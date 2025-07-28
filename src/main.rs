@@ -195,7 +195,11 @@ async fn main() {
         .pool_max_idle_per_host(2)
         .timeout(NETWORK_TIMEOUT)
         .build().unwrap();
-
+    let (sender, receiver) = channel(TASK_BUFFER_SIZE);
+    let mut start = 0;
+    let mut bases_since_restart = 0;
+    let mut results_since_restart: usize = 0;
+    let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     let rps_limiter = Arc::new(rps_limiter);
     let ctx = BuildTaskContext {
         bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
@@ -204,12 +208,7 @@ async fn main() {
         rps_limiter: rps_limiter.clone()
     };
 
-    let (sender, receiver) = channel(TASK_BUFFER_SIZE);
-    let mut start = 0;
-    let mut bases_since_restart = 0;
-    let mut results_since_restart: usize = 0;
     task::spawn(do_checks(receiver, http.clone(), rps_limiter.clone()));
-    let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     loop {
         let _ = sender.reserve_many(MIN_CAPACITY_AT_START_OF_SEARCH).await.unwrap();
         let search_url = format!("{}{}", search_url_base, start);
