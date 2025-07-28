@@ -181,6 +181,12 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
 
 #[tokio::main]
 async fn main() {
+    let rps_limiter = RateLimiter::direct(Quota::per_hour(5000u32.try_into().unwrap()));
+    // Guardian rate-limiters start out with their full burst capacity and recharge starting
+    // immediately, but this would lead to more than 5000 requests in our first hour, so we make it
+    // start nearly empty instead.
+    let _ = rps_limiter.until_n_ready(4500u32.try_into().unwrap()).await.unwrap();
+
     simple_log::console("info").unwrap();
     let search_url_base = format!("https://factordb.com/listtype.php?t=1&mindig={}&perpage={}&start=",
         MIN_DIGITS_IN_PRP, RESULTS_PER_PAGE);
@@ -189,12 +195,7 @@ async fn main() {
         .pool_max_idle_per_host(2)
         .timeout(NETWORK_TIMEOUT)
         .build().unwrap();
-    let rps_limiter = RateLimiter::direct(Quota::per_hour(5000u32.try_into().unwrap()));
 
-    // Guardian rate-limiters start out with their full burst capacity and recharge starting
-    // immediately, but this would lead to more than 5000 requests in our first hour, so we make it
-    // start nearly empty instead.
-    let _ = rps_limiter.until_n_ready(4000u32.try_into().unwrap()).await.unwrap();
     let rps_limiter = Arc::new(rps_limiter);
     let ctx = BuildTaskContext {
         bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
