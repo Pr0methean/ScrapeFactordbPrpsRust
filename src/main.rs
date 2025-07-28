@@ -25,9 +25,9 @@ const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const RESULTS_PER_PAGE: usize = 64;
 const MIN_DIGITS_IN_PRP: u64 = 300;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
-const TASK_BUFFER_SIZE: usize = 2 * RESULTS_PER_PAGE;
+const TASK_BUFFER_SIZE: usize = 16 * RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_START_OF_SEARCH: usize = RESULTS_PER_PAGE;
-const MIN_CAPACITY_AT_RESTART: usize = TASK_BUFFER_SIZE - (RESULTS_PER_PAGE / 2);
+const MIN_CAPACITY_AT_RESTART: usize = TASK_BUFFER_SIZE - RESULTS_PER_PAGE;
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 struct PrpChecksTask {
@@ -194,7 +194,7 @@ async fn main() {
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to more than 5000 requests in our first hour, so we make it
     // start nearly empty instead.
-    let _ = rps_limiter.until_n_ready(4500u32.try_into().unwrap()).await.unwrap();
+    let _ = rps_limiter.until_n_ready(4000u32.try_into().unwrap()).await.unwrap();
     let rps_limiter = Arc::new(rps_limiter);
     let ctx = BuildTaskContext {
         bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
