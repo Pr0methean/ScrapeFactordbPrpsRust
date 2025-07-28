@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 use anyhow::anyhow;
+use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use governor::{NotUntil, Quota, RateLimiter};
 use governor::clock::{DefaultClock, ReasonablyRealtime};
 use governor::middleware::RateLimitingMiddleware;
@@ -27,6 +28,8 @@ const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Pr
 const TASK_BUFFER_SIZE: usize = 2 * RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_START_OF_SEARCH: usize = RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_RESTART: usize = TASK_BUFFER_SIZE - (RESULTS_PER_PAGE / 2);
+#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
+#[repr(C)]
 struct PrpChecksTask {
     bases_left: U256,
     id: u128,
@@ -104,12 +107,29 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<P
     }
 }
 async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMiddleware<T::Instant, NegativeOutcome=NotUntil<T::Instant>>>(mut receiver: Receiver<PrpChecksTask>, http: Client, rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>) {
+    let config = FilterConfigBuilder::default()
+        .capacity(2500)
+        .false_positive_rate(0.001)
+        .level_duration(Duration::from_hours(1))
+        .max_levels(24)
+        .build()
+        .unwrap();
+    let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let mut next_budget_reset = Instant::now();
     let mut cpu_budget = Duration::ZERO;
+    let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
     while let Some(task) = receiver.recv().await {
+        task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
+        task_bytes[size_of::<U256>()..(size_of::<U256>() + size_of::<u128>())].copy_from_slice(&task.id.to_ne_bytes()[..]);
+        if filter.query(&task_bytes).unwrap() {
+            warn!("Detected a duplicate task: ID {}", task.id);
+            continue;
+        } else {
+            filter.insert(&task_bytes).unwrap();
+        }
         let bases_count = count_ones(task.bases_left);
-        let cpu_cost_per_base = Duration::from_nanos((task.digits * task.digits * task.digits) / 50 + 100_000_000);
+        let cpu_cost_per_base = Duration::from_nanos((task.digits * task.digits * task.digits) / 50 + 50_000_000);
         info!("{}: {} digits, {} bases to check; estimated CPU cost {}", task.id, task.digits, bases_count,
             format_duration(cpu_cost_per_base * bases_count));
         let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", task.id);
