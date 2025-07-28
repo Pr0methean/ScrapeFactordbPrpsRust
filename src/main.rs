@@ -59,21 +59,21 @@ fn format_duration(duration: Duration) -> Box<str> {
     if days == 0 {
         if hours == 0 {
             if minutes == 0 {
-                return format!("{}.{:09}s", seconds, nanos).into_boxed_str();
+                return format!("{seconds}.{nanos:09}s").into_boxed_str();
             }
-            return format!("{}m{:02}.{:09}s", minutes, seconds, nanos).into_boxed_str();
+            return format!("{minutes}m{seconds:02}.{nanos:09}s").into_boxed_str();
         }
-        return format!("{}h{:02}m{:02}.{:09}s", hours, minutes, seconds, nanos).into_boxed_str();
+        return format!("{hours}h{minutes:02}m{seconds:02}.{nanos:09}s").into_boxed_str();
     }
-    format!("{}d{:02}h{:02}m{:02}.{:09}s", days, hours, minutes, seconds, nanos).into_boxed_str()
+    format!("{days}d{hours:02}h{minutes:02}m{seconds:02}.{nanos:09}s").into_boxed_str()
 }
 
 async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
     loop {
         match http.get(url).send().await {
-            Err(http_error) => error!("Error reading {}: {}", url, http_error),
+            Err(http_error) => error!("Error reading {url}: {http_error}"),
             Ok(body) => match body.text().await {
-                Err(decoding_error) => error!("Error reading {}: {}", url, decoding_error),
+                Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
                 Ok(text) => return text.into_boxed_str(),
             }
         }
@@ -84,16 +84,16 @@ async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
 async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<PrpChecksTask>> {
     let BuildTaskContext { http, bases_regex, digits_regex, rps_limiter } = ctx;
     let mut bases_left = U256::MAX - 3;
-    let bases_url = format!("{}{}", CHECK_ID_URL_BASE, id);
+    let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
-    let bases_text = retrying_get_and_decode(&http, &bases_url).await;
+    let bases_text = retrying_get_and_decode(http, &bases_url).await;
     for bases in bases_regex.captures_iter(&bases_text) {
         for base in bases.iter() {
             bases_left &= !(U256::from(1) << base.unwrap().as_str().parse::<u8>()?);
         }
     }
     if bases_left == U256::from(0) {
-        info!("ID {} already has all bases checked", id);
+        info!("ID {id} already has all bases checked");
         Ok(None)
     } else {
         let Some(digits_captures) = digits_regex.captures(&bases_text) else {
@@ -102,7 +102,7 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<P
         let digits = digits_captures[1].parse()?;
         let id = id.parse()?;
         let bases_count = count_ones(bases_left);
-        info!("ID {} has {} digits and {} bases left to check", id, digits, bases_count);
+        info!("ID {id} has {digits} digits and {bases_count} bases left to check");
         Ok(Some(PrpChecksTask { bases_left, id, digits }))
     }
 }
@@ -133,7 +133,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         info!("{}: {} digits, {} bases to check; estimated CPU cost {}", task.id, task.digits, bases_count,
             format_duration(cpu_cost_per_base * bases_count));
         let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", task.id);
-        for base in (0..=(u8::MAX as usize)).into_iter().filter(|i| task.bases_left.bit(*i)) {
+        for base in (0..=(u8::MAX as usize)).filter(|i| task.bases_left.bit(*i)) {
             let mut now = Instant::now();
             let mut reset_budget = false;
             if now >= next_budget_reset {
@@ -157,7 +157,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 next_budget_reset = now + BUDGET_RESET_INTERVAL;
                 cpu_budget = MAX_CPU_BUDGET.saturating_sub(cpu_cost_per_base);
             }
-            let url = format!("{}{}", url_base, base);
+            let url = format!("{url_base}{base}");
             rps_limiter.until_ready().await;
             let text = retrying_get_and_decode(&http, &url).await;
             if cert_regex.is_match(&text) {
@@ -185,11 +185,10 @@ async fn main() {
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to more than 5000 requests in our first hour, so we make it
     // start nearly empty instead.
-    let _ = rps_limiter.until_n_ready(4500u32.try_into().unwrap()).await.unwrap();
+    rps_limiter.until_n_ready(4500u32.try_into().unwrap()).await.unwrap();
 
     simple_log::console("info").unwrap();
-    let search_url_base = format!("https://factordb.com/listtype.php?t=1&mindig={}&perpage={}&start=",
-        MIN_DIGITS_IN_PRP, RESULTS_PER_PAGE);
+    let search_url_base = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={RESULTS_PER_PAGE}&start=");
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
     let http = Client::builder()
         .pool_max_idle_per_host(2)
@@ -211,13 +210,13 @@ async fn main() {
     task::spawn(do_checks(receiver, http.clone(), rps_limiter.clone()));
     loop {
         let _ = sender.reserve_many(MIN_CAPACITY_AT_START_OF_SEARCH).await.unwrap();
-        let search_url = format!("{}{}", search_url_base, start);
+        let search_url = format!("{search_url_base}{start}");
         rps_limiter.until_ready().await;
         let results_text = retrying_get_and_decode(&http, &search_url).await;
         for id in id_regex.captures_iter(&results_text).map(|result| result[1].to_owned().into_boxed_str()).unique() {
             results_since_restart += 1;
             match build_task(&id, &ctx).await {
-                Err(e) => error!("{}: {}", id, e),
+                Err(e) => error!("{id}: {e}"),
                 Ok(None) => {},
                 Ok(Some(task)) => {
                     bases_since_restart += count_ones(task.bases_left) as usize;
@@ -233,10 +232,10 @@ async fn main() {
         } else if results_since_restart >= TASK_BUFFER_SIZE
                 && bases_since_restart >= (results_since_restart * 254 * 254).isqrt()
                 && Instant::now() >= next_min_restart {
-            info!("Restarting: triggered {} bases in {} search results", bases_since_restart, results_since_restart);
+            info!("Restarting: triggered {bases_since_restart} bases in {results_since_restart} search results");
             restart = true;
         } else {
-            info!("Continuing: triggered {} bases in {} search results", bases_since_restart, results_since_restart);
+            info!("Continuing: triggered {bases_since_restart} bases in {results_since_restart} search results");
         }
         if restart {
             let _ = sender.reserve_many(MIN_CAPACITY_AT_RESTART).await.unwrap();
