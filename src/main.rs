@@ -210,7 +210,9 @@ async fn main() {
         if start > MAX_START {
             info!("Restarting: reached maximum starting index");
             restart = true;
-        } else if bases_since_restart >= (results_since_restart * 254 * 254).isqrt() && next_min_restart >= Instant::now() {
+        } else if results_since_restart >= TASK_BUFFER_SIZE
+                && bases_since_restart >= (results_since_restart * 254 * 254).isqrt()
+                && Instant::now() >= next_min_restart {
             info!("Restarting: triggered {} bases in {} search results", bases_since_restart, results_since_restart);
             restart = true;
         } else {
