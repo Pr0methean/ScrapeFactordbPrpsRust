@@ -114,18 +114,22 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             format_duration(cpu_cost_per_base * bases_count));
         let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", task.id);
         for base in (0..=(u8::MAX as usize)).into_iter().filter(|i| task.bases_left.bit(*i)) {
-            let now = Instant::now();
+            let mut now = Instant::now();
             let mut reset_budget = false;
             if now >= next_budget_reset {
                 reset_budget = true;
             } else {
-                if let Some(remaining_budget) = cpu_budget.checked_sub(cpu_cost_per_base) {
-                    cpu_budget = remaining_budget;
-                } else {
-                    warn!("Throttling for {} to wait for refreshed CPU budget",
+                match cpu_budget.checked_sub(cpu_cost_per_base) {
+                    Some(remaining_budget) => {
+                        cpu_budget = remaining_budget;
+                    }
+                    None => {
+                        warn!("Throttling for {} to wait for refreshed CPU budget",
                         format_duration(next_budget_reset.saturating_duration_since(now)));
-                    sleep_until(next_budget_reset).await;
-                    reset_budget = true;
+                        sleep_until(next_budget_reset).await;
+                        now = Instant::now();
+                        reset_budget = true;
+                    }
                 }
             }
             if reset_budget {
