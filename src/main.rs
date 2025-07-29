@@ -129,7 +129,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             filter.insert(&task_bytes).unwrap();
         }
         let bases_count = count_ones(task.bases_left);
-        let cpu_cost_per_base = Duration::from_nanos((task.digits * task.digits * task.digits) / 50 + 50_000_000);
+        let cpu_cost_per_base = Duration::from_nanos((task.digits * task.digits * task.digits) / 30 + 50_000_000);
         info!("{}: {} digits, {} bases to check; estimated CPU cost {}", task.id, task.digits, bases_count,
             format_duration(cpu_cost_per_base * bases_count));
         let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", task.id);
