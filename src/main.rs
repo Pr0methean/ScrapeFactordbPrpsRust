@@ -13,8 +13,9 @@ use tokio::sync::mpsc::{channel, Receiver};
 use reqwest::Client;
 use primitive_types::U256;
 use regex::Regex;
+use tokio::io::{stdin, AsyncReadExt};
 use tokio::task;
-use tokio::time::{Duration, Instant, sleep, sleep_until};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 
 const MAX_START: usize = 100_000;
 const BUDGET_RESET_INTERVAL: Duration = Duration::from_hours(1);
@@ -144,9 +145,9 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                         cpu_budget = remaining_budget;
                     }
                     None => {
-                        warn!("Throttling for {} to wait for refreshed CPU budget",
-                        format_duration(next_budget_reset.saturating_duration_since(now)));
-                        sleep_until(next_budget_reset).await;
+                        let delay = next_budget_reset.saturating_duration_since(now);
+                        warn!("Throttling for {} to wait for refreshed CPU budget; press SPACE to skip", format_duration(delay));
+                        let _ = timeout(delay, || stdin().read_u8()).await;
                         now = Instant::now();
                         reset_budget = true;
                     }
