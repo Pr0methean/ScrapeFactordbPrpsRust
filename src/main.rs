@@ -147,7 +147,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                     None => {
                         let delay = next_budget_reset.saturating_duration_since(now);
                         warn!("Throttling for {} to wait for refreshed CPU budget; press SPACE to skip", format_duration(delay));
-                        let _ = timeout(delay, || stdin().read_u8()).await;
+                        let _ = timeout(delay, stdin().read_u8());
                         now = Instant::now();
                         reset_budget = true;
                     }
