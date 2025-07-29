@@ -15,7 +15,7 @@ use primitive_types::U256;
 use regex::Regex;
 use tokio::io::{stdin, AsyncReadExt};
 use tokio::task;
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{Duration, Instant, sleep, timeout};
 
 const MAX_START: usize = 100_000;
 const BUDGET_RESET_INTERVAL: Duration = Duration::from_hours(1);
