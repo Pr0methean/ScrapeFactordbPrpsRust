@@ -137,6 +137,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
         let (_, [cpu_seconds, cpu_tenths_within_second]) = cpu_tenths_regex.captures_iter(&resources_text).next().unwrap().extract();
         let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
+        info!("CPU time spent this cycle: {:.1} seconds", cpu_tenths_spent_after as f64 * 0.1);
         if let Some(cpu_spent) = cpu_tenths_spent_before.checked_sub(cpu_tenths_spent_after) {
             info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
             task.id, cpu_spent as f64 * 0.1, bases_checked, task.digits)
