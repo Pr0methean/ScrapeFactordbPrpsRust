@@ -161,6 +161,10 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             let url = format!("{url_base}{base}");
             rps_limiter.until_ready().await;
             let text = retrying_get_and_decode(&http, &url).await;
+            if !text.contains("<td bgcolor=\"#DDDDDD\">number</td>") {
+                error!("Failed to decode result from {url}: {text}");
+                break;
+            }
             if cert_regex.is_match(&text) {
                 info!("{}: No longer PRP (has certificate)", task.id);
                 break;
