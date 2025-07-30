@@ -153,11 +153,11 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
 
 #[tokio::main]
 async fn main() {
-    let rps_limiter = RateLimiter::direct(Quota::per_hour(6000u32.try_into().unwrap()));
+    let rps_limiter = RateLimiter::direct(Quota::per_hour(5800u32.try_into().unwrap()));
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
     // so we make it start nearly empty instead.
-    rps_limiter.until_n_ready(5900u32.try_into().unwrap()).await.unwrap();
+    rps_limiter.until_n_ready(5700u32.try_into().unwrap()).await.unwrap();
 
     simple_log::console("info").unwrap();
     let search_url_base = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={RESULTS_PER_PAGE}&start=");
