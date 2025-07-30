@@ -14,11 +14,9 @@ use reqwest::Client;
 use primitive_types::U256;
 use regex::Regex;
 use tokio::task;
-use tokio::time::{Duration, Instant, sleep, sleep_until};
+use tokio::time::{Duration, Instant, sleep};
 
 const MAX_START: usize = 100_000;
-const BUDGET_RESET_INTERVAL: Duration = Duration::from_hours(1);
-const MAX_CPU_BUDGET: Duration = Duration::from_mins(8);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
@@ -45,27 +43,6 @@ struct BuildTaskContext {
 
 fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
-}
-
-fn format_duration(duration: Duration) -> Box<str> {
-    let mut seconds = duration.as_secs();
-    let days = seconds / (60 * 60 * 24);
-    seconds %= 60 * 60 * 24;
-    let hours = seconds / (60 * 60);
-    seconds %= 60 * 60;
-    let minutes = seconds / 60;
-    seconds %= 60;
-    let nanos = duration.subsec_nanos();
-    if days == 0 {
-        if hours == 0 {
-            if minutes == 0 {
-                return format!("{seconds}.{nanos:09}s").into_boxed_str();
-            }
-            return format!("{minutes}m{seconds:02}.{nanos:09}s").into_boxed_str();
-        }
-        return format!("{hours}h{minutes:02}m{seconds:02}.{nanos:09}s").into_boxed_str();
-    }
-    format!("{days}d{hours:02}h{minutes:02}m{seconds:02}.{nanos:09}s").into_boxed_str()
 }
 
 async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
@@ -116,8 +93,6 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .unwrap();
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
-    let mut next_budget_reset = Instant::now();
-    let mut cpu_budget = Duration::ZERO;
     let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
     while let Some(task) = receiver.recv().await {
         task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
@@ -128,35 +103,11 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         } else {
             filter.insert(&task_bytes).unwrap();
         }
+        let mut bases_checked = 0;
         let bases_count = count_ones(task.bases_left);
-        let cpu_cost_per_base = Duration::from_nanos((task.digits * task.digits * task.digits) / 200 + 100_000_000);
-        info!("{}: {} digits, {} bases to check @ {}; estimated CPU cost {}", task.id, task.digits, bases_count,
-            format_duration(cpu_cost_per_base), format_duration(cpu_cost_per_base * bases_count));
+        info!("{}: {} digits, {} bases to check", task.id, task.digits, bases_count);
         let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", task.id);
         for base in (0..=(u8::MAX as usize)).filter(|i| task.bases_left.bit(*i)) {
-            let mut now = Instant::now();
-            let mut reset_budget = false;
-            if now >= next_budget_reset {
-                reset_budget = true;
-            } else {
-                match cpu_budget.checked_sub(cpu_cost_per_base) {
-                    Some(remaining_budget) => {
-                        cpu_budget = remaining_budget;
-                    }
-                    None => {
-                        warn!("Throttling for {} to wait for refreshed CPU budget",
-                        format_duration(next_budget_reset.saturating_duration_since(now)));
-                        sleep_until(next_budget_reset).await;
-                        now = Instant::now();
-                        reset_budget = true;
-                    }
-                }
-            }
-            if reset_budget {
-                info!("CPU budget has been reset");
-                next_budget_reset = now + BUDGET_RESET_INTERVAL;
-                cpu_budget = MAX_CPU_BUDGET.saturating_sub(cpu_cost_per_base);
-            }
             let url = format!("{url_base}{base}");
             rps_limiter.until_ready().await;
             let text = retrying_get_and_decode(&http, &url).await;
@@ -164,6 +115,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 error!("Failed to decode result from {url}: {text}");
                 break;
             }
+            bases_checked += 1;
             if cert_regex.is_match(&text) {
                 info!("{}: No longer PRP (has certificate)", task.id);
                 break;
@@ -178,8 +130,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             }
             info!("{}: Checked base {}", task.id, base);
         }
-        info!("Remaining budget: {}; refreshes in {}", format_duration(cpu_budget),
-            format_duration(next_budget_reset.saturating_duration_since(Instant::now())));
+        info!("{}: {} bases checked", task.id, bases_checked);
     }
 }
 
