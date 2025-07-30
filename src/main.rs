@@ -91,7 +91,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .max_levels(24)
         .build()
         .unwrap();
-    let mut cpu_tenths_spent_before = u64::MAX;
+    let mut cpu_tenths_spent_before = 0;
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let cpu_tenths_regex = Regex::new("([0-9]+)\\.([0-9]) seconds").unwrap();
@@ -138,7 +138,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         let (_, [cpu_seconds, cpu_tenths_within_second]) = cpu_tenths_regex.captures_iter(&resources_text).next().unwrap().extract();
         let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
         info!("CPU time spent this cycle: {:.1} seconds", cpu_tenths_spent_after as f64 * 0.1);
-        if let Some(cpu_spent) = cpu_tenths_spent_before.checked_sub(cpu_tenths_spent_after) {
+        if let Some(cpu_spent) = cpu_tenths_spent_after.checked_sub(cpu_tenths_spent_before) {
             info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
             task.id, cpu_spent as f64 * 0.1, bases_checked, task.digits)
         }
