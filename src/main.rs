@@ -91,8 +91,10 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .max_levels(24)
         .build()
         .unwrap();
+    let mut cpu_tenths_spent_before = u64::MAX;
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
+    let cpu_tenths_regex = Regex::new("([0-9]+)\\.([0-9]) seconds").unwrap();
     let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
     while let Some(task) = receiver.recv().await {
         task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
@@ -130,7 +132,15 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             }
             info!("{}: Checked base {}", task.id, base);
         }
-        info!("{}: {} bases checked", task.id, bases_checked);
+        rps_limiter.until_ready().await;
+        let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
+        let (_, [cpu_seconds, cpu_tenths_within_second]) = cpu_tenths_regex.captures_iter(&resources_text).next().unwrap().extract();
+        let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
+        if let Some(cpu_spent) = cpu_tenths_spent_before.checked_sub(cpu_tenths_spent_after) {
+            info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
+            task.id, cpu_spent as f64 * 0.1, bases_checked, task.digits)
+        }
+        cpu_tenths_spent_before = cpu_tenths_spent_after;
     }
 }
 
