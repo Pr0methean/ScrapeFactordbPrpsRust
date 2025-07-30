@@ -91,7 +91,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .max_levels(24)
         .build()
         .unwrap();
-    let mut cpu_tenths_spent_before = 0;
+    let mut cpu_tenths_spent_before = u64::MAX;
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let cpu_tenths_regex = Regex::new("([0-9]+)\\.([0-9]) seconds").unwrap();
