@@ -95,6 +95,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let cpu_tenths_regex = Regex::new("([0-9]+)\\.([0-9]) seconds").unwrap();
+    let time_to_reset_regex = Regex::new("([0-5][0-9]):([0-6][0-9])").unwrap();
     let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
     while let Some(task) = receiver.recv().await {
         task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
@@ -139,6 +140,12 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         if let Some(cpu_spent) = cpu_tenths_spent_before.checked_sub(cpu_tenths_spent_after) {
             info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
             task.id, cpu_spent as f64 * 0.1, bases_checked, task.digits)
+        }
+        if cpu_tenths_spent_after >= 5700 {
+            let (_, [minutes_to_reset, seconds_within_minute_to_reset]) = time_to_reset_regex.captures_iter(&resources_text).next().unwrap().extract();
+            let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
+            warn!("Throttling {} seconds due to high server CPU usage", seconds_to_reset);
+            sleep(Duration::from_secs(seconds_to_reset)).await;
         }
         cpu_tenths_spent_before = cpu_tenths_spent_after;
     }
