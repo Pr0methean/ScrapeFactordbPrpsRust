@@ -142,7 +142,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
             task.id, cpu_spent as f64 * 0.1, bases_checked, task.digits)
         }
-        if cpu_tenths_spent_after >= 5700 {
+        if cpu_tenths_spent_after >= 5400 {
             let (_, [minutes_to_reset, seconds_within_minute_to_reset]) = time_to_reset_regex.captures_iter(&resources_text).next().unwrap().extract();
             let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
             warn!("Throttling {} seconds due to high server CPU usage", seconds_to_reset);
