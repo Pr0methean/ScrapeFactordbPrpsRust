@@ -241,6 +241,7 @@ async fn main() {
         if restart {
             let _ = sender.reserve_many(MIN_CAPACITY_AT_RESTART).await.unwrap();
             start = 0;
+            results_since_restart = 0;
             bases_since_restart = 0;
             next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
         }
