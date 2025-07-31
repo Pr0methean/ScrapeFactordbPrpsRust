@@ -120,6 +120,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 error!("Failed to decode result from {url}: {text}");
                 break;
             }
+            info!("{}: Checked base {}", task.id, base);
             bases_checked += 1;
             bases_before_next_cpu_check -= 1;
             if bases_before_next_cpu_check == 0 || bases_checked == bases_count {
@@ -153,7 +154,6 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 info!("{}: No longer PRP (solved by N-1/N+1 or factor)", task.id);
                 break;
             }
-            info!("{}: Checked base {}", task.id, base);
         }
         if let Some(cpu_spent) = cpu_tenths_spent_after.checked_sub(cpu_tenths_spent_before) {
             info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
