@@ -127,7 +127,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
                 let (_, [cpu_seconds, cpu_tenths_within_second]) = cpu_tenths_regex.captures_iter(&resources_text).next().unwrap().extract();
                 cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
-                let remaining = (5999i64 - (cpu_tenths_spent_after as i64)) / 5;
+                let remaining = (5900i64 - (cpu_tenths_spent_after as i64)) / 5;
                 if remaining <= 0 {
                     let (_, [minutes_to_reset, seconds_within_minute_to_reset]) = time_to_reset_regex.captures_iter(&resources_text).next().unwrap().extract();
                     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
