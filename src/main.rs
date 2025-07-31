@@ -128,7 +128,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 let (_, [cpu_seconds, cpu_tenths_within_second]) = cpu_tenths_regex.captures_iter(&resources_text).next().unwrap().extract();
                 cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
                 let remaining = (5900i64 - (cpu_tenths_spent_after as i64)) / 5;
-                if remaining <= 0 {
+                if remaining < 4.min((bases_count - bases_checked) as i64) {
                     let (_, [minutes_to_reset, seconds_within_minute_to_reset]) = time_to_reset_regex.captures_iter(&resources_text).next().unwrap().extract();
                     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
                     warn!("CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
