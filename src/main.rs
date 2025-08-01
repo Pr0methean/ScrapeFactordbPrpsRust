@@ -91,9 +91,14 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .max_levels(24)
         .build()
         .unwrap();
+    let mut cpu_tenths_spent_before = u64::MAX;
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
+    let cpu_tenths_regex = Regex::new("([0-9]+)\\.([0-9]) seconds").unwrap();
+    let time_to_reset_regex = Regex::new("([0-5][0-9]):([0-6][0-9])").unwrap();
+    let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
+    let mut cpu_tenths_spent_after = 0;
     while let Some(task) = receiver.recv().await {
         task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
         task_bytes[size_of::<U256>()..(size_of::<U256>() + size_of::<u128>())].copy_from_slice(&task.id.to_ne_bytes()[..]);
@@ -115,7 +120,28 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 error!("Failed to decode result from {url}: {text}");
                 break;
             }
+            info!("{}: Checked base {}", task.id, base);
             bases_checked += 1;
+            bases_before_next_cpu_check -= 1;
+            if bases_before_next_cpu_check == 0 || bases_checked == bases_count {
+                rps_limiter.until_ready().await;
+                let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
+                let (_, [cpu_seconds, cpu_tenths_within_second]) = cpu_tenths_regex.captures_iter(&resources_text).next().unwrap().extract();
+                cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
+                let remaining = (5700i64 - (cpu_tenths_spent_after as i64)) / 5;
+                if remaining < 4.min((bases_count - bases_checked) as i64) {
+                    let (_, [minutes_to_reset, seconds_within_minute_to_reset]) = time_to_reset_regex.captures_iter(&resources_text).next().unwrap().extract();
+                    let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
+                    warn!("CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
+                         cpu_tenths_spent_after as f64 * 0.1, seconds_to_reset);
+                    sleep(Duration::from_secs(seconds_to_reset)).await;
+                    bases_before_next_cpu_check = 254;
+                } else {
+                    info!("CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
+                    cpu_tenths_spent_after as f64 * 0.1, remaining.min(254));
+                    bases_before_next_cpu_check = remaining;
+                }
+            }
             if cert_regex.is_match(&text) {
                 info!("{}: No longer PRP (has certificate)", task.id);
                 break;
@@ -128,9 +154,12 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 info!("{}: No longer PRP (solved by N-1/N+1 or factor)", task.id);
                 break;
             }
-            info!("{}: Checked base {}", task.id, base);
         }
-        info!("{}: {} bases checked", task.id, bases_checked);
+        if let Some(cpu_spent) = cpu_tenths_spent_after.checked_sub(cpu_tenths_spent_before) {
+            info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
+            task.id, cpu_spent as f64 * 0.1, bases_checked, task.digits)
+        }
+        cpu_tenths_spent_before = cpu_tenths_spent_after;
     }
 }
 
