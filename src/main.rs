@@ -12,7 +12,7 @@ use log::{error, info, warn};
 use tokio::sync::mpsc::{channel, Receiver};
 use reqwest::Client;
 use primitive_types::U256;
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -94,7 +94,10 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
     let mut cpu_tenths_spent_before = u64::MAX;
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
-    let resources_regex = Regex::new("([0-9]+)\\.([0-9]) seconds.*([0-5][0-9]):([0-6][0-9])").unwrap();
+    let resources_regex = RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-5][0-9]):([0-6][0-9])")
+        .multi_line(true)
+        .build()
+        .unwrap();
     let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
     let mut cpu_tenths_spent_after = 0;
