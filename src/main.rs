@@ -128,18 +128,19 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
                 let (_, [cpu_seconds, cpu_tenths_within_second]) = cpu_tenths_regex.captures_iter(&resources_text).next().unwrap().extract();
                 cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
-                let remaining = (5700i64 - (cpu_tenths_spent_after as i64)) / 5;
-                if remaining < 4.min((bases_count - bases_checked) as i64) {
-                    let (_, [minutes_to_reset, seconds_within_minute_to_reset]) = time_to_reset_regex.captures_iter(&resources_text).next().unwrap().extract();
-                    let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
+                let (_, [minutes_to_reset, seconds_within_minute_to_reset]) = time_to_reset_regex.captures_iter(&resources_text).next().unwrap().extract();
+                let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
+                let tenths_remaining = (6000i64 - (seconds_to_reset as i64 / 6) - (cpu_tenths_spent_after as i64)) / 5;
+                if tenths_remaining < 4.min((bases_count - bases_checked) as i64) {
                     warn!("CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
                          cpu_tenths_spent_after as f64 * 0.1, seconds_to_reset);
                     sleep(Duration::from_secs(seconds_to_reset)).await;
                     bases_before_next_cpu_check = 254;
                 } else {
+                    let tenths_remaining = tenths_remaining.min(254);
                     info!("CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
-                    cpu_tenths_spent_after as f64 * 0.1, remaining.min(254));
-                    bases_before_next_cpu_check = remaining;
+                    cpu_tenths_spent_after as f64 * 0.1, tenths_remaining);
+                    bases_before_next_cpu_check = tenths_remaining;
                 }
             }
             if cert_regex.is_match(&text) {
