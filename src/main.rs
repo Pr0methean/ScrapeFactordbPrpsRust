@@ -96,6 +96,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let resources_regex = RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-5][0-9]):([0-6][0-9])")
         .multi_line(true)
+        .dot_matches_new_line(true)
         .build()
         .unwrap();
     let mut bases_before_next_cpu_check = 1;
@@ -128,8 +129,11 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             if bases_before_next_cpu_check == 0 || bases_checked == bases_count {
                 rps_limiter.until_ready().await;
                 let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
+                // info!("Resources fetched");
                 let (_, [cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset])
                     = resources_regex.captures_iter(&resources_text).next().unwrap().extract();
+                // info!("Resources parsed: {}, {}, {}, {}",
+                //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
                 cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
                 let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
                 let tenths_remaining = (6000i64 - (seconds_to_reset as i64 / 6) - (cpu_tenths_spent_after as i64)) / 5;
