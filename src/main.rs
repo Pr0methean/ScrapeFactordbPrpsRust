@@ -104,12 +104,12 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .build()
         .unwrap();
     let mut bases_before_next_cpu_check = 1;
-    let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
+    let mut task_bytes = [0u8; (size_of::<U256>() + size_of::<u128>())];
     let mut cpu_tenths_spent_after = 0;
     const MAX_BASES_BETWEEN_RESOURCE_CHECKS: i64 = 127;
     while let Some(task) = receiver.recv().await {
         task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
-        task_bytes[size_of::<U256>()..(size_of::<U256>() + size_of::<u128>())].copy_from_slice(&task.id.to_ne_bytes()[..]);
+        task_bytes[size_of::<U256>()..].copy_from_slice(&task.id.to_ne_bytes()[..]);
         if filter.query(&task_bytes).unwrap() {
             warn!("Detected a duplicate task: ID {}", task.id);
             continue;
