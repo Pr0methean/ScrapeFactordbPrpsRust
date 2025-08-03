@@ -106,6 +106,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
     let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<PrpChecksTask>()];
     let mut cpu_tenths_spent_after = 0;
+    const MAX_BASES_BETWEEN_RESOURCE_CHECKS: i64 = 127;
     while let Some(task) = receiver.recv().await {
         task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
         task_bytes[size_of::<U256>()..(size_of::<U256>() + size_of::<u128>())].copy_from_slice(&task.id.to_ne_bytes()[..]);
@@ -143,13 +144,13 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
                 let tenths_remaining = 6000i64 - (cpu_tenths_spent_after as i64);
                 let tenths_remaining_minus_reserve = tenths_remaining - (seconds_to_reset as i64 / 3);
-                let bases_remaining = (tenths_remaining_minus_reserve / 10).min(254);
+                let bases_remaining = (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
                 if bases_remaining < 16i64
                         && (bases_count == bases_checked || ((bases_count - bases_checked) as i64) < bases_remaining) {
                     warn!("CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
                          cpu_tenths_spent_after as f64 * 0.1, seconds_to_reset);
                     sleep(Duration::from_secs(seconds_to_reset)).await;
-                    bases_before_next_cpu_check = 254;
+                    bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
                 } else {
                     info!("CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
                     cpu_tenths_spent_after as f64 * 0.1, bases_remaining);
