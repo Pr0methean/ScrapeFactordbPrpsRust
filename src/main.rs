@@ -64,6 +64,10 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<P
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
     let bases_text = retrying_get_and_decode(http, &bases_url).await;
+    if !bases_text.contains("PRP") {
+        info!("ID {id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
+        return Ok(None);
+    }
     for bases in bases_regex.captures_iter(&bases_text) {
         for base in bases.iter() {
             bases_left &= !(U256::from(1) << base.unwrap().as_str().parse::<u8>()?);
