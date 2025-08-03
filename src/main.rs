@@ -47,7 +47,7 @@ fn count_ones(u256: U256) -> u32 {
 
 async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
     loop {
-        match http.get(url).send().await {
+        match http.get(url).header("Referer","https://factordb.com").send().await {
             Err(http_error) => error!("Error reading {url}: {http_error}"),
             Ok(body) => match body.text().await {
                 Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
