@@ -142,7 +142,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                 //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
                 cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
                 let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
-                let tenths_remaining = 6000i64 - (cpu_tenths_spent_after as i64);
+                let tenths_remaining = 5950i64 - (cpu_tenths_spent_after as i64);
                 let tenths_remaining_minus_reserve = tenths_remaining - (seconds_to_reset as i64 / 3);
                 let bases_remaining = (tenths_remaining_minus_reserve / 15).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
                 if bases_remaining < 16i64
