@@ -12,7 +12,7 @@ use log::{error, info, warn};
 use tokio::sync::mpsc::{channel, Receiver};
 use reqwest::Client;
 use primitive_types::U256;
-use regex::{Regex, RegexBuilder};
+use regex::{Captures, Regex, RegexBuilder};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -45,13 +45,19 @@ fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
 }
 
-async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
+async fn retrying_get_and_decode<const N: usize>(http: &Client, url: &str, regex: &Regex) -> (&str, [&str; N]) {
     loop {
         match http.get(url).header("Referer","https://factordb.com").send().await {
             Err(http_error) => error!("Error reading {url}: {http_error}"),
             Ok(body) => match body.text().await {
-                Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
-                Ok(text) => return text.into_boxed_str(),
+                Err(decoding_error) => error!("Error decoding {url} to UTF8: {decoding_error}"),
+                Ok(text) => match regex.captures(&text) {
+                    None => error!("Failed to match regex for {url} against {text}"),
+                    Some(captures) => match captures.next() {
+                        None => error!("Failed to match regex for {url} against {text}"),
+                        Some(first_capture) => return first_capture
+                    }
+                }
             }
         }
         sleep(RETRY_DELAY).await;
