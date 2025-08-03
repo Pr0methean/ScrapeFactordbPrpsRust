@@ -127,6 +127,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             bases_checked += 1;
             bases_before_next_cpu_check -= 1;
             if bases_before_next_cpu_check == 0 || bases_checked == bases_count {
+                sleep(Duration::from_secs(5)).await; // allow for delay in CPU accounting
                 rps_limiter.until_ready().await;
                 let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
                 // info!("Resources fetched");
