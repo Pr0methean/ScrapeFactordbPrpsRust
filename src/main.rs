@@ -121,12 +121,15 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
             CheckTask::Prp(task) => {
                 task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
                 task_bytes[size_of::<U256>()..].copy_from_slice(&task.id.to_ne_bytes()[..]);
-                if filter.query(&task_bytes) == Ok(true) {
-                    warn!("Detected a duplicate task: ID {}", task.id);
-                    continue;
-                } else {
-                    filter.insert(&task_bytes).unwrap();
+                match filter.query(&task_bytes) {
+                    Ok(true) => {
+                        warn!("Detected a duplicate task: ID {}", task.id);
+                        continue;
+                    }
+                    Ok(false) => {},
+                    Err(e) => error!("Bloom filter error: {}", e)
                 }
+                filter.insert(&task_bytes).unwrap();
                 let mut bases_checked = 0;
                 let bases_count = count_ones(task.bases_left);
                 info!("{}: {} digits, {} bases to check", task.id, task.digits, bases_count);
