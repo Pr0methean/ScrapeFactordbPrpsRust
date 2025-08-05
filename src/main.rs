@@ -150,8 +150,12 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                         rps_limiter.until_ready().await;
                         let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
                         // info!("Resources fetched");
+                        let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
+                            error!("Failed to parse resource limits");
+                            break;
+                        };
                         let (_, [cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset])
-                            = resources_regex.captures_iter(&resources_text).next().unwrap().extract();
+                            = captures.extract();
                         // info!("Resources parsed: {}, {}, {}, {}",
                         //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
                         cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
