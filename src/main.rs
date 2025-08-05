@@ -152,6 +152,7 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                         // info!("Resources fetched");
                         let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
                             error!("Failed to parse resource limits");
+                            bases_before_next_cpu_check = 1;
                             break;
                         };
                         let (_, [cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset])
