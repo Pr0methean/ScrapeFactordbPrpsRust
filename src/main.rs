@@ -15,7 +15,7 @@ use reqwest::Client;
 use std::fs::File;
 use std::io::BufRead;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
@@ -109,11 +109,11 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<C
     }
 }
 
-const MAX_BASES_BETWEEN_RESOURCE_CHECKS: i64 = 127;
-const MAX_CPU_BUDGET_TENTHS: i64 = 5950i64;
+const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
+const MAX_CPU_BUDGET_TENTHS: u64 = 5950;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(30);
-const CPU_TENTHS_SPENT_LAST_CHECK: AtomicI64 = AtomicI64::new(MAX_CPU_BUDGET_TENTHS);
-const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: i64 = 4000;
+const CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
+const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
 
 async fn do_checks<
     S: DirectStateStore,
@@ -266,7 +266,7 @@ async fn throttle_if_necessary<
     http: &Client,
     rps_limiter: &Arc<RateLimiter<NotKeyed, S, T, U>>,
     resources_regex: &Regex,
-    bases_before_next_cpu_check: &mut i64,
+    bases_before_next_cpu_check: &mut u64,
 ) -> bool {
     *bases_before_next_cpu_check -= 1;
     if *bases_before_next_cpu_check == 0 {
@@ -294,8 +294,8 @@ async fn throttle_if_necessary<
             + cpu_tenths_within_second.parse::<u64>().unwrap();
         let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
-        let tenths_remaining = MAX_CPU_BUDGET_TENTHS - (cpu_tenths_spent_after as i64);
-        let tenths_remaining_minus_reserve = tenths_remaining - (seconds_to_reset as i64 / 3);
+        let tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
+        let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset / 3);
         let bases_remaining =
             (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
         if bases_remaining <= 0 {
