@@ -110,7 +110,7 @@ const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(30);
 const CPU_TENTHS_SPENT_LAST_CHECK: AtomicI64 = AtomicI64::new(MAX_CPU_BUDGET_TENTHS);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: i64 = 4000;
 
-async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMiddleware<T::Instant, NegativeOutcome=NotUntil<T::Instant>>>(mut receiver: Receiver<CheckTask>, mut sender: Sender<CheckTask>, http: Client, rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>) {
+async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMiddleware<T::Instant, NegativeOutcome=NotUntil<T::Instant>>>(mut receiver: Receiver<CheckTask>, sender: Sender<CheckTask>, http: Client, rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>) {
     let config = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -149,7 +149,6 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         match details {
             CheckTaskDetails::Prp {bases_left, digits} => {
                 filter.insert(&task_bytes).unwrap();
-                let mut bases_checked = 0;
                 let bases_count = count_ones(bases_left);
                 info!("{}: {} digits, {} bases to check", id, digits, bases_count);
                 let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", id);
@@ -162,7 +161,6 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                         break;
                     }
                     info!("{}: Checked base {}", id, base);
-                    bases_checked += 1;
                     if throttle_if_necessary(&http, &rps_limiter, &resources_regex, &mut bases_before_next_cpu_check).await { break; }
                     if cert_regex.is_match(&text) {
                         info!("{}: No longer PRP (has certificate)", id);
