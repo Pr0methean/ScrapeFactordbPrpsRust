@@ -196,7 +196,7 @@ async fn do_checks<
                         info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
                         break;
                     }
-                    if let Ok(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                    if bases_before_next_cpu_check == 1 && let Ok(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
                         = retry_recv.try_recv() {
                         try_handle_unknown(&retry_send, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
                     }
