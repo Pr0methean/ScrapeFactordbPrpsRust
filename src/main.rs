@@ -1,6 +1,10 @@
 #![feature(duration_constructors_lite)]
+#![feature(file_buffered)]
 
+use std::fs::File;
+use std::io::BufRead;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 use anyhow::anyhow;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use governor::{NotUntil, Quota, RateLimiter};
@@ -9,7 +13,7 @@ use governor::middleware::RateLimitingMiddleware;
 use governor::state::{DirectStateStore, InMemoryState, NotKeyed};
 use itertools::Itertools;
 use log::{error, info, warn};
-use tokio::sync::mpsc::{channel, Receiver};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use reqwest::Client;
 use primitive_types::U256;
 use regex::{Regex, RegexBuilder};
@@ -22,25 +26,27 @@ const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const PRP_RESULTS_PER_PAGE: usize = 64;
 const MIN_DIGITS_IN_PRP: u64 = 300;
-const U_RESULTS_PER_PAGE: usize = 16;
-const U_TASK_BUFFER_SIZE: usize = 4 * U_RESULTS_PER_PAGE;
+const MIN_DIGITS_IN_U: u64 = 2001;
+const U_RESULTS_PER_PAGE: usize = 6;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
-const PRP_TASK_BUFFER_SIZE: usize = 2 * PRP_RESULTS_PER_PAGE;
-const PRP_MIN_CAPACITY_AT_START_OF_SEARCH: usize = PRP_RESULTS_PER_PAGE - 1;
-const PRP_MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
+const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
+const MIN_CAPACITY_AT_START_OF_U_SEARCH: usize = U_RESULTS_PER_PAGE;
+const MIN_CAPACITY_AT_START_OF_PRP_SEARCH: usize = PRP_RESULTS_PER_PAGE - 1;
+const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
-struct PrpChecksTask {
-    bases_left: U256,
+enum CheckTaskDetails {
+    Prp {
+        bases_left: U256,
+        digits: u64
+    },
+    U {
+        wait_until: Instant,
+    }
+}
+struct CheckTask {
     id: u128,
-    digits: u64,
-}
-struct UCheckTask {
-    id: u128
-}
-enum CheckTask {
-    Prp(PrpChecksTask),
-    U(UCheckTask),
+    details: CheckTaskDetails
 }
 
 struct BuildTaskContext {
@@ -67,7 +73,7 @@ async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
     }
 }
 
-async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<PrpChecksTask>> {
+async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<CheckTask>> {
     let BuildTaskContext { http, bases_regex, digits_regex, rps_limiter } = ctx;
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
@@ -93,10 +99,18 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<P
         let id = id.parse()?;
         let bases_count = count_ones(bases_left);
         info!("ID {id} has {digits} digits and {bases_count} bases left to check");
-        Ok(Some(PrpChecksTask { bases_left, id, digits }))
+        Ok(Some(CheckTask { id,
+            details: CheckTaskDetails::Prp { bases_left, digits }}))
     }
 }
-async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMiddleware<T::Instant, NegativeOutcome=NotUntil<T::Instant>>>(mut receiver: Receiver<CheckTask>, http: Client, rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>) {
+
+const MAX_BASES_BETWEEN_RESOURCE_CHECKS: i64 = 127;
+const MAX_CPU_BUDGET_TENTHS: i64 = 5950i64;
+const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(30);
+const CPU_TENTHS_SPENT_LAST_CHECK: AtomicI64 = AtomicI64::new(MAX_CPU_BUDGET_TENTHS);
+const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: i64 = 4000;
+
+async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMiddleware<T::Instant, NegativeOutcome=NotUntil<T::Instant>>>(mut receiver: Receiver<CheckTask>, mut sender: Sender<CheckTask>, http: Client, rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>) {
     let config = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -104,7 +118,6 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .max_levels(24)
         .build()
         .unwrap();
-    let mut cpu_tenths_spent_before = u64::MAX;
     let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let resources_regex = RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-5][0-9]):([0-6][0-9])")
@@ -112,29 +125,35 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
         .dot_matches_new_line(true)
         .build()
         .unwrap();
+    let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
-    let mut cpu_tenths_spent_after = 0;
-    const MAX_BASES_BETWEEN_RESOURCE_CHECKS: i64 = 127;
-    while let Some(task) = receiver.recv().await {
-        match task {
-            CheckTask::Prp(task) => {
-                task_bytes[0..size_of::<U256>()].copy_from_slice(&task.bases_left.to_big_endian());
-                task_bytes[size_of::<U256>()..].copy_from_slice(&task.id.to_ne_bytes()[..]);
-                match filter.query(&task_bytes) {
-                    Ok(true) => {
-                        warn!("Detected a duplicate task: ID {}", task.id);
-                        continue;
-                    }
-                    Ok(false) => {},
-                    Err(e) => error!("Bloom filter error: {}", e)
-                }
+    while let Some(CheckTask {id, details}) = receiver.recv().await {
+        task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
+        match details {
+            CheckTaskDetails::Prp {bases_left, ..} => {
+                task_bytes[0..size_of::<U256>()].copy_from_slice(&bases_left.to_big_endian());
+            }
+            _ => {
+                task_bytes[0..size_of::<U256>()].fill(0);
+            }
+        }
+        match filter.query(&task_bytes) {
+            Ok(true) => {
+                warn!("Detected a duplicate task: ID {}", id);
+                continue;
+            }
+            Ok(false) => {},
+            Err(e) => error!("Bloom filter error: {}", e)
+        }
+        match details {
+            CheckTaskDetails::Prp {bases_left, digits} => {
                 filter.insert(&task_bytes).unwrap();
                 let mut bases_checked = 0;
-                let bases_count = count_ones(task.bases_left);
-                info!("{}: {} digits, {} bases to check", task.id, task.digits, bases_count);
-                let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", task.id);
-                for base in (0..=(u8::MAX as usize)).filter(|i| task.bases_left.bit(*i)) {
+                let bases_count = count_ones(bases_left);
+                info!("{}: {} digits, {} bases to check", id, digits, bases_count);
+                let url_base = format!("https://factordb.com/index.php?id={}&open=prime&basetocheck=", id);
+                for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
                     let url = format!("{url_base}{base}");
                     rps_limiter.until_ready().await;
                     let text = retrying_get_and_decode(&http, &url).await;
@@ -142,62 +161,95 @@ async fn do_checks<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMi
                         error!("Failed to decode result from {url}: {text}");
                         break;
                     }
-                    info!("{}: Checked base {}", task.id, base);
+                    info!("{}: Checked base {}", id, base);
                     bases_checked += 1;
-                    bases_before_next_cpu_check -= 1;
-                    if bases_before_next_cpu_check == 0 || bases_checked == bases_count {
-                        sleep(Duration::from_secs(10)).await; // allow for delay in CPU accounting
-                        rps_limiter.until_ready().await;
-                        let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
-                        // info!("Resources fetched");
-                        let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
-                            error!("Failed to parse resource limits");
-                            bases_before_next_cpu_check = 1;
-                            break;
-                        };
-                        let (_, [cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset])
-                            = captures.extract();
-                        // info!("Resources parsed: {}, {}, {}, {}",
-                        //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
-                        cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
-                        let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
-                        let tenths_remaining = 5950i64 - (cpu_tenths_spent_after as i64);
-                        let tenths_remaining_minus_reserve = tenths_remaining - (seconds_to_reset as i64 / 3);
-                        let bases_remaining = (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-                        if bases_remaining < 16i64
-                                && (bases_count == bases_checked || ((bases_count - bases_checked) as i64) > bases_remaining) {
-                            warn!("CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
-                                cpu_tenths_spent_after as f64 * 0.1, seconds_to_reset);
-                            sleep(Duration::from_secs(seconds_to_reset)).await;
-                            bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
-                        } else {
-                            info!("CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
-                    cpu_tenths_spent_after as f64 * 0.1, bases_remaining);
-                            bases_before_next_cpu_check = bases_remaining;
-                        }
-                    }
+                    if throttle_if_necessary(&http, &rps_limiter, &resources_regex, &mut bases_before_next_cpu_check).await { break; }
                     if cert_regex.is_match(&text) {
-                        info!("{}: No longer PRP (has certificate)", task.id);
+                        info!("{}: No longer PRP (has certificate)", id);
                         break;
                     }
                     if text.contains("set to C") {
-                        info!("{}: No longer PRP (ruled out by PRP check)", task.id);
+                        info!("{}: No longer PRP (ruled out by PRP check)", id);
                         break;
                     }
                     if !text.contains("PRP") {
-                        info!("{}: No longer PRP (solved by N-1/N+1 or factor)", task.id);
+                        info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
                         break;
                     }
                 }
-                if let Some(cpu_spent) = cpu_tenths_spent_after.checked_sub(cpu_tenths_spent_before) {
-                    info!("{}: CPU time was {:.1} seconds for {} bases of {} digits",
-            task.id, cpu_spent as f64 * 0.1, bases_checked, task.digits)
-                }
-                cpu_tenths_spent_before = cpu_tenths_spent_after;
             }
-            CheckTask::U(_task) => {}
+            CheckTaskDetails::U {wait_until} => {
+                if Instant::now() < wait_until {
+                    sender.send(CheckTask { id, details: CheckTaskDetails::U {wait_until} }).await.unwrap();
+                } else {
+                    let url = format!("https://factordb.com/?id=${id}&prp=Assign+to+worker");
+                    let result = retrying_get_and_decode(&http, &url).await;
+                    let status = u_status_regex.captures_iter(&result).next();
+                    if let Some(status) = status {
+                        match status.get(1) {
+                            None => error!("Failed to decode status for {id}: {result}"),
+                            Some(matched_status) => match matched_status.as_str() {
+                                "Assigned" => {
+                                    filter.insert(&task_bytes).unwrap();
+                                    info!("Assigned PRP check for unknown-status number with ID {id}")
+                                },
+                                "Please wait" => {
+                                    warn!("Got 'please wait' for unknown-status number with ID {id}");
+                                    let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                                    sender.send(CheckTask {id, details: CheckTaskDetails::U {wait_until: next_try}}).await.unwrap();
+                                }
+                                _ => {
+                                    filter.insert(&task_bytes).unwrap();
+                                    warn!("Unknown-status number with ID {id} is already being checked");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+async fn throttle_if_necessary<S: DirectStateStore, T: ReasonablyRealtime, U: RateLimitingMiddleware<T::Instant, NegativeOutcome=NotUntil<T::Instant>>>(
+    http: &Client,
+    rps_limiter: &Arc<RateLimiter<NotKeyed, S, T, U>>,
+    resources_regex: &Regex,
+    bases_before_next_cpu_check: &mut i64) -> bool {
+    *bases_before_next_cpu_check -= 1;
+    if *bases_before_next_cpu_check == 0 {
+        sleep(Duration::from_secs(10)).await; // allow for delay in CPU accounting
+        rps_limiter.until_ready().await;
+        let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
+        // info!("Resources fetched");
+        let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
+            error!("Failed to parse resource limits");
+            *bases_before_next_cpu_check = 1;
+            return true;
+        };
+        let (_, [cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset])
+            = captures.extract();
+        // info!("Resources parsed: {}, {}, {}, {}",
+        //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
+        let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
+        let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60 + seconds_within_minute_to_reset.parse::<u64>().unwrap();
+        let tenths_remaining = MAX_CPU_BUDGET_TENTHS - (cpu_tenths_spent_after as i64);
+        let tenths_remaining_minus_reserve = tenths_remaining - (seconds_to_reset as i64 / 3);
+        let bases_remaining = (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
+        if bases_remaining <= 0 {
+            warn!("CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
+                                cpu_tenths_spent_after as f64 * 0.1, seconds_to_reset);
+            sleep(Duration::from_secs(seconds_to_reset)).await;
+            *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
+            CPU_TENTHS_SPENT_LAST_CHECK.store(0, Ordering::AcqRel);
+        } else {
+            info!("CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
+                    cpu_tenths_spent_after as f64 * 0.1, bases_remaining);
+            *bases_before_next_cpu_check = bases_remaining;
+            CPU_TENTHS_SPENT_LAST_CHECK.store(bases_remaining, Ordering::AcqRel);
+        }
+    }
+    false
 }
 
 #[tokio::main]
@@ -210,13 +262,19 @@ async fn main() {
 
     simple_log::console("info").unwrap();
     let prp_search_url_base = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start=");
+    let u_search_url_base = format!("https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_PRP}&perpage={U_RESULTS_PER_PAGE}&start=");
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
     let http = Client::builder()
         .pool_max_idle_per_host(2)
         .timeout(NETWORK_TIMEOUT)
         .build().unwrap();
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
-    let mut start = 0;
+    let mut prp_start = 0;
+    let mut u_start = 0;
+    let mut dump_file_index = 3;
+    let mut dump_file = File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
+    let mut dump_file_lines_read = 0;
+    let mut line = String::new();
     let mut bases_since_restart = 0;
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
@@ -228,10 +286,52 @@ async fn main() {
         rps_limiter: rps_limiter.clone()
     };
 
-    task::spawn(do_checks(prp_receiver, http.clone(), rps_limiter.clone()));
+    task::spawn(do_checks(prp_receiver, prp_sender.clone(), http.clone(), rps_limiter.clone()));
     loop {
-        let _ = prp_sender.reserve_many(PRP_MIN_CAPACITY_AT_START_OF_SEARCH).await.unwrap();
-        let search_url = format!("{prp_search_url_base}{start}");
+        let _ = prp_sender.reserve_many(MIN_CAPACITY_AT_START_OF_U_SEARCH).await.unwrap();
+        let now = Instant::now();
+        if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::AcqRel) >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+            let mut lines_read = 0;
+            while lines_read < U_RESULTS_PER_PAGE {
+                line.clear();
+                while line.len() == 0 {
+                    let mut next_file = false;
+                    match dump_file.read_line(&mut line) {
+                        Ok(0) => next_file = true,
+                        Ok(_) => {},
+                        Err(e) => {
+                            error!("Reading unknown-status dump file: {e}");
+                            next_file = true;
+                        }
+                    }
+                    if next_file {
+                        dump_file_index += 1;
+                        info!("Opening new dump file: {dump_file_index}");
+                        dump_file = File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
+                        dump_file_lines_read = 0;
+                    }
+                }
+                let id = line.split(",").next().unwrap();
+                prp_sender.send(CheckTask { id: id.parse().unwrap(), details: CheckTaskDetails::U {
+                    wait_until: now
+                }}).await.unwrap();
+                lines_read += 1;
+                dump_file_lines_read += 1;
+            }
+            info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+        } else {
+            let search_url = format!("{u_search_url_base}{u_start}");
+            rps_limiter.until_ready().await;
+            let results_text = retrying_get_and_decode(&http, &search_url).await;
+            for id in id_regex.captures_iter(&results_text).map(|result| result[1].to_owned().into_boxed_str()).unique() {
+                prp_sender.send(CheckTask { id: id.parse().unwrap(), details: CheckTaskDetails::U {
+                    wait_until: now
+                }}).await.unwrap();
+            }
+            u_start += U_RESULTS_PER_PAGE;
+        }
+        let _ = prp_sender.reserve_many(MIN_CAPACITY_AT_START_OF_PRP_SEARCH).await.unwrap();
+        let search_url = format!("{prp_search_url_base}{prp_start}");
         rps_limiter.until_ready().await;
         let results_text = retrying_get_and_decode(&http, &search_url).await;
         for id in id_regex.captures_iter(&results_text).map(|result| result[1].to_owned().into_boxed_str()).unique() {
@@ -240,14 +340,16 @@ async fn main() {
                 Err(e) => error!("{id}: {e}"),
                 Ok(None) => {},
                 Ok(Some(task)) => {
-                    bases_since_restart += count_ones(task.bases_left) as usize;
-                    prp_sender.send(CheckTask::Prp(task)).await.unwrap();
+                    if let CheckTask { details: CheckTaskDetails::Prp { bases_left, ..}, .. } = task {
+                        bases_since_restart += count_ones(bases_left) as usize;
+                    }
+                    prp_sender.send(task).await.unwrap();
                 }
             }
         }
         let mut restart = false;
-        start += PRP_RESULTS_PER_PAGE;
-        if start > MAX_START {
+        prp_start += PRP_RESULTS_PER_PAGE;
+        if prp_start > MAX_START || u_start > MAX_START {
             info!("Restarting: reached maximum starting index");
             restart = true;
         } else if results_since_restart >= PRP_TASK_BUFFER_SIZE
@@ -259,8 +361,9 @@ async fn main() {
             info!("Continuing: triggered {bases_since_restart} bases in {results_since_restart} search results");
         }
         if restart {
-            let _ = prp_sender.reserve_many(PRP_MIN_CAPACITY_AT_RESTART).await.unwrap();
-            start = 0;
+            let _ = prp_sender.reserve_many(MIN_CAPACITY_AT_RESTART).await.unwrap();
+            prp_start = 0;
+            u_start = 0;
             results_since_restart = 0;
             bases_since_restart = 0;
             next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
