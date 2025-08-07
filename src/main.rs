@@ -210,13 +210,11 @@ async fn do_checks<
                 if remaining_wait > Duration::ZERO {
                     let remaining_secs = remaining_wait.as_secs();
                     warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
-                    sender
-                        .send(CheckTask {
+                    send_permit.send(CheckTask {
                             id,
                             details: CheckTaskDetails::U { wait_until },
-                        })
-                        .await
-                        .unwrap();
+                        });
+                    send_permit = sender.reserve().await.unwrap();
                 } else {
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
                     let result = retrying_get_and_decode(&http, &url).await;
@@ -238,15 +236,12 @@ async fn do_checks<
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
                                 let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                send_permit
-                                    .send(CheckTask {
+                                send_permit.send(CheckTask {
                                         id,
                                         details: CheckTaskDetails::U {
                                             wait_until: next_try,
                                         },
-                                    })
-                                    .await
-                                    .unwrap();
+                                    });
                                 send_permit = sender.reserve().await.unwrap();
                             }
                             _ => {
@@ -394,7 +389,7 @@ async fn main() {
                     {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
-                    prp_sender.send(task).await.unwrap();
+                    prp_sender.reserve_many(2).await.unwrap().next().unwrap().send(task);
                     let now = Instant::now();
                     if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire)
                         >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES
@@ -421,7 +416,7 @@ async fn main() {
                                 }
                             }
                             let id = line.split(",").next().unwrap();
-                            prp_sender
+                            prp_sender.reserve_many(2).await.unwrap().next().unwrap()
                                 .send(CheckTask {
                                     id: id.parse().unwrap(),
                                     details: CheckTaskDetails::U { wait_until: now },
@@ -442,7 +437,7 @@ async fn main() {
                             .map(|result| result[1].to_owned().into_boxed_str())
                             .unique()
                         {
-                            prp_sender
+                            prp_sender.reserve_many(2).await.unwrap().next().unwrap()
                                 .send(CheckTask {
                                     id: id.parse().unwrap(),
                                     details: CheckTaskDetails::U { wait_until: now },
