@@ -143,6 +143,7 @@ async fn do_checks<
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
+    let mut send_permit = sender.reserve().await.unwrap();
     while let Some(CheckTask { id, details }) = receiver.recv().await {
         task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
         match details {
@@ -237,7 +238,7 @@ async fn do_checks<
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
                                 let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                sender
+                                send_permit
                                     .send(CheckTask {
                                         id,
                                         details: CheckTaskDetails::U {
@@ -246,6 +247,7 @@ async fn do_checks<
                                     })
                                     .await
                                     .unwrap();
+                                send_permit = sender.reserve().await.unwrap();
                             }
                             _ => {
                                 filter.insert(&task_bytes).unwrap();
