@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc::{Receiver, Sender, channel, unbounded_channel};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -121,7 +121,7 @@ async fn do_checks<
     U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
 >(
     mut receiver: Receiver<CheckTask>,
-    sender: Sender<CheckTask>,
+    retry_send: Sender<CheckTask>,
     http: Client,
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) {
@@ -143,7 +143,6 @@ async fn do_checks<
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
-    let (retry_send, mut retry_recv) = unbounded_channel();
     while let Some(CheckTask { id, details }) = receiver.recv().await {
         task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
         match details {
@@ -213,7 +212,7 @@ async fn do_checks<
                     retry_send.send(CheckTask {
                             id,
                             details: CheckTaskDetails::U { wait_until },
-                        }).unwrap();
+                        }).await.unwrap();
                 } else {
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
                     let result = retrying_get_and_decode(&http, &url).await;
@@ -250,10 +249,6 @@ async fn do_checks<
                             }
                         }
                     }
-                }
-                while let Ok(permit) = sender.try_reserve() && let Ok(retried) = retry_recv.try_recv() {
-                    info!("Moving task with ID {} from retry queue to main queue", retried.id);
-                    permit.send(retried);
                 }
             }
         }
@@ -332,7 +327,7 @@ async fn main() {
         .until_n_ready(5800u32.try_into().unwrap())
         .await
         .unwrap();
-
+    let (retry_send, mut retry_recv) = channel(PRP_TASK_BUFFER_SIZE);
     simple_log::console("info").unwrap();
     let prp_search_url_base = format!(
         "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
@@ -366,7 +361,7 @@ async fn main() {
 
     task::spawn(do_checks(
         prp_receiver,
-        prp_sender.clone(),
+        retry_send,
         http.clone(),
         rps_limiter.clone(),
     ));
@@ -384,6 +379,10 @@ async fn main() {
                 Err(e) => error!("{id}: {e}"),
                 Ok(None) => {}
                 Ok(Some(task)) => {
+                    while let Ok(permit) = prp_sender.try_reserve() && let Ok(task) = retry_recv.try_recv() {
+                        info!("Moving retried task with ID {} to main queue (nonblocking)", task.id);
+                        permit.send(task);
+                    }
                     if let CheckTask {
                         details: CheckTaskDetails::Prp { bases_left, .. },
                         ..
@@ -448,6 +447,10 @@ async fn main() {
                         u_start += U_RESULTS_PER_PAGE;
                     }
                 }
+            }
+            while let Ok(task) = retry_recv.try_recv() {
+                info!("Moving retried task with ID {} to main queue (blocking)", task.id);
+                prp_sender.send(task).await.unwrap();
             }
         }
         let mut restart = false;
