@@ -110,7 +110,7 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<C
 }
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
-const MAX_CPU_BUDGET_TENTHS: u64 = 5950;
+const MAX_CPU_BUDGET_TENTHS: u64 = 5900;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(30);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
@@ -295,7 +295,7 @@ async fn throttle_if_necessary<
     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
-    let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset / 3);
+    let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset / 10);
     let bases_remaining =
         (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
     if bases_remaining <= 0 {
