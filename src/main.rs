@@ -344,7 +344,7 @@ async fn main() {
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let mut prp_start = 0;
     let mut u_start = 0;
-    let mut dump_file_index = 3;
+    let mut dump_file_index = 4;
     let mut dump_file = File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
     let mut dump_file_lines_read = 0;
     let mut line = String::new();
