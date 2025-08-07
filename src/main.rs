@@ -169,9 +169,7 @@ async fn do_checks<
                 let bases_count = count_ones(bases_left);
                 info!("{}: {} digits, {} bases to check", id, digits, bases_count);
                 let url_base = format!(
-                    "https://factordb.com/index.php?id={}&open=prime&basetocheck=",
-                    id
-                );
+                    "https://factordb.com/index.php?id={id}&open=prime&basetocheck=");
                 for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
                     let url = format!("{url_base}{base}");
                     rps_limiter.until_ready().await;
@@ -208,7 +206,8 @@ async fn do_checks<
             CheckTaskDetails::U { wait_until } => {
                 let remaining_wait = wait_until.saturating_duration_since(Instant::now());
                 if remaining_wait > Duration::ZERO {
-                    warn!("Waiting {remaining_wait} to start an unknown-status task");
+                    let remaining_secs = remaining_wait.as_secs();
+                    warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
                     sender
                         .send(CheckTask {
                             id,
@@ -217,7 +216,7 @@ async fn do_checks<
                         .await
                         .unwrap();
                 } else {
-                    let url = format!("https://factordb.com/?id=${id}&prp=Assign+to+worker");
+                    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
                     let result = retrying_get_and_decode(&http, &url).await;
                     let Some(status) = u_status_regex.captures_iter(&result).next() else {
                         error!("Failed to decode status for {id} from result: {result}");
