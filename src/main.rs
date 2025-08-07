@@ -121,10 +121,10 @@ async fn do_checks<
     U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
 >(
     mut receiver: Receiver<CheckTask>,
-    retry_send: Sender<CheckTask>,
     http: Client,
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) {
+    let (retry_send, mut retry_recv) = channel(PRP_TASK_BUFFER_SIZE);
     let config = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -196,6 +196,10 @@ async fn do_checks<
                         info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
                         break;
                     }
+                    if let Ok(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                        = retry_recv.try_recv() {
+                        try_handle_unknown(&retry_send, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
+                    }
                 }
             }
             CheckTaskDetails::U { wait_until, source_file } => {
@@ -205,55 +209,60 @@ async fn do_checks<
                     &resources_regex,
                     &mut bases_before_next_cpu_check,
                 ).await;
-                let remaining_wait = wait_until.saturating_duration_since(Instant::now());
-                if remaining_wait > Duration::ZERO {
-                    let remaining_secs = remaining_wait.as_secs();
-                    warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
-                    retry_send.send(CheckTask {
-                            id,
-                            details: CheckTaskDetails::U { wait_until, source_file },
-                        }).await.unwrap();
-                } else {
-                    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-                    let result = retrying_get_and_decode(&http, &url).await;
-                    let Some(status) = u_status_regex.captures_iter(&result).next() else {
-                        error!("Failed to decode status for {id} from result: {result}");
-                        continue;
-                    };
-                    match status.get(1) {
-                        None => error!("Failed to decode status for {id}: {result}"),
-                        Some(matched_status) => match matched_status.as_str() {
-                            "Assigned" => {
-                                filter.insert(&task_bytes).unwrap();
-                                info!(
+                try_handle_unknown(&retry_send, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
+            }
+        }
+    }
+}
+
+async fn try_handle_unknown(retry_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, wait_until: Instant, source_file: Option<u64>) -> bool {
+    let remaining_wait = wait_until.saturating_duration_since(Instant::now());
+    if remaining_wait > Duration::ZERO {
+        let remaining_secs = remaining_wait.as_secs();
+        warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
+        retry_send.send(CheckTask {
+            id,
+            details: CheckTaskDetails::U { wait_until, source_file },
+        }).await.unwrap();
+    } else {
+        let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
+        let result = retrying_get_and_decode(&http, &url).await;
+        let Some(status) = u_status_regex.captures_iter(&result).next() else {
+            error!("Failed to decode status for {id} from result: {result}");
+            return true;
+        };
+        match status.get(1) {
+            None => error!("Failed to decode status for {id}: {result}"),
+            Some(matched_status) => match matched_status.as_str() {
+                "Assigned" => {
+                    filter.insert(task_bytes).unwrap();
+                    info!(
                                     "Assigned PRP check for unknown-status number with ID {id}"
                                 )
-                            }
-                            "Please wait" => {
-                                warn!(
+                }
+                "Please wait" => {
+                    warn!(
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
-                                let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                retry_send.send(CheckTask {
-                                        id,
-                                        details: CheckTaskDetails::U {
-                                            wait_until: next_try,
-                                            source_file
-                                        },
-                                    }).await.unwrap();
-                            }
-                            _ => {
-                                filter.insert(&task_bytes).unwrap();
-                                warn!(
+                    let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                    retry_send.send(CheckTask {
+                        id,
+                        details: CheckTaskDetails::U {
+                            wait_until: next_try,
+                            source_file
+                        },
+                    }).await.unwrap();
+                }
+                _ => {
+                    filter.insert(task_bytes).unwrap();
+                    warn!(
                                     "Unknown-status number with ID {id} is already being checked"
                                 );
-                            }
-                        }
-                    }
                 }
             }
         }
     }
+    false
 }
 
 async fn throttle_if_necessary<
@@ -328,7 +337,6 @@ async fn main() {
         .until_n_ready(6000u32.try_into().unwrap())
         .await
         .unwrap();
-    let (retry_send, mut retry_recv) = channel(PRP_TASK_BUFFER_SIZE);
     simple_log::console("info").unwrap();
     let prp_search_url_base = format!(
         "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
@@ -362,7 +370,6 @@ async fn main() {
 
     task::spawn(do_checks(
         prp_receiver,
-        retry_send,
         http.clone(),
         rps_limiter.clone(),
     ));
@@ -380,10 +387,6 @@ async fn main() {
                 Err(e) => error!("{id}: {e}"),
                 Ok(None) => {}
                 Ok(Some(task)) => {
-                    while let Ok(permit) = prp_sender.try_reserve() && let Ok(retrying_task) = retry_recv.try_recv() {
-                        info!("Moving retried task with ID {} to main queue (nonblocking)", retrying_task.id);
-                        permit.send(retrying_task);
-                    }
                     if let CheckTask {
                         details: CheckTaskDetails::Prp { bases_left, .. },
                         ..
@@ -463,10 +466,6 @@ async fn main() {
                         u_start += U_RESULTS_PER_PAGE;
                     }
                 }
-            }
-            while let Ok(task) = retry_recv.try_recv() {
-                info!("Moving retried task with ID {} to main queue (blocking)", task.id);
-                prp_sender.send(task).await.unwrap();
             }
         }
         let mut restart = false;
