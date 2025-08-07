@@ -35,7 +35,7 @@ const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PA
 #[repr(C)]
 enum CheckTaskDetails {
     Prp { bases_left: U256, digits: u64 },
-    U { wait_until: Instant },
+    U { wait_until: Instant, source_file: Option<u64> },
 }
 struct CheckTask {
     id: u128,
@@ -198,7 +198,7 @@ async fn do_checks<
                     }
                 }
             }
-            CheckTaskDetails::U { wait_until } => {
+            CheckTaskDetails::U { wait_until, source_file } => {
                 throttle_if_necessary(
                     &http,
                     &rps_limiter,
@@ -211,7 +211,7 @@ async fn do_checks<
                     warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
                     retry_send.send(CheckTask {
                             id,
-                            details: CheckTaskDetails::U { wait_until },
+                            details: CheckTaskDetails::U { wait_until, source_file },
                         }).await.unwrap();
                 } else {
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
@@ -238,6 +238,7 @@ async fn do_checks<
                                         id,
                                         details: CheckTaskDetails::U {
                                             wait_until: next_try,
+                                            source_file
                                         },
                                     }).await.unwrap();
                             }
@@ -379,9 +380,9 @@ async fn main() {
                 Err(e) => error!("{id}: {e}"),
                 Ok(None) => {}
                 Ok(Some(task)) => {
-                    while let Ok(permit) = prp_sender.try_reserve() && let Ok(task) = retry_recv.try_recv() {
-                        info!("Moving retried task with ID {} to main queue (nonblocking)", task.id);
-                        permit.send(task);
+                    while let Ok(permit) = prp_sender.try_reserve() && let Ok(retrying_task) = retry_recv.try_recv() {
+                        info!("Moving retried task with ID {} to main queue (nonblocking)", retrying_task.id);
+                        permit.send(retrying_task);
                     }
                     if let CheckTask {
                         details: CheckTaskDetails::Prp { bases_left, .. },
@@ -420,7 +421,7 @@ async fn main() {
                             let id = line.split(",").next().unwrap();
                             prp_sender.send(CheckTask {
                                     id: id.parse().unwrap(),
-                                    details: CheckTaskDetails::U { wait_until: now },
+                                    details: CheckTaskDetails::U { wait_until: now, source_file: Some(dump_file_index) },
                                 }).await.unwrap();
                             info!("Queued check of unknown-status number with ID {id} from dump file");
                             lines_read += 1;
@@ -440,7 +441,7 @@ async fn main() {
                         {
                             prp_sender.send(CheckTask {
                                     id: id.parse().unwrap(),
-                                    details: CheckTaskDetails::U { wait_until: now },
+                                    details: CheckTaskDetails::U { wait_until: now, source_file: None },
                                 }).await.unwrap();
                             info!("Queued check of unknown-status number with ID {id} from search");
                         }
