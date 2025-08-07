@@ -409,19 +409,26 @@ async fn main() {
                     }
                     prp_sender.send(task).await.unwrap();
                     let now = Instant::now();
-                    let mut reserve_result = prp_sender.try_reserve_many(U_RESULTS_PER_PAGE);
-                    let cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+                    let mut reserve_result = None;
+                    let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
                     let use_file = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
                         info!("Using dump file, because {:.1} seconds CPU time has already been spent this cycle",
                             cpu_tenths_spent as f64 * 0.1);
                         true
-                    } else if reserve_result.is_err() {
-                        info!("Using dump file because search results won't fit in queue");
-                        true
                     } else {
-                        info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
+                        if let Ok(permits) = prp_sender.reserve_many(U_RESULTS_PER_PAGE).await {
+                            reserve_result = Some(permits);
+                        }
+                        cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+                        if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+                            info!("Using dump file, because {:.1} seconds CPU time has already been spent this cycle",
                             cpu_tenths_spent as f64 * 0.1);
-                        false
+                            true
+                        } else {
+                            info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
+                                cpu_tenths_spent as f64 * 0.1);
+                            false
+                        }
                     };
                     if use_file {
                         let mut lines_read = 0;
@@ -450,8 +457,8 @@ async fn main() {
                                 id: id.parse().unwrap(),
                                 details: CheckTaskDetails::U { wait_until: now, source_file: Some(dump_file_index) },
                             };
-                            if let Ok(permits) = &mut reserve_result
-                            && let Some(permit) = permits.next() {
+                            if let Some(permits) = &mut reserve_result
+                                    && let Some(permit) = permits.next() {
                                 permit.send(task);
                             } else {
                                 prp_sender.send(task).await.unwrap();
