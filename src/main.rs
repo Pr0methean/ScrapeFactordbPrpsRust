@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{Receiver, Sender, channel, unbounded_channel};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -143,6 +143,7 @@ async fn do_checks<
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
+    let (retry_send, mut retry_recv) = unbounded_channel();
     while let Some(CheckTask { id, details }) = receiver.recv().await {
         task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
         match details {
@@ -209,7 +210,7 @@ async fn do_checks<
                 if remaining_wait > Duration::ZERO {
                     let remaining_secs = remaining_wait.as_secs();
                     warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
-                    sender.send(CheckTask {
+                    retry_send.send(CheckTask {
                             id,
                             details: CheckTaskDetails::U { wait_until },
                         }).await.unwrap();
@@ -249,6 +250,9 @@ async fn do_checks<
                             }
                         }
                     }
+                }
+                while let Some(permit) = sender.try_reserve() && let Some(retried) = retry_recv.try_recv() {
+                    permit.send(retried);
                 }
             }
         }
@@ -386,7 +390,7 @@ async fn main() {
                     {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
-                    prp_sender.reserve_many(2).await.unwrap().next().unwrap().send(task);
+                    prp_sender.send(task).await.unwrap();
                     let now = Instant::now();
                     let cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
                     if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
@@ -414,11 +418,10 @@ async fn main() {
                                 }
                             }
                             let id = line.split(",").next().unwrap();
-                            prp_sender.reserve_many(2).await.unwrap().next().unwrap()
-                                .send(CheckTask {
+                            prp_sender.send(CheckTask {
                                     id: id.parse().unwrap(),
                                     details: CheckTaskDetails::U { wait_until: now },
-                                });
+                                }).await.unwrap();
                             info!("Queued check of unknown-status number with ID {id} from dump file");
                             lines_read += 1;
                             dump_file_lines_read += 1;
@@ -435,11 +438,10 @@ async fn main() {
                             .map(|result| result[1].to_owned().into_boxed_str())
                             .unique()
                         {
-                            prp_sender.reserve_many(2).await.unwrap().next().unwrap()
-                                .send(CheckTask {
+                            prp_sender.send(CheckTask {
                                     id: id.parse().unwrap(),
                                     details: CheckTaskDetails::U { wait_until: now },
-                                });
+                                }).await.unwrap();
                             info!("Queued check of unknown-status number with ID {id} from search");
                         }
                         u_start += U_RESULTS_PER_PAGE;
