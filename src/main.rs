@@ -206,7 +206,9 @@ async fn do_checks<
                 }
             }
             CheckTaskDetails::U { wait_until } => {
-                if Instant::now() < wait_until {
+                let remaining_wait = wait_until.saturating_duration_since(Instant::now());
+                if remaining_wait > Duration::ZERO {
+                    warn!("Waiting {remaining_wait} to start an unknown-status task");
                     sender
                         .send(CheckTask {
                             id,
@@ -217,39 +219,40 @@ async fn do_checks<
                 } else {
                     let url = format!("https://factordb.com/?id=${id}&prp=Assign+to+worker");
                     let result = retrying_get_and_decode(&http, &url).await;
-                    let status = u_status_regex.captures_iter(&result).next();
-                    if let Some(status) = status {
-                        match status.get(1) {
-                            None => error!("Failed to decode status for {id}: {result}"),
-                            Some(matched_status) => match matched_status.as_str() {
-                                "Assigned" => {
-                                    filter.insert(&task_bytes).unwrap();
-                                    info!(
-                                        "Assigned PRP check for unknown-status number with ID {id}"
-                                    )
-                                }
-                                "Please wait" => {
-                                    warn!(
-                                        "Got 'please wait' for unknown-status number with ID {id}"
-                                    );
-                                    let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                    sender
-                                        .send(CheckTask {
-                                            id,
-                                            details: CheckTaskDetails::U {
-                                                wait_until: next_try,
-                                            },
-                                        })
-                                        .await
-                                        .unwrap();
-                                }
-                                _ => {
-                                    filter.insert(&task_bytes).unwrap();
-                                    warn!(
-                                        "Unknown-status number with ID {id} is already being checked"
-                                    );
-                                }
-                            },
+                    let Some(status) = u_status_regex.captures_iter(&result).next() else {
+                        error!("Failed to decode status for {id} from result: {result}");
+                        continue;
+                    };
+                    match status.get(1) {
+                        None => error!("Failed to decode status for {id}: {result}"),
+                        Some(matched_status) => match matched_status.as_str() {
+                            "Assigned" => {
+                                filter.insert(&task_bytes).unwrap();
+                                info!(
+                                    "Assigned PRP check for unknown-status number with ID {id}"
+                                )
+                            }
+                            "Please wait" => {
+                                warn!(
+                                    "Got 'please wait' for unknown-status number with ID {id}"
+                                );
+                                let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                                sender
+                                    .send(CheckTask {
+                                        id,
+                                        details: CheckTaskDetails::U {
+                                            wait_until: next_try,
+                                        },
+                                    })
+                                    .await
+                                    .unwrap();
+                            }
+                            _ => {
+                                filter.insert(&task_bytes).unwrap();
+                                warn!(
+                                    "Unknown-status number with ID {id} is already being checked"
+                                );
+                            }
                         }
                     }
                 }
@@ -406,6 +409,7 @@ async fn main() {
                     })
                     .await
                     .unwrap();
+                info!("Queued check of unknown-status number with ID {id} from dump file");
                 lines_read += 1;
                 dump_file_lines_read += 1;
             }
@@ -426,6 +430,7 @@ async fn main() {
                     })
                     .await
                     .unwrap();
+                info!("Queued check of unknown-status number with ID {id} from search");
             }
             u_start += U_RESULTS_PER_PAGE;
         }
