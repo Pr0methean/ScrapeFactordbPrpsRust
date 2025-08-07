@@ -30,8 +30,6 @@ const MIN_DIGITS_IN_U: u64 = 2001;
 const U_RESULTS_PER_PAGE: usize = 6;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
-const MIN_CAPACITY_AT_START_OF_U_SEARCH: usize = U_RESULTS_PER_PAGE;
-const MIN_CAPACITY_AT_START_OF_PRP_SEARCH: usize = PRP_RESULTS_PER_PAGE - 1;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
@@ -371,10 +369,6 @@ async fn main() {
         rps_limiter.clone(),
     ));
     loop {
-        let _ = prp_sender
-            .reserve_many(MIN_CAPACITY_AT_START_OF_PRP_SEARCH)
-            .await
-            .unwrap();
         let search_url = format!("{prp_search_url_base}{prp_start}");
         rps_limiter.until_ready().await;
         let results_text = retrying_get_and_decode(&http, &search_url).await;
@@ -396,7 +390,6 @@ async fn main() {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
                     prp_sender.send(task).await.unwrap();
-                    let _ = prp_sender.reserve_many(MIN_CAPACITY_AT_START_OF_U_SEARCH).await.unwrap();
                     let now = Instant::now();
                     if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire)
                         >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES
