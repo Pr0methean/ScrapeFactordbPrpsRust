@@ -298,7 +298,7 @@ async fn throttle_if_necessary<
     let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset / 10);
     let bases_remaining =
         (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-    if bases_remaining <= 0 {
+    if bases_remaining < 8 {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
             cpu_tenths_spent_after as f64 * 0.1,
