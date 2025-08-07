@@ -114,6 +114,7 @@ const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(30);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
+const PRP_BASES_PER_U_RETRY: u64 = 32;
 
 async fn do_checks<
     S: DirectStateStore,
@@ -196,7 +197,7 @@ async fn do_checks<
                         info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
                         break;
                     }
-                    if bases_before_next_cpu_check == 1 && let Ok(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                    if bases_before_next_cpu_check % PRP_BASES_PER_U_RETRY == 1 && let Ok(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
                         = retry_recv.try_recv() {
                         try_handle_unknown(&retry_send, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
                     }
