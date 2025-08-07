@@ -112,7 +112,7 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<C
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
 const MAX_CPU_BUDGET_TENTHS: u64 = 5950;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(30);
-const CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
+static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
 
 async fn do_checks<
@@ -291,6 +291,7 @@ async fn throttle_if_necessary<
     //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
     let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10
         + cpu_tenths_within_second.parse::<u64>().unwrap();
+    CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Ordering::Release);
     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
@@ -313,7 +314,6 @@ async fn throttle_if_necessary<
             bases_remaining
         );
         *bases_before_next_cpu_check = bases_remaining;
-        CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Ordering::Release);
     }
 }
 
