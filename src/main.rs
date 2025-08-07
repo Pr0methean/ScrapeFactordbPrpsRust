@@ -16,7 +16,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc::{Receiver, Sender, channel};
+use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -121,6 +121,7 @@ async fn do_checks<
     T: ReasonablyRealtime,
     U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
 >(
+    sender: Sender<CheckTask>,
     mut receiver: Receiver<CheckTask>,
     http: Client,
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
@@ -200,7 +201,7 @@ async fn do_checks<
                     if bases_before_next_cpu_check % PRP_BASES_PER_U_RETRY == 1 {
                         if let Ok(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
                             = retry_recv.try_recv() {
-                            try_handle_unknown(&retry_send, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
+                            try_handle_unknown(&retry_send, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
                         } else {
                             info!("Skipping retry because retry queue is empty");
                         }
@@ -214,21 +215,22 @@ async fn do_checks<
                     &resources_regex,
                     &mut bases_before_next_cpu_check,
                 ).await;
-                try_handle_unknown(&retry_send, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
+                try_handle_unknown(&retry_send, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
             }
         }
     }
 }
 
-async fn try_handle_unknown(retry_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, wait_until: Instant, source_file: Option<u64>) -> bool {
+async fn try_handle_unknown(retry_send: &Sender<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, wait_until: Instant, source_file: Option<u64>) -> bool {
     let remaining_wait = wait_until.saturating_duration_since(Instant::now());
+    let mut requeue = None;
     if remaining_wait > Duration::ZERO {
         let remaining_secs = remaining_wait.as_secs();
         warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
-        retry_send.send(CheckTask {
+        requeue = Some(CheckTask {
             id,
             details: CheckTaskDetails::U { wait_until, source_file },
-        }).await.unwrap();
+        });
     } else {
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
         let result = retrying_get_and_decode(&http, &url).await;
@@ -250,13 +252,13 @@ async fn try_handle_unknown(retry_send: &Sender<CheckTask>, http: &Client, filte
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
                     let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                    retry_send.send(CheckTask {
+                    requeue = Some(CheckTask {
                         id,
                         details: CheckTaskDetails::U {
                             wait_until: next_try,
                             source_file
                         },
-                    }).await.unwrap();
+                    });
                 }
                 _ => {
                     filter.insert(task_bytes).unwrap();
@@ -265,6 +267,11 @@ async fn try_handle_unknown(retry_send: &Sender<CheckTask>, http: &Client, filte
                                 );
                 }
             }
+        }
+    }
+    if let Some(task) = requeue {
+        if let Err(TrySendError::Full(task)) = retry_send.try_send(task) && main_send.try_send(task).is_err() {
+            error!("Aborting PRP check for unknown-status number with ID {id}");
         }
     }
     false
@@ -374,6 +381,7 @@ async fn main() {
     };
 
     task::spawn(do_checks(
+        prp_sender.clone(),
         prp_receiver,
         http.clone(),
         rps_limiter.clone(),
