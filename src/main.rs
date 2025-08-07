@@ -241,12 +241,12 @@ async fn throttle_if_necessary<S: DirectStateStore, T: ReasonablyRealtime, U: Ra
                                 cpu_tenths_spent_after as f64 * 0.1, seconds_to_reset);
             sleep(Duration::from_secs(seconds_to_reset)).await;
             *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
-            CPU_TENTHS_SPENT_LAST_CHECK.store(0, Ordering::AcqRel);
+            CPU_TENTHS_SPENT_LAST_CHECK.store(0, Ordering::Release);
         } else {
             info!("CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
                     cpu_tenths_spent_after as f64 * 0.1, bases_remaining);
             *bases_before_next_cpu_check = bases_remaining;
-            CPU_TENTHS_SPENT_LAST_CHECK.store(bases_remaining, Ordering::AcqRel);
+            CPU_TENTHS_SPENT_LAST_CHECK.store(bases_remaining, Ordering::Release);
         }
     }
     false
@@ -262,7 +262,7 @@ async fn main() {
 
     simple_log::console("info").unwrap();
     let prp_search_url_base = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start=");
-    let u_search_url_base = format!("https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_PRP}&perpage={U_RESULTS_PER_PAGE}&start=");
+    let u_search_url_base = format!("https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start=");
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
     let http = Client::builder()
         .pool_max_idle_per_host(2)
@@ -290,7 +290,7 @@ async fn main() {
     loop {
         let _ = prp_sender.reserve_many(MIN_CAPACITY_AT_START_OF_U_SEARCH).await.unwrap();
         let now = Instant::now();
-        if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::AcqRel) >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+        if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire) >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
             let mut lines_read = 0;
             while lines_read < U_RESULTS_PER_PAGE {
                 line.clear();
