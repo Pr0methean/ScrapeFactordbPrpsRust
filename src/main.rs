@@ -30,7 +30,6 @@ const MIN_DIGITS_IN_U: u64 = 2001;
 const U_RESULTS_PER_PAGE: usize = 3;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
-const MIN_CAPACITY_AT_START_OF_U_SEARCH: usize = U_RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_START_OF_PRP_SEARCH: usize = PRP_RESULTS_PER_PAGE - 1;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
@@ -398,12 +397,22 @@ async fn main() {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
                     prp_sender.send(task).await.unwrap();
-                    let _ = prp_sender.reserve_many(MIN_CAPACITY_AT_START_OF_U_SEARCH).await.unwrap();
                     let now = Instant::now();
+                    let mut reserve_result = prp_sender.try_reserve_many(U_RESULTS_PER_PAGE);
                     let cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
-                    if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+                    let use_file = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
                         info!("Using dump file, because {:.1} seconds CPU time has already been spent this cycle",
                             cpu_tenths_spent as f64 * 0.1);
+                        true
+                    } else if reserve_result.is_err() {
+                        info!("Using dump file because search results won't fit in queue");
+                        true
+                    } else {
+                        info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
+                            cpu_tenths_spent as f64 * 0.1);
+                        false
+                    };
+                    if use_file {
                         let mut lines_read = 0;
                         while lines_read < U_RESULTS_PER_PAGE {
                             line.clear();
@@ -426,18 +435,22 @@ async fn main() {
                                 }
                             }
                             let id = line.split(",").next().unwrap();
-                            prp_sender.send(CheckTask {
-                                    id: id.parse().unwrap(),
-                                    details: CheckTaskDetails::U { wait_until: now, source_file: Some(dump_file_index) },
-                                }).await.unwrap();
+                            let task = CheckTask {
+                                id: id.parse().unwrap(),
+                                details: CheckTaskDetails::U { wait_until: now, source_file: Some(dump_file_index) },
+                            };
+                            if let Ok(permits) = &mut reserve_result
+                            && let Some(permit) = permits.next() {
+                                permit.send(task);
+                            } else {
+                                prp_sender.send(task).await.unwrap();
+                            }
                             info!("Queued check of unknown-status number with ID {id} from dump file");
                             lines_read += 1;
                             dump_file_lines_read += 1;
                         }
                         info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
                     } else {
-                        info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
-                            cpu_tenths_spent as f64 * 0.1);
                         let search_url = format!("{u_search_url_base}{u_start}");
                         rps_limiter.until_ready().await;
                         let results_text = retrying_get_and_decode(&http, &search_url).await;
