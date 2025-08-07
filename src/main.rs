@@ -314,7 +314,7 @@ async fn throttle_if_necessary<
                 bases_remaining
             );
             *bases_before_next_cpu_check = bases_remaining;
-            CPU_TENTHS_SPENT_LAST_CHECK.store(bases_remaining, Ordering::Release);
+            CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Ordering::Release);
         }
     }
     false
