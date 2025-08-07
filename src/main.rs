@@ -396,65 +396,64 @@ async fn main() {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
                     prp_sender.send(task).await.unwrap();
-                    if prp_sender.try_reserve_many(MIN_CAPACITY_AT_START_OF_U_SEARCH).is_ok() {
-                        let now = Instant::now();
-                        if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire)
-                            >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES
-                        {
-                            let mut lines_read = 0;
-                            while lines_read < U_RESULTS_PER_PAGE {
-                                line.clear();
-                                while line.len() == 0 {
-                                    let mut next_file = false;
-                                    match dump_file.read_line(&mut line) {
-                                        Ok(0) => next_file = true,
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            error!("Reading unknown-status dump file: {e}");
-                                            next_file = true;
-                                        }
-                                    }
-                                    if next_file {
-                                        dump_file_index += 1;
-                                        info!("Opening new dump file: {dump_file_index}");
-                                        dump_file =
-                                            File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
-                                        dump_file_lines_read = 0;
+                    let _ = prp_sender.reserve_many(MIN_CAPACITY_AT_START_OF_U_SEARCH).await.unwrap();
+                    let now = Instant::now();
+                    if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire)
+                        >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES
+                    {
+                        let mut lines_read = 0;
+                        while lines_read < U_RESULTS_PER_PAGE {
+                            line.clear();
+                            while line.len() == 0 {
+                                let mut next_file = false;
+                                match dump_file.read_line(&mut line) {
+                                    Ok(0) => next_file = true,
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        error!("Reading unknown-status dump file: {e}");
+                                        next_file = true;
                                     }
                                 }
-                                let id = line.split(",").next().unwrap();
-                                prp_sender
-                                    .send(CheckTask {
-                                        id: id.parse().unwrap(),
-                                        details: CheckTaskDetails::U { wait_until: now },
-                                    })
-                                    .await
-                                    .unwrap();
-                                info!("Queued check of unknown-status number with ID {id} from dump file");
-                                lines_read += 1;
-                                dump_file_lines_read += 1;
+                                if next_file {
+                                    dump_file_index += 1;
+                                    info!("Opening new dump file: {dump_file_index}");
+                                    dump_file =
+                                        File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
+                                    dump_file_lines_read = 0;
+                                }
                             }
-                            info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
-                        } else {
-                            let search_url = format!("{u_search_url_base}{u_start}");
-                            rps_limiter.until_ready().await;
-                            let results_text = retrying_get_and_decode(&http, &search_url).await;
-                            for id in id_regex
-                                .captures_iter(&results_text)
-                                .map(|result| result[1].to_owned().into_boxed_str())
-                                .unique()
-                            {
-                                prp_sender
-                                    .send(CheckTask {
-                                        id: id.parse().unwrap(),
-                                        details: CheckTaskDetails::U { wait_until: now },
-                                    })
-                                    .await
-                                    .unwrap();
-                                info!("Queued check of unknown-status number with ID {id} from search");
-                            }
-                            u_start += U_RESULTS_PER_PAGE;
+                            let id = line.split(",").next().unwrap();
+                            prp_sender
+                                .send(CheckTask {
+                                    id: id.parse().unwrap(),
+                                    details: CheckTaskDetails::U { wait_until: now },
+                                })
+                                .await
+                                .unwrap();
+                            info!("Queued check of unknown-status number with ID {id} from dump file");
+                            lines_read += 1;
+                            dump_file_lines_read += 1;
                         }
+                        info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+                    } else {
+                        let search_url = format!("{u_search_url_base}{u_start}");
+                        rps_limiter.until_ready().await;
+                        let results_text = retrying_get_and_decode(&http, &search_url).await;
+                        for id in id_regex
+                            .captures_iter(&results_text)
+                            .map(|result| result[1].to_owned().into_boxed_str())
+                            .unique()
+                        {
+                            prp_sender
+                                .send(CheckTask {
+                                    id: id.parse().unwrap(),
+                                    details: CheckTaskDetails::U { wait_until: now },
+                                })
+                                .await
+                                .unwrap();
+                            info!("Queued check of unknown-status number with ID {id} from search");
+                        }
+                        u_start += U_RESULTS_PER_PAGE;
                     }
                 }
             }
