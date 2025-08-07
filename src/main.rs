@@ -235,7 +235,7 @@ async fn do_checks<
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
                                 let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                sender.send(CheckTask {
+                                retry_send.send(CheckTask {
                                         id,
                                         details: CheckTaskDetails::U {
                                             wait_until: next_try,
