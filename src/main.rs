@@ -319,12 +319,12 @@ async fn throttle_if_necessary<
 
 #[tokio::main]
 async fn main() {
-    let rps_limiter = RateLimiter::direct(Quota::per_hour(6000u32.try_into().unwrap()));
+    let rps_limiter = RateLimiter::direct(Quota::per_hour(6200u32.try_into().unwrap()));
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
     // so we make it start nearly empty instead.
     rps_limiter
-        .until_n_ready(5800u32.try_into().unwrap())
+        .until_n_ready(6000u32.try_into().unwrap())
         .await
         .unwrap();
     let (retry_send, mut retry_recv) = channel(PRP_TASK_BUFFER_SIZE);
