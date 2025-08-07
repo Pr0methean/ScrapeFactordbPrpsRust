@@ -27,7 +27,7 @@ const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const PRP_RESULTS_PER_PAGE: usize = 64;
 const MIN_DIGITS_IN_PRP: u64 = 300;
 const MIN_DIGITS_IN_U: u64 = 2001;
-const U_RESULTS_PER_PAGE: usize = 6;
+const U_RESULTS_PER_PAGE: usize = 3;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
