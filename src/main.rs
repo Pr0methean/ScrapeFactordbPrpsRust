@@ -143,7 +143,6 @@ async fn do_checks<
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
-    let mut send_permit = sender.reserve().await.unwrap();
     while let Some(CheckTask { id, details }) = receiver.recv().await {
         task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
         match details {
@@ -210,11 +209,10 @@ async fn do_checks<
                 if remaining_wait > Duration::ZERO {
                     let remaining_secs = remaining_wait.as_secs();
                     warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
-                    send_permit.send(CheckTask {
+                    sender.send(CheckTask {
                             id,
                             details: CheckTaskDetails::U { wait_until },
-                        });
-                    send_permit = sender.reserve().await.unwrap();
+                        }).await.unwrap();
                 } else {
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
                     let result = retrying_get_and_decode(&http, &url).await;
@@ -236,13 +234,12 @@ async fn do_checks<
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
                                 let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                send_permit.send(CheckTask {
+                                sender.send(CheckTask {
                                         id,
                                         details: CheckTaskDetails::U {
                                             wait_until: next_try,
                                         },
-                                    });
-                                send_permit = sender.reserve().await.unwrap();
+                                    }).await.unwrap();
                             }
                             _ => {
                                 filter.insert(&task_bytes).unwrap();
@@ -391,9 +388,10 @@ async fn main() {
                     }
                     prp_sender.reserve_many(2).await.unwrap().next().unwrap().send(task);
                     let now = Instant::now();
-                    if CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire)
-                        >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES
-                    {
+                    let cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+                    if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+                        info!("Using dump file, because {:.1} seconds CPU time has already been spent this cycle",
+                            cpu_tenths_spent as f64 * 0.1);
                         let mut lines_read = 0;
                         while lines_read < U_RESULTS_PER_PAGE {
                             line.clear();
@@ -420,15 +418,15 @@ async fn main() {
                                 .send(CheckTask {
                                     id: id.parse().unwrap(),
                                     details: CheckTaskDetails::U { wait_until: now },
-                                })
-                                .await
-                                .unwrap();
+                                });
                             info!("Queued check of unknown-status number with ID {id} from dump file");
                             lines_read += 1;
                             dump_file_lines_read += 1;
                         }
                         info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
                     } else {
+                        info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
+                            cpu_tenths_spent as f64 * 0.1);
                         let search_url = format!("{u_search_url_base}{u_start}");
                         rps_limiter.until_ready().await;
                         let results_text = retrying_get_and_decode(&http, &search_url).await;
@@ -441,9 +439,7 @@ async fn main() {
                                 .send(CheckTask {
                                     id: id.parse().unwrap(),
                                     details: CheckTaskDetails::U { wait_until: now },
-                                })
-                                .await
-                                .unwrap();
+                                });
                             info!("Queued check of unknown-status number with ID {id} from search");
                         }
                         u_start += U_RESULTS_PER_PAGE;
