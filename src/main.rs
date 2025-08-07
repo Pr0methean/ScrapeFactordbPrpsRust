@@ -142,8 +142,14 @@ async fn do_checks<
             .dot_matches_new_line(true)
             .build()
             .unwrap();
-    let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut bases_before_next_cpu_check = 1;
+    throttle_if_necessary(
+        &http,
+        &rps_limiter,
+        &resources_regex,
+        &mut bases_before_next_cpu_check,
+    ).await;
+    let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
     while let Some(CheckTask { id, details }) = receiver.recv().await {
         task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
