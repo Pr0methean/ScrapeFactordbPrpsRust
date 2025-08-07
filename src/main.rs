@@ -110,7 +110,7 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<C
 }
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
-const MAX_CPU_BUDGET_TENTHS: u64 = 5900;
+const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(30);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
