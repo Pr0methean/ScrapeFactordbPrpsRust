@@ -213,7 +213,7 @@ async fn do_checks<
                     retry_send.send(CheckTask {
                             id,
                             details: CheckTaskDetails::U { wait_until },
-                        }).await.unwrap();
+                        }).unwrap();
                 } else {
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
                     let result = retrying_get_and_decode(&http, &url).await;
@@ -251,7 +251,8 @@ async fn do_checks<
                         }
                     }
                 }
-                while let Some(permit) = sender.try_reserve() && let Some(retried) = retry_recv.try_recv() {
+                while let Ok(permit) = sender.try_reserve() && let Ok(retried) = retry_recv.try_recv() {
+                    info!("Moving task with ID {} from retry queue to main queue", retried.id);
                     permit.send(retried);
                 }
             }
