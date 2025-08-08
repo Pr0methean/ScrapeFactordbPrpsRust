@@ -150,6 +150,7 @@ async fn do_checks<
         &rps_limiter,
         &resources_regex,
         &mut bases_before_next_cpu_check,
+        false
     ).await;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
@@ -192,6 +193,7 @@ async fn do_checks<
                         &rps_limiter,
                         &resources_regex,
                         &mut bases_before_next_cpu_check,
+                        true
                     )
                     .await;
                     if cert_regex.is_match(&text) {
@@ -237,6 +239,7 @@ async fn do_checks<
                     &rps_limiter,
                     &resources_regex,
                     &mut bases_before_next_cpu_check,
+                    true
                 ).await;
                 if try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
                     loop {
@@ -336,12 +339,15 @@ async fn throttle_if_necessary<
     rps_limiter: &Arc<RateLimiter<NotKeyed, S, T, U>>,
     resources_regex: &Regex,
     bases_before_next_cpu_check: &mut u64,
+    sleep_first: bool
 ) {
     *bases_before_next_cpu_check -= 1;
     if *bases_before_next_cpu_check != 0 {
         return;
     }
-    sleep(Duration::from_secs(10)).await; // allow for delay in CPU accounting
+    if sleep_first {
+        sleep(Duration::from_secs(10)).await; // allow for delay in CPU accounting
+    }
     rps_limiter.until_ready().await;
     let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
     // info!("Resources fetched");
