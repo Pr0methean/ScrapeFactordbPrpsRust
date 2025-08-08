@@ -238,7 +238,18 @@ async fn do_checks<
                     &resources_regex,
                     &mut bases_before_next_cpu_check,
                 ).await;
-                try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
+                if try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
+                    loop {
+                        let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                            = retry.pop_front() else {
+                            break;
+                        };
+                        rps_limiter.until_ready().await;
+                        if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
+                            break;
+                        }
+                    }
+                }
             }
         }
     }
