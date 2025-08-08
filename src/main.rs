@@ -410,7 +410,7 @@ async fn main() {
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
     // so we make it start nearly empty instead.
     rps_limiter
-        .until_n_ready(6000u32.try_into().unwrap())
+        .until_n_ready(6150u32.try_into().unwrap())
         .await
         .unwrap();
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
