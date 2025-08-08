@@ -1,6 +1,7 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
+use std::collections::VecDeque;
 use anyhow::anyhow;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use governor::clock::{DefaultClock, ReasonablyRealtime};
@@ -127,7 +128,7 @@ async fn do_checks<
     http: Client,
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) {
-    let (retry_send, mut retry_recv) = channel(PRP_TASK_BUFFER_SIZE);
+    let mut retry = VecDeque::with_capacity(PRP_TASK_BUFFER_SIZE);
     let config = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -206,9 +207,9 @@ async fn do_checks<
                         break;
                     }
                     if bases_before_next_cpu_check % PRP_BASES_PER_U_RETRY == 1 {
-                        if let Ok(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
-                            = retry_recv.try_recv() {
-                            try_handle_unknown(&retry_send, &sender, &mut retry_recv, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
+                        if let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                            = retry.pop_front() {
+                            try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
                         } else {
                             info!("Skipping retry because retry queue is empty");
                         }
@@ -222,13 +223,13 @@ async fn do_checks<
                     &resources_regex,
                     &mut bases_before_next_cpu_check,
                 ).await;
-                try_handle_unknown(&retry_send, &sender, &mut retry_recv, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
+                try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
             }
         }
     }
 }
 
-async fn try_handle_unknown(retry_send: &Sender<CheckTask>, main_send: &Sender<CheckTask>, retry_recv: &mut Receiver<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, wait_until: Instant, source_file: Option<u64>) -> bool {
+async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, wait_until: Instant, source_file: Option<u64>) -> bool {
     let remaining_wait = wait_until.saturating_duration_since(Instant::now());
     let mut requeue = None;
     if remaining_wait > Duration::ZERO {
@@ -277,15 +278,17 @@ async fn try_handle_unknown(retry_send: &Sender<CheckTask>, main_send: &Sender<C
         }
     }
     if let Some(task) = requeue {
-        if let Err(TrySendError::Full(task)) = retry_send.try_send(task) {
+        if retry.len() >= PRP_TASK_BUFFER_SIZE {
             if let Err(TrySendError::Full(task)) = main_send.try_send(task) {
                 // Both queues are full, so abandon the oldest retry
-                let oldest_task = retry_recv.try_recv().unwrap();
-                retry_send.try_send(task).unwrap();
+                let oldest_task = retry.pop_front().unwrap();
                 error!("Aborting PRP check for unknown-status number with ID {}", oldest_task.id);
+                retry.push_back(task);
             } else {
                 warn!("Sent unknown-status number with ID {id} back to main queue, because retry queue is full");
             }
+        } else {
+            retry.push_back(task);
         }
     }
     false
