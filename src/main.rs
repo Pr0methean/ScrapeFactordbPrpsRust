@@ -67,7 +67,13 @@ async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
             Err(http_error) => error!("Error reading {url}: {http_error}"),
             Ok(body) => match body.text().await {
                 Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
-                Ok(text) => return text.into_boxed_str(),
+                Ok(text) => {
+                    if text.contains("502 Proxy Error") {
+                        error!("502 error from {url}");
+                    } else {
+                        return text.into_boxed_str()
+                    }
+                },
             },
         }
         sleep(RETRY_DELAY).await;
