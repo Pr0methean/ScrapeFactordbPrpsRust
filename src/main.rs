@@ -207,14 +207,27 @@ async fn do_checks<
                         break;
                     }
                     if bases_before_next_cpu_check % PRP_BASES_PER_U_RETRY == 1 {
-                        while let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                        let mut retry_blocked = false;
+                        while !retry_blocked && let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
                             = retry.pop_front() {
                             rps_limiter.until_ready().await;
                             if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
-                                break;
+                                retry_blocked = true;
                             }
                         }
-                        info!("Retry queue has {} entries", retry.len());
+                        if !retry_blocked && (retry.len() == 0) {
+                            info!("Retry queue empty; checking main queue for U's");
+                            while let Ok(permit) = sender.try_reserve() && let Ok(task) = receiver.try_recv() {
+                                let CheckTaskDetails::U { wait_until, source_file } = task.details else {
+                                    permit.send(task);
+                                    break;
+                                };
+                                rps_limiter.until_ready().await;
+                                if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
