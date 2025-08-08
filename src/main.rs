@@ -290,7 +290,7 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
             }
         } else {
             retry.push_back(task);
-            info!("{} entries in retry queue", retry_queue_len);
+            info!("{} entries in retry queue", retry_queue_len + 1);
         }
     }
     false
