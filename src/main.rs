@@ -220,8 +220,7 @@ async fn do_checks<
                         let mut retry_blocked = false;
                         while !retry_blocked && let Some(CheckTask { id, details: CheckTaskDetails::U { source_file, .. } })
                             = retry.pop_front() {
-                            rps_limiter.until_ready().await;
-                            if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
+                            if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                                 retry_blocked = true;
                             }
                         }
@@ -232,8 +231,7 @@ async fn do_checks<
                                     permit.send(task);
                                     break;
                                 };
-                                rps_limiter.until_ready().await;
-                                if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
+                                if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                                     break;
                                 }
                             }
@@ -249,14 +247,14 @@ async fn do_checks<
                     &mut bases_before_next_cpu_check,
                     true
                 ).await;
-                if try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
+                if try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                     loop {
                         let Some(CheckTask { id, details: CheckTaskDetails::U { source_file } })
                             = retry.pop_front() else {
                             break;
                         };
                         rps_limiter.until_ready().await;
-                        if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
+                        if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                             break;
                         }
                     }
@@ -266,7 +264,11 @@ async fn do_checks<
     }
 }
 
-async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, next_attempt: &mut Instant, source_file: Option<u64>) -> bool {
+async fn try_handle_unknown<
+    S: DirectStateStore,
+    T: ReasonablyRealtime,
+    U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
+>(retry: &mut VecDeque<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, next_attempt: &mut Instant, source_file: Option<u64>, rate_limiter: &Arc<RateLimiter<NotKeyed, S, T, U>>) -> bool {
     let remaining_wait = next_attempt.saturating_duration_since(Instant::now());
     let mut requeue = None;
     if remaining_wait > UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT {
@@ -279,6 +281,7 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
     } else {
         sleep(remaining_wait).await;
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
+        rate_limiter.until_ready().await;
         let result = retrying_get_and_decode(&http, &url).await;
         if let Some(status) = u_status_regex.captures_iter(&result).next() {
             match status.get(1) {
