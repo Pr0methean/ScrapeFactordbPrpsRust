@@ -277,12 +277,15 @@ async fn try_handle_unknown(retry_send: &Sender<CheckTask>, main_send: &Sender<C
         }
     }
     if let Some(task) = requeue {
-        if let Err(TrySendError::Full(task)) = retry_send.try_send(task)
-                && let Err(TrySendError::Full(task)) = main_send.try_send(task) {
-            // Both queues are full, so abandon the oldest retry
-            let oldest_task = retry_recv.try_recv().unwrap();
-            retry_send.try_send(task).unwrap();
-            error!("Aborting PRP check for unknown-status number with ID {}", oldest_task.id);
+        if let Err(TrySendError::Full(task)) = retry_send.try_send(task) {
+            if let Err(TrySendError::Full(task)) = main_send.try_send(task) {
+                // Both queues are full, so abandon the oldest retry
+                let oldest_task = retry_recv.try_recv().unwrap();
+                retry_send.try_send(task).unwrap();
+                error!("Aborting PRP check for unknown-status number with ID {}", oldest_task.id);
+            } else {
+                warn!("Sent unknown-status number with ID {id} back to main queue, because retry queue is full");
+            }
         }
     }
     false
