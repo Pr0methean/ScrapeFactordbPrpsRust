@@ -121,6 +121,7 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<C
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
 const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
+const UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT: Duration = Duration::from_secs(1);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
 
@@ -268,7 +269,7 @@ async fn do_checks<
 async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, next_attempt: &mut Instant, source_file: Option<u64>) -> bool {
     let remaining_wait = next_attempt.saturating_duration_since(Instant::now());
     let mut requeue = None;
-    if remaining_wait > Duration::ZERO {
+    if remaining_wait > UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT {
         let remaining_secs = remaining_wait.as_secs();
         warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
         requeue = Some(CheckTask {
@@ -276,6 +277,7 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
             details: CheckTaskDetails::U { source_file },
         });
     } else {
+        sleep(remaining_wait).await;
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
         let result = retrying_get_and_decode(&http, &url).await;
         if let Some(status) = u_status_regex.captures_iter(&result).next() {
