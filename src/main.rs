@@ -413,13 +413,6 @@ async fn main() {
         .until_n_ready(6000u32.try_into().unwrap())
         .await
         .unwrap();
-    simple_log::console("info").unwrap();
-    let prp_search_url_base = format!(
-        "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
-    );
-    let u_search_url_base = format!(
-        "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
-    );
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
     let http = Client::builder()
         .pool_max_idle_per_host(2)
@@ -427,6 +420,20 @@ async fn main() {
         .build()
         .unwrap();
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
+    let rps_limiter = Arc::new(rps_limiter);
+    task::spawn(do_checks(
+        prp_sender.clone(),
+        prp_receiver,
+        http.clone(),
+        rps_limiter.clone(),
+    ));
+    simple_log::console("info").unwrap();
+    let prp_search_url_base = format!(
+        "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
+    );
+    let u_search_url_base = format!(
+        "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
+    );
     let mut prp_start = 0;
     let mut u_start = 0;
     let mut dump_file_index = 0;
@@ -436,20 +443,12 @@ async fn main() {
     let mut bases_since_restart = 0;
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
-    let rps_limiter = Arc::new(rps_limiter);
     let ctx = BuildTaskContext {
         bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
         digits_regex: Regex::new("&lt;([0-9]+)&gt;").unwrap(),
         http: http.clone(),
         rps_limiter: rps_limiter.clone(),
     };
-
-    task::spawn(do_checks(
-        prp_sender.clone(),
-        prp_receiver,
-        http.clone(),
-        rps_limiter.clone(),
-    ));
     for _ in 0..U_RESULTS_PER_PAGE {
         queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut None).await;
     }
