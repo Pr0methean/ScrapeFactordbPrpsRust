@@ -31,12 +31,13 @@ const U_RESULTS_PER_PAGE: usize = 3;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
-#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 enum CheckTaskDetails {
     Prp { bases_left: U256, digits: u64 },
     U { wait_until: Instant, source_file: Option<u64> },
 }
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 struct CheckTask {
     id: u128,
     details: CheckTaskDetails,
@@ -163,7 +164,7 @@ async fn do_checks<
         }
         match filter.query(&task_bytes) {
             Ok(true) => {
-                warn!("Detected a duplicate task: ID {}", id);
+                warn!("Detected a duplicate task: ID {id}, {details:?}");
                 continue;
             }
             Ok(false) => {}
