@@ -14,10 +14,10 @@ use primitive_types::U256;
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use std::fs::File;
-use std::io::BufRead;
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel};
+use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel, PermitIterator};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -403,6 +403,7 @@ async fn main() {
         http.clone(),
         rps_limiter.clone(),
     ));
+    queue_unknowns_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, Instant::now(), &mut None).await;
     loop {
         let search_url = format!("{prp_search_url_base}{prp_start}");
         rps_limiter.until_ready().await;
@@ -448,42 +449,7 @@ async fn main() {
                         }
                     };
                     if use_file {
-                        let mut lines_read = 0;
-                        while lines_read < U_RESULTS_PER_PAGE {
-                            line.clear();
-                            while line.len() == 0 {
-                                let mut next_file = false;
-                                match dump_file.read_line(&mut line) {
-                                    Ok(0) => next_file = true,
-                                    Ok(_) => {}
-                                    Err(e) => {
-                                        error!("Reading unknown-status dump file: {e}");
-                                        next_file = true;
-                                    }
-                                }
-                                if next_file {
-                                    dump_file_index += 1;
-                                    info!("Opening new dump file: {dump_file_index}");
-                                    dump_file =
-                                        File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
-                                    dump_file_lines_read = 0;
-                                }
-                            }
-                            let id = line.split(",").next().unwrap();
-                            let task = CheckTask {
-                                id: id.parse().unwrap(),
-                                details: CheckTaskDetails::U { wait_until: now, source_file: Some(dump_file_index) },
-                            };
-                            if let Some(permits) = &mut reserve_result
-                                    && let Some(permit) = permits.next() {
-                                permit.send(task);
-                            } else {
-                                prp_sender.send(task).await.unwrap();
-                            }
-                            info!("Queued check of unknown-status number with ID {id} from dump file");
-                            lines_read += 1;
-                            dump_file_lines_read += 1;
-                        }
+                        queue_unknowns_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, now, &mut reserve_result).await;
                         info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
                     } else {
                         let search_url = format!("{u_search_url_base}{u_start}");
@@ -534,5 +500,44 @@ async fn main() {
             bases_since_restart = 0;
             next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
         }
+    }
+}
+
+async fn queue_unknowns_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, now: Instant, reserve_result: &mut Option<PermitIterator<'_, CheckTask>>) {
+    let mut lines_read = 0;
+    while lines_read < U_RESULTS_PER_PAGE {
+        line.clear();
+        while line.len() == 0 {
+            let mut next_file = false;
+            match dump_file.read_line(&mut line) {
+                Ok(0) => next_file = true,
+                Ok(_) => {}
+                Err(e) => {
+                    error!("Reading unknown-status dump file: {e}");
+                    next_file = true;
+                }
+            }
+            if next_file {
+                *dump_file_index += 1;
+                info!("Opening new dump file: {dump_file_index}");
+                *dump_file =
+                    File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
+                *dump_file_lines_read = 0;
+            }
+        }
+        let id = line.split(",").next().unwrap();
+        let task = CheckTask {
+            id: id.parse().unwrap(),
+            details: CheckTaskDetails::U { wait_until: now, source_file: Some(*dump_file_index) },
+        };
+        if let Some(permits) = reserve_result
+            && let Some(permit) = permits.next() {
+            permit.send(task);
+        } else {
+            prp_sender.send(task).await.unwrap();
+        }
+        info!("Queued check of unknown-status number with ID {id} from dump file");
+        lines_read += 1;
+        *dump_file_lines_read += 1;
     }
 }
