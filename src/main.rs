@@ -207,12 +207,11 @@ async fn do_checks<
                         break;
                     }
                     if bases_before_next_cpu_check % PRP_BASES_PER_U_RETRY == 1 {
-                        if let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                        while let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
                             = retry.pop_front() {
                             try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
-                        } else {
-                            info!("Skipping retry because retry queue is empty");
                         }
+                        info!("Retry queue has {} entries", retry.len());
                     }
                 }
             }
@@ -242,40 +241,44 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
     } else {
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
         let result = retrying_get_and_decode(&http, &url).await;
-        let Some(status) = u_status_regex.captures_iter(&result).next() else {
-            error!("Failed to decode status for {id} from result: {result}");
-            return true;
-        };
-        match status.get(1) {
-            None => error!("Failed to decode status for {id}: {result}"),
-            Some(matched_status) => match matched_status.as_str() {
-                "Assigned" => {
-                    filter.insert(task_bytes).unwrap();
-                    info!(
+        if let Some(status) = u_status_regex.captures_iter(&result).next() {
+            match status.get(1) {
+                None => error!("Failed to decode status for {id}: {result}"),
+                Some(matched_status) => match matched_status.as_str() {
+                    "Assigned" => {
+                        filter.insert(task_bytes).unwrap();
+                        info!(
                                     "Assigned PRP check for unknown-status number with ID {id}"
                                 )
-                }
-                "Please wait" => {
-                    warn!(
+                    }
+                    "Please wait" => {
+                        warn!(
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
-                    let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                    requeue = Some(CheckTask {
-                        id,
-                        details: CheckTaskDetails::U {
-                            wait_until: next_try,
-                            source_file
-                        },
-                    });
-                }
-                _ => {
-                    filter.insert(task_bytes).unwrap();
-                    warn!(
+                        let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                        requeue = Some(CheckTask {
+                            id,
+                            details: CheckTaskDetails::U {
+                                wait_until: next_try,
+                                source_file
+                            },
+                        });
+                    }
+                    _ => {
+                        filter.insert(task_bytes).unwrap();
+                        warn!(
                                     "Unknown-status number with ID {id} is already being checked"
                                 );
+                    }
                 }
             }
-        }
+        } else {
+            error!("Failed to decode status for {id} from result: {result}");
+            requeue = Some(CheckTask {
+                id,
+                details: CheckTaskDetails::U { wait_until, source_file },
+            });
+        };
     }
     if let Some(task) = requeue {
         let retry_queue_len = retry.len();
@@ -292,8 +295,9 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
             retry.push_back(task);
             info!("{} entries in retry queue", retry_queue_len + 1);
         }
+        return false;
     }
-    false
+    true
 }
 
 async fn throttle_if_necessary<
