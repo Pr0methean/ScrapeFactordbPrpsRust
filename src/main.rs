@@ -278,7 +278,8 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
         }
     }
     if let Some(task) = requeue {
-        if retry.len() >= PRP_TASK_BUFFER_SIZE {
+        let retry_queue_len = retry.len();
+        if retry_queue_len >= PRP_TASK_BUFFER_SIZE {
             if let Err(TrySendError::Full(task)) = main_send.try_send(task) {
                 // Both queues are full, so abandon the oldest retry
                 let oldest_task = retry.pop_front().unwrap();
@@ -289,6 +290,7 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
             }
         } else {
             retry.push_back(task);
+            info!("{} entries in retry queue", retry_queue_len);
         }
     }
     false
