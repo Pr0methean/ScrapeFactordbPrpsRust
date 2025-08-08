@@ -209,6 +209,7 @@ async fn do_checks<
                     if bases_before_next_cpu_check % PRP_BASES_PER_U_RETRY == 1 {
                         while let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
                             = retry.pop_front() {
+                            rps_limiter.until_ready().await;
                             try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await;
                         }
                         info!("Retry queue has {} entries", retry.len());
