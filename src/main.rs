@@ -1,5 +1,6 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
+#![feature(generic_atomic)]
 
 use std::collections::VecDeque;
 use anyhow::anyhow;
@@ -36,7 +37,7 @@ const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PA
 #[repr(C)]
 enum CheckTaskDetails {
     Prp { bases_left: U256, digits: u64 },
-    U { wait_until: Instant, source_file: Option<u64> },
+    U { source_file: Option<u64> },
 }
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 struct CheckTask {
@@ -128,6 +129,7 @@ async fn do_checks<
     http: Client,
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) {
+    let mut next_unknown_attempt = Instant::now();
     let mut retry = VecDeque::with_capacity(PRP_TASK_BUFFER_SIZE);
     let config = FilterConfigBuilder::default()
         .capacity(2500)
@@ -210,22 +212,22 @@ async fn do_checks<
                     }
                     if bases_before_next_cpu_check % PRP_BASES_PER_U_RETRY == 1 {
                         let mut retry_blocked = false;
-                        while !retry_blocked && let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                        while !retry_blocked && let Some(CheckTask { id, details: CheckTaskDetails::U { source_file, .. } })
                             = retry.pop_front() {
                             rps_limiter.until_ready().await;
-                            if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
+                            if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
                                 retry_blocked = true;
                             }
                         }
                         if !retry_blocked && (retry.len() == 0) {
                             info!("Retry queue empty; checking main queue for U's");
                             while let Ok(permit) = sender.try_reserve() && let Ok(task) = receiver.try_recv() {
-                                let CheckTaskDetails::U { wait_until, source_file } = task.details else {
+                                let CheckTaskDetails::U { source_file } = task.details else {
                                     permit.send(task);
                                     break;
                                 };
                                 rps_limiter.until_ready().await;
-                                if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
+                                if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
                                     break;
                                 }
                             }
@@ -233,7 +235,7 @@ async fn do_checks<
                     }
                 }
             }
-            CheckTaskDetails::U { wait_until, source_file } => {
+            CheckTaskDetails::U { source_file } => {
                 throttle_if_necessary(
                     &http,
                     &rps_limiter,
@@ -241,14 +243,14 @@ async fn do_checks<
                     &mut bases_before_next_cpu_check,
                     true
                 ).await;
-                if try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
+                if try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
                     loop {
-                        let Some(CheckTask { id, details: CheckTaskDetails::U { wait_until, source_file } })
+                        let Some(CheckTask { id, details: CheckTaskDetails::U { source_file } })
                             = retry.pop_front() else {
                             break;
                         };
                         rps_limiter.until_ready().await;
-                        if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, wait_until, source_file).await {
+                        if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file).await {
                             break;
                         }
                     }
@@ -258,15 +260,15 @@ async fn do_checks<
     }
 }
 
-async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, wait_until: Instant, source_file: Option<u64>) -> bool {
-    let remaining_wait = wait_until.saturating_duration_since(Instant::now());
+async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, next_attempt: &mut Instant, source_file: Option<u64>) -> bool {
+    let remaining_wait = next_attempt.saturating_duration_since(Instant::now());
     let mut requeue = None;
     if remaining_wait > Duration::ZERO {
         let remaining_secs = remaining_wait.as_secs();
         warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
         requeue = Some(CheckTask {
             id,
-            details: CheckTaskDetails::U { wait_until, source_file },
+            details: CheckTaskDetails::U { source_file },
         });
     } else {
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
@@ -285,11 +287,10 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
                         warn!(
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
-                        let next_try = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                        *next_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
                         requeue = Some(CheckTask {
                             id,
                             details: CheckTaskDetails::U {
-                                wait_until: next_try,
                                 source_file
                             },
                         });
@@ -306,7 +307,7 @@ async fn try_handle_unknown(retry: &mut VecDeque<CheckTask>, main_send: &Sender<
             error!("Failed to decode status for {id} from result: {result}");
             requeue = Some(CheckTask {
                 id,
-                details: CheckTaskDetails::U { wait_until, source_file },
+                details: CheckTaskDetails::U { source_file },
             });
         };
     }
@@ -443,7 +444,7 @@ async fn main() {
         rps_limiter.clone(),
     ));
     for _ in 0..U_RESULTS_PER_PAGE {
-        queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, Instant::now(), &mut None).await;
+        queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut None).await;
     }
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
@@ -468,7 +469,6 @@ async fn main() {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
                     prp_sender.send(task).await.unwrap();
-                    let now = Instant::now();
                     let mut reserve_result = None;
                     let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
                     let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
@@ -490,7 +490,7 @@ async fn main() {
                             true
                         }
                     };
-                    queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, now, &mut reserve_result).await;
+                    queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut reserve_result).await;
                     if use_search {
                         let search_url = format!("{u_search_url_base}{u_start}");
                         rps_limiter.until_ready().await;
@@ -502,14 +502,14 @@ async fn main() {
                         {
                             prp_sender.send(CheckTask {
                                     id: id.parse().unwrap(),
-                                    details: CheckTaskDetails::U { wait_until: now, source_file: None },
+                                    details: CheckTaskDetails::U { source_file: None },
                                 }).await.unwrap();
                             info!("Queued check of unknown-status number with ID {id} from search");
                         }
                         u_start += U_RESULTS_PER_PAGE;
                     } else {
                         for _ in 0..U_RESULTS_PER_PAGE {
-                            queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, now, &mut reserve_result).await;
+                            queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut reserve_result).await;
                         }
                     }
                     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
@@ -548,7 +548,7 @@ async fn main() {
     }
 }
 
-async fn queue_unknown_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, now: Instant, reserve_result: &mut Option<PermitIterator<'_, CheckTask>>) {
+async fn queue_unknown_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, reserve_result: &mut Option<PermitIterator<'_, CheckTask>>) {
     line.clear();
     while line.len() == 0 {
         let mut next_file = false;
@@ -576,7 +576,7 @@ async fn queue_unknown_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_
     let id = line.split(",").next().unwrap();
     let task = CheckTask {
         id: id.parse().unwrap(),
-        details: CheckTaskDetails::U { wait_until: now, source_file: Some(*dump_file_index) },
+        details: CheckTaskDetails::U { source_file: Some(*dump_file_index) },
     };
     if let Some(permits) = reserve_result
         && let Some(permit) = permits.next() {
