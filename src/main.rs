@@ -442,7 +442,10 @@ async fn main() {
         http.clone(),
         rps_limiter.clone(),
     ));
-    queue_unknowns_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, Instant::now(), &mut None).await;
+    for _ in 0..U_RESULTS_PER_PAGE {
+        queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, Instant::now(), &mut None).await;
+    }
+    info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
         let search_url = format!("{prp_search_url_base}{prp_start}");
         rps_limiter.until_ready().await;
@@ -468,29 +471,27 @@ async fn main() {
                     let now = Instant::now();
                     let mut reserve_result = None;
                     let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
-                    let use_file = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
-                        info!("Using dump file, because {:.1} seconds CPU time has already been spent this cycle",
+                    let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+                        info!("Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
                             cpu_tenths_spent as f64 * 0.1);
-                        true
+                        false
                     } else {
                         if let Ok(permits) = prp_sender.reserve_many(U_RESULTS_PER_PAGE).await {
                             reserve_result = Some(permits);
                         }
                         cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
                         if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
-                            info!("Using dump file, because {:.1} seconds CPU time has already been spent this cycle",
+                            info!("Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
                             cpu_tenths_spent as f64 * 0.1);
-                            true
+                            false
                         } else {
                             info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
                                 cpu_tenths_spent as f64 * 0.1);
-                            false
+                            true
                         }
                     };
-                    if use_file {
-                        queue_unknowns_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, now, &mut reserve_result).await;
-                        info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
-                    } else {
+                    queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, now, &mut reserve_result).await;
+                    if use_search {
                         let search_url = format!("{u_search_url_base}{u_start}");
                         rps_limiter.until_ready().await;
                         let results_text = retrying_get_and_decode(&http, &search_url).await;
@@ -506,7 +507,12 @@ async fn main() {
                             info!("Queued check of unknown-status number with ID {id} from search");
                         }
                         u_start += U_RESULTS_PER_PAGE;
+                    } else {
+                        for _ in 0..U_RESULTS_PER_PAGE {
+                            queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, now, &mut reserve_result).await;
+                        }
                     }
+                    info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
                 }
             }
         }
@@ -542,41 +548,37 @@ async fn main() {
     }
 }
 
-async fn queue_unknowns_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, now: Instant, reserve_result: &mut Option<PermitIterator<'_, CheckTask>>) {
-    let mut lines_read = 0;
-    while lines_read < U_RESULTS_PER_PAGE {
-        line.clear();
-        while line.len() == 0 {
-            let mut next_file = false;
-            match dump_file.read_line(&mut line) {
-                Ok(0) => next_file = true,
-                Ok(_) => {}
-                Err(e) => {
-                    error!("Reading unknown-status dump file: {e}");
-                    next_file = true;
-                }
-            }
-            if next_file {
-                *dump_file_index += 1;
-                info!("Opening new dump file: {dump_file_index}");
-                *dump_file =
-                    File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
-                *dump_file_lines_read = 0;
+async fn queue_unknown_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, now: Instant, reserve_result: &mut Option<PermitIterator<'_, CheckTask>>) {
+    line.clear();
+    while line.len() == 0 {
+        let mut next_file = false;
+        match dump_file.read_line(&mut line) {
+            Ok(0) => next_file = true,
+            Ok(_) => {}
+            Err(e) => {
+                error!("Reading unknown-status dump file: {e}");
+                next_file = true;
             }
         }
-        let id = line.split(",").next().unwrap();
-        let task = CheckTask {
-            id: id.parse().unwrap(),
-            details: CheckTaskDetails::U { wait_until: now, source_file: Some(*dump_file_index) },
-        };
-        if let Some(permits) = reserve_result
-            && let Some(permit) = permits.next() {
-            permit.send(task);
-        } else {
-            prp_sender.send(task).await.unwrap();
+        if next_file {
+            *dump_file_index += 1;
+            info!("Opening new dump file: {dump_file_index}");
+            *dump_file =
+                File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
+            *dump_file_lines_read = 0;
         }
-        info!("Queued check of unknown-status number with ID {id} from dump file");
-        lines_read += 1;
-        *dump_file_lines_read += 1;
     }
+    let id = line.split(",").next().unwrap();
+    let task = CheckTask {
+        id: id.parse().unwrap(),
+        details: CheckTaskDetails::U { wait_until: now, source_file: Some(*dump_file_index) },
+    };
+    if let Some(permits) = reserve_result
+        && let Some(permit) = permits.next() {
+        permit.send(task);
+    } else {
+        prp_sender.send(task).await.unwrap();
+    }
+    info!("Queued check of unknown-status number with ID {id} from dump file");
+    *dump_file_lines_read += 1;
 }
