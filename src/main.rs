@@ -421,8 +421,8 @@ async fn main() {
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let mut prp_start = 0;
     let mut u_start = 0;
-    let mut dump_file_index = 4;
-    let mut dump_file = File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
+    let mut dump_file_index = 0;
+    let mut dump_file = File::open_buffered("/dev/null").unwrap();
     let mut dump_file_lines_read = 0;
     let mut line = String::new();
     let mut bases_since_restart = 0;
@@ -560,12 +560,17 @@ async fn queue_unknown_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_
                 next_file = true;
             }
         }
-        if next_file {
+        while next_file {
             *dump_file_index += 1;
             info!("Opening new dump file: {dump_file_index}");
-            *dump_file =
-                File::open_buffered(format!("U{dump_file_index:0>6}.csv")).unwrap();
-            *dump_file_lines_read = 0;
+            match File::open_buffered(format!("U{dump_file_index:0>6}.csv")) {
+                Ok(new_file) => {
+                    *dump_file = new_file;
+                    next_file = false;
+                    *dump_file_lines_read = 0;
+                }
+                Err(e) => warn!("Skipping dump file {dump_file_index}: {e}")
+            }
         }
     }
     let id = line.split(",").next().unwrap();
