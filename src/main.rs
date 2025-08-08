@@ -408,12 +408,12 @@ async fn throttle_if_necessary<
 
 #[tokio::main]
 async fn main() {
-    let rps_limiter = RateLimiter::direct(Quota::per_hour(6200u32.try_into().unwrap()));
+    let rps_limiter = RateLimiter::direct(Quota::per_hour(6100u32.try_into().unwrap()));
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
     // so we make it start nearly empty instead.
     rps_limiter
-        .until_n_ready(6150u32.try_into().unwrap())
+        .until_n_ready(6050u32.try_into().unwrap())
         .await
         .unwrap();
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
