@@ -33,7 +33,7 @@ const U_RESULTS_PER_PAGE: usize = 2;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
-const RETRY_QUEUE_SOFT_LIMIT: usize = 16;
+const RETRY_QUEUE_SOFT_LIMIT: usize = 8;
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 enum CheckTaskDetails {
