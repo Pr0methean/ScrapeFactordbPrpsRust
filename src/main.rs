@@ -334,14 +334,14 @@ async fn try_handle_unknown<
                 retry.push_back(task);
             } else {
                 warn!("Sent unknown-status number with ID {id} back to main queue, because retry queue is full");
-                info!("{} entries in retry queue", retry_queue_len);
             }
         } else {
             retry.push_back(task);
-            info!("{} entries in retry queue", retry_queue_len + 1);
         }
+        info!("{} entries in retry queue", retry_queue_len);
         return false;
     }
+    info!("{} entries in retry queue", retry.len());
     true
 }
 
