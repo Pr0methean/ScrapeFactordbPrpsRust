@@ -33,6 +33,7 @@ const U_RESULTS_PER_PAGE: usize = 2;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
+const RETRY_QUEUE_SOFT_LIMIT: usize = 16;
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 enum CheckTaskDetails {
@@ -323,11 +324,13 @@ async fn try_handle_unknown<
     }
     if let Some(task) = requeue {
         let retry_queue_len = retry.len();
-        if retry_queue_len >= PRP_TASK_BUFFER_SIZE {
+        if retry_queue_len >= RETRY_QUEUE_SOFT_LIMIT {
             if let Err(TrySendError::Full(task)) = main_send.try_send(task) {
-                // Both queues are full, so abandon the oldest retry
-                let oldest_task = retry.pop_front().unwrap();
-                error!("Aborting PRP check for unknown-status number with ID {}", oldest_task.id);
+                if retry_queue_len >= PRP_TASK_BUFFER_SIZE {
+                    // Both queues are full, so abandon the oldest retry
+                    let oldest_task = retry.pop_front().unwrap();
+                    error!("Aborting PRP check for unknown-status number with ID {}", oldest_task.id);
+                }
                 retry.push_back(task);
             } else {
                 warn!("Sent unknown-status number with ID {id} back to main queue, because retry queue is full");
