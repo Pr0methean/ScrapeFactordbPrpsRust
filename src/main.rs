@@ -2,7 +2,6 @@
 #![feature(file_buffered)]
 #![feature(generic_atomic)]
 
-use std::collections::VecDeque;
 use anyhow::anyhow;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use governor::clock::{DefaultClock, ReasonablyRealtime};
@@ -34,7 +33,6 @@ const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Pr
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 32;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
-const RETRY_QUEUE_SOFT_LIMIT: usize = 8;
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 enum CheckTaskDetails {
@@ -145,7 +143,7 @@ async fn do_checks<
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) {
     let mut next_unknown_attempt = Instant::now();
-    let mut retry = VecDeque::with_capacity(PRP_TASK_BUFFER_SIZE);
+    let mut retry = None;
     let config = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -226,22 +224,21 @@ async fn do_checks<
                         break;
                     }
                     if next_unknown_attempt <= Instant::now() {
-                        let mut retry_blocked = false;
-                        while !retry_blocked && let Some(CheckTask { id, details: CheckTaskDetails::U { source_file, .. } })
-                            = retry.pop_front() {
-                            if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
-                                retry_blocked = true;
-                            }
-                        }
-                        if !retry_blocked && (retry.len() == 0) {
-                            while let Ok(permit) = u_sender.try_reserve() && let Ok(u_task) = u_receiver.try_recv() {
-                                let CheckTaskDetails::U { source_file } = u_task.details else {
-                                    permit.send(u_task);
-                                    break;
-                                };
-                                if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, u_task.id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
-                                    break;
+                        if let Some(CheckTask { id, details: CheckTaskDetails::U { source_file, .. } })
+                            = retry {
+                            if try_handle_unknown(&http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                                retry = None;
+                                while let Ok(permit) = u_sender.try_reserve() && let Ok(u_task) = u_receiver.try_recv() {
+                                    let CheckTaskDetails::U { source_file } = u_task.details else {
+                                        permit.send(u_task);
+                                        break;
+                                    };
+                                    if !try_handle_unknown(&http, &mut filter, &u_status_regex, &mut task_bytes, u_task.id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                                        retry = Some(u_task);
+                                        break;
+                                    }
                                 }
+
                             }
                         }
                     }
@@ -255,16 +252,12 @@ async fn do_checks<
                     &mut bases_before_next_cpu_check,
                     true
                 ).await;
-                if try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
-                    loop {
-                        let Some(CheckTask { id, details: CheckTaskDetails::U { source_file } })
-                            = retry.pop_front() else {
-                            break;
-                        };
-                        rps_limiter.until_ready().await;
-                        if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
-                            break;
-                        }
+                if !try_handle_unknown(&http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                    let task = CheckTask { id, details: CheckTaskDetails::U { source_file } };
+                    if retry.is_none() {
+                        retry = Some(task);
+                    } else {
+                        u_sender.send(task).await.unwrap();
                     }
                 }
             }
@@ -276,16 +269,12 @@ async fn try_handle_unknown<
     S: DirectStateStore,
     T: ReasonablyRealtime,
     U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
->(retry: &mut VecDeque<CheckTask>, main_send: &Sender<CheckTask>, http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, next_attempt: &mut Instant, source_file: Option<u64>, rate_limiter: &Arc<RateLimiter<NotKeyed, S, T, U>>) -> bool {
+>(http: &Client, filter: &mut InMemoryFilter, u_status_regex: &Regex, task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()], id: u128, next_attempt: &mut Instant, _source_file: Option<u64>, rate_limiter: &Arc<RateLimiter<NotKeyed, S, T, U>>) -> bool {
     let remaining_wait = next_attempt.saturating_duration_since(Instant::now());
-    let mut requeue = None;
     if remaining_wait > UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT {
         let remaining_secs = remaining_wait.as_secs();
         warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
-        requeue = Some(CheckTask {
-            id,
-            details: CheckTaskDetails::U { source_file },
-        });
+        false
     } else {
         sleep(remaining_wait).await;
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
@@ -293,63 +282,39 @@ async fn try_handle_unknown<
         let result = retrying_get_and_decode(&http, &url).await;
         if let Some(status) = u_status_regex.captures_iter(&result).next() {
             match status.get(1) {
-                None => error!("Failed to decode status for {id}: {result}"),
+                None => {
+                    error!("Failed to decode status for {id}: {result}");
+                    false
+                },
                 Some(matched_status) => match matched_status.as_str() {
                     "Assigned" => {
                         filter.insert(task_bytes).unwrap();
                         info!(
                                     "Assigned PRP check for unknown-status number with ID {id}"
-                                )
+                                );
+                        true
                     }
                     "Please wait" => {
                         warn!(
                                     "Got 'please wait' for unknown-status number with ID {id}"
                                 );
                         *next_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                        requeue = Some(CheckTask {
-                            id,
-                            details: CheckTaskDetails::U {
-                                source_file
-                            },
-                        });
+                        false
                     }
                     _ => {
                         filter.insert(task_bytes).unwrap();
                         warn!(
                                     "Unknown-status number with ID {id} is already being checked"
                                 );
+                        true
                     }
                 }
             }
         } else {
             error!("Failed to decode status for {id} from result: {result}");
-            requeue = Some(CheckTask {
-                id,
-                details: CheckTaskDetails::U { source_file },
-            });
-        };
-    }
-    if let Some(task) = requeue {
-        let retry_queue_len = retry.len();
-        if retry_queue_len >= RETRY_QUEUE_SOFT_LIMIT {
-            if let Err(TrySendError::Full(task)) = main_send.try_send(task) {
-                if retry_queue_len >= PRP_TASK_BUFFER_SIZE {
-                    // Both queues are full, so abandon the oldest retry
-                    let oldest_task = retry.pop_front().unwrap();
-                    error!("Aborting PRP check for unknown-status number with ID {}", oldest_task.id);
-                }
-                retry.push_back(task);
-            } else {
-                warn!("Sent unknown-status number with ID {id} back to main queue, because retry queue is full");
-            }
-        } else {
-            retry.push_back(task);
+            false
         }
-        info!("{} entries in retry queue", retry.len());
-        return false;
     }
-    info!("{} entries in retry queue", retry.len());
-    true
 }
 
 async fn throttle_if_necessary<
