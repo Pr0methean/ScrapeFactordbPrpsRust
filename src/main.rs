@@ -437,7 +437,7 @@ async fn main() {
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
         select! {
-            _ = prp_sender.reserve() => {
+            _ = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
                 let prp_search_url = format!("{prp_search_url_base}{prp_start}");
                 rps_limiter.until_ready().await;
                 let results_text = retrying_get_and_decode(&http, &prp_search_url).await;
@@ -476,7 +476,7 @@ async fn main() {
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
             }
-            _ = u_sender.reserve() => {
+            _ = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
                 queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line).await;
             }
         };
