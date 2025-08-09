@@ -229,12 +229,12 @@ async fn do_checks<
                         }
                         if !retry_blocked && (retry.len() == 0) {
                             info!("Retry queue empty; checking main queue for U's");
-                            while let Ok(permit) = u_sender.try_reserve() && let Ok(task) = u_receiver.try_recv() {
-                                let CheckTaskDetails::U { source_file } = task.details else {
-                                    permit.send(task);
+                            while let Ok(permit) = u_sender.try_reserve() && let Ok(u_task) = u_receiver.try_recv() {
+                                let CheckTaskDetails::U { source_file } = u_task.details else {
+                                    permit.send(u_task);
                                     break;
                                 };
-                                if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                                if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, u_task.id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                                     break;
                                 }
                             }
