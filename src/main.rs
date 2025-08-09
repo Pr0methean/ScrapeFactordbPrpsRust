@@ -17,7 +17,7 @@ use reqwest::Client;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel, Permit};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
@@ -126,7 +126,6 @@ const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
 const UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT: Duration = Duration::from_millis(1500);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
-static SHOULD_QUEUE_UNKNOWNS: AtomicBool = AtomicBool::new(true);
 
 async fn do_checks<
     S: DirectStateStore,
@@ -325,10 +324,9 @@ async fn try_handle_unknown<
             });
         };
     }
-    let retry_queue_len = retry.len();
     if let Some(task) = requeue {
+        let retry_queue_len = retry.len();
         if retry_queue_len >= RETRY_QUEUE_SOFT_LIMIT {
-            SHOULD_QUEUE_UNKNOWNS.store(false, Ordering::Release);
             if let Err(TrySendError::Full(task)) = main_send.try_send(task) {
                 if retry_queue_len >= PRP_TASK_BUFFER_SIZE {
                     // Both queues are full, so abandon the oldest retry
@@ -337,15 +335,13 @@ async fn try_handle_unknown<
                 }
                 retry.push_back(task);
             } else {
-                warn!("Sent unknown-status number with ID {id} back to main queue, because retry queue is too full");
+                warn!("Sent unknown-status number with ID {id} back to main queue, because retry queue is full");
             }
         } else {
             retry.push_back(task);
         }
         info!("{} entries in retry queue", retry.len());
         return false;
-    } else if retry_queue_len < RETRY_QUEUE_SOFT_LIMIT {
-        SHOULD_QUEUE_UNKNOWNS.store(true, Ordering::Release);
     }
     info!("{} entries in retry queue", retry.len());
     true
