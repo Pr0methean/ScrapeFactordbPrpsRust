@@ -228,9 +228,12 @@ async fn do_checks<
                             = retry {
                             if try_handle_unknown(&http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                                 retry = None;
-                                while let Ok(permit) = u_sender.try_reserve() && let Ok(u_task) = u_receiver.try_recv() {
+                            }
+                        }
+                        if retry == None {
+                            while let Ok(u_task) = u_receiver.try_recv() {
                                     let CheckTaskDetails::U { source_file } = u_task.details else {
-                                        permit.send(u_task);
+                                        u_sender.send(u_task).await.unwrap();
                                         break;
                                     };
                                     if !try_handle_unknown(&http, &mut filter, &u_status_regex, &mut task_bytes, u_task.id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
@@ -243,7 +246,6 @@ async fn do_checks<
                         }
                     }
                 }
-            }
             CheckTaskDetails::U { source_file } => {
                 throttle_if_necessary(
                     &http,
@@ -479,7 +481,7 @@ async fn main() {
             _ = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
                 queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line).await;
             }
-        };
+        }
         let mut restart = false;
         if prp_start > MAX_START || u_start > MAX_START {
             info!("Restarting: reached maximum starting index");
