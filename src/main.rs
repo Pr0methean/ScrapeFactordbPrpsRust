@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel, Permit};
+use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel, Permit, PermitIterator};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -460,10 +460,10 @@ async fn main() {
         http: http.clone(),
         rps_limiter: rps_limiter.clone(),
     };
-    for _ in 0..U_RESULTS_PER_PAGE {
-        // Use PRP queue so that the first unknown numbers will start immediately
-        queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, None).await;
-    }
+    // Use PRP queue so that the first unknown numbers will start immediately
+    queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, None).await;
+    let mut u_permits = prp_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap();
+    queue_unknowns_from_search(&id_regex, &http, &rps_limiter, &u_search_url_base, &mut u_start, &mut u_permits).await;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
         let prp_search_url = format!("{prp_search_url_base}{prp_start}");
@@ -511,21 +511,7 @@ async fn main() {
                     };
                     queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
                     if use_search {
-                        let u_search_url = format!("{u_search_url_base}{u_start}");
-                        rps_limiter.until_ready().await;
-                        let results_text = retrying_get_and_decode(&http, &u_search_url).await;
-                        for u_id in id_regex
-                            .captures_iter(&results_text)
-                            .map(|result| result[1].to_owned().into_boxed_str())
-                            .unique()
-                        {
-                            u_permits.next().unwrap().send(CheckTask {
-                                    id: u_id.parse().unwrap(),
-                                    details: CheckTaskDetails::U { source_file: None },
-                                });
-                            info!("Queued check of unknown-status number with ID {u_id} from search");
-                        }
-                        u_start += U_RESULTS_PER_PAGE;
+                        queue_unknowns_from_search(&id_regex, &http, &rps_limiter, &u_search_url_base, &mut u_start, &mut u_permits).await;
                     } else {
                         for _ in 0..U_RESULTS_PER_PAGE {
                             queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
@@ -565,6 +551,24 @@ async fn main() {
             next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
         }
     }
+}
+
+async fn queue_unknowns_from_search(id_regex: &Regex, http: &Client, rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>, u_search_url_base: &String, u_start: &mut usize, u_permits: &mut PermitIterator<'_, CheckTask>) {
+    let u_search_url = format!("{u_search_url_base}{u_start}");
+    rps_limiter.until_ready().await;
+    let results_text = retrying_get_and_decode(&http, &u_search_url).await;
+    for u_id in id_regex
+        .captures_iter(&results_text)
+        .map(|result| result[1].to_owned().into_boxed_str())
+        .unique()
+    {
+        u_permits.next().unwrap().send(CheckTask {
+            id: u_id.parse().unwrap(),
+            details: CheckTaskDetails::U { source_file: None },
+        });
+        info!("Queued check of unknown-status number with ID {u_id} from search");
+    }
+    *u_start += U_RESULTS_PER_PAGE;
 }
 
 async fn queue_unknown_from_dump_file(u_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, permit: Option<Permit<'_, CheckTask>>) {
