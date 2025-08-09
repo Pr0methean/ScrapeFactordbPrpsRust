@@ -228,7 +228,6 @@ async fn do_checks<
                             }
                         }
                         if !retry_blocked && (retry.len() == 0) {
-                            info!("Retry queue empty; checking main queue for U's");
                             while let Ok(permit) = u_sender.try_reserve() && let Ok(u_task) = u_receiver.try_recv() {
                                 let CheckTaskDetails::U { source_file } = u_task.details else {
                                     permit.send(u_task);
@@ -486,38 +485,44 @@ async fn main() {
                     {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
-                    prp_sender.send(task).await.unwrap();
-                    let Ok(mut u_permits) = u_sender.try_reserve_many(
-                        U_RESULTS_PER_PAGE + 1
-                    ) else {
-                        continue;
+                    let prp_task_again = match prp_sender.try_send(task) {
+                        Ok(()) => None,
+                        Err(TrySendError::Full(task)) => Some(task),
+                        Err(TrySendError::Closed(_)) => unreachable!()
                     };
-                    let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
-                    let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
-                        info!("Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
-                            cpu_tenths_spent as f64 * 0.1);
-                        false
-                    } else {
-                        cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
-                        if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+                    while let Ok(mut u_permits) = u_sender.try_reserve_many(
+                        U_RESULTS_PER_PAGE + 1
+                    ) {
+                        let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+                        let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
                             info!("Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
-                            cpu_tenths_spent as f64 * 0.1);
+                                cpu_tenths_spent as f64 * 0.1);
                             false
                         } else {
-                            info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
+                            cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+                            if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+                                info!("Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
                                 cpu_tenths_spent as f64 * 0.1);
-                            true
+                                false
+                            } else {
+                                info!("Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
+                                    cpu_tenths_spent as f64 * 0.1);
+                                true
+                            }
+                        };
+                        queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
+                        if use_search {
+                            queue_unknowns_from_search(&id_regex, &http, &rps_limiter, &u_search_url_base, &mut u_start, &mut u_permits).await;
+                        } else {
+                            for _ in 0..U_RESULTS_PER_PAGE {
+                                queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
+                            }
                         }
-                    };
-                    queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
-                    if use_search {
-                        queue_unknowns_from_search(&id_regex, &http, &rps_limiter, &u_search_url_base, &mut u_start, &mut u_permits).await;
-                    } else {
-                        for _ in 0..U_RESULTS_PER_PAGE {
-                            queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
-                        }
+                        info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
                     }
-                    info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+                    if let Some(prp_task) = prp_task_again {
+                        prp_sender.send(prp_task).await.unwrap();
+                    }
                 }
             }
         }
