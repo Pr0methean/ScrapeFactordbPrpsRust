@@ -461,7 +461,8 @@ async fn main() {
         rps_limiter: rps_limiter.clone(),
     };
     for _ in 0..U_RESULTS_PER_PAGE {
-        queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, None).await;
+        // Use PRP queue so that the first unknown numbers will start immediately
+        queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, None).await;
     }
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
