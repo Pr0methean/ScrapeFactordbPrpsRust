@@ -18,7 +18,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel, PermitIterator};
+use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError, channel, Permit};
 use tokio::task;
 use tokio::time::{Duration, Instant, sleep};
 
@@ -32,6 +32,7 @@ const MIN_DIGITS_IN_U: u64 = 2001;
 const U_RESULTS_PER_PAGE: usize = 2;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
+const U_TASK_BUFFER_SIZE: usize = 32;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const RETRY_QUEUE_SOFT_LIMIT: usize = 8;
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
@@ -132,8 +133,9 @@ async fn do_checks<
     T: ReasonablyRealtime,
     U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
 >(
-    sender: Sender<CheckTask>,
-    mut receiver: Receiver<CheckTask>,
+    u_sender: Sender<CheckTask>,
+    mut prp_receiver: Receiver<CheckTask>,
+    mut u_receiver: Receiver<CheckTask>,
     http: Client,
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) {
@@ -164,7 +166,7 @@ async fn do_checks<
     ).await;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
-    while let Some(CheckTask { id, details }) = receiver.recv().await {
+    while let Some(CheckTask { id, details }) = prp_receiver.recv().await {
         task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
         match details {
             CheckTaskDetails::Prp { bases_left, .. } => {
@@ -222,18 +224,18 @@ async fn do_checks<
                         let mut retry_blocked = false;
                         while !retry_blocked && let Some(CheckTask { id, details: CheckTaskDetails::U { source_file, .. } })
                             = retry.pop_front() {
-                            if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                            if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                                 retry_blocked = true;
                             }
                         }
                         if !retry_blocked && (retry.len() == 0) {
                             info!("Retry queue empty; checking main queue for U's");
-                            while let Ok(permit) = sender.try_reserve() && let Ok(task) = receiver.try_recv() {
+                            while let Ok(permit) = u_sender.try_reserve() && let Ok(task) = u_receiver.try_recv() {
                                 let CheckTaskDetails::U { source_file } = task.details else {
                                     permit.send(task);
                                     break;
                                 };
-                                if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                                if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                                     break;
                                 }
                             }
@@ -249,14 +251,14 @@ async fn do_checks<
                     &mut bases_before_next_cpu_check,
                     true
                 ).await;
-                if try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                if try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                     loop {
                         let Some(CheckTask { id, details: CheckTaskDetails::U { source_file } })
                             = retry.pop_front() else {
                             break;
                         };
                         rps_limiter.until_ready().await;
-                        if !try_handle_unknown(&mut retry, &sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
+                        if !try_handle_unknown(&mut retry, &u_sender, &http, &mut filter, &u_status_regex, &mut task_bytes, id, &mut next_unknown_attempt, source_file, &rps_limiter).await {
                             break;
                         }
                     }
@@ -431,10 +433,12 @@ async fn main() {
         .build()
         .unwrap();
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
+    let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let rps_limiter = Arc::new(rps_limiter);
     task::spawn(do_checks(
-        prp_sender.clone(),
+        u_sender.clone(),
         prp_receiver,
+        u_receiver,
         http.clone(),
         rps_limiter.clone(),
     ));
@@ -461,7 +465,7 @@ async fn main() {
         rps_limiter: rps_limiter.clone(),
     };
     for _ in 0..U_RESULTS_PER_PAGE {
-        queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut None).await;
+        queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, None).await;
     }
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
@@ -486,19 +490,17 @@ async fn main() {
                         bases_since_restart += count_ones(bases_left) as usize;
                     }
                     prp_sender.send(task).await.unwrap();
-                    if !SHOULD_QUEUE_UNKNOWNS.load(Ordering::Acquire) {
+                    let Ok(mut u_permits) = u_sender.try_reserve_many(
+                        U_RESULTS_PER_PAGE + 1
+                    ) else {
                         continue;
-                    }
-                    let mut reserve_result = None;
+                    };
                     let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
                     let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
                         info!("Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
                             cpu_tenths_spent as f64 * 0.1);
                         false
                     } else {
-                        if let Ok(permits) = prp_sender.reserve_many(U_RESULTS_PER_PAGE).await {
-                            reserve_result = Some(permits);
-                        }
                         cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
                         if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
                             info!("Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
@@ -510,7 +512,7 @@ async fn main() {
                             true
                         }
                     };
-                    queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut reserve_result).await;
+                    queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
                     if use_search {
                         let search_url = format!("{u_search_url_base}{u_start}");
                         rps_limiter.until_ready().await;
@@ -520,16 +522,16 @@ async fn main() {
                             .map(|result| result[1].to_owned().into_boxed_str())
                             .unique()
                         {
-                            prp_sender.send(CheckTask {
+                            u_permits.next().unwrap().send(CheckTask {
                                     id: id.parse().unwrap(),
                                     details: CheckTaskDetails::U { source_file: None },
-                                }).await.unwrap();
+                                });
                             info!("Queued check of unknown-status number with ID {id} from search");
                         }
                         u_start += U_RESULTS_PER_PAGE;
                     } else {
                         for _ in 0..U_RESULTS_PER_PAGE {
-                            queue_unknown_from_dump_file(&prp_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut reserve_result).await;
+                            queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
                         }
                     }
                     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
@@ -568,7 +570,7 @@ async fn main() {
     }
 }
 
-async fn queue_unknown_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, reserve_result: &mut Option<PermitIterator<'_, CheckTask>>) {
+async fn queue_unknown_from_dump_file(u_sender: &Sender<CheckTask>, dump_file_index: &mut u64, dump_file: &mut BufReader<File>, dump_file_lines_read: &mut i32, mut line: &mut String, permit: Option<Permit<'_, CheckTask>>) {
     line.clear();
     while line.len() == 0 {
         let mut next_file = false;
@@ -598,11 +600,10 @@ async fn queue_unknown_from_dump_file(prp_sender: &Sender<CheckTask>, dump_file_
         id: id.parse().unwrap(),
         details: CheckTaskDetails::U { source_file: Some(*dump_file_index) },
     };
-    if let Some(permits) = reserve_result
-        && let Some(permit) = permits.next() {
+    if let Some(permit) = permit {
         permit.send(task);
     } else {
-        prp_sender.send(task).await.unwrap();
+        u_sender.send(task).await.unwrap();
     }
     info!("Queued check of unknown-status number with ID {id} from dump file");
     *dump_file_lines_read += 1;
