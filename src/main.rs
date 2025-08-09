@@ -465,17 +465,17 @@ async fn main() {
     }
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
-        let search_url = format!("{prp_search_url_base}{prp_start}");
+        let prp_search_url = format!("{prp_search_url_base}{prp_start}");
         rps_limiter.until_ready().await;
-        let results_text = retrying_get_and_decode(&http, &search_url).await;
-        for id in id_regex
+        let results_text = retrying_get_and_decode(&http, &prp_search_url).await;
+        for prp_id in id_regex
             .captures_iter(&results_text)
             .map(|result| result[1].to_owned().into_boxed_str())
             .unique()
         {
             results_since_restart += 1;
-            match build_task(&id, &ctx).await {
-                Err(e) => error!("{id}: {e}"),
+            match build_task(&prp_id, &ctx).await {
+                Err(e) => error!("{prp_id}: {e}"),
                 Ok(None) => {}
                 Ok(Some(task)) => {
                     if let CheckTask {
@@ -510,19 +510,19 @@ async fn main() {
                     };
                     queue_unknown_from_dump_file(&u_sender, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, u_permits.next()).await;
                     if use_search {
-                        let search_url = format!("{u_search_url_base}{u_start}");
+                        let u_search_url = format!("{u_search_url_base}{u_start}");
                         rps_limiter.until_ready().await;
-                        let results_text = retrying_get_and_decode(&http, &search_url).await;
-                        for id in id_regex
+                        let results_text = retrying_get_and_decode(&http, &u_search_url).await;
+                        for u_id in id_regex
                             .captures_iter(&results_text)
                             .map(|result| result[1].to_owned().into_boxed_str())
                             .unique()
                         {
                             u_permits.next().unwrap().send(CheckTask {
-                                    id: id.parse().unwrap(),
+                                    id: u_id.parse().unwrap(),
                                     details: CheckTaskDetails::U { source_file: None },
                                 });
-                            info!("Queued check of unknown-status number with ID {id} from search");
+                            info!("Queued check of unknown-status number with ID {u_id} from search");
                         }
                         u_start += U_RESULTS_PER_PAGE;
                     } else {
