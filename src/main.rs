@@ -338,7 +338,7 @@ async fn try_handle_unknown<
         } else {
             retry.push_back(task);
         }
-        info!("{} entries in retry queue", retry_queue_len);
+        info!("{} entries in retry queue", retry.len());
         return false;
     }
     info!("{} entries in retry queue", retry.len());
