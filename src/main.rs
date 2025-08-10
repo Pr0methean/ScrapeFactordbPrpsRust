@@ -418,7 +418,7 @@ async fn main() {
         "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
     );
     let mut prp_start = 0;
-    let mut u_start = 0;
+    let mut u_start = 1;
     let mut dump_file_index = 0;
     let mut dump_file = File::open_buffered("/dev/null").unwrap();
     let mut dump_file_lines_read = 0;
@@ -505,7 +505,7 @@ async fn main() {
                 .await
                 .unwrap();
             prp_start = 0;
-            u_start = 0;
+            u_start = 1;
             results_since_restart = 0;
             bases_since_restart = 0;
             next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
