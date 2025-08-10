@@ -1,6 +1,5 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
-#![feature(generic_atomic)]
 
 use anyhow::anyhow;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
