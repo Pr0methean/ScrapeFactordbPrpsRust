@@ -550,7 +550,7 @@ async fn main() {
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
                 if prp_start > MAX_START || u_start > MAX_START {
-                    info!("Restarting: reached maximum starting index");
+                    info!("Restarting PRP search: reached maximum starting index");
                     restart_prp = true;
                 } else if results_since_restart >= PRP_TASK_BUFFER_SIZE
                     && bases_since_restart >= (results_since_restart * 254 * 254).isqrt()
