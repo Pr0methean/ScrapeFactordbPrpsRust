@@ -31,6 +31,8 @@ const U_RESULTS_PER_PAGE: usize = 2;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 2 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
+const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
+const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 enum CheckTaskDetails {
@@ -498,7 +500,11 @@ async fn main() {
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
         select! {
-            _ = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
+            _ = prp_sender.reserve_many(if restart_prp {
+                MIN_CAPACITY_AT_PRP_RESTART
+            } else {
+                PRP_RESULTS_PER_PAGE
+            }) => {
                 if restart_prp {
                     restart_prp = false;
                     prp_start = 0;
@@ -556,9 +562,14 @@ async fn main() {
                     restart_prp = true;
                 }
             }
-            _ = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+            _ = u_sender.reserve_many(if restart_u {
+                MIN_CAPACITY_AT_U_RESTART
+            } else {
+                U_RESULTS_PER_PAGE
+            }) => {
                 if restart_u {
                     u_start = 1;
+                    restart_u = false;
                 }
                 queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line).await;
                 if u_start > MAX_START {
