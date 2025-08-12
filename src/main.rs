@@ -29,8 +29,8 @@ const MIN_DIGITS_IN_PRP: u64 = 300;
 const MIN_DIGITS_IN_U: u64 = 2001;
 const U_RESULTS_PER_PAGE: usize = 2;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
-const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
-const U_TASK_BUFFER_SIZE: usize = 8;
+const PRP_TASK_BUFFER_SIZE: usize = 2 * PRP_RESULTS_PER_PAGE;
+const U_TASK_BUFFER_SIZE: usize = 16;
 const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
@@ -407,7 +407,7 @@ async fn throttle_if_necessary<
     let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset / 10);
     let bases_remaining =
         (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-    if bases_remaining < 8 {
+    if bases_remaining == 0 {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
             cpu_tenths_spent_after as f64 * 0.1,
