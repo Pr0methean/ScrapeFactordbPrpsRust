@@ -562,7 +562,7 @@ async fn main() {
                 }
                 queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line).await;
                 if u_start > MAX_START {
-                    info!("Restarting U search: searched {u_start} unknowns")
+                    info!("Restarting U search: searched {u_start} unknowns");
                     restart_u = true;
                 }
             }
