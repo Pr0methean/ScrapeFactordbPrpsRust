@@ -31,7 +31,6 @@ const U_RESULTS_PER_PAGE: usize = 2;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 2 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
-const MIN_CAPACITY_AT_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 enum CheckTaskDetails {
@@ -494,10 +493,19 @@ async fn main() {
         &mut u_permits,
     )
     .await;
+    let mut restart_prp = false;
+    let mut restart_u = false;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
         select! {
             _ = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
+                if restart_prp {
+                    restart_prp = false;
+                    prp_start = 0;
+                    results_since_restart = 0;
+                    bases_since_restart = 0;
+                    next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
+                }
                 let prp_search_url = format!("{prp_search_url_base}{prp_start}");
                 rps_limiter.until_ready().await;
                 let results_text = retrying_get_and_decode(&http, &prp_search_url).await;
@@ -535,38 +543,29 @@ async fn main() {
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
+                if prp_start > MAX_START || u_start > MAX_START {
+                    info!("Restarting: reached maximum starting index");
+                    restart_prp = true;
+                } else if results_since_restart >= PRP_TASK_BUFFER_SIZE
+                    && bases_since_restart >= (results_since_restart * 254 * 254).isqrt()
+                    && Instant::now() >= next_min_restart
+                {
+                    info!(
+                        "Restarting PRP search: triggered {bases_since_restart} bases in {results_since_restart} search results"
+                    );
+                    restart_prp = true;
+                }
             }
             _ = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+                if restart_u {
+                    u_start = 1;
+                }
                 queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line).await;
+                if u_start > MAX_START {
+                    info!("Restarting U search: searched {u_start} unknowns")
+                    restart_u = true;
+                }
             }
-        }
-        let mut restart = false;
-        if prp_start > MAX_START || u_start > MAX_START {
-            info!("Restarting: reached maximum starting index");
-            restart = true;
-        } else if results_since_restart >= PRP_TASK_BUFFER_SIZE
-            && bases_since_restart >= (results_since_restart * 254 * 254).isqrt()
-            && Instant::now() >= next_min_restart
-        {
-            info!(
-                "Restarting: triggered {bases_since_restart} bases in {results_since_restart} search results"
-            );
-            restart = true;
-        } else {
-            info!(
-                "Continuing: triggered {bases_since_restart} bases in {results_since_restart} search results"
-            );
-        }
-        if restart {
-            let _ = prp_sender
-                .reserve_many(MIN_CAPACITY_AT_RESTART)
-                .await
-                .unwrap();
-            prp_start = 0;
-            u_start = 1;
-            results_since_restart = 0;
-            bases_since_restart = 0;
-            next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
         }
     }
 }
