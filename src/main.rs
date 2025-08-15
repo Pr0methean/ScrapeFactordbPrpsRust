@@ -44,12 +44,6 @@ struct CheckTask {
     id: u128,
     details: CheckTaskDetails,
 }
-const BAD_PRPS: [&str; 4] = [
-    "1100000005379126486",
-    "1100000008352877062",
-    "1100000005380672739",
-    "1100000008352880515",
-];
 
 struct BuildTaskContext {
     http: Client,
@@ -521,10 +515,7 @@ async fn main() {
                     .unique()
                 {
                     results_since_restart += 1;
-                    if BAD_PRPS.contains(&&*prp_id) {
-                        warn!("Skipping ID with a known issue: {prp_id}");
-                        continue;
-                    }
+
                     match build_task(&prp_id, &ctx).await {
                         Err(e) => error!("{prp_id}: {e}"),
                         Ok(None) => {}
