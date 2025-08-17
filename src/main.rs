@@ -315,7 +315,7 @@ async fn try_handle_unknown<
     task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()],
     id: u128,
     next_attempt: &mut Instant,
-    _source_file: Option<u64>,
+    source_file: Option<u64>,
     rate_limiter: &Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) -> bool {
     let remaining_wait = next_attempt.saturating_duration_since(Instant::now());
@@ -337,7 +337,7 @@ async fn try_handle_unknown<
                 Some(matched_status) => match matched_status.as_str() {
                     "Assigned" => {
                         filter.insert(task_bytes).unwrap();
-                        info!("Assigned PRP check for unknown-status number with ID {id}");
+                        info!("Assigned PRP check for unknown-status number with ID {id} from dump file {source_file}");
                         true
                     }
                     "Please wait" => {
@@ -347,7 +347,7 @@ async fn try_handle_unknown<
                     }
                     _ => {
                         filter.insert(task_bytes).unwrap();
-                        warn!("Unknown-status number with ID {id} is already being checked");
+                        warn!("Unknown-status number with ID {id} from dump file {source_file} is already being checked");
                         true
                     }
                 },
