@@ -337,7 +337,7 @@ async fn try_handle_unknown<
                 Some(matched_status) => match matched_status.as_str() {
                     "Assigned" => {
                         filter.insert(task_bytes).unwrap();
-                        info!("Assigned PRP check for unknown-status number with ID {id} from dump file {source_file}");
+                        info!("Assigned PRP check for unknown-status number with ID {id} from dump file {source_file:?}");
                         true
                     }
                     "Please wait" => {
@@ -347,7 +347,7 @@ async fn try_handle_unknown<
                     }
                     _ => {
                         filter.insert(task_bytes).unwrap();
-                        warn!("Unknown-status number with ID {id} from dump file {source_file} is already being checked");
+                        warn!("Unknown-status number with ID {id} from dump file {source_file:?} is already being checked");
                         true
                     }
                 },
