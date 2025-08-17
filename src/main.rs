@@ -403,9 +403,9 @@ async fn throttle_if_necessary<
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
     let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 36000);
-    let bases_remaining =
+    let mut bases_remaining =
         (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-    if bases_remaining < MIN_BASES_BETWEEN_RESOURCE_CHECKS {
+    if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS / 2 {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
             cpu_tenths_spent_after as f64 * 0.1,
@@ -415,6 +415,9 @@ async fn throttle_if_necessary<
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
         CPU_TENTHS_SPENT_LAST_CHECK.store(0, Ordering::Release);
     } else {
+        if bases_remaining < MIN_BASES_BETWEEN_RESOURCE_CHECKS {
+            bases_remaining = MIN_BASES_BETWEEN_RESOURCE_CHECKS;
+        }
         info!(
             "CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
             cpu_tenths_spent_after as f64 * 0.1,
