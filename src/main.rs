@@ -27,7 +27,7 @@ const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const PRP_RESULTS_PER_PAGE: usize = 64;
 const MIN_DIGITS_IN_PRP: u64 = 300;
 const MIN_DIGITS_IN_U: u64 = 2001;
-const U_RESULTS_PER_PAGE: usize = 2;
+const U_RESULTS_PER_PAGE: usize = 3;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 2 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
@@ -591,7 +591,7 @@ async fn queue_unknowns(
     mut dump_file_lines_read: &mut i32,
     mut line: &mut String,
 ) {
-    while let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE + 1) {
+    while let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
         let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
         let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
             info!(
@@ -615,15 +615,6 @@ async fn queue_unknowns(
                 true
             }
         };
-        queue_unknown_from_dump_file(
-            &u_sender,
-            &mut dump_file_index,
-            &mut dump_file,
-            &mut dump_file_lines_read,
-            &mut line,
-            u_permits.next(),
-        )
-        .await;
         if use_search {
             queue_unknowns_from_search(
                 &id_regex,
