@@ -119,6 +119,9 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<C
 }
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
+
+const MIN_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 4;
+
 const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
 const UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT: Duration = Duration::from_millis(1500);
@@ -402,7 +405,7 @@ async fn throttle_if_necessary<
     let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 36000);
     let bases_remaining =
         (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-    if bases_remaining == 0 {
+    if bases_remaining < MIN_BASES_BETWEEN_RESOURCE_CHECKS {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
             cpu_tenths_spent_after as f64 * 0.1,
