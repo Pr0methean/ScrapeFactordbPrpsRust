@@ -419,8 +419,9 @@ async fn throttle_if_necessary<
             bases_remaining = MIN_BASES_BETWEEN_RESOURCE_CHECKS;
         }
         info!(
-            "CPU time spent this cycle: {:.1} seconds; checking again after {} bases",
+            "CPU time spent this cycle: {:.1} seconds; reset in {} seconds; checking again after {} bases",
             cpu_tenths_spent_after as f64 * 0.1,
+            seconds_to_reset,
             bases_remaining
         );
         *bases_before_next_cpu_check = bases_remaining;
