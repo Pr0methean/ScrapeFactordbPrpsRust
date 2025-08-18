@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "main" ]
   schedule:
-    - cron: "15 * * * *" 
+    - cron: "0 0,6,12,18 * * *" 
 env:
   CARGO_TERM_COLOR: always
 
@@ -21,4 +21,4 @@ jobs:
     - name: Build
       run: cargo +nightly build --release
     - name: Run tests
-      run: timeout -k 1h cargo +nightly run --release
+      run: timeout 330m cargo +nightly run --release
