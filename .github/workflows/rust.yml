@@ -17,7 +17,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - run: rustup install nightly
     - name: Build
-      run: cargo build --release
+      run: cargo +nightly build --release
     - name: Run tests
-      run: timeout -k 1h cargo run --release
+      run: timeout -k 1h cargo +nightly run --release
