@@ -21,4 +21,4 @@ jobs:
     - name: Build
       run: cargo +nightly build --release
     - name: Run tests
-      run: timeout 330m cargo +nightly run --release
+      run: NO_RESERVE=1 timeout 330m cargo +nightly run --release

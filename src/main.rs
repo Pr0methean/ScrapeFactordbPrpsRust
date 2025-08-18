@@ -15,7 +15,7 @@ use reqwest::Client;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, error::TrySendError};
 use tokio::time::{Duration, Instant, sleep};
 use tokio::{select, task};
@@ -126,6 +126,7 @@ const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
 const UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT: Duration = Duration::from_millis(1500);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
+static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
 
 async fn do_checks<
@@ -139,6 +140,7 @@ async fn do_checks<
     http: Client,
     rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
 ) {
+    NO_RESERVE.store(std::env::var("NO_RESERVE").is_ok(), Ordering::Release);
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
     let config = FilterConfigBuilder::default()
@@ -401,10 +403,12 @@ async fn throttle_if_necessary<
     CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Ordering::Release);
     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
-    let tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
-    let tenths_remaining_minus_reserve = tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 36000);
+    let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
+    if NO_RESERVE.load(Ordering::Acquire) {
+        tenths_remaining = tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 36000);
+    }
     let mut bases_remaining =
-        (tenths_remaining_minus_reserve / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
+        (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
     if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS / 2 {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
