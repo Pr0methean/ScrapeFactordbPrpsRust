@@ -404,7 +404,7 @@ async fn throttle_if_necessary<
     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
-    if NO_RESERVE.load(Ordering::Acquire) {
+    if !NO_RESERVE.load(Ordering::Acquire) {
         tenths_remaining = tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 36000);
     }
     let mut bases_remaining =
