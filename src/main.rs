@@ -146,7 +146,7 @@ async fn do_checks<
     let config = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
-        .level_duration(Duration::from_hours(1))
+        .level_duration(Duration::from_hours(3))
         .max_levels(24)
         .build()
         .unwrap();
