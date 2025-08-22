@@ -312,7 +312,10 @@ fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_o
             filter.insert(&task_bytes[..]).unwrap();
             true
         }
-        Err(e) => error!("Bloom filter error: {}", e),
+        Err(e) => {
+            error!("Bloom filter error: {}", e);
+            true
+        }
     }
 }
 
