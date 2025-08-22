@@ -14,11 +14,14 @@ use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::ops::Add;
+use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, error::TrySendError};
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{Duration, Instant, sleep, sleep_until};
 use tokio::{select, task};
+use tokio::sync::OnceCell;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -33,6 +36,8 @@ const PRP_TASK_BUFFER_SIZE: usize = 2 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
+static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
+
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(C)]
 enum CheckTaskDetails {
@@ -381,6 +386,7 @@ async fn throttle_if_necessary<
     }
     rps_limiter.until_ready().await;
     let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
+    let cpu_check_time = Instant::now();
     // info!("Resources fetched");
     let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
         error!("Failed to parse resource limits");
@@ -415,7 +421,12 @@ async fn throttle_if_necessary<
             cpu_tenths_spent_after as f64 * 0.1,
             seconds_to_reset
         );
-        sleep(Duration::from_secs(seconds_to_reset)).await;
+        let cpu_reset_time = cpu_check_time.add(Duration::from_secs(seconds_to_reset));
+        if EXIT_TIME.get().is_some_and(|exit_time| exit_time <= cpu_reset_time) {
+            warn!("Throttling won't end before program exit; exiting now");
+            exit(0);
+        }
+        sleep_until(cpu_reset_time).await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
         CPU_TENTHS_SPENT_LAST_CHECK.store(0, Ordering::Release);
     } else {
@@ -434,6 +445,9 @@ async fn throttle_if_necessary<
 
 #[tokio::main]
 async fn main() {
+    if std::env::var("CI").is_ok() {
+        EXIT_TIME.set(Instant::now().add(Duration::from_mins(330))).unwrap();
+    }
     let rps_limiter = RateLimiter::direct(Quota::per_hour(6100u32.try_into().unwrap()));
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
