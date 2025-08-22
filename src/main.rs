@@ -170,26 +170,11 @@ async fn do_checks<
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
     while let Some(CheckTask { id, details }) = prp_receiver.recv().await {
-        task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
-        match details {
-            CheckTaskDetails::Prp { bases_left, .. } => {
-                task_bytes[0..size_of::<U256>()].copy_from_slice(&bases_left.to_big_endian());
-            }
-            _ => {
-                task_bytes[0..size_of::<U256>()].fill(0);
-            }
-        }
-        match filter.query(&task_bytes) {
-            Ok(true) => {
-                warn!("Detected a duplicate task: ID {id}, {details:?}");
-                continue;
-            }
-            Ok(false) => {}
-            Err(e) => error!("Bloom filter error: {}", e),
+        if !add_to_bloom_filter(&mut filter, &mut task_bytes, &id, details) {
+            continue;
         }
         match details {
             CheckTaskDetails::Prp { bases_left, digits } => {
-                filter.insert(&task_bytes).unwrap();
                 let bases_count = count_ones(bases_left);
                 info!("{}: {} digits, {} bases to check", id, digits, bases_count);
                 let url_base =
@@ -231,9 +216,7 @@ async fn do_checks<
                         {
                             if try_handle_unknown(
                                 &http,
-                                &mut filter,
                                 &u_status_regex,
-                                &mut task_bytes,
                                 id,
                                 &mut next_unknown_attempt,
                                 source_file,
@@ -246,15 +229,16 @@ async fn do_checks<
                         }
                         if retry == None {
                             while let Ok(u_task) = u_receiver.try_recv() {
+                                if !add_to_bloom_filter(&mut filter, &mut task_bytes, &id, u_task.details) {
+                                    continue;
+                                }
                                 let CheckTaskDetails::U { source_file } = u_task.details else {
                                     u_sender.send(u_task).await.unwrap();
                                     break;
                                 };
                                 if !try_handle_unknown(
                                     &http,
-                                    &mut filter,
                                     &u_status_regex,
-                                    &mut task_bytes,
                                     u_task.id,
                                     &mut next_unknown_attempt,
                                     source_file,
@@ -281,9 +265,7 @@ async fn do_checks<
                 .await;
                 if !try_handle_unknown(
                     &http,
-                    &mut filter,
                     &u_status_regex,
-                    &mut task_bytes,
                     id,
                     &mut next_unknown_attempt,
                     source_file,
@@ -306,15 +288,35 @@ async fn do_checks<
     }
 }
 
+fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_of::<U256>() + size_of::<u128>()], id: &u128, details: CheckTaskDetails) -> bool {
+    task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
+    match details {
+        CheckTaskDetails::Prp { bases_left, .. } => {
+            task_bytes[0..size_of::<U256>()].copy_from_slice(&bases_left.to_big_endian());
+        }
+        _ => {
+            task_bytes[0..size_of::<U256>()].fill(0);
+        }
+    }
+    match filter.query(&task_bytes) {
+        Ok(true) => {
+            warn!("Detected a duplicate task: ID {id}, {details:?}");
+            return false;
+        }
+        Ok(false) => {}
+        Err(e) => error!("Bloom filter error: {}", e),
+    }
+    filter.insert(&task_bytes).unwrap();
+    true
+}
+
 async fn try_handle_unknown<
     S: DirectStateStore,
     T: ReasonablyRealtime,
     U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
 >(
     http: &Client,
-    filter: &mut InMemoryFilter,
     u_status_regex: &Regex,
-    task_bytes: &mut [u8; size_of::<u128>() + size_of::<U256>()],
     id: u128,
     next_attempt: &mut Instant,
     source_file: Option<u64>,
@@ -338,7 +340,6 @@ async fn try_handle_unknown<
                 }
                 Some(matched_status) => match matched_status.as_str() {
                     "Assigned" => {
-                        filter.insert(task_bytes).unwrap();
                         info!("Assigned PRP check for unknown-status number with ID {id} from dump file {source_file:?}");
                         true
                     }
@@ -348,7 +349,6 @@ async fn try_handle_unknown<
                         false
                     }
                     _ => {
-                        filter.insert(task_bytes).unwrap();
                         warn!("Unknown-status number with ID {id} from dump file {source_file:?} is already being checked");
                         true
                     }
