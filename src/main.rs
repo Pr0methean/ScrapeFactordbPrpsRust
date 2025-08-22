@@ -175,7 +175,7 @@ async fn do_checks<
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
     while let Some(CheckTask { id, details }) = prp_receiver.recv().await {
-        if !add_to_bloom_filter(&mut filter, &mut task_bytes, &id, details) {
+        if !add_to_bloom_filter(&mut filter, &mut task_bytes, id, details) {
             continue;
         }
         match details {
@@ -234,7 +234,7 @@ async fn do_checks<
                         }
                         if retry == None {
                             while let Ok(u_task) = u_receiver.try_recv() {
-                                if !add_to_bloom_filter(&mut filter, &mut task_bytes, &id, u_task.details) {
+                                if !add_to_bloom_filter(&mut filter, &mut task_bytes, u_task.id, u_task.details) {
                                     continue;
                                 }
                                 let CheckTaskDetails::U { source_file } = u_task.details else {
@@ -293,7 +293,7 @@ async fn do_checks<
     }
 }
 
-fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_of::<U256>() + size_of::<u128>()], id: &u128, details: CheckTaskDetails) -> bool {
+fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_of::<U256>() + size_of::<u128>()], id: u128, details: CheckTaskDetails) -> bool {
     task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
     match details {
         CheckTaskDetails::Prp { bases_left, .. } => {
@@ -306,13 +306,14 @@ fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_o
     match filter.query(&task_bytes[..]) {
         Ok(true) => {
             warn!("Detected a duplicate task: ID {id}, {details:?}");
-            return false;
+            false
         }
-        Ok(false) => {}
+        Ok(false) => {
+            filter.insert(&task_bytes[..]).unwrap();
+            true
+        }
         Err(e) => error!("Bloom filter error: {}", e),
     }
-    filter.insert(&task_bytes[..]).unwrap();
-    true
 }
 
 async fn try_handle_unknown<
