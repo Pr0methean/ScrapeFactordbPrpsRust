@@ -192,7 +192,6 @@ async fn do_checks<
                         error!("Failed to decode result from {url}: {text}");
                         break;
                     }
-                    info!("{}: Checked base {}", id, base);
                     throttle_if_necessary(
                         &http,
                         &rps_limiter,
@@ -258,6 +257,7 @@ async fn do_checks<
                         }
                     }
                 }
+                info!("{}: {} bases checked", id, bases_count);
             }
             CheckTaskDetails::U { source_file } => {
                 throttle_if_necessary(
