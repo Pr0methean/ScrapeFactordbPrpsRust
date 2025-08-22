@@ -303,7 +303,7 @@ fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_o
             task_bytes[0..size_of::<U256>()].fill(0);
         }
     }
-    match filter.query(&task_bytes) {
+    match filter.query(&task_bytes[..]) {
         Ok(true) => {
             warn!("Detected a duplicate task: ID {id}, {details:?}");
             return false;
@@ -311,7 +311,7 @@ fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_o
         Ok(false) => {}
         Err(e) => error!("Bloom filter error: {}", e),
     }
-    filter.insert(&task_bytes).unwrap();
+    filter.insert(&task_bytes[..]).unwrap();
     true
 }
 
@@ -422,7 +422,7 @@ async fn throttle_if_necessary<
             seconds_to_reset
         );
         let cpu_reset_time = cpu_check_time.add(Duration::from_secs(seconds_to_reset));
-        if EXIT_TIME.get().is_some_and(|exit_time| exit_time <= cpu_reset_time) {
+        if EXIT_TIME.get().is_some_and(|exit_time| *exit_time <= cpu_reset_time) {
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
