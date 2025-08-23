@@ -722,17 +722,21 @@ async fn queue_unknown_from_dump_file(
         }
     }
     let id = line.split(",").next().unwrap();
-    let task = CheckTask {
-        id: id.parse().unwrap(),
-        details: CheckTaskDetails::U {
-            source_file: Some(*dump_file_index),
-        },
-    };
-    if let Some(permit) = permit {
-        permit.send(task);
+    if id.is_empty() {
+        warn!("Skipping an empty line in dump file {*dump_file_index}");
     } else {
-        u_sender.send(task).await.unwrap();
+        let task = CheckTask {
+            id: id.parse().expect("Invalid ID {id} in dump file {*dump_file_index}"),
+            details: CheckTaskDetails::U {
+                source_file: Some(*dump_file_index),
+            },
+        };
+        if let Some(permit) = permit {
+            permit.send(task);
+        } else {
+            u_sender.send(task).await.unwrap();
+        }
+        info!("Queued check of unknown-status number with ID {id} from dump file");
     }
-    info!("Queued check of unknown-status number with ID {id} from dump file");
     *dump_file_lines_read += 1;
 }
