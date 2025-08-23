@@ -1,3 +1,4 @@
+#![allow(stable_features)]
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
@@ -723,10 +724,10 @@ async fn queue_unknown_from_dump_file(
     }
     let id = line.split(",").next().unwrap();
     if id.is_empty() {
-        warn!("Skipping an empty line in dump file {*dump_file_index}");
+        warn!("Skipping an empty line in dump file {}", *dump_file_index);
     } else {
         let task = CheckTask {
-            id: id.parse().expect("Invalid ID {id} in dump file {*dump_file_index}"),
+            id: id.parse().expect(&format!("Invalid ID {} in dump file {}", id, *dump_file_index)),
             details: CheckTaskDetails::U {
                 source_file: Some(*dump_file_index),
             },
