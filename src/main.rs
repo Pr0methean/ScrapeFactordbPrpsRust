@@ -2,7 +2,6 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
-use anyhow::anyhow;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use governor::clock::{DefaultClock, ReasonablyRealtime};
 use governor::middleware::RateLimitingMiddleware;
@@ -40,21 +39,20 @@ const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
-#[repr(C)]
-enum CheckTaskDetails {
-    Prp { bases_left: U256, digits: u64 },
-    U { source_file: Option<u64> },
+#[repr(u8)]
+enum CheckTaskType {
+    Prp, U
 }
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 struct CheckTask {
     id: u128,
-    details: CheckTaskDetails,
+    source_file: Option<u64>,
+    task_type: CheckTaskType,
 }
 
 struct BuildTaskContext {
     http: Client,
     bases_regex: Regex,
-    digits_regex: Regex,
     rps_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
 }
 
@@ -86,11 +84,10 @@ async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
     }
 }
 
-async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<CheckTask>> {
+async fn get_prp_remaining_bases(id: &str, ctx: &BuildTaskContext) -> U256 {
     let BuildTaskContext {
         http,
         bases_regex,
-        digits_regex,
         rps_limiter,
     } = ctx;
     let mut bases_left = U256::MAX - 3;
@@ -99,29 +96,21 @@ async fn build_task(id: &str, ctx: &BuildTaskContext) -> anyhow::Result<Option<C
     let bases_text = retrying_get_and_decode(http, &bases_url).await;
     if bases_text.contains(" is prime") {
         info!("ID {id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
-        return Ok(None);
+        return U256::from(0);
     }
     for bases in bases_regex.captures_iter(&bases_text) {
         for base in bases.iter() {
-            bases_left &= !(U256::from(1) << base.unwrap().as_str().parse::<u8>()?);
+            let Ok(base) = base.unwrap().as_str().parse::<u8>() else {
+                error!("Invalid PRP-check base: {:?}", base);
+                continue;
+            };
+            bases_left &= !(U256::from(1) << base);
         }
     }
     if bases_left == U256::from(0) {
         info!("ID {id} already has all bases checked");
-        Ok(None)
-    } else {
-        let Some(digits_captures) = digits_regex.captures(&bases_text) else {
-            return Err(anyhow!("Couldn't find digit size"));
-        };
-        let digits = digits_captures[1].parse()?;
-        let id = id.parse()?;
-        let bases_count = count_ones(bases_left);
-        info!("ID {id} has {digits} digits and {bases_count} bases left to check");
-        Ok(Some(CheckTask {
-            id,
-            details: CheckTaskDetails::Prp { bases_left, digits },
-        }))
     }
+    bases_left
 }
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
@@ -135,28 +124,15 @@ static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TE
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
 
-async fn do_checks<
-    S: DirectStateStore,
-    T: ReasonablyRealtime,
-    U: RateLimitingMiddleware<T::Instant, NegativeOutcome = NotUntil<T::Instant>>,
->(
-    u_sender: Sender<CheckTask>,
+async fn do_checks(
+    prp_sender: Sender<CheckTask>,
     mut prp_receiver: Receiver<CheckTask>,
     mut u_receiver: Receiver<CheckTask>,
     http: Client,
-    rps_limiter: Arc<RateLimiter<NotKeyed, S, T, U>>,
+    rps_limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
 ) {
-    NO_RESERVE.store(std::env::var("NO_RESERVE").is_ok(), Ordering::Release);
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
-    let config = FilterConfigBuilder::default()
-        .capacity(2500)
-        .false_positive_rate(0.001)
-        .level_duration(Duration::from_hours(3))
-        .max_levels(24)
-        .build()
-        .unwrap();
-    let mut filter = InMemoryFilter::new(config).unwrap();
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let resources_regex =
         RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
@@ -164,6 +140,11 @@ async fn do_checks<
             .dot_matches_new_line(true)
             .build()
             .unwrap();
+    let ctx = BuildTaskContext {
+        bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
+        http: http.clone(),
+        rps_limiter: rps_limiter.clone(),
+    };
     let mut bases_before_next_cpu_check = 1;
     throttle_if_necessary(
         &http,
@@ -174,15 +155,15 @@ async fn do_checks<
     )
     .await;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
-    let mut task_bytes = [0u8; size_of::<U256>() + size_of::<u128>()];
-    while let Some(CheckTask { id, details }) = prp_receiver.recv().await {
-        if !add_to_bloom_filter(&mut filter, &mut task_bytes, id, details) {
-            continue;
-        }
-        match details {
-            CheckTaskDetails::Prp { bases_left, digits } => {
+    while let Some(CheckTask {id, task_type, source_file}) = prp_receiver.recv().await {
+        match task_type {
+            CheckTaskType::Prp => {
+                let bases_left = get_prp_remaining_bases(&id.to_string(), &ctx).await;
+                if bases_left == U256::from(0) {
+                    continue;
+                }
                 let bases_count = count_ones(bases_left);
-                info!("{}: {} digits, {} bases to check", id, digits, bases_count);
+                info!("{}: {} bases to check", id, bases_count);
                 let url_base =
                     format!("https://factordb.com/index.php?id={id}&open=prime&basetocheck=");
                 for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
@@ -216,7 +197,8 @@ async fn do_checks<
                     if next_unknown_attempt <= Instant::now() {
                         if let Some(CheckTask {
                             id,
-                            details: CheckTaskDetails::U { source_file, .. },
+                            task_type: CheckTaskType::U,
+                            source_file
                         }) = retry
                         {
                             if try_handle_unknown(
@@ -233,25 +215,22 @@ async fn do_checks<
                             }
                         }
                         if retry == None {
-                            while let Ok(u_task) = u_receiver.try_recv() {
-                                if !add_to_bloom_filter(&mut filter, &mut task_bytes, u_task.id, u_task.details) {
-                                    continue;
-                                }
-                                let CheckTaskDetails::U { source_file } = u_task.details else {
-                                    u_sender.send(u_task).await.unwrap();
+                            while let Ok(CheckTask {id, task_type, source_file }) = u_receiver.try_recv() {
+                                if task_type != CheckTaskType::U {
+                                    prp_sender.send(CheckTask {id, task_type, source_file }).await.unwrap();
                                     break;
                                 };
                                 if !try_handle_unknown(
                                     &http,
                                     &u_status_regex,
-                                    u_task.id,
+                                    id,
                                     &mut next_unknown_attempt,
                                     source_file,
                                     &rps_limiter,
                                 )
                                 .await
                                 {
-                                    retry = Some(u_task);
+                                    retry = Some(CheckTask {id, task_type, source_file });
                                     break;
                                 }
                             }
@@ -260,7 +239,7 @@ async fn do_checks<
                 }
                 info!("{}: {} bases checked", id, bases_count);
             }
-            CheckTaskDetails::U { source_file } => {
+            CheckTaskType::U => {
                 throttle_if_necessary(
                     &http,
                     &rps_limiter,
@@ -279,43 +258,13 @@ async fn do_checks<
                 )
                 .await
                 {
-                    let task = CheckTask {
-                        id,
-                        details: CheckTaskDetails::U { source_file },
-                    };
                     if retry.is_none() {
-                        retry = Some(task);
+                        retry = Some(CheckTask {id, task_type, source_file});
                     } else {
-                        u_sender.send(task).await.unwrap();
+                        prp_sender.send(CheckTask {id, task_type, source_file}).await.unwrap();
                     }
                 }
             }
-        }
-    }
-}
-
-fn add_to_bloom_filter(filter: &mut InMemoryFilter, task_bytes: &mut [u8; size_of::<U256>() + size_of::<u128>()], id: u128, details: CheckTaskDetails) -> bool {
-    task_bytes[size_of::<U256>()..].copy_from_slice(&id.to_ne_bytes()[..]);
-    match details {
-        CheckTaskDetails::Prp { bases_left, .. } => {
-            task_bytes[0..size_of::<U256>()].copy_from_slice(&bases_left.to_big_endian());
-        }
-        _ => {
-            task_bytes[0..size_of::<U256>()].fill(0);
-        }
-    }
-    match filter.query(&task_bytes[..]) {
-        Ok(true) => {
-            warn!("Detected a duplicate task: ID {id}, {details:?}");
-            false
-        }
-        Ok(false) => {
-            filter.insert(&task_bytes[..]).unwrap();
-            true
-        }
-        Err(e) => {
-            error!("Bloom filter error: {}", e);
-            true
         }
     }
 }
@@ -450,9 +399,20 @@ async fn throttle_if_necessary<
 
 #[tokio::main]
 async fn main() {
+    let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
+    NO_RESERVE.store(is_no_reserve, Ordering::Release);
+    let mut config_builder = FilterConfigBuilder::default()
+        .capacity(2500)
+        .false_positive_rate(0.001);
     if std::env::var("CI").is_ok() {
+        config_builder = config_builder
+            .level_duration(Duration::from_hours(24))
+            .max_levels(7);
         EXIT_TIME.set(Instant::now().add(Duration::from_mins(330))).unwrap();
     }
+    let config = config_builder.build().unwrap();
+    let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
+    let mut u_filter = InMemoryFilter::new(config).unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(6100u32.try_into().unwrap()));
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
@@ -471,7 +431,7 @@ async fn main() {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let rps_limiter = Arc::new(rps_limiter);
     task::spawn(do_checks(
-        u_sender.clone(),
+        prp_sender.clone(),
         prp_receiver,
         u_receiver,
         http.clone(),
@@ -493,12 +453,6 @@ async fn main() {
     let mut bases_since_restart = 0;
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
-    let ctx = BuildTaskContext {
-        bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
-        digits_regex: Regex::new("&lt;([0-9]+)&gt;").unwrap(),
-        http: http.clone(),
-        rps_limiter: rps_limiter.clone(),
-    };
     // Use PRP queue so that the first unknown numbers will start immediately
     queue_unknown_from_dump_file(
         &prp_sender,
@@ -517,6 +471,7 @@ async fn main() {
         &u_search_url_base,
         &mut u_start,
         &mut u_permits,
+        &mut u_filter
     )
     .await;
     let mut restart_prp = false;
@@ -544,29 +499,30 @@ async fn main() {
                     .map(|result| result[1].to_owned().into_boxed_str())
                     .unique()
                 {
+                    let Ok(prp_id) = prp_id.parse::<u128>() else {
+                        error!("Invalid PRP ID found: {}", prp_id);
+                        continue;
+                    };
+                    let prp_id_bytes = prp_id.to_ne_bytes();
+                    if prp_filter.query(&prp_id_bytes).unwrap() {
+                        warn!("Skipping duplicate PRP ID: {}", prp_id);
+                        continue;
+                    }
+                    prp_filter.insert(&prp_id_bytes).unwrap();
+                    let prp_task = CheckTask {
+                        id: prp_id,
+                        task_type: CheckTaskType::Prp,
+                        source_file: None
+                    };
                     results_since_restart += 1;
-
-                    match build_task(&prp_id, &ctx).await {
-                        Err(e) => error!("{prp_id}: {e}"),
-                        Ok(None) => {}
-                        Ok(Some(task)) => {
-                            if let CheckTask {
-                                details: CheckTaskDetails::Prp { bases_left, .. },
-                                ..
-                            } = task
-                            {
-                                bases_since_restart += count_ones(bases_left) as usize;
-                            }
-                            let prp_task_again = match prp_sender.try_send(task) {
-                                Ok(()) => None,
-                                Err(TrySendError::Full(task)) => Some(task),
-                                Err(TrySendError::Closed(_)) => unreachable!()
-                            };
-                            queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line).await;
-                            if let Some(prp_task) = prp_task_again {
-                                prp_sender.send(prp_task).await.unwrap();
-                            }
-                        }
+                    let unsent_prp_task = match prp_sender.try_send(prp_task) {
+                        Ok(()) => None,
+                        Err(TrySendError::Full(prp_id)) => Some(prp_id),
+                        Err(TrySendError::Closed(_)) => unreachable!()
+                    };
+                    queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                    if let Some(prp_task) = unsent_prp_task {
+                        prp_sender.send(prp_task).await.unwrap();
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -574,7 +530,6 @@ async fn main() {
                     info!("Restarting PRP search: reached maximum starting index");
                     restart_prp = true;
                 } else if results_since_restart >= PRP_TASK_BUFFER_SIZE
-                    && bases_since_restart >= (results_since_restart * 254 * 254).isqrt()
                     && Instant::now() >= next_min_restart
                 {
                     info!(
@@ -592,7 +547,7 @@ async fn main() {
                     u_start = 1;
                     restart_u = false;
                 }
-                queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line).await;
+                queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
                 if u_start > MAX_START {
                     info!("Restarting U search: searched {u_start} unknowns");
                     restart_u = true;
@@ -613,6 +568,7 @@ async fn queue_unknowns(
     mut dump_file: &mut BufReader<File>,
     mut dump_file_lines_read: &mut i32,
     mut line: &mut String,
+    u_filter: &mut InMemoryFilter
 ) {
     while let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
         let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
@@ -646,6 +602,7 @@ async fn queue_unknowns(
                 &u_search_url_base,
                 &mut u_start,
                 &mut u_permits,
+                u_filter
             )
             .await;
         } else {
@@ -672,6 +629,7 @@ async fn queue_unknowns_from_search(
     u_search_url_base: &String,
     u_start: &mut usize,
     u_permits: &mut PermitIterator<'_, CheckTask>,
+    u_filter: &mut InMemoryFilter
 ) {
     let u_search_url = format!("{u_search_url_base}{u_start}");
     rps_limiter.until_ready().await;
@@ -681,9 +639,20 @@ async fn queue_unknowns_from_search(
         .map(|result| result[1].to_owned().into_boxed_str())
         .unique()
     {
+        let Ok(u_id) = u_id.parse::<u128>() else {
+            error!("Invalid unknown-status number ID in search results: {}", u_id);
+            continue;
+        };
+        let u_id_bytes = u_id.to_ne_bytes();
+        if u_filter.query(&u_id_bytes).unwrap() {
+            warn!("Skipping duplicate U ID: {}", u_id);
+            continue;
+        }
+        u_filter.insert(&u_id_bytes).unwrap();
         u_permits.next().unwrap().send(CheckTask {
-            id: u_id.parse().unwrap(),
-            details: CheckTaskDetails::U { source_file: None },
+            id: u_id,
+            task_type: CheckTaskType::U,
+            source_file: None,
         });
         info!("Queued check of unknown-status number with ID {u_id} from search");
     }
@@ -728,9 +697,8 @@ async fn queue_unknown_from_dump_file(
     } else {
         let task = CheckTask {
             id: id.parse().expect(&format!("Invalid ID {} in dump file {}", id, *dump_file_index)),
-            details: CheckTaskDetails::U {
-                source_file: Some(*dump_file_index),
-            },
+            source_file: Some(*dump_file_index),
+            task_type: CheckTaskType::U,
         };
         if let Some(permit) = permit {
             permit.send(task);
