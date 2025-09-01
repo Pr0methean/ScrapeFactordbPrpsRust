@@ -524,6 +524,7 @@ async fn main() {
                     if let Some(prp_task) = unsent_prp_task {
                         prp_sender.send(prp_task).await.unwrap();
                     }
+                    info!("Queued check of probable prime with ID {prp_id} from search");
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
                 if prp_start > MAX_START || u_start > MAX_START {
