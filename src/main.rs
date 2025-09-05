@@ -261,6 +261,7 @@ async fn do_checks(
                     if retry.is_none() {
                         retry = Some(CheckTask {id, task_type, source_file});
                     } else {
+                        warn!("Need to retry ID {} but the retry buffer is already full; sending it back to the queue", id);
                         prp_sender.send(CheckTask {id, task_type, source_file}).await.unwrap();
                     }
                 }
@@ -287,7 +288,9 @@ async fn try_handle_unknown<
         warn!("Waiting {remaining_secs} seconds to start an unknown-status task");
         false
     } else {
+        if remaining_wait > Duration::ZERO {
         sleep(remaining_wait).await;
+            }
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
         rate_limiter.until_ready().await;
         let result = retrying_get_and_decode(&http, &url).await;
