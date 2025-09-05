@@ -260,9 +260,8 @@ async fn do_checks(
                 {
                     if retry.is_none() {
                         retry = Some(CheckTask {id, task_type, source_file});
-                    } else {
-                        warn!("Need to retry ID {} but the retry buffer is already full; sending it back to the queue", id);
-                        prp_sender.send(CheckTask {id, task_type, source_file}).await.unwrap();
+                    } else if prp_sender.try_send(CheckTask {id, task_type, source_file}).is_err() {
+                        warn!("Dropping task for ID {} because the retry buffer and queue are both full", id);
                     }
                 }
             }
