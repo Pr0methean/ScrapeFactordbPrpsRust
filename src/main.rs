@@ -158,6 +158,7 @@ async fn do_checks(
     while let Some(CheckTask {id, task_type, source_file}) = prp_receiver.recv().await {
         match task_type {
             CheckTaskType::Prp => {
+                let mut stopped_early = false;
                 let bases_left = get_prp_remaining_bases(&id.to_string(), &ctx).await;
                 if bases_left == U256::from(0) {
                     continue;
@@ -184,14 +185,17 @@ async fn do_checks(
                     .await;
                     if cert_regex.is_match(&text) {
                         info!("{}: No longer PRP (has certificate)", id);
+                        stopped_early = true;
                         break;
                     }
                     if text.contains("set to C") {
                         info!("{}: No longer PRP (ruled out by PRP check)", id);
+                        stopped_early = true;
                         break;
                     }
                     if !text.contains("PRP") {
                         info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
+                        stopped_early = true;
                         break;
                     }
                     if next_unknown_attempt <= Instant::now() {
@@ -237,7 +241,9 @@ async fn do_checks(
                         }
                     }
                 }
-                info!("{}: {} bases checked", id, bases_count);
+                if !stopped_early {
+                    info!("{}: {} bases checked", id, bases_count);
+                }
             }
             CheckTaskType::U => {
                 throttle_if_necessary(
