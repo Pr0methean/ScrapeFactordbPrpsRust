@@ -122,7 +122,7 @@ const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
 const UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT: Duration = Duration::from_millis(1500);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
-const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
+const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
 
 async fn do_checks(
     prp_sender: Sender<CheckTask>,
