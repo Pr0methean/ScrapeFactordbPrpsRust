@@ -70,26 +70,33 @@ fn count_ones(u256: U256) -> u32 {
 
 async fn retrying_get_and_decode(http: &Client, url: &str, retry_delay: Duration) -> Box<str> {
     loop {
-        match http
-            .get(url)
-            .header("Referer", "https://factordb.com")
-            .send()
-            .await
-        {
-            Err(http_error) => error!("Error reading {url}: {http_error}"),
-            Ok(body) => match body.text().await {
-                Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
-                Ok(text) => {
-                    if text.contains("502 Proxy Error") {
-                        error!("502 error from {url}");
-                    } else {
-                        return text.into_boxed_str();
-                    }
-                }
-            },
+        if let Some(value) = try_get_and_decode(http, url).await {
+            return value;
         }
         sleep(retry_delay).await;
     }
+}
+
+async fn try_get_and_decode(http: &Client, url: &str) -> Option<Box<str>> {
+    match http
+        .get(url)
+        .header("Referer", "https://factordb.com")
+        .send()
+        .await
+    {
+        Err(http_error) => error!("Error reading {url}: {http_error}"),
+        Ok(body) => match body.text().await {
+            Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
+            Ok(text) => {
+                if text.contains("502 Proxy Error") {
+                    error!("502 error from {url}");
+                } else {
+                    return Some(text.into_boxed_str());
+                }
+            }
+        },
+    }
+    None
 }
 
 async fn get_prp_remaining_bases(id: &str, ctx: &BuildTaskContext) -> U256 {
@@ -473,16 +480,7 @@ async fn main() {
         None,
     )
     .await;
-    let mut u_permits = prp_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap();
-    queue_unknowns_from_search(
-        &id_regex,
-        &http,
-        &rps_limiter,
-        &mut u_start,
-        &mut u_permits,
-        &mut u_filter
-    )
-    .await;
+    queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
@@ -603,17 +601,14 @@ async fn queue_unknowns(
                 true
             }
         };
-        if use_search {
-            queue_unknowns_from_search(
+        if !use_search || !queue_unknowns_from_search(
                 &id_regex,
                 &http,
                 &rps_limiter,
                 &mut u_start,
                 &mut u_permits,
                 u_filter
-            )
-            .await;
-        } else {
+        ).await {
             for _ in 0..U_RESULTS_PER_PAGE {
                 queue_unknown_from_dump_file(
                     &u_sender,
@@ -637,10 +632,12 @@ async fn queue_unknowns_from_search(
     u_start: &mut usize,
     u_permits: &mut PermitIterator<'_, CheckTask>,
     u_filter: &mut InMemoryFilter
-) {
+) -> bool {
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
     rps_limiter.until_ready().await;
-    let results_text = retrying_get_and_decode(&http, &u_search_url, SEARCH_RETRY_DELAY).await;
+    let Some(results_text) = try_get_and_decode(&http, &u_search_url).await else {
+        return false;
+    };
     let ids = id_regex
         .captures_iter(&results_text)
         .map(|result| result[1].to_owned().into_boxed_str())
@@ -648,11 +645,11 @@ async fn queue_unknowns_from_search(
     let mut ids_found = false;
     for u_id in ids
     {
-        ids_found = true;
         let Ok(u_id) = u_id.parse::<u128>() else {
             error!("Invalid unknown-status number ID in search results: {}", u_id);
             continue;
         };
+        ids_found = true;
         let u_id_bytes = u_id.to_ne_bytes();
         if u_filter.query(&u_id_bytes).unwrap() {
             warn!("Skipping duplicate U ID: {}", u_id);
@@ -668,8 +665,10 @@ async fn queue_unknowns_from_search(
     }
     if ids_found {
         *u_start += U_RESULTS_PER_PAGE;
+        true
     } else {
-        error!("Couldn't parse IDs from search result: {results_text}")
+        error!("Couldn't parse IDs from search result: {results_text}");
+        false
     }
 }
 
