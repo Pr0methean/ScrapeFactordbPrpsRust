@@ -149,6 +149,7 @@ async fn do_checks(
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
+    let many_digits_regex = Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
     let resources_regex =
         RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
             .multi_line(true)
@@ -223,6 +224,7 @@ async fn do_checks(
                             if try_handle_unknown(
                                 &http,
                                 &u_status_regex,
+                                &many_digits_regex,
                                 id,
                                 &mut next_unknown_attempt,
                                 source_file,
@@ -242,6 +244,7 @@ async fn do_checks(
                                 if !try_handle_unknown(
                                     &http,
                                     &u_status_regex,
+                                    &many_digits_regex,
                                     id,
                                     &mut next_unknown_attempt,
                                     source_file,
@@ -272,6 +275,7 @@ async fn do_checks(
                 if !try_handle_unknown(
                     &http,
                     &u_status_regex,
+                    &many_digits_regex,
                     id,
                     &mut next_unknown_attempt,
                     source_file,
@@ -297,6 +301,7 @@ async fn try_handle_unknown<
 >(
     http: &Client,
     u_status_regex: &Regex,
+    many_digits_regex: &Regex,
     id: u128,
     next_attempt: &mut Instant,
     source_file: Option<u64>,
@@ -317,8 +322,14 @@ async fn try_handle_unknown<
         if let Some(status) = u_status_regex.captures_iter(&result).next() {
             match status.get(1) {
                 None => {
-                    error!("Failed to decode status for {id}: {result}");
-                    false
+                    if many_digits_regex.is_match(&result) {
+                        warn!("Unknown-status number {id} is too large for a PRP check!");
+                        // FIXME: Should restart search if this number came from a search
+                        true
+                    } else {
+                        error!("Failed to decode status for {id}: {result}");
+                        false
+                    }
                 }
                 Some(matched_status) => match matched_status.as_str() {
                     "Assigned" => {
