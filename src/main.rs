@@ -348,8 +348,14 @@ async fn try_handle_unknown<
                 },
             }
         } else {
-            error!("Failed to decode status for {id} from result: {result}");
-            false
+            if many_digits_regex.is_match(&result) {
+                warn!("Unknown-status number {id} is too large for a PRP check!");
+                // FIXME: Should restart search if this number came from a search
+                true
+            } else {
+                error!("Failed to decode status for {id} from result: {result}");
+                false
+            }
         }
     }
 }
