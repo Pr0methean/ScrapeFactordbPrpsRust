@@ -18,6 +18,7 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use const_format::formatcp;
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, error::TrySendError};
 use tokio::time::{Duration, Instant, sleep, sleep_until};
 use tokio::{select, task};
@@ -36,6 +37,12 @@ const PRP_TASK_BUFFER_SIZE: usize = 2 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
+const PRP_SEARCH_URL_BASE: &str = formatcp!(
+    "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
+);
+const U_SEARCH_URL_BASE: &str = formatcp!(
+    "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
+);
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
@@ -446,12 +453,6 @@ async fn main() {
         rps_limiter.clone(),
     ));
     simple_log::console("info").unwrap();
-    let prp_search_url_base = format!(
-        "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
-    );
-    let u_search_url_base = format!(
-        "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
-    );
     let mut prp_start = 0;
     let mut u_start = 1;
     let mut dump_file_index = 0;
@@ -476,7 +477,6 @@ async fn main() {
         &id_regex,
         &http,
         &rps_limiter,
-        &u_search_url_base,
         &mut u_start,
         &mut u_permits,
         &mut u_filter
@@ -499,7 +499,7 @@ async fn main() {
                     bases_since_restart = 0;
                     next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
                 }
-                let prp_search_url = format!("{prp_search_url_base}{prp_start}");
+                let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 rps_limiter.until_ready().await;
                 let results_text = retrying_get_and_decode(&http, &prp_search_url).await;
                 for prp_id in id_regex
@@ -528,7 +528,7 @@ async fn main() {
                         Err(TrySendError::Full(prp_id)) => Some(prp_id),
                         Err(TrySendError::Closed(_)) => unreachable!()
                     };
-                    queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                    queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
                     if let Some(prp_task) = unsent_prp_task {
                         prp_sender.send(prp_task).await.unwrap();
                     }
@@ -556,7 +556,7 @@ async fn main() {
                     u_start = 1;
                     restart_u = false;
                 }
-                queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &u_search_url_base, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
                 if u_start > MAX_START {
                     info!("Restarting U search: searched {u_start} unknowns");
                     restart_u = true;
@@ -571,7 +571,6 @@ async fn queue_unknowns(
     http: &Client,
     u_sender: &Sender<CheckTask>,
     rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
-    u_search_url_base: &String,
     mut u_start: &mut usize,
     mut dump_file_index: &mut u64,
     mut dump_file: &mut BufReader<File>,
@@ -608,7 +607,6 @@ async fn queue_unknowns(
                 &id_regex,
                 &http,
                 &rps_limiter,
-                &u_search_url_base,
                 &mut u_start,
                 &mut u_permits,
                 u_filter
@@ -635,12 +633,11 @@ async fn queue_unknowns_from_search(
     id_regex: &Regex,
     http: &Client,
     rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
-    u_search_url_base: &String,
     u_start: &mut usize,
     u_permits: &mut PermitIterator<'_, CheckTask>,
     u_filter: &mut InMemoryFilter
 ) {
-    let u_search_url = format!("{u_search_url_base}{u_start}");
+    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
     rps_limiter.until_ready().await;
     let results_text = retrying_get_and_decode(&http, &u_search_url).await;
     let ids = id_regex
