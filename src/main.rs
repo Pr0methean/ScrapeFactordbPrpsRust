@@ -26,6 +26,7 @@ use tokio::sync::OnceCell;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
+const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const PRP_RESULTS_PER_PAGE: usize = 64;
@@ -67,7 +68,7 @@ fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
 }
 
-async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
+async fn retrying_get_and_decode(http: &Client, url: &str, retry_delay: Duration) -> Box<str> {
     loop {
         match http
             .get(url)
@@ -87,7 +88,7 @@ async fn retrying_get_and_decode(http: &Client, url: &str) -> Box<str> {
                 }
             },
         }
-        sleep(RETRY_DELAY).await;
+        sleep(retry_delay).await;
     }
 }
 
@@ -100,7 +101,7 @@ async fn get_prp_remaining_bases(id: &str, ctx: &BuildTaskContext) -> U256 {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
-    let bases_text = retrying_get_and_decode(http, &bases_url).await;
+    let bases_text = retrying_get_and_decode(http, &bases_url, RETRY_DELAY).await;
     if bases_text.contains(" is prime") {
         info!("ID {id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
         return U256::from(0);
@@ -177,7 +178,7 @@ async fn do_checks(
                 for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
                     let url = format!("{url_base}{base}");
                     rps_limiter.until_ready().await;
-                    let text = retrying_get_and_decode(&http, &url).await;
+                    let text = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
                         break;
@@ -305,7 +306,7 @@ async fn try_handle_unknown<
             }
         let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
         rate_limiter.until_ready().await;
-        let result = retrying_get_and_decode(&http, &url).await;
+        let result = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
         if let Some(status) = u_status_regex.captures_iter(&result).next() {
             match status.get(1) {
                 None => {
@@ -354,7 +355,7 @@ async fn throttle_if_necessary<
         sleep(Duration::from_secs(10)).await; // allow for delay in CPU accounting
     }
     rps_limiter.until_ready().await;
-    let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php").await;
+    let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php", RETRY_DELAY).await;
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
     let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
@@ -501,7 +502,7 @@ async fn main() {
                 }
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 rps_limiter.until_ready().await;
-                let results_text = retrying_get_and_decode(&http, &prp_search_url).await;
+                let results_text = retrying_get_and_decode(&http, &prp_search_url, SEARCH_RETRY_DELAY).await;
                 for prp_id in id_regex
                     .captures_iter(&results_text)
                     .map(|result| result[1].to_owned().into_boxed_str())
@@ -639,7 +640,7 @@ async fn queue_unknowns_from_search(
 ) {
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
     rps_limiter.until_ready().await;
-    let results_text = retrying_get_and_decode(&http, &u_search_url).await;
+    let results_text = retrying_get_and_decode(&http, &u_search_url, SEARCH_RETRY_DELAY).await;
     let ids = id_regex
         .captures_iter(&results_text)
         .map(|result| result[1].to_owned().into_boxed_str())
