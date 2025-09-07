@@ -643,11 +643,14 @@ async fn queue_unknowns_from_search(
     let u_search_url = format!("{u_search_url_base}{u_start}");
     rps_limiter.until_ready().await;
     let results_text = retrying_get_and_decode(&http, &u_search_url).await;
-    for u_id in id_regex
+    let ids = id_regex
         .captures_iter(&results_text)
         .map(|result| result[1].to_owned().into_boxed_str())
-        .unique()
+        .unique();
+    let mut ids_found = false;
+    for u_id in ids
     {
+        ids_found = true;
         let Ok(u_id) = u_id.parse::<u128>() else {
             error!("Invalid unknown-status number ID in search results: {}", u_id);
             continue;
@@ -665,7 +668,11 @@ async fn queue_unknowns_from_search(
         });
         info!("Queued check of unknown-status number with ID {u_id} from search");
     }
-    *u_start += U_RESULTS_PER_PAGE;
+    if ids_found {
+        *u_start += U_RESULTS_PER_PAGE;
+    } else {
+        error!("Couldn't parse IDs from search result: {results_text}")
+    }
 }
 
 async fn queue_unknown_from_dump_file(
