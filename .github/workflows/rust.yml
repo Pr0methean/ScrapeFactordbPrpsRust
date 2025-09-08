@@ -18,6 +18,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cargo
+        key: cargo-${{ hashFiles('**/Cargo.toml') }}
+        restore-keys: |
+          cargo-
+    - name: Cache build
+      uses: actions/cache@v4
+      with:
+        path: target
+        key: target-${{ hashFiles('**/*.rs') }}
+        restore-keys: |
+          target-
     - run: rustup install nightly
     - name: Build
       run: cargo +nightly build --release
