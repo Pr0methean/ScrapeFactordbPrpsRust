@@ -448,7 +448,7 @@ async fn main() {
         config_builder = config_builder
             .level_duration(Duration::from_hours(24))
             .max_levels(7);
-        EXIT_TIME.set(Instant::now().add(Duration::from_mins(330))).unwrap();
+        EXIT_TIME.set(Instant::now().add(Duration::from_mins(350))).unwrap();
     }
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
