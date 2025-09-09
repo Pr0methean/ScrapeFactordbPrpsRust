@@ -109,7 +109,11 @@ async fn get_prp_remaining_bases(id: &str, ctx: &BuildTaskContext) -> U256 {
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
     let bases_text = retrying_get_and_decode(http, &bases_url, RETRY_DELAY).await;
-    if bases_text.contains(" is prime") {
+    if !bases_text.contains("&lt;") {
+        error!("ID {id}: Failed to decode status: {bases_text}");
+        return U256::from(0);
+    }
+    if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
         info!("ID {id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
         return U256::from(0);
     }
