@@ -364,8 +364,7 @@ async fn try_handle_unknown(
                     true
                 } else {
                     error!("Failed to decode status for {id}: {result}");
-                    composites_while_waiting(Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                    http, c_receiver, rate_limiter).await;
+                    *next_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
                     false
                 }
             }
