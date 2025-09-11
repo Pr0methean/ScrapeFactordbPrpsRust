@@ -169,7 +169,6 @@ const MIN_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 4;
 
 const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
-const UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT: Duration = Duration::from_millis(1500);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
@@ -209,7 +208,11 @@ async fn do_checks(
     )
     .await;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
-    while let Some(CheckTask {id, task_type, source_file}) = prp_receiver.recv().await {
+    loop {
+        let Ok(CheckTask {id, task_type, source_file}) = prp_receiver.try_recv() else {
+            composites_while_waiting(Instant::now() + Duration::from_secs(1), &http, &mut ctx.c_receiver, &rps_limiter).await;
+            continue;
+        };
         match task_type {
             CheckTaskType::Prp => {
                 let mut stopped_early = false;
@@ -346,12 +349,7 @@ async fn try_handle_unknown(
     source_file: Option<u64>,
     rate_limiter: &SimpleRateLimiter,
 ) -> bool {
-    let remaining_wait = next_attempt.saturating_duration_since(Instant::now());
-    if remaining_wait > UNKNOWN_STATUS_CHECK_MAX_BLOCKING_WAIT {
-        composites_while_waiting(*next_attempt, http, c_receiver, rate_limiter).await;
-    } else if remaining_wait > Duration::ZERO {
-        sleep(remaining_wait).await;
-    }
+    composites_while_waiting(*next_attempt, http, c_receiver, rate_limiter).await;
     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
     rate_limiter.until_ready().await;
     let result = retrying_get_and_decode(http, &url, RETRY_DELAY).await;
@@ -364,7 +362,7 @@ async fn try_handle_unknown(
                     true
                 } else {
                     error!("Failed to decode status for {id}: {result}");
-                    *next_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                    *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
                     false
                 }
             }
@@ -553,15 +551,18 @@ async fn main() {
                         waiting_c.push_back(c_id);
                     }
                     info!("All composites buffered");
-                    c = waiting_c.pop_front()
+                    c = waiting_c.pop_front();
                 }
                 c_permit.unwrap().send(c.unwrap());
+                let mut c_sent = 1;
                 while let Some(c) = waiting_c.pop_front() {
                     if c_sender.try_send(c).is_err() {
                         waiting_c.push_front(c);
                         break;
                     }
+                    c_sent += 1;
                 }
+                info!("{c_sent} composites sent to channel");
             }
             prp_permits = prp_sender.reserve_many(if restart_prp {
                 MIN_CAPACITY_AT_PRP_RESTART
@@ -602,7 +603,9 @@ async fn main() {
                     results_since_restart += 1;
                     prp_permits.next().unwrap().send(prp_task);
                     info!("Queued check of probable prime with ID {prp_id} from search");
-                    queue_unknowns(&id_regex, &http, u_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap(), &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                    if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
+                        queue_unknowns(&id_regex, &http, u_permits, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                    }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
                 if prp_start > MAX_START || u_start > MAX_START {
