@@ -2,6 +2,7 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
+use std::collections::VecDeque;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use governor::clock::{DefaultClock};
 use governor::state::{InMemoryState, NotKeyed};
@@ -18,7 +19,7 @@ use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use const_format::formatcp;
-use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, error::TrySendError};
+use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 use tokio::sync::OnceCell;
@@ -523,21 +524,49 @@ async fn main() {
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     // Use PRP queue so that the first unknown numbers will start immediately
     queue_unknown_from_dump_file(
-        &prp_sender,
+        prp_sender.reserve().await.unwrap(),
         &mut dump_file_index,
         &mut dump_file,
         &mut dump_file_lines_read,
         &mut line,
-        None,
     )
     .await;
-    queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+    queue_unknowns(&id_regex, &http, u_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap(), &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+    let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE);
     loop {
         select! {
-            _ = prp_sender.reserve_many(if restart_prp {
+            biased;
+            c_permit = c_sender.reserve() => {
+                let mut c = waiting_c.pop_front();
+                if c.is_none() {
+                    info!("Searching for composites");
+                    let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
+                    info!("Composites retrieved");
+                    for c_id in id_regex.captures_iter(&composites_page)
+                            .map(|capture| capture.get(1).unwrap().as_str())
+                            .unique() {
+                        let Ok(c_id) = c_id.parse::<u128>() else {
+                            error!("Invalid composite number ID in search results: {}", c_id);
+                            continue;
+                        };
+                        waiting_c.push_back(c_id);
+                        info!("Composite buffered");
+                    }
+                    info!("All composites buffered");
+                    c = waiting_c.pop_front()
+                }
+                c_permit.unwrap().send(c.unwrap());
+                while let Some(c) = waiting_c.pop_front() {
+                    if c_sender.try_send(c).is_err() {
+                        waiting_c.push_front(c);
+                        break;
+                    }
+                }
+            }
+            prp_permits = prp_sender.reserve_many(if restart_prp {
                 MIN_CAPACITY_AT_PRP_RESTART
             } else {
                 PRP_RESULTS_PER_PAGE
@@ -552,6 +581,7 @@ async fn main() {
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 rps_limiter.until_ready().await;
                 let results_text = retrying_get_and_decode(&http, &prp_search_url, SEARCH_RETRY_DELAY).await;
+                let mut prp_permits = prp_permits.unwrap();
                 for prp_id in id_regex
                     .captures_iter(&results_text)
                     .map(|result| result[1].to_owned().into_boxed_str())
@@ -573,16 +603,9 @@ async fn main() {
                         source_file: None
                     };
                     results_since_restart += 1;
-                    let unsent_prp_task = match prp_sender.try_send(prp_task) {
-                        Ok(()) => None,
-                        Err(TrySendError::Full(prp_id)) => Some(prp_id),
-                        Err(TrySendError::Closed(_)) => unreachable!()
-                    };
-                    queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
-                    if let Some(prp_task) = unsent_prp_task {
-                        prp_sender.send(prp_task).await.unwrap();
-                    }
+                    prp_permits.next().unwrap().send(prp_task);
                     info!("Queued check of probable prime with ID {prp_id} from search");
+                    queue_unknowns(&id_regex, &http, u_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap(), &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
                 if prp_start > MAX_START || u_start > MAX_START {
@@ -597,7 +620,7 @@ async fn main() {
                     restart_prp = true;
                 }
             }
-            _ = u_sender.reserve_many(if restart_u {
+            u_permits = u_sender.reserve_many(if restart_u {
                 MIN_CAPACITY_AT_U_RESTART
             } else {
                 U_RESULTS_PER_PAGE
@@ -606,27 +629,11 @@ async fn main() {
                     u_start = 1;
                     restart_u = false;
                 }
-                queue_unknowns(&id_regex, &http, &u_sender, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                queue_unknowns(&id_regex, &http, u_permits.unwrap(), &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
                 if u_start > MAX_START {
                     info!("Restarting U search: searched {u_start} unknowns");
                     restart_u = true;
                 }
-            }
-            _ = c_sender.reserve_many(C_RESULTS_PER_PAGE) => {
-                info!("Searching for composites");
-                let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
-                info!("Composites retrieved");
-                for c_id in id_regex.captures_iter(&composites_page)
-                        .map(|capture| capture.get(1).unwrap().as_str())
-                        .unique() {
-                    let Ok(c_id) = c_id.parse::<u128>() else {
-                        error!("Invalid composite number ID in search results: {}", c_id);
-                        continue;
-                    };
-                    c_sender.send(c_id).await.unwrap();
-                    info!("Composite sent to channel");
-                }
-                info!("All composites sent to channel");
             }
         }
     }
@@ -635,7 +642,7 @@ async fn main() {
 async fn queue_unknowns(
     id_regex: &Regex,
     http: &Client,
-    u_sender: &Sender<CheckTask>,
+    u_permits: PermitIterator<'_, CheckTask>,
     rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
     u_start: &mut usize,
     dump_file_index: &mut u64,
@@ -644,66 +651,69 @@ async fn queue_unknowns(
     line: &mut String,
     u_filter: &mut InMemoryFilter
 ) {
-    while let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-        let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
-        let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+    let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+    let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+        info!(
+            "Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
+            cpu_tenths_spent as f64 * 0.1
+        );
+        false
+    } else {
+        cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+        if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
             info!(
                 "Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
                 cpu_tenths_spent as f64 * 0.1
             );
             false
         } else {
-            cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
-            if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
-                info!(
-                    "Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
-                    cpu_tenths_spent as f64 * 0.1
-                );
-                false
-            } else {
-                info!(
-                    "Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
-                    cpu_tenths_spent as f64 * 0.1
-                );
-                true
-            }
-        };
-        if !use_search || !queue_unknowns_from_search(
-                id_regex,
-                http,
-                rps_limiter,
-                u_start,
-                &mut u_permits,
-                u_filter
-        ).await {
-            for _ in 0..U_RESULTS_PER_PAGE {
-                queue_unknown_from_dump_file(
-                    u_sender,
-                    dump_file_index,
-                    dump_file,
-                    dump_file_lines_read,
-                    line,
-                    u_permits.next(),
-                )
-                .await;
-            }
+            info!(
+                "Using search to find unknown-status numbers, because only {:.1} seconds CPU time has been spent this cycle",
+                cpu_tenths_spent as f64 * 0.1
+            );
+            true
         }
-        info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+    };
+    let mut permits = Some(u_permits);
+    if use_search {
+        if let Err(u_permits) = queue_unknowns_from_search(
+            id_regex,
+            http,
+            rps_limiter,
+            u_start,
+            permits.take().unwrap(),
+            u_filter
+        ).await {
+            permits = Some(u_permits);
+        }
     }
+    if let Some(mut u_permits) = permits.take() {
+        for _ in 0..U_RESULTS_PER_PAGE {
+            queue_unknown_from_dump_file(
+                u_permits.next().unwrap(),
+                dump_file_index,
+                dump_file,
+                dump_file_lines_read,
+                line,
+            )
+            .await;
+        }
+    }
+    info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
 }
 
-async fn queue_unknowns_from_search(
+async fn queue_unknowns_from_search<'a>(
     id_regex: &Regex,
     http: &Client,
     rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
     u_start: &mut usize,
-    u_permits: &mut PermitIterator<'_, CheckTask>,
+    mut u_permits: PermitIterator<'a, CheckTask>,
     u_filter: &mut InMemoryFilter
-) -> bool {
+) -> Result<(), PermitIterator<'a, CheckTask>> {
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
     rps_limiter.until_ready().await;
     let Some(results_text) = try_get_and_decode(http, &u_search_url).await else {
-        return false;
+        return Err(u_permits);
     };
     let ids = id_regex
         .captures_iter(&results_text)
@@ -732,20 +742,19 @@ async fn queue_unknowns_from_search(
     }
     if ids_found {
         *u_start += U_RESULTS_PER_PAGE;
-        true
+        Ok(())
     } else {
         error!("Couldn't parse IDs from search result: {results_text}");
-        false
+        Err(u_permits)
     }
 }
 
 async fn queue_unknown_from_dump_file(
-    u_sender: &Sender<CheckTask>,
+    u_permit: Permit<'_, CheckTask>,
     dump_file_index: &mut u64,
     dump_file: &mut BufReader<File>,
     dump_file_lines_read: &mut i32,
-    line: &mut String,
-    permit: Option<Permit<'_, CheckTask>>,
+    line: &mut String
 ) {
     line.clear();
     while line.is_empty() {
@@ -780,11 +789,7 @@ async fn queue_unknown_from_dump_file(
             source_file: Some(*dump_file_index),
             task_type: CheckTaskType::U,
         };
-        if let Some(permit) = permit {
-            permit.send(task);
-        } else {
-            u_sender.send(task).await.unwrap();
-        }
+        u_permit.send(task);
         info!("Queued check of unknown-status number with ID {id} from dump file");
     }
     *dump_file_lines_read += 1;
