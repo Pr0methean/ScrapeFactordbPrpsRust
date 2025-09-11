@@ -613,6 +613,7 @@ async fn main() {
             _ = c_sender.reserve_many(C_RESULTS_PER_PAGE) => {
                 info!("Searching for composites");
                 let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
+                info!("Composites retrieved");
                 for c_id in id_regex.captures_iter(&composites_page) {
                     let c_id = c_id.get(1).unwrap().as_str();
                     let Ok(c_id) = c_id.parse::<u128>() else {
