@@ -134,10 +134,10 @@ async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
-    let bases_text = retrying_get_and_decode(&http, &bases_url, RETRY_DELAY).await;
+    let bases_text = retrying_get_and_decode(http, &bases_url, RETRY_DELAY).await;
     if !bases_text.contains("&lt;") {
         error!("ID {id}: Failed to decode status: {bases_text}");
-        composites_while_waiting(Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY, http, c_receiver, &rps_limiter).await;
+        composites_while_waiting(Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY, http, c_receiver, rps_limiter).await;
         return U256::from(0);
     }
     if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
@@ -256,8 +256,7 @@ async fn do_checks(
                             task_type: CheckTaskType::U,
                             source_file
                         }) = retry
-                        {
-                            if try_handle_unknown(
+                            && try_handle_unknown(
                                 &http,
                                 &mut ctx.c_receiver,
                                 &u_status_regex,
@@ -271,8 +270,7 @@ async fn do_checks(
                             {
                                 retry = None;
                             }
-                        }
-                        if retry == None {
+                        if retry.is_none() {
                             while let Ok(CheckTask {id, task_type, source_file }) = u_receiver.try_recv() {
                                 if task_type != CheckTaskType::U {
                                     prp_sender.send(CheckTask {id, task_type, source_file }).await.unwrap();
@@ -352,7 +350,7 @@ async fn try_handle_unknown(
     }
     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
     rate_limiter.until_ready().await;
-    let result = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
+    let result = retrying_get_and_decode(http, &url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
         match status.get(1) {
             None => {
@@ -383,16 +381,14 @@ async fn try_handle_unknown(
                 }
             },
         }
+    } else if many_digits_regex.is_match(&result) {
+        warn!("Unknown-status number {id} is too large for a PRP check!");
+        // FIXME: Should restart search if this number came from a search
+        true
     } else {
-        if many_digits_regex.is_match(&result) {
-            warn!("Unknown-status number {id} is too large for a PRP check!");
-            // FIXME: Should restart search if this number came from a search
-            true
-        } else {
-            error!("Failed to decode status for {id} from result: {result}");
-            *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-            false
-        }
+        error!("Failed to decode status for {id} from result: {result}");
+        *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
+        false
     }
 }
 
@@ -412,7 +408,7 @@ async fn throttle_if_necessary(
         composites_while_waiting(Instant::now() + Duration::from_secs(10), http, c_receiver, rps_limiter).await; // allow for delay in CPU accounting
     }
     rps_limiter.until_ready().await;
-    let resources_text = retrying_get_and_decode(&http, "https://factordb.com/res.php", RETRY_DELAY).await;
+    let resources_text = retrying_get_and_decode(http, "https://factordb.com/res.php", RETRY_DELAY).await;
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
     let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
@@ -635,11 +631,11 @@ async fn queue_unknowns(
     http: &Client,
     u_sender: &Sender<CheckTask>,
     rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
-    mut u_start: &mut usize,
-    mut dump_file_index: &mut u64,
-    mut dump_file: &mut BufReader<File>,
-    mut dump_file_lines_read: &mut i32,
-    mut line: &mut String,
+    u_start: &mut usize,
+    dump_file_index: &mut u64,
+    dump_file: &mut BufReader<File>,
+    dump_file_lines_read: &mut i32,
+    line: &mut String,
     u_filter: &mut InMemoryFilter
 ) {
     while let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
@@ -667,20 +663,20 @@ async fn queue_unknowns(
             }
         };
         if !use_search || !queue_unknowns_from_search(
-                &id_regex,
-                &http,
-                &rps_limiter,
-                &mut u_start,
+                id_regex,
+                http,
+                rps_limiter,
+                u_start,
                 &mut u_permits,
                 u_filter
         ).await {
             for _ in 0..U_RESULTS_PER_PAGE {
                 queue_unknown_from_dump_file(
-                    &u_sender,
-                    &mut dump_file_index,
-                    &mut dump_file,
-                    &mut dump_file_lines_read,
-                    &mut line,
+                    u_sender,
+                    dump_file_index,
+                    dump_file,
+                    dump_file_lines_read,
+                    line,
                     u_permits.next(),
                 )
                 .await;
@@ -700,7 +696,7 @@ async fn queue_unknowns_from_search(
 ) -> bool {
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
     rps_limiter.until_ready().await;
-    let Some(results_text) = try_get_and_decode(&http, &u_search_url).await else {
+    let Some(results_text) = try_get_and_decode(http, &u_search_url).await else {
         return false;
     };
     let ids = id_regex
@@ -742,13 +738,13 @@ async fn queue_unknown_from_dump_file(
     dump_file_index: &mut u64,
     dump_file: &mut BufReader<File>,
     dump_file_lines_read: &mut i32,
-    mut line: &mut String,
+    line: &mut String,
     permit: Option<Permit<'_, CheckTask>>,
 ) {
     line.clear();
-    while line.len() == 0 {
+    while line.is_empty() {
         let mut next_file = false;
-        match dump_file.read_line(&mut line) {
+        match dump_file.read_line(line) {
             Ok(0) => next_file = true,
             Ok(_) => {}
             Err(e) => {
@@ -774,7 +770,7 @@ async fn queue_unknown_from_dump_file(
         warn!("Skipping an empty line in dump file {}", *dump_file_index);
     } else {
         let task = CheckTask {
-            id: id.parse().expect(&format!("Invalid ID {} in dump file {}", id, *dump_file_index)),
+            id: id.parse().unwrap_or_else(|_| panic!("Invalid ID {} in dump file {}", id, *dump_file_index)),
             source_file: Some(*dump_file_index),
             task_type: CheckTaskType::U,
         };
