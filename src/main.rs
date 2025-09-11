@@ -675,8 +675,8 @@ async fn queue_unknowns(
         }
     };
     let mut permits = Some(u_permits);
-    if use_search {
-        if let Err(u_permits) = queue_unknowns_from_search(
+    if use_search
+        && let Err(u_permits) = queue_unknowns_from_search(
             id_regex,
             http,
             rps_limiter,
@@ -686,7 +686,6 @@ async fn queue_unknowns(
         ).await {
             permits = Some(u_permits);
         }
-    }
     if let Some(mut u_permits) = permits.take() {
         for _ in 0..U_RESULTS_PER_PAGE {
             queue_unknown_from_dump_file(
