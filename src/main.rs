@@ -318,14 +318,15 @@ async fn do_checks(
                             }) = u_receiver.try_recv()
                             {
                                 if task_type != CheckTaskType::U {
-                                    prp_sender
-                                        .send(CheckTask {
+                                    if prp_sender
+                                        .try_send(CheckTask {
                                             id,
                                             task_type,
                                             source_file,
                                         })
-                                        .await
-                                        .unwrap();
+                                        .is_err() {
+                                        error!("Dropping unknown check with ID {id} from full PRP queue");
+                                    }
                                     break;
                                 };
                                 if !try_handle_unknown(
@@ -391,8 +392,8 @@ async fn do_checks(
                         })
                         .is_err()
                     {
-                        warn!(
-                            "Dropping task for ID {} because the retry buffer and queue are both full",
+                        error!(
+                            "Dropping unknown check with ID {} because the retry buffer and queue are both full",
                             id
                         );
                     }
@@ -626,33 +627,54 @@ async fn main() {
     loop {
         select! {
             c_permit = c_sender.reserve() => {
-                let mut c = waiting_c.pop_front();
-                if c.is_none() {
-                    info!("Searching for composites");
-                    let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
-                    info!("Composites retrieved");
-                    for c_id in id_regex.captures_iter(&composites_page)
-                            .map(|capture| capture.get(1).unwrap().as_str())
-                            .unique() {
-                        let Ok(c_id) = c_id.parse::<u128>() else {
-                            error!("Invalid composite number ID in search results: {}", c_id);
+                let c = waiting_c.pop_front();
+                let mut composites_page = "".to_string().into_boxed_str();
+                let mut c_sent = 1usize;
+                let mut c_buffered = 0isize;
+                match c {
+                    Some(c) => {
+                        c_buffered = -1;
+                        c_permit.unwrap().send(c);
+                        while let Some(c) = waiting_c.pop_front() {
+                            if c_sender.try_send(c).is_err() {
+                                waiting_c.push_front(c);
+                                break;
+                            }
+                            c_sent += 1;
+                            c_buffered -= 1;
+                        }
+                    }
+                    None => {
+                        info!("Searching for composites");
+                        composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
+                        info!("Composites retrieved");
+                        let mut c_ids = id_regex.captures_iter(&composites_page)
+                                .map(|capture| capture.get(1).unwrap().as_str())
+                                .unique();
+                        let Some(c_id) = c_ids.next() else {
+                            error!("Failed to decode any composites from search results: {composites_page}");
                             continue;
                         };
-                        waiting_c.push_back(c_id);
+                        if let Ok(c_id) = c_id.parse::<u128>() {
+                            c_permit.unwrap().send(c_id);
+                        } else {
+                            error!("Invalid composite number ID in search results: {}", c_id);
+                        };
+                        for c_id in c_ids {
+                            let Ok(c_id) = c_id.parse::<u128>() else {
+                                error!("Invalid composite number ID in search results: {}", c_id);
+                                continue;
+                            };
+                            if c_sender.try_send(c_id).is_err() {
+                                waiting_c.push_back(c_id);
+                                c_buffered += 1;
+                            } else {
+                                c_sent += 1;
+                            }
+                        }
                     }
-                    info!("All composites buffered");
-                    c = waiting_c.pop_front();
                 }
-                c_permit.unwrap().send(c.unwrap());
-                let mut c_sent = 1;
-                while let Some(c) = waiting_c.pop_front() {
-                    if c_sender.try_send(c).is_err() {
-                        waiting_c.push_front(c);
-                        break;
-                    }
-                    c_sent += 1;
-                }
-                info!("{c_sent} composites sent to channel");
+                info!("{c_sent} composites sent to channel; {c_buffered} added to buffer");
             }
             prp_permits = prp_sender.reserve_many(if restart_prp {
                 MIN_CAPACITY_AT_PRP_RESTART
