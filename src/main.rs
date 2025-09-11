@@ -616,13 +616,15 @@ async fn main() {
                 info!("Searching for composites");
                 let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
                 info!("Composites retrieved");
-                for c_id in id_regex.captures_iter(&composites_page) {
-                    let c_id = c_id.get(1).unwrap().as_str();
+                for c_id in id_regex.captures_iter(&composites_page)
+                        .map(|capture| capture.get(1).unwrap().as_str())
+                        .unique() {
                     let Ok(c_id) = c_id.parse::<u128>() else {
                         error!("Invalid composite number ID in search results: {}", c_id);
                         continue;
                     };
                     c_sender.send(c_id).await.unwrap();
+                    info!("Composite sent to channel");
                 }
                 info!("All composites sent to channel");
             }
