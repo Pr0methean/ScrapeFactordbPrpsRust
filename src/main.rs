@@ -27,6 +27,7 @@ use tokio::sync::OnceCell;
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
+const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const PRP_RESULTS_PER_PAGE: usize = 64;
@@ -111,6 +112,7 @@ async fn get_prp_remaining_bases(id: &str, ctx: &BuildTaskContext) -> U256 {
     let bases_text = retrying_get_and_decode(http, &bases_url, RETRY_DELAY).await;
     if !bases_text.contains("&lt;") {
         error!("ID {id}: Failed to decode status: {bases_text}");
+        sleep(UNPARSEABLE_RESPONSE_RETRY_DELAY).await;
         return U256::from(0);
     }
     if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
@@ -193,6 +195,7 @@ async fn do_checks(
                     let text = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
+                        sleep(UNPARSEABLE_RESPONSE_RETRY_DELAY).await;
                         break;
                     }
                     throttle_if_necessary(
@@ -332,6 +335,7 @@ async fn try_handle_unknown<
                         true
                     } else {
                         error!("Failed to decode status for {id}: {result}");
+                        sleep(UNPARSEABLE_RESPONSE_RETRY_DELAY).await;
                         false
                     }
                 }
@@ -358,6 +362,7 @@ async fn try_handle_unknown<
                 true
             } else {
                 error!("Failed to decode status for {id} from result: {result}");
+                sleep(UNPARSEABLE_RESPONSE_RETRY_DELAY).await;
                 false
             }
         }
