@@ -628,7 +628,6 @@ async fn main() {
         select! {
             c_permit = c_sender.reserve() => {
                 let c = waiting_c.pop_front();
-                let mut composites_page = "".to_string().into_boxed_str();
                 let mut c_sent = 1usize;
                 let mut c_buffered = 0isize;
                 match c {
@@ -646,7 +645,7 @@ async fn main() {
                     }
                     None => {
                         info!("Searching for composites");
-                        composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
+                        let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
                         info!("Composites retrieved");
                         let mut c_ids = id_regex.captures_iter(&composites_page)
                                 .map(|capture| capture.get(1).unwrap().as_str())
