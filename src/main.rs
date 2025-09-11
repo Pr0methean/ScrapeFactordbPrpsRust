@@ -605,8 +605,7 @@ async fn main() {
         &mut dump_file,
         &mut dump_file_lines_read,
         &mut line,
-    )
-    .await;
+    );
     queue_unknowns(
         &id_regex,
         &http,
@@ -666,7 +665,7 @@ async fn main() {
                     results_since_restart = 0;
                     bases_since_restart = 0;
                     next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
-                }c
+                }
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 rps_limiter.until_ready().await;
                 let results_text = retrying_get_and_decode(&http, &prp_search_url, SEARCH_RETRY_DELAY).await;
@@ -787,8 +786,7 @@ async fn queue_unknowns(
                 dump_file,
                 dump_file_lines_read,
                 line,
-            )
-            .await;
+            );
         }
     }
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
@@ -843,7 +841,7 @@ async fn queue_unknowns_from_search<'a>(
     }
 }
 
-async fn queue_unknown_from_dump_file(
+fn queue_unknown_from_dump_file(
     u_permit: Permit<'_, CheckTask>,
     dump_file_index: &mut u64,
     dump_file: &mut BufReader<File>,
