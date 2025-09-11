@@ -2,9 +2,9 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
-use std::collections::VecDeque;
+use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
-use governor::clock::{DefaultClock};
+use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
 use itertools::Itertools;
@@ -12,17 +12,17 @@ use log::{error, info, warn};
 use primitive_types::U256;
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use const_format::formatcp;
+use tokio::sync::OnceCell;
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
-use tokio::sync::OnceCell;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -47,15 +47,15 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
 const U_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
 );
-const C_SEARCH_URL: &str = formatcp!(
-    "https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}"
-);
+const C_SEARCH_URL: &str =
+    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(u8)]
 enum CheckTaskType {
-    Prp, U
+    Prp,
+    U,
 }
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 struct CheckTask {
@@ -70,7 +70,7 @@ struct BuildTaskContext {
     http: Client,
     bases_regex: Regex,
     rps_limiter: SimpleRateLimiter,
-    c_receiver: Receiver<u128>
+    c_receiver: Receiver<u128>,
 }
 
 fn count_ones(u256: U256) -> u32 {
@@ -108,7 +108,12 @@ async fn try_get_and_decode(http: &Client, url: &str) -> Option<Box<str>> {
     None
 }
 
-async fn composites_while_waiting(end: Instant, http: &Client, c_receiver: &mut Receiver<u128>, rps_limiter: &SimpleRateLimiter) {
+async fn composites_while_waiting(
+    end: Instant,
+    http: &Client,
+    c_receiver: &mut Receiver<u128>,
+    rps_limiter: &SimpleRateLimiter,
+) {
     info!("Processing composites while other work is waiting");
     loop {
         let Some(remaining) = end.checked_duration_since(Instant::now()) else {
@@ -120,7 +125,11 @@ async fn composites_while_waiting(end: Instant, http: &Client, c_receiver: &mut 
             return;
         };
         rps_limiter.until_ready().await;
-        if let Err(e) = http.get(format!("https://factordb.com/sequences.php?check={id}")).send().await {
+        if let Err(e) = http
+            .get(format!("https://factordb.com/sequences.php?check={id}"))
+            .send()
+            .await
+        {
             error!("Error while checking composite with ID {id}: {e}");
         } else {
             info!("Checked composite with ID {id}");
@@ -133,7 +142,7 @@ async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
         http,
         bases_regex,
         rps_limiter,
-        c_receiver
+        c_receiver,
     } = ctx;
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
@@ -141,7 +150,13 @@ async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
     let bases_text = retrying_get_and_decode(http, &bases_url, RETRY_DELAY).await;
     if !bases_text.contains("&lt;") {
         error!("ID {id}: Failed to decode status: {bases_text}");
-        composites_while_waiting(Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY, http, c_receiver, rps_limiter).await;
+        composites_while_waiting(
+            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
+            http,
+            c_receiver,
+            rps_limiter,
+        )
+        .await;
         return U256::from(0);
     }
     if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
@@ -184,7 +199,8 @@ async fn do_checks(
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
-    let many_digits_regex = Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
+    let many_digits_regex =
+        Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
     let resources_regex =
         RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
             .multi_line(true)
@@ -195,7 +211,7 @@ async fn do_checks(
         bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
         http: http.clone(),
         rps_limiter: rps_limiter.clone(),
-        c_receiver
+        c_receiver,
     };
     let mut bases_before_next_cpu_check = 1;
     throttle_if_necessary(
@@ -209,8 +225,19 @@ async fn do_checks(
     .await;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     loop {
-        let Ok(CheckTask {id, task_type, source_file}) = prp_receiver.try_recv() else {
-            composites_while_waiting(Instant::now() + Duration::from_secs(1), &http, &mut ctx.c_receiver, &rps_limiter).await;
+        let Ok(CheckTask {
+            id,
+            task_type,
+            source_file,
+        }) = prp_receiver.try_recv()
+        else {
+            composites_while_waiting(
+                Instant::now() + Duration::from_secs(1),
+                &http,
+                &mut ctx.c_receiver,
+                &rps_limiter,
+            )
+            .await;
             continue;
         };
         match task_type {
@@ -230,7 +257,13 @@ async fn do_checks(
                     let text = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
-                        composites_while_waiting(Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY, &http, &mut ctx.c_receiver, &rps_limiter).await;
+                        composites_while_waiting(
+                            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
+                            &http,
+                            &mut ctx.c_receiver,
+                            &rps_limiter,
+                        )
+                        .await;
                         break;
                     }
                     throttle_if_necessary(
@@ -261,7 +294,7 @@ async fn do_checks(
                         if let Some(CheckTask {
                             id,
                             task_type: CheckTaskType::U,
-                            source_file
+                            source_file,
                         }) = retry
                             && try_handle_unknown(
                                 &http,
@@ -274,13 +307,25 @@ async fn do_checks(
                                 &rps_limiter,
                             )
                             .await
-                            {
-                                retry = None;
-                            }
+                        {
+                            retry = None;
+                        }
                         if retry.is_none() {
-                            while let Ok(CheckTask {id, task_type, source_file }) = u_receiver.try_recv() {
+                            while let Ok(CheckTask {
+                                id,
+                                task_type,
+                                source_file,
+                            }) = u_receiver.try_recv()
+                            {
                                 if task_type != CheckTaskType::U {
-                                    prp_sender.send(CheckTask {id, task_type, source_file }).await.unwrap();
+                                    prp_sender
+                                        .send(CheckTask {
+                                            id,
+                                            task_type,
+                                            source_file,
+                                        })
+                                        .await
+                                        .unwrap();
                                     break;
                                 };
                                 if !try_handle_unknown(
@@ -295,7 +340,11 @@ async fn do_checks(
                                 )
                                 .await
                                 {
-                                    retry = Some(CheckTask {id, task_type, source_file });
+                                    retry = Some(CheckTask {
+                                        id,
+                                        task_type,
+                                        source_file,
+                                    });
                                     break;
                                 }
                             }
@@ -329,9 +378,23 @@ async fn do_checks(
                 .await
                 {
                     if retry.is_none() {
-                        retry = Some(CheckTask {id, task_type, source_file});
-                    } else if prp_sender.try_send(CheckTask {id, task_type, source_file}).is_err() {
-                        warn!("Dropping task for ID {} because the retry buffer and queue are both full", id);
+                        retry = Some(CheckTask {
+                            id,
+                            task_type,
+                            source_file,
+                        });
+                    } else if prp_sender
+                        .try_send(CheckTask {
+                            id,
+                            task_type,
+                            source_file,
+                        })
+                        .is_err()
+                    {
+                        warn!(
+                            "Dropping task for ID {} because the retry buffer and queue are both full",
+                            id
+                        );
                     }
                 }
             }
@@ -368,7 +431,9 @@ async fn try_handle_unknown(
             }
             Some(matched_status) => match matched_status.as_str() {
                 "Assigned" => {
-                    info!("Assigned PRP check for unknown-status number with ID {id} from dump file {source_file:?}");
+                    info!(
+                        "Assigned PRP check for unknown-status number with ID {id} from dump file {source_file:?}"
+                    );
                     true
                 }
                 "Please wait" => {
@@ -377,7 +442,9 @@ async fn try_handle_unknown(
                     false
                 }
                 _ => {
-                    warn!("Unknown-status number with ID {id} from dump file {source_file:?} is already being checked");
+                    warn!(
+                        "Unknown-status number with ID {id} from dump file {source_file:?} is already being checked"
+                    );
                     true
                 }
             },
@@ -406,10 +473,17 @@ async fn throttle_if_necessary(
         return;
     }
     if sleep_first {
-        composites_while_waiting(Instant::now() + Duration::from_secs(10), http, c_receiver, rps_limiter).await; // allow for delay in CPU accounting
+        composites_while_waiting(
+            Instant::now() + Duration::from_secs(10),
+            http,
+            c_receiver,
+            rps_limiter,
+        )
+        .await; // allow for delay in CPU accounting
     }
     rps_limiter.until_ready().await;
-    let resources_text = retrying_get_and_decode(http, "https://factordb.com/res.php", RETRY_DELAY).await;
+    let resources_text =
+        retrying_get_and_decode(http, "https://factordb.com/res.php", RETRY_DELAY).await;
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
     let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
@@ -435,10 +509,10 @@ async fn throttle_if_necessary(
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
     if !NO_RESERVE.load(Ordering::Acquire) {
-        tenths_remaining = tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 18000);
+        tenths_remaining =
+            tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 18000);
     }
-    let mut bases_remaining =
-        (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
+    let mut bases_remaining = (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
     if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS / 2 {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
@@ -446,7 +520,10 @@ async fn throttle_if_necessary(
             seconds_to_reset
         );
         let cpu_reset_time = cpu_check_time.add(Duration::from_secs(seconds_to_reset));
-        if EXIT_TIME.get().is_some_and(|exit_time| *exit_time <= cpu_reset_time) {
+        if EXIT_TIME
+            .get()
+            .is_some_and(|exit_time| *exit_time <= cpu_reset_time)
+        {
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
@@ -478,7 +555,9 @@ async fn main() {
         config_builder = config_builder
             .level_duration(Duration::from_hours(24))
             .max_levels(7);
-        EXIT_TIME.set(Instant::now().add(Duration::from_mins(350))).unwrap();
+        EXIT_TIME
+            .set(Instant::now().add(Duration::from_mins(350)))
+            .unwrap();
     }
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
@@ -528,7 +607,19 @@ async fn main() {
         &mut line,
     )
     .await;
-    queue_unknowns(&id_regex, &http, u_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap(), &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+    queue_unknowns(
+        &id_regex,
+        &http,
+        u_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap(),
+        &rps_limiter,
+        &mut u_start,
+        &mut dump_file_index,
+        &mut dump_file,
+        &mut dump_file_lines_read,
+        &mut line,
+        &mut u_filter,
+    )
+    .await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
@@ -575,7 +666,7 @@ async fn main() {
                     results_since_restart = 0;
                     bases_since_restart = 0;
                     next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
-                }
+                }c
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 rps_limiter.until_ready().await;
                 let results_text = retrying_get_and_decode(&http, &prp_search_url, SEARCH_RETRY_DELAY).await;
@@ -649,7 +740,7 @@ async fn queue_unknowns(
     dump_file: &mut BufReader<File>,
     dump_file_lines_read: &mut i32,
     line: &mut String,
-    u_filter: &mut InMemoryFilter
+    u_filter: &mut InMemoryFilter,
 ) {
     let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
     let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
@@ -682,10 +773,12 @@ async fn queue_unknowns(
             rps_limiter,
             u_start,
             permits.take().unwrap(),
-            u_filter
-        ).await {
-            permits = Some(u_permits);
-        }
+            u_filter,
+        )
+        .await
+    {
+        permits = Some(u_permits);
+    }
     if let Some(mut u_permits) = permits.take() {
         for _ in 0..U_RESULTS_PER_PAGE {
             queue_unknown_from_dump_file(
@@ -707,7 +800,7 @@ async fn queue_unknowns_from_search<'a>(
     rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
     u_start: &mut usize,
     mut u_permits: PermitIterator<'a, CheckTask>,
-    u_filter: &mut InMemoryFilter
+    u_filter: &mut InMemoryFilter,
 ) -> Result<(), PermitIterator<'a, CheckTask>> {
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
     rps_limiter.until_ready().await;
@@ -719,10 +812,12 @@ async fn queue_unknowns_from_search<'a>(
         .map(|result| result[1].to_owned().into_boxed_str())
         .unique();
     let mut ids_found = false;
-    for u_id in ids
-    {
+    for u_id in ids {
         let Ok(u_id) = u_id.parse::<u128>() else {
-            error!("Invalid unknown-status number ID in search results: {}", u_id);
+            error!(
+                "Invalid unknown-status number ID in search results: {}",
+                u_id
+            );
             continue;
         };
         ids_found = true;
@@ -753,7 +848,7 @@ async fn queue_unknown_from_dump_file(
     dump_file_index: &mut u64,
     dump_file: &mut BufReader<File>,
     dump_file_lines_read: &mut i32,
-    line: &mut String
+    line: &mut String,
 ) {
     line.clear();
     while line.is_empty() {
@@ -784,7 +879,9 @@ async fn queue_unknown_from_dump_file(
         warn!("Skipping an empty line in dump file {}", *dump_file_index);
     } else {
         let task = CheckTask {
-            id: id.parse().unwrap_or_else(|_| panic!("Invalid ID {} in dump file {}", id, *dump_file_index)),
+            id: id
+                .parse()
+                .unwrap_or_else(|_| panic!("Invalid ID {} in dump file {}", id, *dump_file_index)),
             source_file: Some(*dump_file_index),
             task_type: CheckTaskType::U,
         };
