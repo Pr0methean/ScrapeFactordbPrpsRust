@@ -108,8 +108,11 @@ async fn try_get_and_decode(http: &Client, url: &str) -> Option<Box<str>> {
 }
 
 async fn composites_while_waiting(end: Instant, http: &Client, c_receiver: &mut Receiver<u128>, rps_limiter: &SimpleRateLimiter) {
-    while Instant::now() < end {
-        let Some(id) = timeout(end - Instant::now(), c_receiver.recv()).await.unwrap() else {
+    loop {
+        let Some(remaining) = end.checked_duration_since(Instant::now()) else {
+            return;
+        };
+        let Ok(Some(id)) = timeout(remaining, c_receiver.recv()).await else {
             return;
         };
         rps_limiter.until_ready().await;
