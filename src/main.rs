@@ -538,7 +538,6 @@ async fn main() {
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE);
     loop {
         select! {
-            biased;
             c_permit = c_sender.reserve() => {
                 let mut c = waiting_c.pop_front();
                 if c.is_none() {
@@ -553,7 +552,6 @@ async fn main() {
                             continue;
                         };
                         waiting_c.push_back(c_id);
-                        info!("Composite buffered");
                     }
                     info!("All composites buffered");
                     c = waiting_c.pop_front()
