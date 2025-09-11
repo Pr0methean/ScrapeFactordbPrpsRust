@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use const_format::formatcp;
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, error::TrySendError};
-use tokio::time::{Duration, Instant, sleep};
+use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 use tokio::sync::OnceCell;
 
@@ -109,7 +109,9 @@ async fn try_get_and_decode(http: &Client, url: &str) -> Option<Box<str>> {
 
 async fn composites_while_waiting(end: Instant, http: &Client, c_receiver: &mut Receiver<u128>, rps_limiter: &SimpleRateLimiter) {
     while Instant::now() < end {
-        let id = c_receiver.recv().await.unwrap();
+        let Some(id) = timeout(end - Instant::now(), c_receiver.recv()).await.unwrap() else {
+            return;
+        };
         rps_limiter.until_ready().await;
         if let Err(e) = http.get(format!("https://factordb.com/sequences.php?check={id}")).send().await {
             error!("Error while checking composite with ID {id}: {e}");
@@ -609,6 +611,7 @@ async fn main() {
                 }
             }
             _ = c_sender.reserve_many(C_RESULTS_PER_PAGE) => {
+                info!("Searching for composites");
                 let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
                 for c_id in id_regex.captures_iter(&composites_page) {
                     let c_id = c_id.get(1).unwrap().as_str();
