@@ -40,7 +40,7 @@ const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Pr
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
 const C_RESULTS_PER_PAGE: usize = 5000;
-const C_TASK_BUFFER_SIZE: usize = C_RESULTS_PER_PAGE - 1; // because we already hold 1 permit when we refill
+const C_TASK_BUFFER_SIZE: usize = 1024; // because we already hold 1 permit when we refill
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
@@ -626,7 +626,7 @@ async fn main() {
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
-    let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE);
+    let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     loop {
         select! {
             c_permit = c_sender.reserve() => {
