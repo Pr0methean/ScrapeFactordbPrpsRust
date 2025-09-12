@@ -19,6 +19,7 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use rand::rng;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::time::{Duration, Instant, sleep, timeout};
@@ -47,8 +48,8 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
 const U_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
 );
-const C_SEARCH_URL: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}");
+const C_SEARCH_URL_BASE: &str =
+    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
@@ -547,6 +548,7 @@ async fn throttle_if_necessary(
 
 #[tokio::main]
 async fn main() {
+    let mut rng = rng();
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Ordering::Release);
     let mut config_builder = FilterConfigBuilder::default()
@@ -645,7 +647,9 @@ async fn main() {
                     }
                     None => {
                         info!("Searching for composites");
-                        let composites_page = retrying_get_and_decode(&http, C_SEARCH_URL, RETRY_DELAY).await;
+                        let start = rng.random_range(0..=100_000);
+                        let composites_page = retrying_get_and_decode(&http,
+                            format!("{C_SEARCH_URL_BASE}{start}"), RETRY_DELAY).await;
                         info!("Composites retrieved");
                         let mut c_ids = id_regex.captures_iter(&composites_page)
                                 .map(|capture| capture.get(1).unwrap().as_str())
