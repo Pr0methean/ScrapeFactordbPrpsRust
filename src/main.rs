@@ -632,10 +632,8 @@ async fn main() {
             c_permit = c_sender.reserve() => {
                 let c = waiting_c.pop_front();
                 let mut c_sent = 1usize;
-                let mut c_buffered = 0isize;
                 match c {
                     Some(c) => {
-                        c_buffered = -1;
                         c_permit.unwrap().send(c);
                         while let Some(c) = waiting_c.pop_front() {
                             if c_sender.try_send(c).is_err() {
@@ -643,7 +641,6 @@ async fn main() {
                                 break;
                             }
                             c_sent += 1;
-                            c_buffered -= 1;
                         }
                     }
                     None => {
@@ -664,6 +661,7 @@ async fn main() {
                         } else {
                             error!("Invalid composite number ID in search results: {}", c_id);
                         };
+                        let mut c_buffered = 0usize;
                         for c_id in c_ids {
                             let Ok(c_id) = c_id.parse::<u128>() else {
                                 error!("Invalid composite number ID in search results: {}", c_id);
@@ -683,7 +681,7 @@ async fn main() {
                         }
                     }
                 }
-                info!("{c_sent} composites sent to channel; {c_buffered} added to buffer");
+                info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
             }
             prp_permits = prp_sender.reserve_many(if restart_prp {
                 MIN_CAPACITY_AT_PRP_RESTART
