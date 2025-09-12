@@ -20,6 +20,7 @@ use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use rand::{rng, Rng};
+use rand::seq::SliceRandom;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::time::{Duration, Instant, sleep, timeout};
@@ -38,8 +39,8 @@ const U_RESULTS_PER_PAGE: usize = 1;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
-const C_TASK_BUFFER_SIZE: usize = 8192;
 const C_RESULTS_PER_PAGE: usize = 5000;
+const C_TASK_BUFFER_SIZE: usize = C_RESULTS_PER_PAGE - 1; // because we already hold 1 permit when we refill
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
@@ -673,6 +674,11 @@ async fn main() {
                                 c_buffered += 1;
                             } else {
                                 c_sent += 1;
+                            }
+                            if c_buffered > 0 {
+                                let (a, b) = waiting_c.as_mut_slices();
+                                a.shuffle(&mut rng);
+                                b.shuffle(&mut rng);
                             }
                         }
                     }
