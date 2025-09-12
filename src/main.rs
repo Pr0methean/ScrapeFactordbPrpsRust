@@ -19,7 +19,7 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use rand::rng;
+use rand::{rng, Rng};
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::time::{Duration, Instant, sleep, timeout};
@@ -649,7 +649,7 @@ async fn main() {
                         info!("Searching for composites");
                         let start = rng.random_range(0..=100_000);
                         let composites_page = retrying_get_and_decode(&http,
-                            format!("{C_SEARCH_URL_BASE}{start}"), RETRY_DELAY).await;
+                            &format!("{C_SEARCH_URL_BASE}{start}"), RETRY_DELAY).await;
                         info!("Composites retrieved");
                         let mut c_ids = id_regex.captures_iter(&composites_page)
                                 .map(|capture| capture.get(1).unwrap().as_str())
