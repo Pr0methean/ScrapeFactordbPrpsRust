@@ -10,6 +10,8 @@ use governor::{Quota, RateLimiter};
 use itertools::Itertools;
 use log::{error, info, warn};
 use primitive_types::U256;
+use rand::seq::SliceRandom;
+use rand::{Rng, rng};
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use std::collections::VecDeque;
@@ -19,8 +21,6 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use rand::{rng, Rng};
-use rand::seq::SliceRandom;
 use tokio::sync::OnceCell;
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::time::{Duration, Instant, sleep, timeout};
@@ -326,8 +326,11 @@ async fn do_checks(
                                             task_type,
                                             source_file,
                                         })
-                                        .is_err() {
-                                        error!("Dropping unknown check with ID {id} from full PRP queue");
+                                        .is_err()
+                                    {
+                                        error!(
+                                            "Dropping unknown check with ID {id} from full PRP queue"
+                                        );
                                     }
                                     break;
                                 };
