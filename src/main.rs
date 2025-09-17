@@ -117,6 +117,9 @@ async fn composites_while_waiting(
     rps_limiter: &SimpleRateLimiter,
 ) {
     info!("Processing composites while other work is waiting");
+    if let Ok(id) = c_receiver.try_recv() {
+        check_composite(http, rps_limiter, id).await;
+    }
     loop {
         let Some(remaining) = end.checked_duration_since(Instant::now()) else {
             info!("Done processing composites");
@@ -126,16 +129,20 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        rps_limiter.until_ready().await;
-        if let Err(e) = http
-            .get(format!("https://factordb.com/sequences.php?check={id}"))
-            .send()
-            .await
-        {
-            error!("Error while checking composite with ID {id}: {e}");
-        } else {
-            info!("Checked composite with ID {id}");
-        }
+        check_composite(http, rps_limiter, id).await;
+    }
+}
+
+async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u128) {
+    rps_limiter.until_ready().await;
+    if let Err(e) = http
+        .get(format!("https://factordb.com/sequences.php?check={id}"))
+        .send()
+        .await
+    {
+        error!("Error while checking composite with ID {id}: {e}");
+    } else {
+        info!("Checked composite with ID {id}");
     }
 }
 
