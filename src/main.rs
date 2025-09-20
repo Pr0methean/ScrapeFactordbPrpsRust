@@ -702,6 +702,14 @@ async fn main() {
                             let (a, b) = waiting_c.as_mut_slices();
                             a.shuffle(&mut rng);
                             b.shuffle(&mut rng);
+                        } else {
+                            while let Some(c) = waiting_c.pop_front() {
+                                if c_sender.try_send(c).is_err() {
+                                    waiting_c.push_front(c);
+                                    break;
+                                }
+                                c_sent += 1;
+                            }
                         }
                     }
                 }
