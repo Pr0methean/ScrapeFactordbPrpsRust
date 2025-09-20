@@ -751,7 +751,7 @@ async fn main() {
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
-                if prp_start > MAX_START || u_start > MAX_START {
+                if prp_start > MAX_START {
                     info!("Restarting PRP search: reached maximum starting index");
                     restart_prp = true;
                 } else if results_since_restart >= PRP_TASK_BUFFER_SIZE
