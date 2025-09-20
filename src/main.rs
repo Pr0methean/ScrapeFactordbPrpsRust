@@ -655,20 +655,10 @@ async fn main() {
                     }
                     None => {
                         info!("Searching for composites");
-                        let mut digits = rng.random_range(89..=300);
-                        let mut start = 0;
-                        match digits {
-                            89 => {
-                                // Fewer than 5k composites have been smaller than 90 digits since
-                                // 2025-08-21, so make sure they're *all* eligible
-                                digits = 1;
-                            }
-                            90 => {
-                                start = rng.random_range(0..=60_000);
-                            }
-                            _ => {
-                                start = rng.random_range(0..=100_000);
-                            }
+                        let mut digits = rng.random_range(90..=300);
+                        let start = rng.random_range(0..=100_000);
+                        if digits == 90 {
+                            digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
                         }
                         let composites_page = retrying_get_and_decode(&http,
                             &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"), RETRY_DELAY).await;
