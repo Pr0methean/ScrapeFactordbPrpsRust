@@ -158,7 +158,7 @@ async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
     rps_limiter.until_ready().await;
     let bases_text = retrying_get_and_decode(http, &bases_url, RETRY_DELAY).await;
     if !bases_text.contains("&lt;") {
-        error!("ID {id}: Failed to decode status: {bases_text}");
+        error!("ID {id}: Failed to decode status for PRP: {bases_text}");
         composites_while_waiting(
             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
             http,
@@ -433,11 +433,11 @@ async fn try_handle_unknown(
         match status.get(1) {
             None => {
                 if many_digits_regex.is_match(&result) {
-                    warn!("Unknown-status number {id} is too large for a PRP check!");
+                    warn!("ID {id}: U is too large for a PRP check!");
                     // FIXME: Should restart search if this number came from a search
                     true
                 } else {
-                    error!("Failed to decode status for {id}: {result}");
+                    error!("ID {id}: Failed to decode status for U: {result}");
                     *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
                     false
                 }
@@ -463,11 +463,11 @@ async fn try_handle_unknown(
             },
         }
     } else if many_digits_regex.is_match(&result) {
-        warn!("Unknown-status number {id} is too large for a PRP check!");
+        warn!("ID {id}: U is too large for a PRP check!");
         // FIXME: Should restart search if this number came from a search
         true
     } else {
-        error!("Failed to decode status for {id} from result: {result}");
+        error!("ID {id}: Failed to decode status for U from result: {result}");
         *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
         false
     }
