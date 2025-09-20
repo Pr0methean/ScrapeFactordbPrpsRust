@@ -697,11 +697,11 @@ async fn main() {
                             } else {
                                 c_sent += 1;
                             }
-                            if c_buffered > 0 {
-                                let (a, b) = waiting_c.as_mut_slices();
-                                a.shuffle(&mut rng);
-                                b.shuffle(&mut rng);
-                            }
+                        }
+                        if c_buffered > 0 {
+                            let (a, b) = waiting_c.as_mut_slices();
+                            a.shuffle(&mut rng);
+                            b.shuffle(&mut rng);
                         }
                     }
                 }
