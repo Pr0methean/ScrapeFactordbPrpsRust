@@ -135,8 +135,8 @@ async fn composites_while_waiting(
 
 async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u128) {
     rps_limiter.until_ready().await;
-    let result = retrying_get_and_decode(http, &format!("https://factordb.com/sequences.php?check={id}"), RETRY_DELAY).await;
-    info!("ID {id}: Checked C and got result: {result}");
+    retrying_get_and_decode(http, &format!("https://factordb.com/sequences.php?check={id}"), RETRY_DELAY).await;
+    info!("ID {id}: Checked C");
 }
 
 async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
