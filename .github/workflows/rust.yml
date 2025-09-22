@@ -27,7 +27,9 @@ jobs:
     - name: Cache build
       uses: actions/cache@v4
       with:
-        path: target
+        path: |
+          target
+          Cargo.lock
         key: target-${{ hashFiles('**/*.rs') }}
         restore-keys: |
           target-
