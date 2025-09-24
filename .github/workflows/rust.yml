@@ -21,7 +21,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: ~/.cargo
-        key: cargo-${{ hashFiles('**/Cargo.toml') }}
+        key: cargo-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
         restore-keys: |
           cargo-
     - name: Cache build
@@ -30,7 +30,7 @@ jobs:
         path: |
           target
           Cargo.lock
-        key: target-${{ hashFiles('**/*.rs') }}
+        key: target-${{ hashFiles('.github/workflows/rust.yml', '**/*.rs') }}
         restore-keys: |
           target-
     - run: rustup install nightly
