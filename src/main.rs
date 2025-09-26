@@ -181,7 +181,7 @@ async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u12
 }
 
 async fn get_prp_remaining_bases(id: u128, http: &Client, bases_regex: &Regex,
-rps_limiter: &mut SimpleRateLimiter, c_receiver: &mut PushbackReceiver<u128>) -> U256 {
+rps_limiter: &mut SimpleRateLimiter, c_receiver: &mut PushbackReceiver<u128>) -> Result<U256,()> {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
@@ -195,11 +195,11 @@ rps_limiter: &mut SimpleRateLimiter, c_receiver: &mut PushbackReceiver<u128>) ->
             rps_limiter,
         )
         .await;
-        return U256::from(0);
+        return Err(());
     }
     if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
         info!("ID {id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
-        return U256::from(0);
+        return Ok(U256::from(0));
     }
     for bases in bases_regex.captures_iter(&bases_text) {
         for base in bases.iter() {
@@ -213,7 +213,7 @@ rps_limiter: &mut SimpleRateLimiter, c_receiver: &mut PushbackReceiver<u128>) ->
     if bases_left == U256::from(0) {
         info!("ID {id} already has all bases checked");
     }
-    bases_left
+    Ok(bases_left)
 }
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
@@ -275,7 +275,18 @@ async fn do_checks(
         match task_type {
             CheckTaskType::Prp => {
                 let mut stopped_early = false;
-                let bases_left = get_prp_remaining_bases(id, &http, &bases_regex, &mut rps_limiter, &mut c_receiver).await;
+                let Ok(bases_left) = get_prp_remaining_bases(id, &http, &bases_regex, &mut rps_limiter, &mut c_receiver).await else {
+                    if prp_receiver.try_send(CheckTask {
+                        id,
+                        task_type,
+                        source_file,
+                    }) {
+                        info!("ID {id}: Requeued PRP");
+                    } else {
+                        error!("ID {id}: Dropping PRP");
+                    }
+                    continue;
+                };
                 if bases_left == U256::from(0) {
                     continue;
                 }
@@ -289,6 +300,15 @@ async fn do_checks(
                     let text = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
+                        if prp_receiver.try_send(CheckTask {
+                            id,
+                            task_type,
+                            source_file,
+                        }) {
+                            info!("ID {id}: Requeued PRP");
+                        } else {
+                            error!("ID {id}: Dropping PRP");
+                        }
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                             &http,
@@ -417,7 +437,7 @@ async fn do_checks(
                             task_type,
                             source_file,
                         });
-                    } else if !prp_receiver
+                    } else if !u_receiver
                         .try_send(CheckTask {
                             id,
                             task_type,
