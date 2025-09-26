@@ -68,13 +68,6 @@ struct CheckTask {
 
 type SimpleRateLimiter = Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>;
 
-struct BuildTaskContext {
-    http: Client,
-    bases_regex: Regex,
-    rps_limiter: SimpleRateLimiter,
-    c_receiver: Receiver<u128>,
-}
-
 fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
 }
@@ -158,13 +151,8 @@ async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u12
     }
 }
 
-async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
-    let BuildTaskContext {
-        http,
-        bases_regex,
-        rps_limiter,
-        c_receiver,
-    } = ctx;
+async fn get_prp_remaining_bases(id: u128, http: &Client, bases_regex: &Regex,
+rps_limiter: &mut SimpleRateLimiter, c_receiver: &mut Receiver<u128>) -> U256 {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
@@ -213,9 +201,9 @@ async fn do_checks(
     prp_sender: Sender<CheckTask>,
     mut prp_receiver: Receiver<CheckTask>,
     mut u_receiver: Receiver<CheckTask>,
-    c_receiver: Receiver<u128>,
+    mut c_receiver: Receiver<u128>,
     http: Client,
-    rps_limiter: SimpleRateLimiter,
+    mut rps_limiter: SimpleRateLimiter,
 ) {
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
@@ -228,16 +216,11 @@ async fn do_checks(
             .dot_matches_new_line(true)
             .build()
             .unwrap();
-    let mut ctx = BuildTaskContext {
-        bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
-        http: http.clone(),
-        rps_limiter: rps_limiter.clone(),
-        c_receiver,
-    };
+    let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap();
     let mut bases_before_next_cpu_check = 1;
     throttle_if_necessary(
         &http,
-        &mut ctx.c_receiver,
+        &mut c_receiver,
         &rps_limiter,
         &resources_regex,
         &mut bases_before_next_cpu_check,
@@ -255,7 +238,7 @@ async fn do_checks(
             composites_while_waiting(
                 Instant::now() + Duration::from_secs(1),
                 &http,
-                &mut ctx.c_receiver,
+                &mut c_receiver,
                 &rps_limiter,
             )
             .await;
@@ -264,7 +247,7 @@ async fn do_checks(
         match task_type {
             CheckTaskType::Prp => {
                 let mut stopped_early = false;
-                let bases_left = get_prp_remaining_bases(&id.to_string(), &mut ctx).await;
+                let bases_left = get_prp_remaining_bases(id, &http, &bases_regex, &mut rps_limiter, &mut c_receiver).await;
                 if bases_left == U256::from(0) {
                     continue;
                 }
@@ -281,7 +264,7 @@ async fn do_checks(
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                             &http,
-                            &mut ctx.c_receiver,
+                            &mut c_receiver,
                             &rps_limiter,
                         )
                         .await;
@@ -289,7 +272,7 @@ async fn do_checks(
                     }
                     throttle_if_necessary(
                         &http,
-                        &mut ctx.c_receiver,
+                        &mut c_receiver,
                         &rps_limiter,
                         &resources_regex,
                         &mut bases_before_next_cpu_check,
@@ -319,7 +302,7 @@ async fn do_checks(
                         }) = retry
                             && try_handle_unknown(
                                 &http,
-                                &mut ctx.c_receiver,
+                                &mut c_receiver,
                                 &u_status_regex,
                                 &many_digits_regex,
                                 id,
@@ -355,7 +338,7 @@ async fn do_checks(
                                 };
                                 if !try_handle_unknown(
                                     &http,
-                                    &mut ctx.c_receiver,
+                                    &mut c_receiver,
                                     &u_status_regex,
                                     &many_digits_regex,
                                     id,
@@ -383,7 +366,7 @@ async fn do_checks(
             CheckTaskType::U => {
                 throttle_if_necessary(
                     &http,
-                    &mut ctx.c_receiver,
+                    &mut c_receiver,
                     &rps_limiter,
                     &resources_regex,
                     &mut bases_before_next_cpu_check,
@@ -392,7 +375,7 @@ async fn do_checks(
                 .await;
                 if !try_handle_unknown(
                     &http,
-                    &mut ctx.c_receiver,
+                    &mut c_receiver,
                     &u_status_regex,
                     &many_digits_regex,
                     id,
