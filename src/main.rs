@@ -101,9 +101,11 @@ impl <T> PushbackReceiver<T> {
             self.permit = self.sender.clone().try_reserve_owned().ok();
             true
         } else {
-            if self.sender.try_send(value).is_ok() {
+            let result = self.sender.try_send(value).is_ok();
+            if result {
                 self.permit = self.sender.clone().try_reserve_owned().ok();
             }
+            result
         }
     }
 }
