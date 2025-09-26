@@ -22,7 +22,7 @@ use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::OnceCell;
-use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel};
+use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, OwnedPermit};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 
@@ -66,14 +66,46 @@ struct CheckTask {
     task_type: CheckTaskType,
 }
 
-type SimpleRateLimiter = Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>;
-
-struct BuildTaskContext {
-    http: Client,
-    bases_regex: Regex,
-    rps_limiter: SimpleRateLimiter,
-    c_receiver: Receiver<u128>,
+struct PushbackReceiver<T> {
+    sender: Sender<T>,
+    receiver: Receiver<T>,
+    permit: Option<OwnedPermit<T>>
 }
+
+impl <T> PushbackReceiver<T> {
+    fn new(receiver: tokio::sync::mpsc::Receiver<T>, sender: &tokio::sync::mpsc::Sender<T>) -> Self {
+        PushbackReceiver {
+            receiver, sender: sender.clone(), permit: None
+        }
+    }
+
+    async fn recv(&mut self) -> T {
+        let result = self.receiver.recv().await.unwrap();
+        if self.permit.is_none() {
+            self.permit = self.sender.clone().try_reserve_owned().ok();
+        }
+        result
+    }
+
+    fn try_recv(&mut self) -> Option<T> {
+        let result = self.receiver.try_recv().ok()?;
+        if self.permit.is_none() {
+            self.permit = self.sender.clone().try_reserve_owned().ok();
+        }
+        Some(result)
+    }
+
+    fn try_send(&mut self, value: T) -> bool {
+        if let Some(permit) = self.permit.take() {
+            permit.send(value);
+            true
+        } else {
+            self.sender.try_send(value).is_ok()
+        }
+    }
+}
+
+type SimpleRateLimiter = Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>;
 
 fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
@@ -113,34 +145,24 @@ async fn try_get_and_decode(http: &Client, url: &str) -> Option<Box<str>> {
 async fn composites_while_waiting(
     end: Instant,
     http: &Client,
-    c_receiver: &mut Receiver<u128>,
+    c_receiver: &mut PushbackReceiver<u128>,
     rps_limiter: &SimpleRateLimiter,
 ) {
     info!("Processing composites while other work is waiting");
-    let mut id_to_retry = c_receiver.try_recv().ok();
-    if let Some(id) = id_to_retry && check_composite(http, rps_limiter, id).await {
-        id_to_retry = None;
-    }
     loop {
         let Some(remaining) = end.checked_duration_since(Instant::now()) else {
-            if let Some(id) = id_to_retry {
-                error!("ID {id}: dropping C");
-            }
-            info!("Done processing composites");
             return;
         };
-        let id = match id_to_retry {
-            Some(id) => id,
-            None => {
-                let Ok(Some(id)) = timeout(remaining, c_receiver.recv()).await else {
-                    warn!("Timed out waiting for a composite number to check");
-                    return;
-                };
-                id
-            }
+        let Ok(id) = timeout(remaining, c_receiver.recv()).await else {
+            warn!("Timed out waiting for a composite number to check");
+            return;
         };
         if !check_composite(http, rps_limiter, id).await {
-            id_to_retry = Some(id);
+            if c_receiver.try_send(id) {
+                info!("ID {id}: Requeued C");
+            } else {
+                error!("ID {id}: Dropping C");
+            }
         }
     }
 }
@@ -158,13 +180,8 @@ async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u12
     }
 }
 
-async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
-    let BuildTaskContext {
-        http,
-        bases_regex,
-        rps_limiter,
-        c_receiver,
-    } = ctx;
+async fn get_prp_remaining_bases(id: u128, http: &Client, bases_regex: &Regex,
+rps_limiter: &mut SimpleRateLimiter, c_receiver: &mut PushbackReceiver<u128>) -> Result<U256,()> {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
@@ -178,11 +195,11 @@ async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
             rps_limiter,
         )
         .await;
-        return U256::from(0);
+        return Err(());
     }
     if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
         info!("ID {id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
-        return U256::from(0);
+        return Ok(U256::from(0));
     }
     for bases in bases_regex.captures_iter(&bases_text) {
         for base in bases.iter() {
@@ -196,7 +213,7 @@ async fn get_prp_remaining_bases(id: &str, ctx: &mut BuildTaskContext) -> U256 {
     if bases_left == U256::from(0) {
         info!("ID {id} already has all bases checked");
     }
-    bases_left
+    Ok(bases_left)
 }
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
@@ -210,12 +227,11 @@ static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
 
 async fn do_checks(
-    prp_sender: Sender<CheckTask>,
-    mut prp_receiver: Receiver<CheckTask>,
-    mut u_receiver: Receiver<CheckTask>,
-    c_receiver: Receiver<u128>,
+    mut prp_receiver: PushbackReceiver<CheckTask>,
+    mut u_receiver: PushbackReceiver<CheckTask>,
+    mut c_receiver: PushbackReceiver<u128>,
     http: Client,
-    rps_limiter: SimpleRateLimiter,
+    mut rps_limiter: SimpleRateLimiter,
 ) {
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
@@ -228,16 +244,11 @@ async fn do_checks(
             .dot_matches_new_line(true)
             .build()
             .unwrap();
-    let mut ctx = BuildTaskContext {
-        bases_regex: Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap(),
-        http: http.clone(),
-        rps_limiter: rps_limiter.clone(),
-        c_receiver,
-    };
+    let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap();
     let mut bases_before_next_cpu_check = 1;
     throttle_if_necessary(
         &http,
-        &mut ctx.c_receiver,
+        &mut c_receiver,
         &rps_limiter,
         &resources_regex,
         &mut bases_before_next_cpu_check,
@@ -246,7 +257,7 @@ async fn do_checks(
     .await;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     loop {
-        let Ok(CheckTask {
+        let Some(CheckTask {
             id,
             task_type,
             source_file,
@@ -255,7 +266,7 @@ async fn do_checks(
             composites_while_waiting(
                 Instant::now() + Duration::from_secs(1),
                 &http,
-                &mut ctx.c_receiver,
+                &mut c_receiver,
                 &rps_limiter,
             )
             .await;
@@ -264,7 +275,18 @@ async fn do_checks(
         match task_type {
             CheckTaskType::Prp => {
                 let mut stopped_early = false;
-                let bases_left = get_prp_remaining_bases(&id.to_string(), &mut ctx).await;
+                let Ok(bases_left) = get_prp_remaining_bases(id, &http, &bases_regex, &mut rps_limiter, &mut c_receiver).await else {
+                    if prp_receiver.try_send(CheckTask {
+                        id,
+                        task_type,
+                        source_file,
+                    }) {
+                        info!("ID {id}: Requeued PRP");
+                    } else {
+                        error!("ID {id}: Dropping PRP");
+                    }
+                    continue;
+                };
                 if bases_left == U256::from(0) {
                     continue;
                 }
@@ -278,10 +300,19 @@ async fn do_checks(
                     let text = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
+                        if prp_receiver.try_send(CheckTask {
+                            id,
+                            task_type,
+                            source_file,
+                        }) {
+                            info!("ID {id}: Requeued PRP");
+                        } else {
+                            error!("ID {id}: Dropping PRP");
+                        }
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                             &http,
-                            &mut ctx.c_receiver,
+                            &mut c_receiver,
                             &rps_limiter,
                         )
                         .await;
@@ -289,7 +320,7 @@ async fn do_checks(
                     }
                     throttle_if_necessary(
                         &http,
-                        &mut ctx.c_receiver,
+                        &mut c_receiver,
                         &rps_limiter,
                         &resources_regex,
                         &mut bases_before_next_cpu_check,
@@ -319,7 +350,7 @@ async fn do_checks(
                         }) = retry
                             && try_handle_unknown(
                                 &http,
-                                &mut ctx.c_receiver,
+                                &mut c_receiver,
                                 &u_status_regex,
                                 &many_digits_regex,
                                 id,
@@ -332,20 +363,18 @@ async fn do_checks(
                             retry = None;
                         }
                         if retry.is_none() {
-                            while let Ok(CheckTask {
+                            while let Some(CheckTask {
                                 id,
                                 task_type,
                                 source_file,
                             }) = u_receiver.try_recv()
                             {
                                 if task_type != CheckTaskType::U {
-                                    if prp_sender
-                                        .try_send(CheckTask {
+                                    if !prp_receiver.try_send(CheckTask {
                                             id,
                                             task_type,
                                             source_file,
                                         })
-                                        .is_err()
                                     {
                                         error!(
                                             "Dropping unknown check with ID {id} from full PRP queue"
@@ -355,7 +384,7 @@ async fn do_checks(
                                 };
                                 if !try_handle_unknown(
                                     &http,
-                                    &mut ctx.c_receiver,
+                                    &mut c_receiver,
                                     &u_status_regex,
                                     &many_digits_regex,
                                     id,
@@ -383,7 +412,7 @@ async fn do_checks(
             CheckTaskType::U => {
                 throttle_if_necessary(
                     &http,
-                    &mut ctx.c_receiver,
+                    &mut c_receiver,
                     &rps_limiter,
                     &resources_regex,
                     &mut bases_before_next_cpu_check,
@@ -392,7 +421,7 @@ async fn do_checks(
                 .await;
                 if !try_handle_unknown(
                     &http,
-                    &mut ctx.c_receiver,
+                    &mut c_receiver,
                     &u_status_regex,
                     &many_digits_regex,
                     id,
@@ -408,13 +437,12 @@ async fn do_checks(
                             task_type,
                             source_file,
                         });
-                    } else if prp_sender
+                    } else if !u_receiver
                         .try_send(CheckTask {
                             id,
                             task_type,
                             source_file,
                         })
-                        .is_err()
                     {
                         error!(
                             "Dropping unknown check with ID {} because the retry buffer and queue are both full",
@@ -429,7 +457,7 @@ async fn do_checks(
 
 async fn try_handle_unknown(
     http: &Client,
-    c_receiver: &mut Receiver<u128>,
+    c_receiver: &mut PushbackReceiver<u128>,
     u_status_regex: &Regex,
     many_digits_regex: &Regex,
     id: u128,
@@ -487,7 +515,7 @@ async fn try_handle_unknown(
 
 async fn throttle_if_necessary(
     http: &Client,
-    c_receiver: &mut Receiver<u128>,
+    c_receiver: &mut PushbackReceiver<u128>,
     rps_limiter: &SimpleRateLimiter,
     resources_regex: &Regex,
     bases_before_next_cpu_check: &mut u64,
@@ -604,12 +632,12 @@ async fn main() {
         .unwrap();
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
-    let (c_sender, c_receiver) = channel(C_TASK_BUFFER_SIZE);
+    let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
+    let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
     let rps_limiter = Arc::new(rps_limiter);
     task::spawn(do_checks(
-        prp_sender.clone(),
-        prp_receiver,
-        u_receiver,
+        PushbackReceiver::new(prp_receiver, &prp_sender),
+        PushbackReceiver::new(u_receiver, &u_sender),
         c_receiver,
         http.clone(),
         rps_limiter.clone(),
