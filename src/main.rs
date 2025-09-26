@@ -98,9 +98,12 @@ impl <T> PushbackReceiver<T> {
     fn try_send(&mut self, value: T) -> bool {
         if let Some(permit) = self.permit.take() {
             permit.send(value);
+            self.permit = self.sender.clone().try_reserve_owned().ok();
             true
         } else {
-            self.sender.try_send(value).is_ok()
+            if self.sender.try_send(value).is_ok() {
+                self.permit = self.sender.clone().try_reserve_owned().ok();
+            }
         }
     }
 }
