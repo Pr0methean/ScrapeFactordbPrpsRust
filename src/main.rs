@@ -73,9 +73,11 @@ struct PushbackReceiver<T> {
 }
 
 impl <T> PushbackReceiver<T> {
-    fn new(receiver: tokio::sync::mpsc::Receiver<T>, sender: &tokio::sync::mpsc::Sender<T>) -> Self {
+    fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
+        let sender = sender.clone();
+        let permit = sender.clone().try_reserve_owned().ok();
         PushbackReceiver {
-            receiver, sender: sender.clone(), permit: None
+            receiver, sender, permit
         }
     }
 
