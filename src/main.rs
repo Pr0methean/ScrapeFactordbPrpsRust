@@ -675,22 +675,13 @@ async fn main() {
                         let composites_page = retrying_get_and_decode(&http,
                             &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"), RETRY_DELAY).await;
                         info!("Composites retrieved");
-                        let mut c_ids = id_regex.captures_iter(&composites_page)
-                                .map(|capture| capture.get(1).unwrap().as_str())
+                        let c_ids = id_regex.captures_iter(&composites_page)
+                                .map(|capture| capture.get(1).unwrap().as_str().parse::<u128>().ok())
                                 .unique();
-                        let Some(c_id) = c_ids.next() else {
-                            error!("Failed to decode any composites from search results: {composites_page}");
-                            continue;
-                        };
-                        if let Ok(c_id) = c_id.parse::<u128>() {
-                            c_permit.unwrap().send(c_id);
-                        } else {
-                            error!("Invalid composite number ID in search results: {}", c_id);
-                        };
                         let mut c_buffered = 0usize;
                         for c_id in c_ids {
-                            let Ok(c_id) = c_id.parse::<u128>() else {
-                                error!("Invalid composite number ID in search results: {}", c_id);
+                            let Some(c_id) = c_id else {
+                                error!("Invalid composite number ID in search results");
                                 continue;
                             };
                             if c_sender.try_send(c_id).is_err() {
@@ -735,11 +726,11 @@ async fn main() {
                 let mut prp_permits = prp_permits.unwrap();
                 for prp_id in id_regex
                     .captures_iter(&results_text)
-                    .map(|result| result[1].to_owned().into_boxed_str())
+                    .map(|result| result[1].parse::<u128>().ok())
                     .unique()
                 {
-                    let Ok(prp_id) = prp_id.parse::<u128>() else {
-                        error!("Invalid PRP ID found: {}", prp_id);
+                    let Some(prp_id) = prp_id else {
+                        error!("Invalid PRP ID found");
                         continue;
                     };
                     let prp_id_bytes = prp_id.to_ne_bytes();
@@ -870,15 +861,12 @@ async fn queue_unknowns_from_search<'a>(
     };
     let ids = id_regex
         .captures_iter(&results_text)
-        .map(|result| result[1].to_owned().into_boxed_str())
+        .map(|result| result[1].parse::<u128>().ok())
         .unique();
     let mut ids_found = false;
     for u_id in ids {
-        let Ok(u_id) = u_id.parse::<u128>() else {
-            error!(
-                "Invalid unknown-status number ID in search results: {}",
-                u_id
-            );
+        let Some(u_id) = u_id else {
+            error!("Invalid unknown-status number ID in search results");
             continue;
         };
         ids_found = true;
