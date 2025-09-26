@@ -123,6 +123,9 @@ async fn composites_while_waiting(
     }
     loop {
         let Some(remaining) = end.checked_duration_since(Instant::now()) else {
+            if let Some(id) = id_to_retry {
+                error!("ID {id}: dropping C");
+            }
             info!("Done processing composites");
             return;
         };
