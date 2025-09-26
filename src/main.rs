@@ -117,32 +117,41 @@ async fn composites_while_waiting(
     rps_limiter: &SimpleRateLimiter,
 ) {
     info!("Processing composites while other work is waiting");
-    if let Ok(id) = c_receiver.try_recv() {
-        check_composite(http, rps_limiter, id).await;
+    let mut id_to_retry = c_receiver.try_recv().ok();
+    if let Some(id) = id_to_retry && check_composite(http, rps_limiter, id).await {
+        id_to_retry = None;
     }
     loop {
         let Some(remaining) = end.checked_duration_since(Instant::now()) else {
             info!("Done processing composites");
             return;
         };
-        let Ok(Some(id)) = timeout(remaining, c_receiver.recv()).await else {
-            warn!("Timed out waiting for a composite number to check");
-            return;
+        let id = match id_to_retry {
+            Some(id) => id,
+            None => {
+                let Ok(Some(id)) = timeout(remaining, c_receiver.recv()).await else {
+                    warn!("Timed out waiting for a composite number to check");
+                    return;
+                };
+                id
+            }
         };
-        check_composite(http, rps_limiter, id).await;
+        if !check_composite(http, rps_limiter, id).await {
+            id_to_retry = Some(id);
+        }
     }
 }
 
-async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u128) {
+async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u128) -> bool {
     rps_limiter.until_ready().await;
-    if let Err(e) = http
-        .get(format!("https://factordb.com/sequences.php?check={id}"))
-        .send()
+    if try_get_and_decode(http, &format!("https://factordb.com/sequences.php?check={id}"))
         .await
+        .is_some()
     {
-        error!("Error while checking composite with ID {id}: {e}");
-    } else {
         info!("Checked composite with ID {id}");
+        true
+    } else {
+        false
     }
 }
 
