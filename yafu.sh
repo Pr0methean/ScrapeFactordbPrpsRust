@@ -1,5 +1,5 @@
 #!/bin/bash
-set -u
+set -ux
 #	if [ ${origstart} == -1 ]; then
 #		start="$(($RANDOM * 3))"
 #	fi
