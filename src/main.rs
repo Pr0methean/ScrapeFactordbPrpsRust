@@ -199,6 +199,8 @@ async fn composites_while_waiting(
                                         .take(1);
                                     if let Some(error) = result.next() {
                                         error!("{id}: Failed to write factor to FIFO: {error}");
+                                    } else {
+                                        info!("{id}: Dispatched C to yafu")
                                     }
                                 }
                             }
