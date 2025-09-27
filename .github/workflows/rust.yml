@@ -49,7 +49,9 @@ jobs:
     - name: Run
       run: |
         NO_RESERVE=1 timeout 351m cargo +nightly run --release || true &
+        rust_pid=$!
         ./yafu.sh <composites &
+        wait ${rust_pid}
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
