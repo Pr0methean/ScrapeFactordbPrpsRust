@@ -10,7 +10,6 @@ while read -r num; do
   if flock -xn 9; then
       declare factor
       start_time="$(date -Is)"
-      echo "${start_time}: Factoring ${num}"
       while read -r factor; do
         now="$(date -Is)"
         echo "${now}: Found factor ${factor} of ${num}"
