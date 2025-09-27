@@ -39,7 +39,7 @@ while read -r num; do
           end_time=$(date +%s%N)
           echo "$(date -Is): Done factoring ${num} with yafu after $(format-nanos.sh $((end_time - start_time)))" >&2
         else
-          echo "$(date -Is): Failed to factor ${num} with yafu"
+          echo "$(date -Is): Failed to factor ${num} with yafu" >&2
           tail "./out" >&2
         fi
         rm ".out"
