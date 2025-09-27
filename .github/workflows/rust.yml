@@ -30,12 +30,17 @@ jobs:
         path: |
           target
           Cargo.lock
-          /usr/lib/x86_64-linux-gnu/libecm.a
-          /var/cache/apt/archives
-          /var/lib/dpkg/status
         key: target-${{ hashFiles('.github/workflows/rust.yml', '**/*.rs') }}
         restore-keys: |
           target-
+    - name: Cache apt/dpkg
+      uses: actions/cache@v4
+      with:
+        path: |
+          /usr/lib/x86_64-linux-gnu/libecm.a
+          /var/cache/apt/archives
+          /var/lib/dpkg/status
+        key: dpkg-ecm
     - run: rustup install nightly
     - name: Build
       run: |
