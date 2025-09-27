@@ -37,4 +37,10 @@ jobs:
     - name: Build
       run: cargo +nightly build --release
     - name: Run
-      run: NO_RESERVE=1 timeout 351m cargo +nightly run --release || true
+      run:
+        mkfifo composites
+        NO_RESERVE=1 timeout 351m cargo +nightly run --release || true &
+        rustpid=$!
+        apt-get install libecm-dev
+        ./yafu.sh <composites &
+        wait ${rustpid}

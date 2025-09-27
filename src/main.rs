@@ -16,15 +16,18 @@ use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use tokio::sync::OnceCell;
+use compact_str::CompactString;
+use tokio::sync::{Mutex, OnceCell};
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, OwnedPermit};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
+use serde::{Deserialize, Serialize};
+use serde_json::from_str;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -52,6 +55,7 @@ const U_SEARCH_URL_BASE: &str = formatcp!(
 const C_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
+static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(u8)]
@@ -64,6 +68,13 @@ struct CheckTask {
     id: u128,
     source_file: Option<u64>,
     task_type: CheckTaskType,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct NumberStatusApiResponse {
+    id: u128,
+    status: CompactString,
+    factors: Box<[(CompactString, u128)]>
 }
 
 struct PushbackReceiver<T> {
@@ -168,7 +179,35 @@ async fn composites_while_waiting(
             if c_receiver.try_send(id) {
                 info!("ID {id}: Requeued C");
             } else {
-                error!("ID {id}: Dropping C");
+                match COMPOSITES_OUT.get() {
+                    Some(out) => {
+                        let api_response = retrying_get_and_decode(http,
+                            &format!("https://factordb.com/api?id={id}"), RETRY_DELAY).await;
+                        match from_str::<NumberStatusApiResponse>(&api_response) {
+                            Err(e) => {
+                                error!("{id}: Failed to decode API response: {e}: {api_response}")
+                            },
+                            Ok(api_response) => {
+                                let NumberStatusApiResponse {status, factors, ..} = api_response;
+                                info!("{id}: Fetched status of {status} (previously C)");
+                                if status != "FF" {
+                                    let mut out = out.lock().await;
+                                    let mut result = factors.into_iter().map(|(factor, _exponent)|
+                                            out.write_fmt(format_args!("{factor}\n"))
+                                        )
+                                        .flat_map(Result::err)
+                                        .take(1);
+                                    if let Some(error) = result.next() {
+                                        error!("{id}: Failed to write factor to FIFO: {error}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    None => {
+                        error!("ID {id}: Dropping C");
+                    }
+                }
             }
         }
     }
@@ -619,6 +658,7 @@ async fn main() {
         EXIT_TIME
             .set(Instant::now().add(Duration::from_mins(350)))
             .unwrap();
+        COMPOSITES_OUT.get_or_init(async || Mutex::new(File::options().write(true).append(true).open("composites").unwrap())).await;
     }
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
