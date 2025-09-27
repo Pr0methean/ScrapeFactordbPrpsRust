@@ -169,6 +169,7 @@ async fn composites_while_waiting(
     info!("Processing composites while other work is waiting");
     loop {
         let Some(remaining) = end.checked_duration_since(Instant::now()) else {
+            info!("Out of time while processing composites");
             return;
         };
         let Ok(id) = timeout(remaining, c_receiver.recv()).await else {
