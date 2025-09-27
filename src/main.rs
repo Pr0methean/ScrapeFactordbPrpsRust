@@ -729,6 +729,7 @@ async fn main() {
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     loop {
         select! {
+            biased;
             c_permit = c_sender.reserve() => {
                 let c = waiting_c.pop_front();
                 let mut c_sent = 1usize;
