@@ -44,3 +44,9 @@ jobs:
         apt-get install libecm-dev
         ./yafu.sh <composites &
         wait ${rustpid}
+    - name: Upload any failed submissions
+      uses: actions/upload-artifact@v4
+      with:
+        name: failed-submissions.csv
+        path: failed-submissions.csv
+        if-no-files-found: ignore
