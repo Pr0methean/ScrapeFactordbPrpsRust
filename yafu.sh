@@ -32,7 +32,7 @@ while read -r num; do
         fi
       done < <(
         echo "$(date -Is): Factoring ${num} with yafu" >&2
-        yafu -threads 1 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" <<<"factor(${num})" 2>&1 \
+        ./yafu -threads 1 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" <<<"factor(${num})" 2>&1 \
           | tee "./out" \
           | grep '\(^P[0-9]\|factor = \)' | grep -o '= [0-9]\+' | grep -o '[0-9]\+' \
           | head -n -1 | uniq
@@ -43,6 +43,7 @@ while read -r num; do
           echo "$(date -Is): Failed to factor ${num} with yafu"
           tail "./out" >&2
         fi
+        rm ".out"
       )
   else
     echo "Skipping ${num} because it's already being factored"
