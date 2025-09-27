@@ -30,20 +30,26 @@ jobs:
         path: |
           target
           Cargo.lock
+          /usr/lib/x86_64-linux-gnu/libecm.a
+          /var/cache/apt/archives
+          /var/lib/dpkg/status
         key: target-${{ hashFiles('.github/workflows/rust.yml', '**/*.rs') }}
         restore-keys: |
           target-
     - run: rustup install nightly
     - name: Build
-      run: cargo +nightly build --release
+      run: |
+        (
+          mkfifo composites
+          apt-get install libecm-dev
+        ) &
+        apt_pid=$!
+        cargo +nightly build --release
+        wait ${apt_pid}
     - name: Run
       run: |
-        mkfifo composites
         NO_RESERVE=1 timeout 351m cargo +nightly run --release || true &
-        rustpid=$!
-        apt-get install libecm-dev
         ./yafu.sh <composites &
-        wait ${rustpid}
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
