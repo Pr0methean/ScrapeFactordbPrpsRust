@@ -16,8 +16,7 @@ while read -r num; do
         echo "${now}: Found factor ${factor} of ${num}"
         output=$(sem --id 'factordb-curl' --fg -j 2 curl -X POST --retry 10 --retry-all-errors --retry-delay 10 http://factordb.com/reportfactor.php -d "number=${num}&factor=${factor}")
         error=$?
-        grep -q "submitted" <<< "$output"
-        if [ $? -ne 0 ]; then
+        if ! grep -q "submitted" <<< "$output"; then
           error=1
         fi
         if [ $error -ne 0 ]; then
@@ -25,8 +24,7 @@ while read -r num; do
           flock failed-submissions.csv -c "echo \"${now}\",${num},${factor} >> failed-submissions.csv"
         else
           echo "\"${now}\",${num},${factor}" >> "factor-submissions.csv"
-          grep -q "Already" <<< "$output"
-          if [ $? -eq 0 ]; then
+          if grep -q "Already" <<< "$output"; then
             echo "Factor ${factor} of ${num} already known!"
           else
             echo "Factor ${factor} of ${num} accepted: ${output}"
@@ -38,8 +36,7 @@ while read -r num; do
           | tee "./out" \
           | grep '\(^P[0-9]\|factor = \)' | grep -o '= [0-9]\+' | grep -o '[0-9]\+' \
           | head -n -1 | uniq
-        grep -q '^P[0-9]' "./out"
-        if [ $? -eq 0 ]; then
+        if grep -q '^P[0-9]' "./out"; then
           end_time=$(date +%s%N)
           echo "$(date -Is): Done factoring ${num} with yafu after $(format-nanos.sh $((end_time - start_time)))" >&2
         else
