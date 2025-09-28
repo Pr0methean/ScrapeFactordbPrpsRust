@@ -38,7 +38,7 @@ jobs:
       with:
         path: |
           /usr/lib/x86_64-linux-gnu/libecm.a
-          /var/cache/apt/archives
+          /var/cache/apt/archives/*.deb
           /var/lib/dpkg/status
         key: dpkg-ecm
     - run: rustup install nightly
