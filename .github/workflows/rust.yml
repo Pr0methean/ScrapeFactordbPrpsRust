@@ -12,45 +12,11 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
+    container:
+      image: 'Dockerfile'
     steps:
     - uses: actions/checkout@v4
-    - name: Cache Cargo dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo
-        key: cargo-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
-        restore-keys: |
-          cargo-
-    - name: Cache build
-      uses: actions/cache@v4
-      with:
-        path: |
-          target
-          Cargo.lock
-        key: target-${{ hashFiles('.github/workflows/rust.yml', '**/*.rs') }}
-        restore-keys: |
-          target-
-    - name: Cache apt/dpkg
-      uses: actions/cache@v4
-      with:
-        path: |
-          /usr/lib/x86_64-linux-gnu/libecm.a
-          /var/cache/apt/archives
-          /var/lib/dpkg/status
-        key: dpkg-ecm
-    - run: rustup install nightly
-    - name: Build
-      run: |
-        (
-          mkfifo composites
-          sudo apt-get install libecm-dev
-        ) &
-        apt_pid=$!
-        cargo +nightly build --release
-        wait ${apt_pid}
     - name: Run
       run: |
         NO_RESERVE=1 timeout 351m nice -+19 cargo +nightly run --release || true &
