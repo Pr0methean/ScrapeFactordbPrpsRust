@@ -56,6 +56,7 @@ const C_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
+static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(u8)]
@@ -646,9 +647,57 @@ async fn throttle_if_necessary(
     }
 }
 
+async fn queue_composites(
+    waiting_c: &mut VecDeque<u128>,
+    id_regex: &Regex,
+    http: &Client,
+    c_sender: &Sender<u128>
+) -> usize {
+    let mut c_sent = 0;
+    let mut rng = rng();
+    let mut digits = rng.random_range(90..=300);
+    let start = rng.random_range(0..=100_000);
+    if digits == 90 {
+        digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
+    }
+    let composites_page = retrying_get_and_decode(&http,
+                                                  &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"), RETRY_DELAY).await;
+    info!("Composites retrieved");
+    let c_ids = id_regex.captures_iter(&composites_page)
+        .map(|capture| capture.get(1).unwrap().as_str().parse::<u128>().ok())
+        .unique();
+    let mut c_buffered = 0usize;
+    for c_id in c_ids {
+        let Some(c_id) = c_id else {
+            error!("Invalid composite number ID in search results");
+            continue;
+        };
+        if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).unwrap()
+            || c_sender.try_send(c_id).is_err() {
+            waiting_c.push_back(c_id);
+            c_buffered += 1;
+        } else {
+            c_sent += 1;
+        }
+    }
+    if c_buffered > 0 {
+        let (a, b) = waiting_c.as_mut_slices();
+        a.shuffle(&mut rng);
+        b.shuffle(&mut rng);
+    } else {
+        while let Some(c) = waiting_c.pop_front() {
+            if c_sender.try_send(c).is_err() {
+                waiting_c.push_front(c);
+                break;
+            }
+            c_sent += 1;
+        }
+    }
+    c_sent
+}
+
 #[tokio::main]
 async fn main() {
-    let mut rng = rng();
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Ordering::Release);
     let mut config_builder = FilterConfigBuilder::default()
@@ -702,7 +751,11 @@ async fn main() {
     let mut bases_since_restart = 0;
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
-    // Use PRP queue so that the first unknown numbers will start immediately
+    // Queue composites first
+    let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
+    let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
+    info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
+    // Use PRP queue so that the first unknown number will start sooner
     queue_unknown_from_dump_file(
         prp_sender.reserve().await.unwrap(),
         &mut dump_file_index,
@@ -710,23 +763,9 @@ async fn main() {
         &mut dump_file_lines_read,
         &mut line,
     );
-    queue_unknowns(
-        &id_regex,
-        &http,
-        u_sender.reserve_many(U_RESULTS_PER_PAGE).await.unwrap(),
-        &rps_limiter,
-        &mut u_start,
-        &mut dump_file_index,
-        &mut dump_file,
-        &mut dump_file_lines_read,
-        &mut line,
-        &mut u_filter,
-    )
-    .await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
-    let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     loop {
         select! {
             biased;
@@ -745,44 +784,7 @@ async fn main() {
                         }
                     }
                     None => {
-                        info!("Searching for composites");
-                        let mut digits = rng.random_range(90..=300);
-                        let start = rng.random_range(0..=100_000);
-                        if digits == 90 {
-                            digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
-                        }
-                        let composites_page = retrying_get_and_decode(&http,
-                            &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"), RETRY_DELAY).await;
-                        info!("Composites retrieved");
-                        let c_ids = id_regex.captures_iter(&composites_page)
-                                .map(|capture| capture.get(1).unwrap().as_str().parse::<u128>().ok())
-                                .unique();
-                        let mut c_buffered = 0usize;
-                        for c_id in c_ids {
-                            let Some(c_id) = c_id else {
-                                error!("Invalid composite number ID in search results");
-                                continue;
-                            };
-                            if c_sender.try_send(c_id).is_err() {
-                                waiting_c.push_back(c_id);
-                                c_buffered += 1;
-                            } else {
-                                c_sent += 1;
-                            }
-                        }
-                        if c_buffered > 0 {
-                            let (a, b) = waiting_c.as_mut_slices();
-                            a.shuffle(&mut rng);
-                            b.shuffle(&mut rng);
-                        } else {
-                            while let Some(c) = waiting_c.pop_front() {
-                                if c_sender.try_send(c).is_err() {
-                                    waiting_c.push_front(c);
-                                    break;
-                                }
-                                c_sent += 1;
-                            }
-                        }
+                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
                     }
                 }
                 info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
