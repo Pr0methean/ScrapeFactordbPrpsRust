@@ -672,7 +672,7 @@ async fn queue_composites(
             error!("Invalid composite number ID in search results");
             continue;
         };
-        if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).unwrap()
+        if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
             || c_sender.try_send(c_id).is_err() {
             waiting_c.push_back(c_id);
             c_buffered += 1;
