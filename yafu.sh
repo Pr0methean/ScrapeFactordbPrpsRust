@@ -9,11 +9,11 @@ while read -r num; do
   exec 9>"/tmp/factordb-composites/${num}"
   if flock -xn 9; then
       declare factor
-      start_time="$(date -Is)"
+      start_time="$(date +%s%N)"
       while read -r factor; do
         now="$(date -Is)"
         echo "${now}: Found factor ${factor} of ${num}"
-        output=$(sem --id 'factordb-curl' --fg -j 2 curl -X POST --retry 10 --retry-all-errors --retry-delay 10 http://factordb.com/reportfactor.php -d "number=${num}&factor=${factor}")
+        output=$(curl -X POST --retry 10 --retry-all-errors --retry-delay 10 http://factordb.com/reportfactor.php -d "number=${num}&factor=${factor}")
         error=$?
         if ! grep -q "submitted" <<< "$output"; then
           error=1
