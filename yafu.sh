@@ -1,5 +1,5 @@
 #!/bin/bash
-set -ux
+set -u
 #	if [ ${origstart} == -1 ]; then
 #		start="$(($RANDOM * 3))"
 #	fi
@@ -42,7 +42,7 @@ while read -r num; do
           echo "$(date -Is): Failed to factor ${num} with yafu" >&2
           tail "./out" >&2
         fi
-        rm ".out"
+        rm "./out"
       )
   else
     echo "Skipping ${num} because it's already being factored"
