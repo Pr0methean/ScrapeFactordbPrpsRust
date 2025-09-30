@@ -718,7 +718,7 @@ async fn main() {
             .level_duration(Duration::from_hours(24))
             .max_levels(7);
         EXIT_TIME
-            .set(Instant::now().add(Duration::from_mins(350)))
+            .set(Instant::now().add(Duration::from_mins(355)))
             .unwrap();
         COMPOSITES_OUT.get_or_init(async || Mutex::new(File::options().write(true).append(true).open("composites").unwrap())).await;
     }

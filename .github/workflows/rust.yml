@@ -55,7 +55,7 @@ jobs:
         wait ${apt_pid}
     - name: Run
       run: |
-        NO_RESERVE=1 timeout 351m nice -+19 cargo +nightly run --release || true &
+        NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release || true &
         rust_pid=$!
         ./yafu.sh <composites &
         wait ${rust_pid}
