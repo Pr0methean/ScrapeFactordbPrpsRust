@@ -57,8 +57,8 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
 const U_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
 );
-const C_SEARCH_URL_BASE: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
+const C_SEARCH_URL: &str =
+    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&digits=1&start=0");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
@@ -735,12 +735,9 @@ async fn queue_composites(
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
-    let digits = digits.unwrap_or_else(|| rng.random_range(C_MIN_DIGITS..=C_MAX_DIGITS).try_into().unwrap());
-    let start = rng.random_range(0..=100_000);
-    info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
         .retrying_get_and_decode(
-            &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"),
+            C_SEARCH_URL,
             RETRY_DELAY,
         )
         .await;
