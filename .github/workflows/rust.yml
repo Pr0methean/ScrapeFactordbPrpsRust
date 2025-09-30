@@ -33,6 +33,8 @@ jobs:
         key: target-${{ hashFiles('.github/workflows/rust.yml', '**/*.rs') }}
         restore-keys: |
           target-
+    - name: Let tar run as root
+      run: sudo chown root /bin/tar && sudo chmod u+s /bin/tar
     - name: Cache apt/dpkg
       uses: actions/cache@v4
       with:
