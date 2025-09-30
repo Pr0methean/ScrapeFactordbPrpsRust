@@ -58,7 +58,13 @@ jobs:
         NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release || true &
         rust_pid=$!
         ./yafu.sh <composites &
+        yafu_pid=$!
         wait ${rust_pid}
+        yafus=$(ps -C msieve -o pid=)
+        if [ "${yafus}" != "" ]; then
+          xargs kill <<< "${yafus}"
+          timeout 1m wait "${yafu_pid}"
+        fi
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
