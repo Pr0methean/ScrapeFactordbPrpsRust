@@ -49,14 +49,12 @@ const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: u128 = 32;
 const MIN_DIGITS_IN_PRP: usize = 300;
+const MIN_DIGITS_IN_C: usize = 91;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = (4 * PRP_RESULTS_PER_PAGE) as usize;
 const U_TASK_BUFFER_SIZE: usize = 256;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 256;
-const C_MIN_DIGITS: u128 = 91;
-const C_MAX_DIGITS: u128 = 300;
-
 const U_MIN_DIGITS: u128 = 2001;
 const U_MAX_DIGITS: u128 = 199_999;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
@@ -64,8 +62,8 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
 );
 const U_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
-const C_SEARCH_URL_BASE: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
+const C_SEARCH_URL: &str =
+    formatcp!("https://factordb.com/listtype.php?t=3&mindig={MIN_DIGITS_IN_C}&perpage={C_RESULTS_PER_PAGE}&start=0");
 const SUBMIT_U_FACTOR_MAX_ATTEMPTS: usize = 10;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
@@ -701,25 +699,13 @@ async fn queue_composites(
     waiting_c: &mut VecDeque<CompositeCheckTask>,
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
-    c_sender: &Sender<CompositeCheckTask>,
-    digits: Option<NonZeroU128>,
+    c_sender: &Sender<CompositeCheckTask>
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
-    let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
-        0
-    } else {
-        rng.random_range(0..=MAX_START)
-    };
-    let digits = digits.unwrap_or_else(|| {
-        rng.random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
-            .try_into()
-            .unwrap()
-    });
-    info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
         .retrying_get_and_decode(
-            &format!("{C_SEARCH_URL_BASE}{start}&mindig={digits}"),
+            C_SEARCH_URL,
             RETRY_DELAY,
         )
         .await;
@@ -763,16 +749,9 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let mut c_digits = None;
     let mut u_digits = None;
     let mut prp_start = if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<u128>().unwrap();
-        let mut c_digits_value =
-            C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
-        if c_digits_value == C_MIN_DIGITS - 1 {
-            c_digits_value = 1;
-        }
-        c_digits = Some(c_digits_value.try_into().unwrap());
         let u_digits_value =
             U_MAX_DIGITS - ((run_number * 19793) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
         u_digits = Some(u_digits_value.try_into().unwrap());
@@ -851,7 +830,6 @@ async fn main() {
         &id_and_expr_regex,
         &http,
         &c_sender,
-        c_digits,
     )
     .await;
     let mut sigterm =
@@ -873,7 +851,7 @@ async fn main() {
                         }
                     }
                     None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
+                        c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender).await;
                     }
                 }
                 info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
