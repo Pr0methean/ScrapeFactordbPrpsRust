@@ -55,7 +55,7 @@ const U_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
 );
 const C_SEARCH_URL_BASE: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
+    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&digits=1&start=");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
@@ -667,13 +667,9 @@ async fn queue_composites(
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
-    let mut digits = rng.random_range(90..=300);
     let start = rng.random_range(0..=100_000);
-    if digits == 90 {
-        digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
-    }
     let composites_page = retrying_get_and_decode(&http,
-                                                  &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"), RETRY_DELAY).await;
+                                                  &format!("{C_SEARCH_URL_BASE}{start}"), RETRY_DELAY).await;
     info!("Composites retrieved");
     let c_ids = id_regex.captures_iter(&composites_page)
         .map(|capture| capture.get(1).unwrap().as_str().parse::<u128>().ok())
