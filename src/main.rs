@@ -21,6 +21,7 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::Ordering::{AcqRel, Acquire};
 use compact_str::CompactString;
 use tokio::sync::{Mutex, OnceCell};
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, OwnedPermit};
@@ -178,39 +179,48 @@ async fn composites_while_waiting(
             return;
         };
         if !check_composite(http, rps_limiter, id).await {
-            if c_receiver.try_send(id) {
-                info!("ID {id}: Requeued C");
+            if let Some(out) = COMPOSITES_OUT.get() {
+                if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, AcqRel, Acquire).is_ok() {
+                    if c_receiver.try_send(id) {
+                        info!("ID {id}: Requeued C");
+                    } else {
+                        tokio::spawn(async || dispatch_composite(http, id, out));
+                    }
+                } else {
+                    dispatch_composite(http, id, out).await;
+                }
             } else {
-                match COMPOSITES_OUT.get() {
-                    Some(out) => {
-                        let api_response = retrying_get_and_decode(http,
-                            &format!("https://factordb.com/api?id={id}"), RETRY_DELAY).await;
-                        match from_str::<NumberStatusApiResponse>(&api_response) {
-                            Err(e) => {
-                                error!("{id}: Failed to decode API response: {e}: {api_response}")
-                            },
-                            Ok(api_response) => {
-                                let NumberStatusApiResponse {status, factors, ..} = api_response;
-                                info!("{id}: Fetched status of {status} (previously C)");
-                                if status != "FF" {
-                                    let mut out = out.lock().await;
-                                    let mut result = factors.into_iter().map(|(factor, _exponent)|
-                                            out.write_fmt(format_args!("{factor}\n"))
-                                        )
-                                        .flat_map(Result::err)
-                                        .take(1);
-                                    if let Some(error) = result.next() {
-                                        error!("{id}: Failed to write factor to FIFO: {error}");
-                                    } else {
-                                        info!("{id}: Dispatched C to yafu")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    None => {
-                        error!("ID {id}: Dropping C");
-                    }
+                if c_receiver.try_send(id) {
+                    info!("ID {id}: Requeued C");
+                } else {
+                    error!("ID {id}: Dropping C");
+                }
+            }
+        }
+    }
+}
+
+async fn dispatch_composite(http: &Client, id: u128, out: &Mutex<File>) {
+    let api_response = retrying_get_and_decode(http,
+                                               &format!("https://factordb.com/api?id={id}"), RETRY_DELAY).await;
+    match from_str::<NumberStatusApiResponse>(&api_response) {
+        Err(e) => {
+            error!("{id}: Failed to decode API response: {e}: {api_response}")
+        },
+        Ok(api_response) => {
+            let NumberStatusApiResponse { status, factors, .. } = api_response;
+            info!("{id}: Fetched status of {status} (previously C)");
+            if status != "FF" {
+                let mut out = out.lock().await;
+                let mut result = factors.into_iter().map(|(factor, _exponent)|
+                    out.write_fmt(format_args!("{factor}\n"))
+                )
+                    .flat_map(Result::err)
+                    .take(1);
+                if let Some(error) = result.next() {
+                    error!("{id}: Failed to write factor to FIFO: {error}");
+                } else {
+                    info!("{id}: Dispatched C to yafu")
                 }
             }
         }
@@ -611,7 +621,7 @@ async fn throttle_if_necessary(
     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
-    if !NO_RESERVE.load(Ordering::Acquire) {
+    if !NO_RESERVE.load(Acquire) {
         tenths_remaining =
             tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 18000);
     }
@@ -672,8 +682,7 @@ async fn queue_composites(
             error!("Invalid composite number ID in search results");
             continue;
         };
-        if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
-            || c_sender.try_send(c_id).is_err() {
+        if c_sender.try_send(c_id).is_err() {
             waiting_c.push_back(c_id);
             c_buffered += 1;
         } else {
@@ -876,7 +885,7 @@ async fn queue_unknowns(
     line: &mut String,
     u_filter: &mut InMemoryFilter,
 ) {
-    let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+    let mut cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Acquire);
     let use_search = if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
         info!(
             "Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
@@ -884,7 +893,7 @@ async fn queue_unknowns(
         );
         false
     } else {
-        cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Ordering::Acquire);
+        cpu_tenths_spent = CPU_TENTHS_SPENT_LAST_CHECK.load(Acquire);
         if cpu_tenths_spent >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
             info!(
                 "Using only dump file, because {:.1} seconds CPU time has already been spent this cycle",
