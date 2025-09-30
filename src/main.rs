@@ -180,11 +180,12 @@ async fn composites_while_waiting(
         };
         if !check_composite(http, rps_limiter, id).await {
             if let Some(out) = COMPOSITES_OUT.get() {
+                let http = http.clone();
                 if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, AcqRel, Acquire).is_ok() {
                     if c_receiver.try_send(id) {
                         info!("ID {id}: Requeued C");
                     } else {
-                        tokio::spawn(async || dispatch_composite(http, id, out));
+                        tokio::spawn(dispatch_composite(http, id, out));
                     }
                 } else {
                     dispatch_composite(http, id, out).await;
@@ -200,8 +201,8 @@ async fn composites_while_waiting(
     }
 }
 
-async fn dispatch_composite(http: &Client, id: u128, out: &Mutex<File>) {
-    let api_response = retrying_get_and_decode(http,
+async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) {
+    let api_response = retrying_get_and_decode(&http,
                                                &format!("https://factordb.com/api?id={id}"), RETRY_DELAY).await;
     match from_str::<NumberStatusApiResponse>(&api_response) {
         Err(e) => {
