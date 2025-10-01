@@ -60,8 +60,8 @@ jobs:
         ./yafu.sh <composites &
         yafu_pid=$!
         wait ${rust_pid}
-        echo "Rust program exited; draining unstarted factorizations"
-        while read -t 0.1 -r dropped; do :; done < composites # Drain FIFO so no new factorizations will start
+        echo "Rust program exited"
+        rm yafu # Prevent any more yafu processes from starting
         yafus=$(ps -C yafu -o pid=)
         if [ "${yafus}" != "" ]; then
           echo "Canceling ${#yafus} unfinished yafu processes"
@@ -70,6 +70,7 @@ jobs:
         else
           echo "No unfinished yafu processes found" 
         fi
+        timeout 1m wait "${yafu_pid}"
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
