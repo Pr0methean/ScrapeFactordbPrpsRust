@@ -718,7 +718,7 @@ async fn main() {
     if std::env::var("CI").is_ok() {
         config_builder = config_builder.max_levels(1);
         EXIT_TIME
-            .set(Instant::now().add(Duration::from_mins(355)))
+            .set(Instant::now().add(Duration::from_mins(10)))
             .unwrap();
         COMPOSITES_OUT.get_or_init(async || Mutex::new(File::options().write(true).append(true).open("composites").unwrap())).await;
     } else {
