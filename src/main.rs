@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::atomic::Ordering::{AcqRel, Acquire};
 use compact_str::CompactString;
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, OwnedPermit};
 use tokio::time::{Duration, Instant, sleep, timeout};
@@ -723,6 +724,7 @@ async fn main() {
     } else {
         config_builder = config_builder.max_levels(7);
     }
+    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
@@ -870,6 +872,10 @@ async fn main() {
                     info!("Restarting U search: searched {u_start} unknowns");
                     restart_u = true;
                 }
+            }
+            _ = sigterm.recv() => {
+                warn!("Received SIGTERM; exiting");
+                exit(0);
             }
         }
     }
