@@ -781,7 +781,6 @@ async fn main() {
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
     loop {
         select! {
-            biased;
             c_permit = c_sender.reserve() => {
                 let c = waiting_c.pop_front();
                 let mut c_sent = 1usize;
