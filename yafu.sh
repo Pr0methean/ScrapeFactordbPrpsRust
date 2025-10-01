@@ -6,6 +6,10 @@ set -u
 mkdir /tmp/factordb-composites
 declare num
 while read -r num; do
+  if [ ! -f "./yafu" ]; then
+    echo "Aborting because yafu has been deleted"
+    exit 0
+  fi
   exec 9>"/tmp/factordb-composites/${num}"
   if flock -xn 9; then
       declare factor
