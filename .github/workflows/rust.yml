@@ -57,7 +57,7 @@ jobs:
       run: |
         NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release || true &
         rust_pid=$!
-        timeout 356m -k 1m ./yafu.sh <composites &
+        timeout -k 1m 356m ./yafu.sh <composites &
         yafu_pid=$!
         wait ${rust_pid}
         echo "Rust program exited"
