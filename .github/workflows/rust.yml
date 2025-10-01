@@ -42,13 +42,13 @@ jobs:
           /usr/lib/x86_64-linux-gnu/libecm.a
           /var/cache/apt/archives/*.deb
           /var/lib/dpkg/status
-        key: dpkg-ecm
+        key: dpkg-ecm-2025-10-01
     - run: rustup install nightly
     - name: Build
       run: |
         (
           mkfifo composites
-          sudo apt-get install libecm-dev
+          sudo apt-get install libecm-dev gmp-ecm
         ) &
         apt_pid=$!
         cargo +nightly build --release
