@@ -74,7 +74,6 @@ jobs:
         if [ "${yafus}" != "" ]; then
           echo "Canceling ${#yafus} unfinished yafu processes"
           xargs kill <<< "${yafus}"
-          timeout 1m wait "${yafu_pid}"
         else
           echo "No unfinished yafu processes found" 
         fi
