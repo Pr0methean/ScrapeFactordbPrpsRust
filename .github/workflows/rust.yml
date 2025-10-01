@@ -62,7 +62,7 @@ jobs:
         wait ${rust_pid}
         echo "Rust program exited; draining unstarted factorizations"
         while read -t 0.1 -r dropped; do :; done < composites # Drain FIFO so no new factorizations will start
-        yafus=$(ps -C msieve -o pid=)
+        yafus=$(ps -C yafu -o pid=)
         if [ "${yafus}" != "" ]; then
           echo "Canceling ${#yafus} unfinished yafu processes"
           xargs kill <<< "${yafus}"
