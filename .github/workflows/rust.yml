@@ -57,7 +57,7 @@ jobs:
       run: |
         NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release || true &
         rust_pid=$!
-        ./yafu.sh <composites &
+        timeout 356m -k 1m ./yafu.sh <composites &
         yafu_pid=$!
         wait ${rust_pid}
         echo "Rust program exited"
@@ -70,7 +70,7 @@ jobs:
         else
           echo "No unfinished yafu processes found" 
         fi
-        timeout 1m wait "${yafu_pid}"
+        wait "${yafu_pid}"
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
