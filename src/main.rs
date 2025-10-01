@@ -712,15 +712,16 @@ async fn main() {
     NO_RESERVE.store(is_no_reserve, Ordering::Release);
     let mut config_builder = FilterConfigBuilder::default()
         .capacity(2500)
-        .false_positive_rate(0.001);
+        .false_positive_rate(0.001)
+        .level_duration(Duration::from_hours(24));
     if std::env::var("CI").is_ok() {
-        config_builder = config_builder
-            .level_duration(Duration::from_hours(24))
-            .max_levels(7);
+        config_builder = config_builder.max_levels(1);
         EXIT_TIME
             .set(Instant::now().add(Duration::from_mins(355)))
             .unwrap();
         COMPOSITES_OUT.get_or_init(async || Mutex::new(File::options().write(true).append(true).open("composites").unwrap())).await;
+    } else {
+        config_builder = config_builder.max_levels(7);
     }
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
