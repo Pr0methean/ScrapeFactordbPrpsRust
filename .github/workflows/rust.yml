@@ -55,11 +55,11 @@ jobs:
         wait ${apt_pid}
     - name: Run
       run: |
-        NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release || true &
+        NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release &
         rust_pid=$!
-        timeout -k 1m 356m ./yafu.sh <composites || true &
+        timeout -k 1m 356m ./yafu.sh <composites &
         yafu_pid=$!
-        wait ${rust_pid}
+        wait ${rust_pid} || true
         echo "Rust program exited"
         rm yafu # Prevent any more yafu processes from starting
         yafus=$(ps -C yafu -o pid=)
@@ -70,7 +70,7 @@ jobs:
         else
           echo "No unfinished yafu processes found" 
         fi
-        wait "${yafu_pid}"
+        wait "${yafu_pid}" || true
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
