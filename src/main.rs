@@ -179,23 +179,22 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        if !check_composite(http, rps_limiter, id).await {
-            if let Some(out) = COMPOSITES_OUT.get() {
-                if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, AcqRel, Acquire).is_ok() {
-                    if c_receiver.try_send(id) {
-                        info!("ID {id}: Requeued C");
-                    } else {
-                        tokio::spawn(dispatch_composite(http.clone(), id, out));
-                    }
-                } else {
-                    dispatch_composite(http.clone(), id, out).await;
-                }
-            } else {
+        let check_succeeded = check_composite(http, rps_limiter, id).await;
+        if let Some(out) = COMPOSITES_OUT.get() {
+            if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, AcqRel, Acquire).is_ok() {
+                dispatch_composite(http.clone(), id, out).await;
+            } else if !check_succeeded {
                 if c_receiver.try_send(id) {
                     info!("ID {id}: Requeued C");
                 } else {
-                    error!("ID {id}: Dropping C");
+                    tokio::spawn(dispatch_composite(http.clone(), id, out));
                 }
+            }
+        } else {
+            if c_receiver.try_send(id) {
+                info!("ID {id}: Requeued C");
+            } else {
+                error!("ID {id}: Dropping C");
             }
         }
     }
