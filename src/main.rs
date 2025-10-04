@@ -21,7 +21,7 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::atomic::Ordering::{AcqRel, Acquire};
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use compact_str::CompactString;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::{Mutex, OnceCell};
@@ -181,8 +181,10 @@ async fn composites_while_waiting(
         };
         let check_succeeded = check_composite(http, rps_limiter, id).await;
         if let Some(out) = COMPOSITES_OUT.get() {
-            if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, AcqRel, Acquire).is_ok() {
-                dispatch_composite(http.clone(), id, out).await;
+            if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
+                if dispatch_composite(http.clone(), id, out).await {
+                    HAVE_DISPATCHED_TO_YAFU.store(true, Release);
+                }
             } else if !check_succeeded {
                 if c_receiver.try_send(id) {
                     info!("ID {id}: Requeued C");
@@ -200,17 +202,20 @@ async fn composites_while_waiting(
     }
 }
 
-async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) {
+async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) -> bool {
     let api_response = retrying_get_and_decode(&http,
                                                &format!("https://factordb.com/api?id={id}"), RETRY_DELAY).await;
     match from_str::<NumberStatusApiResponse>(&api_response) {
         Err(e) => {
-            error!("{id}: Failed to decode API response: {e}: {api_response}")
+            error!("{id}: Failed to decode API response: {e}: {api_response}");
+            false
         },
         Ok(api_response) => {
             let NumberStatusApiResponse { status, factors, .. } = api_response;
             info!("{id}: Fetched status of {status} (previously C)");
-            if status != "FF" {
+            if status == "FF" {
+                false
+            } else {
                 let mut out = out.lock().await;
                 let mut result = factors.into_iter().map(|(factor, _exponent)|
                     out.write_fmt(format_args!("{factor}\n"))
@@ -219,8 +224,10 @@ async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) {
                     .take(1);
                 if let Some(error) = result.next() {
                     error!("{id}: Failed to write factor to FIFO: {error}");
+                    false
                 } else {
-                    info!("{id}: Dispatched C to yafu")
+                    info!("{id}: Dispatched C to yafu");
+                    true
                 }
             }
         }
@@ -617,7 +624,7 @@ async fn throttle_if_necessary(
     //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
     let cpu_tenths_spent_after =
         cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
-    CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Ordering::Release);
+    CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Release);
     let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
         + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
@@ -642,7 +649,7 @@ async fn throttle_if_necessary(
         }
         composites_while_waiting(cpu_reset_time, http, c_receiver, rps_limiter).await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
-        CPU_TENTHS_SPENT_LAST_CHECK.store(0, Ordering::Release);
+        CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
     } else {
         if bases_remaining < MIN_BASES_BETWEEN_RESOURCE_CHECKS {
             bases_remaining = MIN_BASES_BETWEEN_RESOURCE_CHECKS;
@@ -708,7 +715,7 @@ async fn queue_composites(
 #[tokio::main]
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
-    NO_RESERVE.store(is_no_reserve, Ordering::Release);
+    NO_RESERVE.store(is_no_reserve, Release);
     let mut config_builder = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
