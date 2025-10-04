@@ -184,6 +184,7 @@ async fn composites_while_waiting(
         let check_succeeded = check_composite(http, rps_limiter, id).await;
         if let Some(out) = COMPOSITES_OUT.get() {
             if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
+                rps_limiter.until_ready().await;
                 if dispatch_composite(http.clone(), id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
@@ -191,6 +192,7 @@ async fn composites_while_waiting(
                 if c_receiver.try_send(id) {
                     info!("ID {id}: Requeued C");
                 } else {
+                    rps_limiter.until_ready().await;
                     tokio::spawn(dispatch_composite(http.clone(), id, out));
                 }
             }
