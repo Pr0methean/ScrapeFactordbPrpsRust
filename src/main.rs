@@ -199,7 +199,7 @@ async fn composites_while_waiting(
         } else {
             if c_receiver.try_send(id) {
                 info!("ID {id}: Requeued C");
-            } else {
+            } else if !check_succeeded {
                 error!("ID {id}: Dropping C");
             }
         }
