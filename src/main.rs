@@ -20,6 +20,7 @@ use serde_json::from_str;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
+use std::num::NonZeroU32;
 use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
@@ -772,7 +773,12 @@ async fn main() {
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
-    let rps_limiter = RateLimiter::direct(Quota::per_hour(6100u32.try_into().unwrap()));
+    let rph_limit: NonZeroU32 = if is_no_reserve {
+        6400
+    } else {
+        6100
+    }.try_into().unwrap();
+    let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
     // so we make it start nearly empty instead.
