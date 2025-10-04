@@ -196,10 +196,10 @@ async fn composites_while_waiting(
                     tokio::spawn(dispatch_composite(http.clone(), id, out));
                 }
             }
-        } else {
+        } else if !check_succeeded {
             if c_receiver.try_send(id) {
                 info!("ID {id}: Requeued C");
-            } else if !check_succeeded {
+            } else {
                 error!("ID {id}: Dropping C");
             }
         }
