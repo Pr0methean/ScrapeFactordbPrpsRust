@@ -181,15 +181,14 @@ async fn composites_while_waiting(
         };
         if !check_composite(http, rps_limiter, id).await {
             if let Some(out) = COMPOSITES_OUT.get() {
-                let http = http.clone();
                 if HAVE_DISPATCHED_TO_YAFU.compare_exchange(false, true, AcqRel, Acquire).is_ok() {
                     if c_receiver.try_send(id) {
                         info!("ID {id}: Requeued C");
                     } else {
-                        tokio::spawn(dispatch_composite(http, id, out));
+                        tokio::spawn(dispatch_composite(http.clone(), id, out));
                     }
                 } else {
-                    dispatch_composite(http, id, out).await;
+                    dispatch_composite(http.clone(), id, out).await;
                 }
             } else {
                 if c_receiver.try_send(id) {
