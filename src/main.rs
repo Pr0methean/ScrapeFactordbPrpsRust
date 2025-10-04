@@ -171,7 +171,7 @@ async fn composites_while_waiting(
     c_receiver: &mut PushbackReceiver<u128>,
     rps_limiter: &SimpleRateLimiter,
 ) {
-    info!("Processing composites while other work is waiting");
+    info!("Processing composites until {end:?} while other work is waiting");
     loop {
         let Some(remaining) = end.checked_duration_since(Instant::now()) else {
             info!("Out of time while processing composites");
