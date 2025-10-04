@@ -172,12 +172,11 @@ async fn composites_while_waiting(
     c_receiver: &mut PushbackReceiver<u128>,
     rps_limiter: &SimpleRateLimiter,
 ) {
-    info!("Processing composites until {end:?} while other work is waiting");
+    let Some(mut remaining) = end.checked_duration_since(Instant::now()) else {
+        return;
+    };
+    info!("Processing composites for {remaining:?} while other work is waiting");
     loop {
-        let Some(remaining) = end.checked_duration_since(Instant::now()) else {
-            info!("Out of time while processing composites");
-            return;
-        };
         let Ok(id) = timeout(remaining, c_receiver.recv()).await else {
             warn!("Timed out waiting for a composite number to check");
             return;
@@ -204,6 +203,13 @@ async fn composites_while_waiting(
                 error!("ID {id}: Dropping C");
             }
         }
+        match end.checked_duration_since(Instant::now()) {
+            None => {
+                info!("Out of time while processing composites");
+                return;
+            }
+            Some(new_remaining) => remaining = new_remaining
+        };
     }
 }
 
