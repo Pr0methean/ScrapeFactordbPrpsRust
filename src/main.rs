@@ -2,6 +2,7 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
+use compact_str::CompactString;
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use governor::clock::DefaultClock;
@@ -14,22 +15,21 @@ use rand::seq::SliceRandom;
 use rand::{Rng, rng};
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use serde_json::from_str;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::Ordering::{Acquire, Release};
-use compact_str::CompactString;
-use tokio::signal::unix::{signal, SignalKind};
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc::{OwnedPermit, Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::sync::mpsc::{Permit, PermitIterator, Receiver, Sender, channel, OwnedPermit};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
-use serde::{Deserialize, Serialize};
-use serde_json::from_str;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -77,21 +77,23 @@ struct CheckTask {
 struct NumberStatusApiResponse {
     id: u128,
     status: CompactString,
-    factors: Box<[(CompactString, u128)]>
+    factors: Box<[(CompactString, u128)]>,
 }
 
 struct PushbackReceiver<T> {
     sender: Sender<T>,
     receiver: Receiver<T>,
-    permit: Option<OwnedPermit<T>>
+    permit: Option<OwnedPermit<T>>,
 }
 
-impl <T> PushbackReceiver<T> {
+impl<T> PushbackReceiver<T> {
     fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
         let sender = sender.clone();
         let permit = sender.clone().try_reserve_owned().ok();
         PushbackReceiver {
-            receiver, sender, permit
+            receiver,
+            sender,
+            permit,
         }
     }
 
@@ -203,23 +205,29 @@ async fn composites_while_waiting(
 }
 
 async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) -> bool {
-    let api_response = retrying_get_and_decode(&http,
-                                               &format!("https://factordb.com/api?id={id}"), RETRY_DELAY).await;
+    let api_response = retrying_get_and_decode(
+        &http,
+        &format!("https://factordb.com/api?id={id}"),
+        RETRY_DELAY,
+    )
+    .await;
     match from_str::<NumberStatusApiResponse>(&api_response) {
         Err(e) => {
             error!("{id}: Failed to decode API response: {e}: {api_response}");
             false
-        },
+        }
         Ok(api_response) => {
-            let NumberStatusApiResponse { status, factors, .. } = api_response;
+            let NumberStatusApiResponse {
+                status, factors, ..
+            } = api_response;
             info!("{id}: Fetched status of {status} (previously C)");
             if status == "FF" {
                 false
             } else {
                 let mut out = out.lock().await;
-                let mut result = factors.into_iter().map(|(factor, _exponent)|
-                    out.write_fmt(format_args!("{factor}\n"))
-                )
+                let mut result = factors
+                    .into_iter()
+                    .map(|(factor, _exponent)| out.write_fmt(format_args!("{factor}\n")))
                     .flat_map(Result::err)
                     .take(1);
                 if let Some(error) = result.next() {
@@ -236,9 +244,12 @@ async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) -> bool {
 
 async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u128) -> bool {
     rps_limiter.until_ready().await;
-    if try_get_and_decode(http, &format!("https://factordb.com/sequences.php?check={id}"))
-        .await
-        .is_some()
+    if try_get_and_decode(
+        http,
+        &format!("https://factordb.com/sequences.php?check={id}"),
+    )
+    .await
+    .is_some()
     {
         info!("Checked composite with ID {id}");
         true
@@ -247,8 +258,13 @@ async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u12
     }
 }
 
-async fn get_prp_remaining_bases(id: u128, http: &Client, bases_regex: &Regex,
-rps_limiter: &mut SimpleRateLimiter, c_receiver: &mut PushbackReceiver<u128>) -> Result<U256,()> {
+async fn get_prp_remaining_bases(
+    id: u128,
+    http: &Client,
+    bases_regex: &Regex,
+    rps_limiter: &mut SimpleRateLimiter,
+    c_receiver: &mut PushbackReceiver<u128>,
+) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     rps_limiter.until_ready().await;
@@ -342,7 +358,15 @@ async fn do_checks(
         match task_type {
             CheckTaskType::Prp => {
                 let mut stopped_early = false;
-                let Ok(bases_left) = get_prp_remaining_bases(id, &http, &bases_regex, &mut rps_limiter, &mut c_receiver).await else {
+                let Ok(bases_left) = get_prp_remaining_bases(
+                    id,
+                    &http,
+                    &bases_regex,
+                    &mut rps_limiter,
+                    &mut c_receiver,
+                )
+                .await
+                else {
                     if prp_receiver.try_send(CheckTask {
                         id,
                         task_type,
@@ -438,11 +462,10 @@ async fn do_checks(
                             {
                                 if task_type != CheckTaskType::U {
                                     if !prp_receiver.try_send(CheckTask {
-                                            id,
-                                            task_type,
-                                            source_file,
-                                        })
-                                    {
+                                        id,
+                                        task_type,
+                                        source_file,
+                                    }) {
                                         error!(
                                             "Dropping unknown check with ID {id} from full PRP queue"
                                         );
@@ -504,13 +527,11 @@ async fn do_checks(
                             task_type,
                             source_file,
                         });
-                    } else if !u_receiver
-                        .try_send(CheckTask {
-                            id,
-                            task_type,
-                            source_file,
-                        })
-                    {
+                    } else if !u_receiver.try_send(CheckTask {
+                        id,
+                        task_type,
+                        source_file,
+                    }) {
                         error!(
                             "Dropping unknown check with ID {} because the retry buffer and queue are both full",
                             id
@@ -668,7 +689,7 @@ async fn queue_composites(
     waiting_c: &mut VecDeque<u128>,
     id_regex: &Regex,
     http: &Client,
-    c_sender: &Sender<u128>
+    c_sender: &Sender<u128>,
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
@@ -677,10 +698,15 @@ async fn queue_composites(
     if digits == 90 {
         digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
     }
-    let composites_page = retrying_get_and_decode(&http,
-                                                  &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"), RETRY_DELAY).await;
+    let composites_page = retrying_get_and_decode(
+        &http,
+        &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"),
+        RETRY_DELAY,
+    )
+    .await;
     info!("Composites retrieved");
-    let c_ids = id_regex.captures_iter(&composites_page)
+    let c_ids = id_regex
+        .captures_iter(&composites_page)
         .map(|capture| capture.get(1).unwrap().as_str().parse::<u128>().ok())
         .unique();
     let mut c_buffered = 0usize;
@@ -725,11 +751,22 @@ async fn main() {
         EXIT_TIME
             .set(Instant::now().add(Duration::from_mins(355)))
             .unwrap();
-        COMPOSITES_OUT.get_or_init(async || Mutex::new(File::options().write(true).append(true).open("composites").unwrap())).await;
+        COMPOSITES_OUT
+            .get_or_init(async || {
+                Mutex::new(
+                    File::options()
+                        .write(true)
+                        .append(true)
+                        .open("composites")
+                        .unwrap(),
+                )
+            })
+            .await;
     } else {
         config_builder = config_builder.max_levels(7);
     }
-    let mut sigterm = signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
@@ -772,7 +809,10 @@ async fn main() {
     // Queue composites first
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
-    info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
+    info!(
+        "{c_sent} composites sent to channel; {} now in buffer",
+        waiting_c.len()
+    );
     // Use PRP queue so that the first unknown number will start sooner
     queue_unknown_from_dump_file(
         prp_sender.reserve().await.unwrap(),
