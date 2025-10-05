@@ -1069,7 +1069,6 @@ fn queue_unknown_from_dump_file(
         }
     }
     let id = line.split(",").next().unwrap();
-    line.clear();
     if id.is_empty() {
         warn!("Skipping an empty line in dump file {}", *dump_file_index);
     } else {
@@ -1083,5 +1082,6 @@ fn queue_unknown_from_dump_file(
         u_permit.send(task);
         info!("Queued check of unknown-status number with ID {id} from dump file");
     }
+    line.clear();
     *dump_file_lines_read += 1;
 }
