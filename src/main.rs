@@ -1045,7 +1045,6 @@ fn queue_unknown_from_dump_file(
     dump_file_lines_read: &mut i32,
     line: &mut String,
 ) {
-    line.clear();
     while line.is_empty() {
         let mut next_file = false;
         match dump_file.read_line(line) {
@@ -1070,6 +1069,7 @@ fn queue_unknown_from_dump_file(
         }
     }
     let id = line.split(",").next().unwrap();
+    line.clear();
     if id.is_empty() {
         warn!("Skipping an empty line in dump file {}", *dump_file_index);
     } else {
