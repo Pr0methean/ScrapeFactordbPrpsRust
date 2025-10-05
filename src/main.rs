@@ -87,6 +87,76 @@ struct PushbackReceiver<T> {
     permit: Option<OwnedPermit<T>>,
 }
 
+#[derive(Clone)]
+struct ThrottlingHttpClient {
+    resources_regex: Regex,
+    http: Client,
+    rps_limiter: SimpleRateLimiter
+}
+
+impl ThrottlingHttpClient {
+    fn parse_resource_limits(&self, bases_before_next_cpu_check: &mut u64, resources_text: &str) -> Option<(u64, u64)> {
+        let Some(captures) = self.resources_regex.captures_iter(&resources_text).next() else {
+            error!("Failed to parse resource limits");
+            *bases_before_next_cpu_check = 1;
+            return None;
+        };
+        let (
+            _,
+            [
+            cpu_seconds,
+            cpu_tenths_within_second,
+            minutes_to_reset,
+            seconds_within_minute_to_reset,
+            ],
+        ) = captures.extract();
+        // info!("Resources parsed: {}, {}, {}, {}",
+        //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
+        let cpu_tenths_spent_after =
+            cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
+        CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Release);
+        let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
+            + seconds_within_minute_to_reset.parse::<u64>().unwrap();
+        Some((cpu_tenths_spent_after, seconds_to_reset))
+    }
+    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
+        loop {
+            if let Some(value) = self.try_get_and_decode(url).await {
+                return value;
+            }
+            sleep(retry_delay).await;
+        }
+    }
+
+    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
+        self.rps_limiter.until_ready().await;
+        match self.http
+            .get(url)
+            .header("Referer", "https://factordb.com")
+            .send()
+            .await
+        {
+            Err(http_error) => error!("Error reading {url}: {http_error}"),
+            Ok(body) => match body.text().await {
+                Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
+                Ok(text) => {
+                    if text.contains("502 Proxy Error") {
+                        error!("502 error from {url}");
+                    } else {
+                        #[allow(const_item_mutation)]
+                        if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &text) {
+                            sleep(Duration::from_secs(seconds_to_reset)).await;
+                            return None;
+                        }
+                        return Some(text.into_boxed_str());
+                    }
+                }
+            },
+        }
+        None
+    }
+}
+
 impl<T> PushbackReceiver<T> {
     fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
         let sender = sender.clone();
@@ -135,42 +205,10 @@ fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
 }
 
-async fn retrying_get_and_decode(http: &Client, url: &str, retry_delay: Duration) -> Box<str> {
-    loop {
-        if let Some(value) = try_get_and_decode(http, url).await {
-            return value;
-        }
-        sleep(retry_delay).await;
-    }
-}
-
-async fn try_get_and_decode(http: &Client, url: &str) -> Option<Box<str>> {
-    match http
-        .get(url)
-        .header("Referer", "https://factordb.com")
-        .send()
-        .await
-    {
-        Err(http_error) => error!("Error reading {url}: {http_error}"),
-        Ok(body) => match body.text().await {
-            Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
-            Ok(text) => {
-                if text.contains("502 Proxy Error") {
-                    error!("502 error from {url}");
-                } else {
-                    return Some(text.into_boxed_str());
-                }
-            }
-        },
-    }
-    None
-}
-
 async fn composites_while_waiting(
     end: Instant,
-    http: &Client,
+    http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<u128>,
-    rps_limiter: &SimpleRateLimiter,
 ) {
     let Some(mut remaining) = end.checked_duration_since(Instant::now()) else {
         return;
@@ -181,10 +219,9 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        let check_succeeded = check_composite(http, rps_limiter, id).await;
+        let check_succeeded = check_composite(http, id).await;
         if let Some(out) = COMPOSITES_OUT.get() {
             if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
-                rps_limiter.until_ready().await;
                 if dispatch_composite(http.clone(), id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
@@ -192,7 +229,6 @@ async fn composites_while_waiting(
                 if c_receiver.try_send(id) {
                     info!("ID {id}: Requeued C");
                 } else {
-                    rps_limiter.until_ready().await;
                     tokio::spawn(dispatch_composite(http.clone(), id, out));
                 }
             }
@@ -213,9 +249,8 @@ async fn composites_while_waiting(
     }
 }
 
-async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) -> bool {
-    let api_response = retrying_get_and_decode(
-        &http,
+async fn dispatch_composite(http: ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
+    let api_response = http.retrying_get_and_decode(
         &format!("https://factordb.com/api?id={id}"),
         RETRY_DELAY,
     )
@@ -256,12 +291,8 @@ async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) -> bool {
     }
 }
 
-async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u128) -> bool {
-    rps_limiter.until_ready().await;
-    if try_get_and_decode(
-        http,
-        &format!("https://factordb.com/sequences.php?check={id}"),
-    )
+async fn check_composite(http: &ThrottlingHttpClient, id: u128) -> bool {
+    if http.try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
     .await
     .is_some()
     {
@@ -274,22 +305,19 @@ async fn check_composite(http: &Client, rps_limiter: &SimpleRateLimiter, id: u12
 
 async fn get_prp_remaining_bases(
     id: u128,
-    http: &Client,
+    http: &ThrottlingHttpClient,
     bases_regex: &Regex,
-    rps_limiter: &mut SimpleRateLimiter,
     c_receiver: &mut PushbackReceiver<u128>,
 ) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
-    rps_limiter.until_ready().await;
-    let bases_text = retrying_get_and_decode(http, &bases_url, RETRY_DELAY).await;
+    let bases_text = http.retrying_get_and_decode(&bases_url, RETRY_DELAY).await;
     if !bases_text.contains("&lt;") {
         error!("ID {id}: Failed to decode status for PRP: {bases_text}");
         composites_while_waiting(
             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
             http,
             c_receiver,
-            rps_limiter,
         )
         .await;
         return Err(());
@@ -327,27 +355,18 @@ async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
     mut c_receiver: PushbackReceiver<u128>,
-    http: Client,
-    mut rps_limiter: SimpleRateLimiter,
+    http: ThrottlingHttpClient,
 ) {
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let many_digits_regex =
         Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
-    let resources_regex =
-        RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
-            .multi_line(true)
-            .dot_matches_new_line(true)
-            .build()
-            .unwrap();
     let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap();
     let mut bases_before_next_cpu_check = 1;
     throttle_if_necessary(
         &http,
         &mut c_receiver,
-        &rps_limiter,
-        &resources_regex,
         &mut bases_before_next_cpu_check,
         false,
     )
@@ -364,7 +383,6 @@ async fn do_checks(
                 Instant::now() + Duration::from_secs(1),
                 &http,
                 &mut c_receiver,
-                &rps_limiter,
             )
             .await;
             continue;
@@ -376,7 +394,6 @@ async fn do_checks(
                     id,
                     &http,
                     &bases_regex,
-                    &mut rps_limiter,
                     &mut c_receiver,
                 )
                 .await
@@ -401,8 +418,7 @@ async fn do_checks(
                     format!("https://factordb.com/index.php?id={id}&open=prime&basetocheck=");
                 for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
                     let url = format!("{url_base}{base}");
-                    rps_limiter.until_ready().await;
-                    let text = retrying_get_and_decode(&http, &url, RETRY_DELAY).await;
+                    let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
                         if prp_receiver.try_send(CheckTask {
@@ -418,7 +434,6 @@ async fn do_checks(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                             &http,
                             &mut c_receiver,
-                            &rps_limiter,
                         )
                         .await;
                         break;
@@ -426,8 +441,6 @@ async fn do_checks(
                     throttle_if_necessary(
                         &http,
                         &mut c_receiver,
-                        &rps_limiter,
-                        &resources_regex,
                         &mut bases_before_next_cpu_check,
                         true,
                     )
@@ -454,15 +467,14 @@ async fn do_checks(
                             source_file,
                         }) = retry
                             && try_handle_unknown(
-                                &http,
-                                &mut c_receiver,
-                                &u_status_regex,
-                                &many_digits_regex,
-                                id,
-                                &mut next_unknown_attempt,
-                                source_file,
-                                &rps_limiter,
-                            )
+                            &http,
+                            &mut c_receiver,
+                            &u_status_regex,
+                            &many_digits_regex,
+                            id,
+                            &mut next_unknown_attempt,
+                            source_file,
+                        )
                             .await
                         {
                             retry = None;
@@ -494,7 +506,6 @@ async fn do_checks(
                                     id,
                                     &mut next_unknown_attempt,
                                     source_file,
-                                    &rps_limiter,
                                 )
                                 .await
                                 {
@@ -517,8 +528,6 @@ async fn do_checks(
                 throttle_if_necessary(
                     &http,
                     &mut c_receiver,
-                    &rps_limiter,
-                    &resources_regex,
                     &mut bases_before_next_cpu_check,
                     true,
                 )
@@ -531,7 +540,6 @@ async fn do_checks(
                     id,
                     &mut next_unknown_attempt,
                     source_file,
-                    &rps_limiter,
                 )
                 .await
                 {
@@ -558,19 +566,17 @@ async fn do_checks(
 }
 
 async fn try_handle_unknown(
-    http: &Client,
+    http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<u128>,
     u_status_regex: &Regex,
     many_digits_regex: &Regex,
     id: u128,
     next_attempt: &mut Instant,
     source_file: Option<u64>,
-    rate_limiter: &SimpleRateLimiter,
 ) -> bool {
-    composites_while_waiting(*next_attempt, http, c_receiver, rate_limiter).await;
+    composites_while_waiting(*next_attempt, http, c_receiver).await;
     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-    rate_limiter.until_ready().await;
-    let result = retrying_get_and_decode(http, &url, RETRY_DELAY).await;
+    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
         match status.get(1) {
             None => {
@@ -616,10 +622,8 @@ async fn try_handle_unknown(
 }
 
 async fn throttle_if_necessary(
-    http: &Client,
+    http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<u128>,
-    rps_limiter: &SimpleRateLimiter,
-    resources_regex: &Regex,
     bases_before_next_cpu_check: &mut u64,
     sleep_first: bool,
 ) {
@@ -632,36 +636,17 @@ async fn throttle_if_necessary(
             Instant::now() + Duration::from_secs(10),
             http,
             c_receiver,
-            rps_limiter,
         )
         .await; // allow for delay in CPU accounting
     }
-    rps_limiter.until_ready().await;
     let resources_text =
-        retrying_get_and_decode(http, "https://factordb.com/res.php", RETRY_DELAY).await;
+        http.retrying_get_and_decode("https://factordb.com/res.php", RETRY_DELAY).await;
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
-    let Some(captures) = resources_regex.captures_iter(&resources_text).next() else {
-        error!("Failed to parse resource limits");
-        *bases_before_next_cpu_check = 1;
-        return;
+    let (cpu_tenths_spent_after, seconds_to_reset) = match http.parse_resource_limits(bases_before_next_cpu_check, &resources_text) {
+        Some(value) => value,
+        None => return,
     };
-    let (
-        _,
-        [
-            cpu_seconds,
-            cpu_tenths_within_second,
-            minutes_to_reset,
-            seconds_within_minute_to_reset,
-        ],
-    ) = captures.extract();
-    // info!("Resources parsed: {}, {}, {}, {}",
-    //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
-    let cpu_tenths_spent_after =
-        cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
-    CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Release);
-    let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
-        + seconds_within_minute_to_reset.parse::<u64>().unwrap();
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
     if !NO_RESERVE.load(Acquire) {
         tenths_remaining =
@@ -682,7 +667,7 @@ async fn throttle_if_necessary(
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
-        composites_while_waiting(cpu_reset_time, http, c_receiver, rps_limiter).await;
+        composites_while_waiting(cpu_reset_time, http, c_receiver).await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
         CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
     } else {
@@ -702,7 +687,7 @@ async fn throttle_if_necessary(
 async fn queue_composites(
     waiting_c: &mut VecDeque<u128>,
     id_regex: &Regex,
-    http: &Client,
+    http: &ThrottlingHttpClient,
     c_sender: &Sender<u128>,
 ) -> usize {
     let mut c_sent = 0;
@@ -712,8 +697,7 @@ async fn queue_composites(
     if digits == 90 {
         digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
     }
-    let composites_page = retrying_get_and_decode(
-        &http,
+    let composites_page = http.retrying_get_and_decode(
         &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"),
         RETRY_DELAY,
     )
@@ -798,22 +782,28 @@ async fn main() {
         .await
         .unwrap();
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
+    let resources_regex =
+        RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
+            .multi_line(true)
+            .dot_matches_new_line(true)
+            .build()
+            .unwrap();
     let http = Client::builder()
         .pool_max_idle_per_host(2)
         .timeout(NETWORK_TIMEOUT)
         .build()
         .unwrap();
+    let rps_limiter = Arc::new(rps_limiter);
+    let http = ThrottlingHttpClient {resources_regex, http, rps_limiter};
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
-    let rps_limiter = Arc::new(rps_limiter);
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
         c_receiver,
         http.clone(),
-        rps_limiter.clone(),
     ));
     simple_log::console("info").unwrap();
     let mut prp_start = 0;
@@ -878,8 +868,7 @@ async fn main() {
                     next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
                 }
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
-                rps_limiter.until_ready().await;
-                let results_text = retrying_get_and_decode(&http, &prp_search_url, SEARCH_RETRY_DELAY).await;
+                let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
                 let mut prp_permits = prp_permits.unwrap();
                 for prp_id in id_regex
                     .captures_iter(&results_text)
@@ -905,7 +894,7 @@ async fn main() {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("Queued check of probable prime with ID {prp_id} from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_regex, &http, u_permits, &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                        queue_unknowns(&id_regex, &http, u_permits, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -930,7 +919,7 @@ async fn main() {
                     u_start = 1;
                     restart_u = false;
                 }
-                queue_unknowns(&id_regex, &http, u_permits.unwrap(), &rps_limiter, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                queue_unknowns(&id_regex, &http, u_permits.unwrap(), &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
                 if u_start > MAX_START {
                     info!("Restarting U search: searched {u_start} unknowns");
                     restart_u = true;
@@ -946,9 +935,8 @@ async fn main() {
 
 async fn queue_unknowns(
     id_regex: &Regex,
-    http: &Client,
+    http: &ThrottlingHttpClient,
     u_permits: PermitIterator<'_, CheckTask>,
-    rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
     u_start: &mut usize,
     dump_file_index: &mut u64,
     dump_file: &mut BufReader<File>,
@@ -984,7 +972,6 @@ async fn queue_unknowns(
         && let Err(u_permits) = queue_unknowns_from_search(
             id_regex,
             http,
-            rps_limiter,
             u_start,
             permits.take().unwrap(),
             u_filter,
@@ -1009,15 +996,13 @@ async fn queue_unknowns(
 
 async fn queue_unknowns_from_search<'a>(
     id_regex: &Regex,
-    http: &Client,
-    rps_limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+    http: &ThrottlingHttpClient,
     u_start: &mut usize,
     mut u_permits: PermitIterator<'a, CheckTask>,
     u_filter: &mut InMemoryFilter,
 ) -> Result<(), PermitIterator<'a, CheckTask>> {
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
-    rps_limiter.until_ready().await;
-    let Some(results_text) = try_get_and_decode(http, &u_search_url).await else {
+    let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
         return Err(u_permits);
     };
     let ids = id_regex
