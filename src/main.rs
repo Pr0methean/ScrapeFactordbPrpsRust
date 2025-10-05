@@ -234,9 +234,13 @@ async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) -> bool {
                 false
             } else {
                 let mut out = out.lock().await;
-                let mut result = factors
+                let factors: Vec<_> = factors
                     .into_iter()
-                    .map(|(factor, _exponent)| out.write_fmt(format_args!("{factor}\n")))
+                    .map(|(factor, _exponent)| factor)
+                    .collect();
+                info!("{id}: Composite with factors: {factors}");
+                let mut result = factors
+                    .map(|factor| out.write_fmt(format_args!("{factor}\n")))
                     .flat_map(Result::err)
                     .take(1);
                 if let Some(error) = result.next() {
