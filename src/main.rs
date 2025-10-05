@@ -144,7 +144,14 @@ impl ThrottlingHttpClient {
                     } else {
                         #[allow(const_item_mutation)]
                         if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &text) {
-                            sleep(Duration::from_secs(seconds_to_reset)).await;
+                            let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
+                            if EXIT_TIME.get().is_some_and(|exit_time| exit_time <= &reset_time) {
+                                error!("Resource limits reached and won't reset during this process's lifespan");
+                                exit(0);
+                            } else {
+                                warn!("Resource limits reached; throttling for {seconds_to_reset} seconds");
+                                sleep(Duration::from_secs(seconds_to_reset)).await;
+                            }
                             return None;
                         }
                         return Some(text.into_boxed_str());
