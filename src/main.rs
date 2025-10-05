@@ -97,7 +97,6 @@ struct ThrottlingHttpClient {
 impl ThrottlingHttpClient {
     fn parse_resource_limits(&self, bases_before_next_cpu_check: &mut u64, resources_text: &str) -> Option<(u64, u64)> {
         let Some(captures) = self.resources_regex.captures_iter(&resources_text).next() else {
-            error!("Failed to parse resource limits");
             *bases_before_next_cpu_check = 1;
             return None;
         };
@@ -645,7 +644,10 @@ async fn throttle_if_necessary(
     // info!("Resources fetched");
     let (cpu_tenths_spent_after, seconds_to_reset) = match http.parse_resource_limits(bases_before_next_cpu_check, &resources_text) {
         Some(value) => value,
-        None => return,
+        None => {
+            error!("Failed to parse resource limits");
+            return;
+        }
     };
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
     if !NO_RESERVE.load(Acquire) {
