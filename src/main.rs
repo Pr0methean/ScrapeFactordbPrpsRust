@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::{OwnedPermit, Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::time::{Duration, Instant, sleep, timeout};
+use tokio::time::{Duration, Instant, sleep, timeout, sleep_until};
 use tokio::{select, task};
 
 const MAX_START: usize = 100_000;
@@ -150,7 +150,7 @@ impl ThrottlingHttpClient {
                                 exit(0);
                             } else {
                                 warn!("Resource limits reached; throttling for {seconds_to_reset} seconds");
-                                sleep(Duration::from_secs(seconds_to_reset)).await;
+                                sleep_until(reset_time).await;
                             }
                             return None;
                         }
