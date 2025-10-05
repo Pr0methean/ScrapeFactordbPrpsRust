@@ -14,7 +14,7 @@ while read -r num; do
   if flock -xn 9; then
       declare factor
       start_time="$(date +%s%N)"
-      while read -r factor; do
+      while read -r factor; do (
         now="$(date -Is)"
         echo "${now}: Found factor ${factor} of ${num}"
         output=$(curl -X POST --retry 10 --retry-all-errors --retry-delay 10 http://factordb.com/reportfactor.php -d "number=${num}&factor=${factor}")
@@ -33,7 +33,7 @@ while read -r num; do
             echo "Factor ${factor} of ${num} accepted: ${output}"
           fi
         fi
-      done < <(
+      )& done < <(
         echo "$(date -Is): Factoring ${num} with yafu" >&2
         ./yafu -threads 2 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" <<<"factor(${num})" 2>&1 \
           | tee "./out" \
