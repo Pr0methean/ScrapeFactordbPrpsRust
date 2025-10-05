@@ -127,7 +127,7 @@ impl ThrottlingHttpClient {
         }
     }
 
-    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
+    async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
         self.rps_limiter.until_ready().await;
         match self.http
             .get(url)
@@ -135,31 +135,47 @@ impl ThrottlingHttpClient {
             .send()
             .await
         {
-            Err(http_error) => error!("Error reading {url}: {http_error}"),
+            Err(http_error) => {
+                error!("Error reading {url}: {http_error}");
+                None
+            },
             Ok(body) => match body.text().await {
-                Err(decoding_error) => error!("Error reading {url}: {decoding_error}"),
+                Err(decoding_error) => {
+                    error!("Error reading {url}: {decoding_error}");
+                    None
+                },
                 Ok(text) => {
                     if text.contains("502 Proxy Error") {
                         error!("502 error from {url}");
+                        None
                     } else {
-                        #[allow(const_item_mutation)]
-                        if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &text) {
-                            let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
-                            if EXIT_TIME.get().is_some_and(|exit_time| exit_time <= &reset_time) {
-                                error!("Resource limits reached and won't reset during this process's lifespan");
-                                exit(0);
-                            } else {
-                                warn!("Resource limits reached; throttling for {seconds_to_reset} seconds");
-                                sleep_until(reset_time).await;
-                            }
-                            return None;
-                        }
-                        return Some(text.into_boxed_str());
+                        Some(text.into_boxed_str())
                     }
                 }
             },
         }
-        None
+    }
+
+    #[allow(const_item_mutation)]
+    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
+        let response = self.try_get_and_decode_core(url).await?;
+        if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &response) {
+            let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
+            if EXIT_TIME.get().is_some_and(|exit_time| exit_time <= &reset_time) {
+                error!("Resource limits reached and won't reset during this process's lifespan");
+                exit(0);
+            } else {
+                warn!("Resource limits reached; throttling for {seconds_to_reset} seconds");
+                sleep_until(reset_time).await;
+            }
+            return None;
+        }
+        Some(response)
+    }
+
+    async fn try_get_resource_limits(&self, bases_before_next_cpu_check: &mut u64) -> Option<(u64, u64)> {
+        let response = self.try_get_and_decode_core("https://factordb.com/res.php").await?;
+        self.parse_resource_limits(bases_before_next_cpu_check, &response)
     }
 }
 
@@ -645,16 +661,11 @@ async fn throttle_if_necessary(
         )
         .await; // allow for delay in CPU accounting
     }
-    let resources_text =
-        http.retrying_get_and_decode("https://factordb.com/res.php", RETRY_DELAY).await;
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
-    let (cpu_tenths_spent_after, seconds_to_reset) = match http.parse_resource_limits(bases_before_next_cpu_check, &resources_text) {
-        Some(value) => value,
-        None => {
-            error!("Failed to parse resource limits");
-            return;
-        }
+    let Some((cpu_tenths_spent_after, seconds_to_reset)) = http.try_get_resource_limits(bases_before_next_cpu_check).await else {
+        error!("Failed to parse resource limits");
+        return;
     };
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
     if !NO_RESERVE.load(Acquire) {
