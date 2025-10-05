@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::{OwnedPermit, Permit, PermitIterator, Receiver, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::time::{Duration, Instant, sleep, timeout, sleep_until};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
 const MAX_START: usize = 100_000;
@@ -87,7 +87,6 @@ struct PushbackReceiver<T> {
     permit: Option<OwnedPermit<T>>,
 }
 
-
 impl<T> PushbackReceiver<T> {
     fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
         let sender = sender.clone();
@@ -134,11 +133,15 @@ impl<T> PushbackReceiver<T> {
 struct ThrottlingHttpClient {
     resources_regex: Regex,
     http: Client,
-    rps_limiter: SimpleRateLimiter
+    rps_limiter: SimpleRateLimiter,
 }
 
 impl ThrottlingHttpClient {
-    fn parse_resource_limits(&self, bases_before_next_cpu_check: &mut u64, resources_text: &str) -> Option<(u64, u64)> {
+    fn parse_resource_limits(
+        &self,
+        bases_before_next_cpu_check: &mut u64,
+        resources_text: &str,
+    ) -> Option<(u64, u64)> {
         let Some(captures) = self.resources_regex.captures_iter(&resources_text).next() else {
             *bases_before_next_cpu_check = 1;
             return None;
@@ -146,16 +149,16 @@ impl ThrottlingHttpClient {
         let (
             _,
             [
-            cpu_seconds,
-            cpu_tenths_within_second,
-            minutes_to_reset,
-            seconds_within_minute_to_reset,
+                cpu_seconds,
+                cpu_tenths_within_second,
+                minutes_to_reset,
+                seconds_within_minute_to_reset,
             ],
         ) = captures.extract();
         // info!("Resources parsed: {}, {}, {}, {}",
         //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
-        let cpu_tenths_spent_after =
-            cpu_seconds.parse::<u64>().unwrap() * 10 + cpu_tenths_within_second.parse::<u64>().unwrap();
+        let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10
+            + cpu_tenths_within_second.parse::<u64>().unwrap();
         CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Release);
         let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
@@ -172,7 +175,8 @@ impl ThrottlingHttpClient {
 
     async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
         self.rps_limiter.until_ready().await;
-        match self.http
+        match self
+            .http
             .get(url)
             .header("Referer", "https://factordb.com")
             .send()
@@ -181,12 +185,12 @@ impl ThrottlingHttpClient {
             Err(http_error) => {
                 error!("Error reading {url}: {http_error}");
                 None
-            },
+            }
             Ok(body) => match body.text().await {
                 Err(decoding_error) => {
                     error!("Error reading {url}: {decoding_error}");
                     None
-                },
+                }
                 Ok(text) => {
                     if text.contains("502 Proxy Error") {
                         error!("502 error from {url}");
@@ -204,7 +208,10 @@ impl ThrottlingHttpClient {
         let response = self.try_get_and_decode_core(url).await?;
         if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &response) {
             let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
-            if EXIT_TIME.get().is_some_and(|exit_time| exit_time <= &reset_time) {
+            if EXIT_TIME
+                .get()
+                .is_some_and(|exit_time| exit_time <= &reset_time)
+            {
                 error!("Resource limits reached and won't reset during this process's lifespan");
                 exit(0);
             } else {
@@ -216,8 +223,13 @@ impl ThrottlingHttpClient {
         Some(response)
     }
 
-    async fn try_get_resource_limits(&self, bases_before_next_cpu_check: &mut u64) -> Option<(u64, u64)> {
-        let response = self.try_get_and_decode_core("https://factordb.com/res.php").await?;
+    async fn try_get_resource_limits(
+        &self,
+        bases_before_next_cpu_check: &mut u64,
+    ) -> Option<(u64, u64)> {
+        let response = self
+            .try_get_and_decode_core("https://factordb.com/res.php")
+            .await?;
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
     }
 }
@@ -267,17 +279,15 @@ async fn composites_while_waiting(
                 info!("Out of time while processing composites");
                 return;
             }
-            Some(new_remaining) => remaining = new_remaining
+            Some(new_remaining) => remaining = new_remaining,
         };
     }
 }
 
 async fn dispatch_composite(http: ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
-    let api_response = http.retrying_get_and_decode(
-        &format!("https://factordb.com/api?id={id}"),
-        RETRY_DELAY,
-    )
-    .await;
+    let api_response = http
+        .retrying_get_and_decode(&format!("https://factordb.com/api?id={id}"), RETRY_DELAY)
+        .await;
     match from_str::<NumberStatusApiResponse>(&api_response) {
         Err(e) => {
             error!("{id}: Failed to decode API response: {e}: {api_response}");
@@ -315,9 +325,10 @@ async fn dispatch_composite(http: ThrottlingHttpClient, id: u128, out: &Mutex<Fi
 }
 
 async fn check_composite(http: &ThrottlingHttpClient, id: u128) -> bool {
-    if http.try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
-    .await
-    .is_some()
+    if http
+        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+        .await
+        .is_some()
     {
         info!("Checked composite with ID {id}");
         true
@@ -413,13 +424,8 @@ async fn do_checks(
         match task_type {
             CheckTaskType::Prp => {
                 let mut stopped_early = false;
-                let Ok(bases_left) = get_prp_remaining_bases(
-                    id,
-                    &http,
-                    &bases_regex,
-                    &mut c_receiver,
-                )
-                .await
+                let Ok(bases_left) =
+                    get_prp_remaining_bases(id, &http, &bases_regex, &mut c_receiver).await
                 else {
                     if prp_receiver.try_send(CheckTask {
                         id,
@@ -490,14 +496,14 @@ async fn do_checks(
                             source_file,
                         }) = retry
                             && try_handle_unknown(
-                            &http,
-                            &mut c_receiver,
-                            &u_status_regex,
-                            &many_digits_regex,
-                            id,
-                            &mut next_unknown_attempt,
-                            source_file,
-                        )
+                                &http,
+                                &mut c_receiver,
+                                &u_status_regex,
+                                &many_digits_regex,
+                                id,
+                                &mut next_unknown_attempt,
+                                source_file,
+                            )
                             .await
                         {
                             retry = None;
@@ -655,16 +661,14 @@ async fn throttle_if_necessary(
         return;
     }
     if sleep_first {
-        composites_while_waiting(
-            Instant::now() + Duration::from_secs(10),
-            http,
-            c_receiver,
-        )
-        .await; // allow for delay in CPU accounting
+        composites_while_waiting(Instant::now() + Duration::from_secs(10), http, c_receiver).await; // allow for delay in CPU accounting
     }
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
-    let Some((cpu_tenths_spent_after, seconds_to_reset)) = http.try_get_resource_limits(bases_before_next_cpu_check).await else {
+    let Some((cpu_tenths_spent_after, seconds_to_reset)) = http
+        .try_get_resource_limits(bases_before_next_cpu_check)
+        .await
+    else {
         error!("Failed to parse resource limits");
         return;
     };
@@ -718,11 +722,12 @@ async fn queue_composites(
     if digits == 90 {
         digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
     }
-    let composites_page = http.retrying_get_and_decode(
-        &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"),
-        RETRY_DELAY,
-    )
-    .await;
+    let composites_page = http
+        .retrying_get_and_decode(
+            &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"),
+            RETRY_DELAY,
+        )
+        .await;
     info!("Composites retrieved");
     let c_ids = id_regex
         .captures_iter(&composites_page)
@@ -789,11 +794,7 @@ async fn main() {
     let config = config_builder.build().unwrap();
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
-    let rph_limit: NonZeroU32 = if is_no_reserve {
-        6400
-    } else {
-        6100
-    }.try_into().unwrap();
+    let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     // Guardian rate-limiters start out with their full burst capacity and recharge starting
     // immediately, but this would lead to twice the allowed number of requests in our first hour,
@@ -815,7 +816,11 @@ async fn main() {
         .build()
         .unwrap();
     let rps_limiter = Arc::new(rps_limiter);
-    let http = ThrottlingHttpClient {resources_regex, http, rps_limiter};
+    let http = ThrottlingHttpClient {
+        resources_regex,
+        http,
+        rps_limiter,
+    };
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
@@ -990,14 +995,9 @@ async fn queue_unknowns(
     };
     let mut permits = Some(u_permits);
     if use_search
-        && let Err(u_permits) = queue_unknowns_from_search(
-            id_regex,
-            http,
-            u_start,
-            permits.take().unwrap(),
-            u_filter,
-        )
-        .await
+        && let Err(u_permits) =
+            queue_unknowns_from_search(id_regex, http, u_start, permits.take().unwrap(), u_filter)
+                .await
     {
         permits = Some(u_permits);
     }
