@@ -87,6 +87,49 @@ struct PushbackReceiver<T> {
     permit: Option<OwnedPermit<T>>,
 }
 
+
+impl<T> PushbackReceiver<T> {
+    fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
+        let sender = sender.clone();
+        let permit = sender.clone().try_reserve_owned().ok();
+        PushbackReceiver {
+            receiver,
+            sender,
+            permit,
+        }
+    }
+
+    async fn recv(&mut self) -> T {
+        let result = self.receiver.recv().await.unwrap();
+        if self.permit.is_none() {
+            self.permit = self.sender.clone().try_reserve_owned().ok();
+        }
+        result
+    }
+
+    fn try_recv(&mut self) -> Option<T> {
+        let result = self.receiver.try_recv().ok()?;
+        if self.permit.is_none() {
+            self.permit = self.sender.clone().try_reserve_owned().ok();
+        }
+        Some(result)
+    }
+
+    fn try_send(&mut self, value: T) -> bool {
+        if let Some(permit) = self.permit.take() {
+            permit.send(value);
+            self.permit = self.sender.clone().try_reserve_owned().ok();
+            true
+        } else {
+            let result = self.sender.try_send(value).is_ok();
+            if result {
+                self.permit = self.sender.clone().try_reserve_owned().ok();
+            }
+            result
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ThrottlingHttpClient {
     resources_regex: Regex,
@@ -176,48 +219,6 @@ impl ThrottlingHttpClient {
     async fn try_get_resource_limits(&self, bases_before_next_cpu_check: &mut u64) -> Option<(u64, u64)> {
         let response = self.try_get_and_decode_core("https://factordb.com/res.php").await?;
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
-    }
-}
-
-impl<T> PushbackReceiver<T> {
-    fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
-        let sender = sender.clone();
-        let permit = sender.clone().try_reserve_owned().ok();
-        PushbackReceiver {
-            receiver,
-            sender,
-            permit,
-        }
-    }
-
-    async fn recv(&mut self) -> T {
-        let result = self.receiver.recv().await.unwrap();
-        if self.permit.is_none() {
-            self.permit = self.sender.clone().try_reserve_owned().ok();
-        }
-        result
-    }
-
-    fn try_recv(&mut self) -> Option<T> {
-        let result = self.receiver.try_recv().ok()?;
-        if self.permit.is_none() {
-            self.permit = self.sender.clone().try_reserve_owned().ok();
-        }
-        Some(result)
-    }
-
-    fn try_send(&mut self, value: T) -> bool {
-        if let Some(permit) = self.permit.take() {
-            permit.send(value);
-            self.permit = self.sender.clone().try_reserve_owned().ok();
-            true
-        } else {
-            let result = self.sender.try_send(value).is_ok();
-            if result {
-                self.permit = self.sender.clone().try_reserve_owned().ok();
-            }
-            result
-        }
     }
 }
 
