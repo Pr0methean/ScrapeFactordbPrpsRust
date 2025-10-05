@@ -238,8 +238,9 @@ async fn dispatch_composite(http: Client, id: u128, out: &Mutex<File>) -> bool {
                     .into_iter()
                     .map(|(factor, _exponent)| factor)
                     .collect();
-                info!("{id}: Composite with factors: {factors}");
+                info!("{id}: Composite with factors: {}", factors.iter().join(","));
                 let mut result = factors
+                    .into_iter()
                     .map(|factor| out.write_fmt(format_args!("{factor}\n")))
                     .flat_map(Result::err)
                     .take(1);
