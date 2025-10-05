@@ -35,7 +35,7 @@ while read -r num; do
         fi
       done < <(
         echo "$(date -Is): Factoring ${num} with yafu" >&2
-        ./yafu "${num}" -threads 2 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" 2>&1 \
+        ./yafu -threads 2 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" <<<"factor(${num})" 2>&1 \
           | tee "./out" \
           | grep '\(^P[0-9]\|factor = \)' | grep -o '= [0-9]\+' | grep -o '[0-9]\+' \
           | head -n -1 | uniq
