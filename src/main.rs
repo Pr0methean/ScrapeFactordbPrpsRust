@@ -398,14 +398,13 @@ async fn do_checks(
         Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
     let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap();
     let mut bases_before_next_cpu_check = 1;
+    let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     throttle_if_necessary(
         &http,
         &mut c_receiver,
         &mut bases_before_next_cpu_check,
         false,
-    )
-    .await;
-    let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
+    ).await;
     loop {
         let Some(CheckTask {
             id,
@@ -766,43 +765,8 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let mut config_builder = FilterConfigBuilder::default()
-        .capacity(2500)
-        .false_positive_rate(0.001)
-        .level_duration(Duration::from_hours(24));
-    if std::env::var("CI").is_ok() {
-        config_builder = config_builder.max_levels(1);
-        EXIT_TIME
-            .set(Instant::now().add(Duration::from_mins(355)))
-            .unwrap();
-        COMPOSITES_OUT
-            .get_or_init(async || {
-                Mutex::new(
-                    File::options()
-                        .write(true)
-                        .append(true)
-                        .open("composites")
-                        .unwrap(),
-                )
-            })
-            .await;
-    } else {
-        config_builder = config_builder.max_levels(7);
-    }
-    let mut sigterm =
-        signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
-    let config = config_builder.build().unwrap();
-    let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
-    let mut u_filter = InMemoryFilter::new(config).unwrap();
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
-    // Guardian rate-limiters start out with their full burst capacity and recharge starting
-    // immediately, but this would lead to twice the allowed number of requests in our first hour,
-    // so we make it start nearly empty instead.
-    rps_limiter
-        .until_n_ready(6050u32.try_into().unwrap())
-        .await
-        .unwrap();
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
     let resources_regex =
         RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
@@ -831,6 +795,32 @@ async fn main() {
         c_receiver,
         http.clone(),
     ));
+    let mut config_builder = FilterConfigBuilder::default()
+        .capacity(2500)
+        .false_positive_rate(0.001)
+        .level_duration(Duration::from_hours(24));
+    if std::env::var("CI").is_ok() {
+        config_builder = config_builder.max_levels(1);
+        EXIT_TIME
+            .set(Instant::now().add(Duration::from_mins(355)))
+            .unwrap();
+        COMPOSITES_OUT
+            .get_or_init(async || {
+                Mutex::new(
+                    File::options()
+                        .write(true)
+                        .append(true)
+                        .open("composites")
+                        .unwrap(),
+                )
+            })
+            .await;
+    } else {
+        config_builder = config_builder.max_levels(7);
+    }
+    let config = config_builder.build().unwrap();
+    let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
+    let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
     let mut prp_start = 0;
     let mut u_start = 1;
@@ -841,8 +831,17 @@ async fn main() {
     let mut bases_since_restart = 0;
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
-    // Queue composites first
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
+
+    // Guardian rate-limiters start out with their full burst capacity and recharge starting
+    // immediately, but this would lead to twice the allowed number of requests in our first hour,
+    // so we make it start nearly empty instead.
+    rps_limiter
+        .until_n_ready(6050u32.try_into().unwrap())
+        .await
+        .unwrap();
+
+    // Queue composites first
     let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
     info!(
         "{c_sent} composites sent to channel; {} now in buffer",
@@ -859,6 +858,8 @@ async fn main() {
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
         select! {
             c_permit = c_sender.reserve() => {
