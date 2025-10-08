@@ -779,6 +779,15 @@ async fn main() {
         .timeout(NETWORK_TIMEOUT)
         .build()
         .unwrap();
+
+    // Guardian rate-limiters start out with their full burst capacity and recharge starting
+    // immediately, but this would lead to twice the allowed number of requests in our first hour,
+    // so we make it start nearly empty instead.
+    rps_limiter
+        .until_n_ready(6050u32.try_into().unwrap())
+        .await
+        .unwrap();
+
     let rps_limiter = Arc::new(rps_limiter);
     let http = ThrottlingHttpClient {
         resources_regex,
@@ -832,14 +841,6 @@ async fn main() {
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-
-    // Guardian rate-limiters start out with their full burst capacity and recharge starting
-    // immediately, but this would lead to twice the allowed number of requests in our first hour,
-    // so we make it start nearly empty instead.
-    rps_limiter
-        .until_n_ready(6050u32.try_into().unwrap())
-        .await
-        .unwrap();
 
     // Queue composites first
     let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
