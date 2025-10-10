@@ -131,7 +131,7 @@ impl<T> PushbackReceiver<T> {
 
 #[derive(Clone)]
 struct ThrottlingHttpClient {
-    resources_regex: Regex,
+    resources_regex: Arc<Regex>,
     http: Client,
     rps_limiter: SimpleRateLimiter,
 }
@@ -792,7 +792,7 @@ async fn main() {
 
     let rps_limiter = Arc::new(rps_limiter);
     let http = ThrottlingHttpClient {
-        resources_regex,
+        resources_regex: resources_regex.into(),
         http,
         rps_limiter,
     };
