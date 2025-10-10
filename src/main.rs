@@ -716,7 +716,7 @@ async fn queue_composites(
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
-    let mut digits = rng.random_range(90..=300);
+    let mut digits = rng.random_range(91..=300);
     let mut start = 0;
     if digits == 90 {
         digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
