@@ -244,6 +244,7 @@ async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<u128>,
+    c_filter: &mut InMemoryFilter,
 ) {
     let Some(mut remaining) = end.checked_duration_since(Instant::now()) else {
         return;
@@ -257,13 +258,15 @@ async fn composites_while_waiting(
         let check_succeeded = check_composite(http, id).await;
         if let Some(out) = COMPOSITES_OUT.get() {
             if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
+                c_filter.insert(&id.to_ne_bytes()).unwrap();
                 if dispatch_composite(http.clone(), id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
-            } else if !check_succeeded {
+            } else if !check_succeeded && !c_filter.query(&id.to_ne_bytes()).unwrap() {
                 if c_receiver.try_send(id) {
                     info!("ID {id}: Requeued C");
                 } else {
+                    c_filter.insert(&id.to_ne_bytes()).unwrap();
                     tokio::spawn(dispatch_composite(http.clone(), id, out));
                 }
             }
@@ -342,6 +345,7 @@ async fn get_prp_remaining_bases(
     http: &ThrottlingHttpClient,
     bases_regex: &Regex,
     c_receiver: &mut PushbackReceiver<u128>,
+    c_filter: &mut InMemoryFilter
 ) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
@@ -352,6 +356,7 @@ async fn get_prp_remaining_bases(
             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
             http,
             c_receiver,
+            c_filter
         )
         .await;
         return Err(());
@@ -389,6 +394,7 @@ async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
     mut c_receiver: PushbackReceiver<u128>,
+    mut c_filter: InMemoryFilter,
     http: ThrottlingHttpClient,
 ) {
     let mut next_unknown_attempt = Instant::now();
@@ -404,6 +410,7 @@ async fn do_checks(
         &mut c_receiver,
         &mut bases_before_next_cpu_check,
         false,
+        &mut c_filter
     ).await;
     loop {
         let Some(CheckTask {
@@ -416,6 +423,7 @@ async fn do_checks(
                 Instant::now() + Duration::from_secs(1),
                 &http,
                 &mut c_receiver,
+                &mut c_filter
             )
             .await;
             continue;
@@ -424,7 +432,7 @@ async fn do_checks(
             CheckTaskType::Prp => {
                 let mut stopped_early = false;
                 let Ok(bases_left) =
-                    get_prp_remaining_bases(id, &http, &bases_regex, &mut c_receiver).await
+                    get_prp_remaining_bases(id, &http, &bases_regex, &mut c_receiver, &mut c_filter).await
                 else {
                     if prp_receiver.try_send(CheckTask {
                         id,
@@ -462,6 +470,7 @@ async fn do_checks(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                             &http,
                             &mut c_receiver,
+                            &mut c_filter,
                         )
                         .await;
                         break;
@@ -471,6 +480,7 @@ async fn do_checks(
                         &mut c_receiver,
                         &mut bases_before_next_cpu_check,
                         true,
+                        &mut c_filter
                     )
                     .await;
                     if cert_regex.is_match(&text) {
@@ -502,6 +512,7 @@ async fn do_checks(
                                 id,
                                 &mut next_unknown_attempt,
                                 source_file,
+                                &mut c_filter
                             )
                             .await
                         {
@@ -534,6 +545,7 @@ async fn do_checks(
                                     id,
                                     &mut next_unknown_attempt,
                                     source_file,
+                                    &mut c_filter
                                 )
                                 .await
                                 {
@@ -558,6 +570,7 @@ async fn do_checks(
                     &mut c_receiver,
                     &mut bases_before_next_cpu_check,
                     true,
+                    &mut c_filter
                 )
                 .await;
                 if !try_handle_unknown(
@@ -568,6 +581,7 @@ async fn do_checks(
                     id,
                     &mut next_unknown_attempt,
                     source_file,
+                    &mut c_filter,
                 )
                 .await
                 {
@@ -601,8 +615,9 @@ async fn try_handle_unknown(
     id: u128,
     next_attempt: &mut Instant,
     source_file: Option<u64>,
+    c_filter: &mut InMemoryFilter
 ) -> bool {
-    composites_while_waiting(*next_attempt, http, c_receiver).await;
+    composites_while_waiting(*next_attempt, http, c_receiver, c_filter).await;
     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
     let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
@@ -654,13 +669,14 @@ async fn throttle_if_necessary(
     c_receiver: &mut PushbackReceiver<u128>,
     bases_before_next_cpu_check: &mut u64,
     sleep_first: bool,
+    c_filter: &mut InMemoryFilter,
 ) {
     *bases_before_next_cpu_check -= 1;
     if *bases_before_next_cpu_check != 0 {
         return;
     }
     if sleep_first {
-        composites_while_waiting(Instant::now() + Duration::from_secs(10), http, c_receiver).await; // allow for delay in CPU accounting
+        composites_while_waiting(Instant::now() + Duration::from_secs(10), http, c_receiver, c_filter).await; // allow for delay in CPU accounting
     }
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
@@ -691,7 +707,7 @@ async fn throttle_if_necessary(
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
-        composites_while_waiting(cpu_reset_time, http, c_receiver).await;
+        composites_while_waiting(cpu_reset_time, http, c_receiver, c_filter).await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
         CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
     } else {
@@ -800,12 +816,6 @@ async fn main() {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
-    task::spawn(do_checks(
-        PushbackReceiver::new(prp_receiver, &prp_sender),
-        PushbackReceiver::new(u_receiver, &u_sender),
-        c_receiver,
-        http.clone(),
-    ));
     let mut config_builder = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -830,6 +840,14 @@ async fn main() {
         config_builder = config_builder.max_levels(7);
     }
     let config = config_builder.build().unwrap();
+    let c_filter = InMemoryFilter::new(config.clone()).unwrap();
+    task::spawn(do_checks(
+        PushbackReceiver::new(prp_receiver, &prp_sender),
+        PushbackReceiver::new(u_receiver, &u_sender),
+        c_receiver,
+        c_filter,
+        http.clone(),
+    ));
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
