@@ -56,7 +56,7 @@ jobs:
     - name: Run
       run: |
         set -x
-        NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release &
+        NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 cargo +nightly run --release &
         rust_pid=$!
         sleep 21300 &
         yafu_timer_pid=$!

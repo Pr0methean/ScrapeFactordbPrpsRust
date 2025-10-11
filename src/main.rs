@@ -20,7 +20,7 @@ use serde_json::from_str;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
@@ -47,6 +47,8 @@ const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 1024; // because we already hold 1 permit when we refill
+const C_MIN_DIGITS: usize = 91;
+const C_MAX_DIGITS: usize = 300;
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
@@ -729,16 +731,13 @@ async fn queue_composites(
     id_regex: &Regex,
     http: &ThrottlingHttpClient,
     c_sender: &Sender<u128>,
+    digits: Option<NonZeroUsize>
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
-    let mut digits = rng.random_range(91..=300);
-    let mut start = 0;
-    if digits == 90 {
-        digits = 1; // Fewer composites of 1..90 digits exist, so ensure they're all eligible
-    } else {
-        start = rng.random_range(0..=100_000);
-    }
+    let digits = digits.unwrap_or_else(|| rng.random_range(C_MIN_DIGITS..=C_MAX_DIGITS).try_into().unwrap());
+    let start = rng.random_range(0..=100_000);
+    info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
         .retrying_get_and_decode(
             &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"),
@@ -783,6 +782,9 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
+    let digits = std::env::var("RUN").ok()
+        .map(|run_number_str| run_number_str.parse::<usize>().unwrap())
+        .map(|run_number| NonZeroUsize::try_from(C_MIN_DIGITS + (run_number % (C_MAX_DIGITS - C_MIN_DIGITS - 1))).unwrap());
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
@@ -863,7 +865,7 @@ async fn main() {
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
 
     // Queue composites first
-    let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
+    let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
     info!(
         "{c_sent} composites sent to channel; {} now in buffer",
         waiting_c.len()
@@ -898,7 +900,7 @@ async fn main() {
                         }
                     }
                     None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
+                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
                     }
                 }
                 info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
