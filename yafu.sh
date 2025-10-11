@@ -25,7 +25,6 @@ while read -r num; do
           echo "Error submitting factor ${factor} of ${num}: ${output}"
           flock failed-submissions.csv -c "echo \"$(date -Is)\",${num},${factor} >> failed-submissions.csv"
         else
-          echo "\"$(date -Is)\",${num},${factor}" >> "factor-submissions.csv"
           if grep -q "Already" <<< "$output"; then
             echo "Factor ${factor} of ${num} already known!"
           else
