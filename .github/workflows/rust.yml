@@ -58,11 +58,14 @@ jobs:
         set -x
         NO_RESERVE=1 timeout 355m nice -+19 cargo +nightly run --release &
         rust_pid=$!
-        timeout -k 1m 356m ./yafu.sh <composites &
+        sleep 21300 &
+        yafu_timer_pid=$!
+        ./yafu.sh <composites &
         yafu_pid=$!
-        wait ${rust_pid} || true
+        wait "${rust_pid}" || true
         echo "Rust program exited"
-        
+        wait -n "${yafu_pid}" "${yafu_timer_pid}" || true
+        echo "yafu time is up"
         # Prevent any more yafu processes from starting
         rm ./yafu
         rm_yafu_status=$?
