@@ -12,7 +12,7 @@ use itertools::Itertools;
 use log::{error, info, warn};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{Rng, rng};
+use rand::{rng};
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ use serde_json::from_str;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU32};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::Arc;
@@ -48,7 +48,6 @@ const U_TASK_BUFFER_SIZE: usize = 16;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 1024; // because we already hold 1 permit when we refill
 const C_MIN_DIGITS: usize = 91;
-const C_MAX_DIGITS: usize = 300;
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
@@ -58,7 +57,7 @@ const U_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
 );
 const C_SEARCH_URL: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&digits=1&start=0");
+    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&digits={C_MIN_DIGITS}&start=0");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
@@ -730,8 +729,7 @@ async fn queue_composites(
     waiting_c: &mut VecDeque<u128>,
     id_regex: &Regex,
     http: &ThrottlingHttpClient,
-    c_sender: &Sender<u128>,
-    digits: Option<NonZeroUsize>
+    c_sender: &Sender<u128>
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
@@ -779,9 +777,6 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let digits = std::env::var("RUN").ok()
-        .map(|run_number_str| run_number_str.parse::<usize>().unwrap())
-        .map(|run_number| NonZeroUsize::try_from(C_MIN_DIGITS + (run_number % (C_MAX_DIGITS - C_MIN_DIGITS - 1))).unwrap());
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
@@ -862,7 +857,7 @@ async fn main() {
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
 
     // Queue composites first
-    let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
+    let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
     info!(
         "{c_sent} composites sent to channel; {} now in buffer",
         waiting_c.len()
@@ -897,7 +892,7 @@ async fn main() {
                         }
                     }
                     None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
+                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
                     }
                 }
                 info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
