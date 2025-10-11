@@ -22,10 +22,10 @@ while read -r num; do
           error=1
         fi
         if [ $error -ne 0 ]; then
-          echo "${now}: Error submitting factor ${factor} of ${num}: ${output}"
-          flock failed-submissions.csv -c "echo \"${now}\",${num},${factor} >> failed-submissions.csv"
+          echo "Error submitting factor ${factor} of ${num}: ${output}"
+          flock failed-submissions.csv -c "echo \"$(date -Is)\",${num},${factor} >> failed-submissions.csv"
         else
-          echo "\"${now}\",${num},${factor}" >> "factor-submissions.csv"
+          echo "\"$(date -Is)\",${num},${factor}" >> "factor-submissions.csv"
           if grep -q "Already" <<< "$output"; then
             echo "Factor ${factor} of ${num} already known!"
           else
@@ -37,7 +37,7 @@ while read -r num; do
         ./yafu -threads 2 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" <<<"factor(${num})" 2>&1 \
           | tee "./out" \
           | grep '\(^P[0-9]\|factor = \)' | grep -o '= [0-9]\+' | grep -o '[0-9]\+' \
-          | head -n -1 | uniq
+          | awk '!x[$0]++'
         if grep -q '^P[0-9]' "./out"; then
           end_time=$(date +%s%N)
           echo "Done factoring ${num} with yafu after $(./format-nanos.sh $((end_time - start_time)))" >&2
