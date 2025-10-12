@@ -1,4 +1,4 @@
-name: Rust ${{ github.ref_name }}
+name: Rust
 
 on:
   push:
