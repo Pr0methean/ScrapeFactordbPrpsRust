@@ -144,7 +144,7 @@ impl ThrottlingHttpClient {
         bases_before_next_cpu_check: &mut u64,
         resources_text: &str,
     ) -> Option<(u64, u64)> {
-        let Some(captures) = self.resources_regex.captures_iter(&resources_text).next() else {
+        let Some(captures) = self.resources_regex.captures_iter(resources_text).next() else {
             *bases_before_next_cpu_check = 1;
             return None;
         };
@@ -831,7 +831,6 @@ async fn main() {
             .get_or_init(async || {
                 Mutex::new(
                     File::options()
-                        .write(true)
                         .append(true)
                         .open("composites")
                         .unwrap(),
