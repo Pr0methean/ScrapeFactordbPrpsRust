@@ -871,12 +871,6 @@ async fn main() {
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
 
-    // Queue composites first
-    let c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
-    info!(
-        "{c_sent} composites sent to channel; {} now in buffer",
-        waiting_c.len()
-    );
     // Use PRP queue so that the first unknown number will start sooner
     queue_unknown_from_dump_file(
         prp_sender.reserve().await.unwrap(),
