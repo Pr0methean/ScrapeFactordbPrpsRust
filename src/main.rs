@@ -72,7 +72,7 @@ enum CheckTaskType {
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 struct CheckTask {
     id: u128,
-    source_file: Option<u64>,
+    source_file: Option<usize>,
     task_type: CheckTaskType,
 }
 
@@ -237,6 +237,12 @@ impl ThrottlingHttpClient {
 }
 
 type SimpleRateLimiter = Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>;
+
+struct DumpFileState {
+    reader: BufReader<File>,
+    index: usize,
+    lines_read: usize
+}
 
 fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
@@ -616,7 +622,7 @@ async fn try_handle_unknown(
     many_digits_regex: &Regex,
     id: u128,
     next_attempt: &mut Instant,
-    source_file: Option<u64>,
+    source_file: Option<usize>,
     c_filter: &mut InMemoryFilter
 ) -> bool {
     composites_while_waiting(*next_attempt, http, c_receiver, c_filter).await;
@@ -854,9 +860,11 @@ async fn main() {
     simple_log::console("info").unwrap();
     let mut prp_start = 0;
     let mut u_start = 1;
-    let mut dump_file_index = 0;
-    let mut dump_file = File::open_buffered("/dev/null").unwrap();
-    let mut dump_file_lines_read = 0;
+    let mut dump_file_state = DumpFileState {
+        reader: File::open_buffered("/dev/null").unwrap(),
+        lines_read: 0,
+        index: 0
+    };
     let mut line = String::new();
     let mut bases_since_restart = 0;
     let mut results_since_restart: usize = 0;
@@ -872,14 +880,12 @@ async fn main() {
     // Use PRP queue so that the first unknown number will start sooner
     queue_unknown_from_dump_file(
         prp_sender.reserve().await.unwrap(),
-        &mut dump_file_index,
-        &mut dump_file,
-        &mut dump_file_lines_read,
+        &mut dump_file_state,
         &mut line,
     );
     let mut restart_prp = false;
     let mut restart_u = false;
-    info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+    info!("{} lines read from dump file {}", dump_file_state.lines_read, dump_file_state.index);
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
@@ -943,7 +949,7 @@ async fn main() {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("Queued check of probable prime with ID {prp_id} from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_regex, &http, u_permits, &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                        queue_unknowns(&id_regex, &http, u_permits, &mut u_start, &mut dump_file_state, &mut line, &mut u_filter).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -968,7 +974,7 @@ async fn main() {
                     u_start = 1;
                     restart_u = false;
                 }
-                queue_unknowns(&id_regex, &http, u_permits.unwrap(), &mut u_start, &mut dump_file_index, &mut dump_file, &mut dump_file_lines_read, &mut line, &mut u_filter).await;
+                queue_unknowns(&id_regex, &http, u_permits.unwrap(), &mut u_start, &mut dump_file_state, &mut line, &mut u_filter).await;
                 if u_start > MAX_START {
                     info!("Restarting U search: searched {u_start} unknowns");
                     restart_u = true;
@@ -987,9 +993,7 @@ async fn queue_unknowns(
     http: &ThrottlingHttpClient,
     u_permits: PermitIterator<'_, CheckTask>,
     u_start: &mut usize,
-    dump_file_index: &mut u64,
-    dump_file: &mut BufReader<File>,
-    dump_file_lines_read: &mut i32,
+    dump_file_state: &mut DumpFileState,
     line: &mut String,
     u_filter: &mut InMemoryFilter,
 ) {
@@ -1028,14 +1032,12 @@ async fn queue_unknowns(
         for _ in 0..U_RESULTS_PER_PAGE {
             queue_unknown_from_dump_file(
                 u_permits.next().unwrap(),
-                dump_file_index,
-                dump_file,
-                dump_file_lines_read,
+                dump_file_state,
                 line,
             );
         }
     }
-    info!("{dump_file_lines_read} lines read from dump file {dump_file_index}");
+    info!("{} lines read from dump file {}", dump_file_state.lines_read, dump_file_state.index);
 }
 
 async fn queue_unknowns_from_search<'a>(
@@ -1084,14 +1086,12 @@ async fn queue_unknowns_from_search<'a>(
 
 fn queue_unknown_from_dump_file(
     u_permit: Permit<'_, CheckTask>,
-    dump_file_index: &mut u64,
-    dump_file: &mut BufReader<File>,
-    dump_file_lines_read: &mut i32,
+    dump_file_state: &mut DumpFileState,
     line: &mut String,
 ) {
     while line.is_empty() {
         let mut next_file = false;
-        match dump_file.read_line(line) {
+        match dump_file_state.reader.read_line(line) {
             Ok(0) => next_file = true,
             Ok(_) => {}
             Err(e) => {
@@ -1100,32 +1100,32 @@ fn queue_unknown_from_dump_file(
             }
         }
         while next_file {
-            *dump_file_index += 1;
-            info!("Opening new dump file: {dump_file_index}");
-            match File::open_buffered(format!("U{dump_file_index:0>6}.csv")) {
+            dump_file_state.index += 1;
+            info!("Opening new dump file: {}", dump_file_state.index);
+            match File::open_buffered(format!("U{:0>6}.csv", dump_file_state.index)) {
                 Ok(new_file) => {
-                    *dump_file = new_file;
+                    dump_file_state.reader = new_file;
                     next_file = false;
-                    *dump_file_lines_read = 0;
+                    dump_file_state.lines_read = 0;
                 }
-                Err(e) => warn!("Skipping dump file {dump_file_index}: {e}"),
+                Err(e) => warn!("Skipping dump file {}: {e}", dump_file_state.index),
             }
         }
     }
     let id = line.split(",").next().unwrap();
     if id.is_empty() {
-        warn!("Skipping an empty line in dump file {}", *dump_file_index);
+        warn!("Skipping an empty line in dump file {}", dump_file_state.index);
     } else {
         let task = CheckTask {
             id: id
                 .parse()
-                .unwrap_or_else(|_| panic!("Invalid ID {} in dump file {}", id, *dump_file_index)),
-            source_file: Some(*dump_file_index),
+                .unwrap_or_else(|_| panic!("Invalid ID {} in dump file {}", id, dump_file_state.index)),
+            source_file: Some(dump_file_state.index),
             task_type: CheckTaskType::U,
         };
         u_permit.send(task);
         info!("Queued check of unknown-status number with ID {id} from dump file");
     }
     line.clear();
-    *dump_file_lines_read += 1;
+    dump_file_state.lines_read += 1;
 }
