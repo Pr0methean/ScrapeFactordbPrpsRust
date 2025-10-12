@@ -78,10 +78,10 @@ jobs:
         if [ "${yafus}" != "" ]; then
           echo "Canceling ${#yafus} unfinished yafu processes"
           xargs kill <<< "${yafus}"
+          sleep 60
         else
-          echo "No unfinished yafu processes found" 
+          echo "No unfinished yafu processes found"
         fi
-        wait "${yafu_pid}" || true
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
