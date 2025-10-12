@@ -740,7 +740,7 @@ async fn queue_composites(
     info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
         .retrying_get_and_decode(
-            &format!("{C_SEARCH_URL_BASE}{start}&digits={digits}"),
+            &format!("{C_SEARCH_URL_BASE}{start}&mindig={digits}"),
             RETRY_DELAY,
         )
         .await;
