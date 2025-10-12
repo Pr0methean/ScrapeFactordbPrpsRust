@@ -67,13 +67,8 @@ jobs:
         wait -n "${yafu_pid}" "${yafu_timer_pid}" || true
         echo "yafu time is up"
         # Prevent any more yafu processes from starting
-        rm ./yafu
-        rm_yafu_status=$?
-        if [ ${rm_yafu_status} -eq 0 ]; then
-          echo "yafu deleted"
-        else
-          echo "rm ./yafu failed with status ${rm_yafu_status}"
-        fi
+        rm ./yafu || true
+        rm composites || true
         yafus=$(ps -C yafu -o pid=)
         if [ "${yafus}" != "" ]; then
           echo "Canceling ${#yafus} unfinished yafu processes"
