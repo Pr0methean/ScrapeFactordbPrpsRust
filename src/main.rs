@@ -593,7 +593,12 @@ async fn do_checks(
                 )
                 .await
                 {
-                    if retry.is_none() {
+                    if source_file.is_some() {
+                        error!(
+                            "Dropping unknown check with ID {} because it came from a dump file",
+                            id
+                        );
+                    } else if retry.is_none() {
                         retry = Some(CheckTask {
                             id,
                             task_type,
@@ -1109,6 +1114,9 @@ fn queue_unknown_from_dump_file(
                 Err(e) => warn!("Skipping dump file {}: {e}", dump_file_state.index),
             }
         }
+    }
+    if line.is_empty() {
+        return;
     }
     let id = line.split(",").next().unwrap();
     if id.is_empty() {
