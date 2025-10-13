@@ -1,4 +1,4 @@
-name: Rust
+name: 10-minute test
 
 on:
   push:
