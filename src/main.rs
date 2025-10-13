@@ -46,7 +46,7 @@ const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Pr
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 16;
 const C_RESULTS_PER_PAGE: usize = 5000;
-const C_TASK_BUFFER_SIZE: usize = 1024; // because we already hold 1 permit when we refill
+const C_TASK_BUFFER_SIZE: usize = 256;
 const C_MIN_DIGITS: usize = 91;
 const C_MAX_DIGITS: usize = 300;
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
@@ -775,6 +775,7 @@ async fn queue_composites(
         let (a, b) = waiting_c.as_mut_slices();
         a.shuffle(&mut rng);
         b.shuffle(&mut rng);
+        info!("Shuffled C buffer");
     } else {
         while let Some(c) = waiting_c.pop_front() {
             if c_sender.try_send(c).is_err() {
