@@ -753,7 +753,7 @@ async fn queue_composites(
             RETRY_DELAY,
         )
         .await;
-    info!("Composites retrieved");
+    info!("C search results retrieved");
     let c_ids = id_regex
         .captures_iter(&composites_page)
         .map(|capture| capture.get(1).unwrap().as_str().parse::<u128>().ok())
@@ -926,6 +926,7 @@ async fn main() {
                 }
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
+                info!("PRP search results retrieved");
                 let mut prp_permits = prp_permits.unwrap();
                 for prp_id in id_regex
                     .captures_iter(&results_text)
@@ -1053,6 +1054,7 @@ async fn queue_unknowns_from_search<'a>(
     let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
         return Err(u_permits);
     };
+    info!("U search results retrieved");
     let ids = id_regex
         .captures_iter(&results_text)
         .map(|result| result[1].parse::<u128>().ok())
