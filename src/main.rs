@@ -607,12 +607,15 @@ async fn do_checks(
                                 task_type,
                                 source_file,
                             });
+                            info!("ID {id}: put U in retry buffer");
                         } else {
                             error!(
                                 "Dropping unknown check with ID {} because the retry buffer and queue are both full",
                                 id
                             );
                         }
+                    } else {
+                        info!("ID {id}: Requeued U")
                     }
                 }
             }
@@ -887,7 +890,7 @@ async fn main() {
         &mut line,
         &mut u_filter
     ).await;
-    queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
+    queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{} lines read from dump file {}", dump_file_state.lines_read, dump_file_state.index);
