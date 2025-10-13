@@ -35,9 +35,9 @@ while read -r num; do
         fi
       )& done < <(
         echo "Factoring ${num} with yafu" >&2
-        ./yafu -threads 2 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" <<<"factor(${num})" 2>&1 \
+        ./yafu -threads 2 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" -pscreen <<<"factor(${num})" 2>&1 \
           | tee "./out" \
-          | grep -i '\(^P[0-9]\|^PRP[0-9]\|factor = \)' | grep -o '= [0-9]\+' | grep -o "^[0-9]\{1,$max_factor_digits\}$" \
+          | grep -i '\(P[0-9]\|factor\) = ' | grep -o '= [0-9]\+' | grep -o "^[0-9]\{1,$max_factor_digits\}$" \
           | awk '!x[$0]++'
         if grep -q '^P[0-9]' "./out"; then
           end_time=$(date +%s%N)
