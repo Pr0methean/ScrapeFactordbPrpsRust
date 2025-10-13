@@ -13,7 +13,7 @@ use log::{error, info, warn};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
-use regex::{Regex, RegexBuilder};
+use regex::{Match, Regex, RegexBuilder};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::from_str;
@@ -55,7 +55,7 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
 );
 const U_SEARCH_URL_BASE: &str = formatcp!(
-    "https://factordb.com/listtype.php?t=2&mindig={MIN_DIGITS_IN_U}&perpage={U_RESULTS_PER_PAGE}&start="
+    "https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start="
 );
 const C_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
@@ -751,6 +751,7 @@ async fn main() {
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
+    let id_and_last_digit_regex = Regex::new("index\\.php\\?id=([0-9]+).*(\\.\\.[0-9][024568])?").unwrap();
     let resources_regex =
         RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
             .multi_line(true)
@@ -816,7 +817,6 @@ async fn main() {
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
     let mut prp_start = 0;
-    let mut u_start = 1;
     let mut dump_file_state = DumpFileState {
         reader: File::open_buffered("/dev/null").unwrap(),
         lines_read: 0,
@@ -830,17 +830,15 @@ async fn main() {
 
     // Use PRP queue so that the first unknown number will start sooner
     queue_unknowns(
-        &id_regex,
+        &id_and_last_digit_regex,
         &http,
         prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
-        &mut u_start,
         &mut dump_file_state,
         &mut line,
         &mut u_filter
     ).await;
     queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
     let mut restart_prp = false;
-    let mut restart_u = false;
     info!("{} lines read from dump file {}", dump_file_state.lines_read, dump_file_state.index);
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
@@ -906,7 +904,7 @@ async fn main() {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("Queued check of probable prime with ID {prp_id} from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_regex, &http, u_permits, &mut u_start, &mut dump_file_state, &mut line, &mut u_filter).await;
+                        queue_unknowns(&id_and_last_digit_regex, &http, u_permits, &mut dump_file_state, &mut line, &mut u_filter).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -922,20 +920,8 @@ async fn main() {
                     restart_prp = true;
                 }
             }
-            u_permits = u_sender.reserve_many(if restart_u {
-                MIN_CAPACITY_AT_U_RESTART
-            } else {
-                U_RESULTS_PER_PAGE
-            }) => {
-                if restart_u {
-                    u_start = 1;
-                    restart_u = false;
-                }
-                queue_unknowns(&id_regex, &http, u_permits.unwrap(), &mut u_start, &mut dump_file_state, &mut line, &mut u_filter).await;
-                if u_start > MAX_START {
-                    info!("Restarting U search: searched {u_start} unknowns");
-                    restart_u = true;
-                }
+            u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+                queue_unknowns(&id_and_last_digit_regex, &http, u_permits.unwrap(), &mut dump_file_state, &mut line, &mut u_filter).await;
             }
             _ = sigterm.recv() => {
                 warn!("Received SIGTERM; exiting");
@@ -946,10 +932,9 @@ async fn main() {
 }
 
 async fn queue_unknowns(
-    id_regex: &Regex,
+    id_and_last_digit_regex: &Regex,
     http: &ThrottlingHttpClient,
     u_permits: PermitIterator<'_, CheckTask>,
-    u_start: &mut usize,
     dump_file_state: &mut DumpFileState,
     line: &mut String,
     u_filter: &mut InMemoryFilter,
@@ -980,7 +965,7 @@ async fn queue_unknowns(
     let mut permits = Some(u_permits);
     if use_search
         && let Err(u_permits) =
-            queue_unknowns_from_search(id_regex, http, u_start, permits.take().unwrap(), u_filter)
+            queue_unknowns_from_search(id_and_last_digit_regex, http, permits.take().unwrap(), u_filter)
                 .await
     {
         permits = Some(u_permits);
@@ -998,43 +983,84 @@ async fn queue_unknowns(
 }
 
 async fn queue_unknowns_from_search<'a>(
-    id_regex: &Regex,
+    id_and_last_digit_regex: &Regex,
     http: &ThrottlingHttpClient,
-    u_start: &mut usize,
     mut u_permits: PermitIterator<'a, CheckTask>,
     u_filter: &mut InMemoryFilter,
 ) -> Result<(), PermitIterator<'a, CheckTask>> {
-    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}");
+    let mut rng = rng();
+    let u_digits = rng.random_range(2000..=200_000);
+    let u_start = rng.random_range(0..=100_000);
+    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={u_digits}");
     let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
         return Err(u_permits);
     };
     info!("U search results retrieved");
-    let ids = id_regex
+    let ids = id_and_last_digit_regex
         .captures_iter(&results_text)
-        .map(|result| result[1].parse::<u128>().ok())
+        .map(|result| (result[1].parse::<u128>().ok(), result.get(2).map(Match::as_str)))
         .unique();
     let mut ids_found = false;
-    for u_id in ids {
+    for (u_id, last_digit) in ids {
         let Some(u_id) = u_id else {
-            error!("Invalid unknown-status number ID in search results");
+            error!("Skipping an invalid ID in U search results");
             continue;
         };
         ids_found = true;
-        let u_id_bytes = u_id.to_ne_bytes();
-        if u_filter.query(&u_id_bytes).unwrap() {
-            warn!("Skipping duplicate U ID: {}", u_id);
-            continue;
+        if let Some(last_digit) = last_digit {
+            let mut even = false;
+            let mut divides5 = false;
+            match last_digit.chars().last() {
+                '0' => {
+                    even = true;
+                    divides5 = true;
+                }
+                '5' => {
+                    divides5 = true;
+                }
+                '2' | '4' | '6' | '8' => {
+                    even = true;
+                }
+                x => {
+                    error!("{u_id}: Invalid last digit: {x}");
+                }
+            }
+            if even {
+                match http.http.post("https://factordb.com/reportfactor.php")
+                    .body(format!("id={u_id}&factor=2"))
+                    .send().await {
+                    Ok(()) => info!("{u_id}: reported a factor of 2"),
+                    Err(e) => error!("{u_id}: this U has a factor of 2 that we failed to report: {e}"),
+                }
+            }
+            if divides5 {
+                match http.http.post("https://factordb.com/reportfactor.php")
+                    .body(format!("id={u_id}&factor=5"))
+                    .send().await {
+                    Ok(()) => info!("{u_id}: reported a factor of 5"),
+                    Err(e) => error!("{u_id}: this U has a factor of 5 that we failed to report: {e}"),
+                }
+            }
+        } else {
+            let Some(u_id) = u_id else {
+                error!("Invalid unknown-status number ID in search results");
+                continue;
+            };
+            let u_id_bytes = u_id.to_ne_bytes();
+            if u_filter.query(&u_id_bytes).unwrap() {
+                warn!("Skipping duplicate U ID: {}", u_id);
+                continue;
+            }
+            u_filter.insert(&u_id_bytes).unwrap();
+            u_permits.next().unwrap().send(CheckTask {
+                id: u_id,
+                task_type: CheckTaskType::U,
+                source_file: None,
+            });
+            info!("Queued check of unknown-status number with ID {u_id} from search");
         }
-        u_filter.insert(&u_id_bytes).unwrap();
-        u_permits.next().unwrap().send(CheckTask {
-            id: u_id,
-            task_type: CheckTaskType::U,
-            source_file: None,
-        });
-        info!("Queued check of unknown-status number with ID {u_id} from search");
     }
     if ids_found {
-        *u_start += U_RESULTS_PER_PAGE;
         Ok(())
     } else {
         error!("Couldn't parse IDs from search result: {results_text}");
