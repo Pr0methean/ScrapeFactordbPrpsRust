@@ -872,11 +872,15 @@ async fn main() {
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
 
     // Use PRP queue so that the first unknown number will start sooner
-    queue_unknown_from_dump_file(
-        prp_sender.reserve().await.unwrap(),
+    queue_unknowns(
+        &id_regex,
+        &http,
+        prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
+        &mut u_start,
         &mut dump_file_state,
         &mut line,
-    );
+        &mut u_filter
+    ).await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{} lines read from dump file {}", dump_file_state.lines_read, dump_file_state.index);
