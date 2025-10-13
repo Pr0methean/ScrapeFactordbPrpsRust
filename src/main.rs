@@ -797,7 +797,7 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let digits = std::env::var("RUN").ok()
+    let c_digits = std::env::var("RUN").ok()
         .map(|run_number_str| run_number_str.parse::<usize>().unwrap())
         .map(|run_number| NonZeroUsize::try_from(C_MIN_DIGITS + (run_number % (C_MAX_DIGITS - C_MIN_DIGITS - 1))).unwrap());
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
@@ -890,7 +890,7 @@ async fn main() {
         &mut line,
         &mut u_filter
     ).await;
-    queue_composites(&mut waiting_c, &id_regex, &http, &c_sender).await;
+    queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{} lines read from dump file {}", dump_file_state.lines_read, dump_file_state.index);
@@ -913,7 +913,7 @@ async fn main() {
                         }
                     }
                     None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
+                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
                     }
                 }
                 info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
