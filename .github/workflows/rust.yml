@@ -70,7 +70,7 @@ jobs:
         # Prevent any more yafu processes from starting
         rm ./yafu || true
         rm composites || true
-        yafus=$(ps -C yafu -o pid=)
+        yafus=$(ps -C yafu -o pid= || true)
         if [ "${yafus}" != "" ]; then
           echo "Canceling ${#yafus} unfinished yafu processes"
           xargs kill <<< "${yafus}"
