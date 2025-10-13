@@ -596,21 +596,23 @@ async fn do_checks(
                             "Dropping unknown check with ID {} because it came from a dump file",
                             id
                         );
-                    } else if retry.is_none() {
-                        retry = Some(CheckTask {
-                            id,
-                            task_type,
-                            source_file,
-                        });
                     } else if !u_receiver.try_send(CheckTask {
                         id,
                         task_type,
                         source_file,
                     }) {
-                        error!(
-                            "Dropping unknown check with ID {} because the retry buffer and queue are both full",
-                            id
-                        );
+                        if retry.is_none() {
+                            retry = Some(CheckTask {
+                                id,
+                                task_type,
+                                source_file,
+                            });
+                        } else {
+                            error!(
+                                "Dropping unknown check with ID {} because the retry buffer and queue are both full",
+                                id
+                            );
+                        }
                     }
                 }
             }
