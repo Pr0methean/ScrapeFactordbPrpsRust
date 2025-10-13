@@ -886,6 +886,7 @@ async fn main() {
         &mut line,
         &mut u_filter
     ).await;
+    queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, digits).await;
     let mut restart_prp = false;
     let mut restart_u = false;
     info!("{} lines read from dump file {}", dump_file_state.lines_read, dump_file_state.index);
