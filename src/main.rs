@@ -40,7 +40,6 @@ const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const PRP_RESULTS_PER_PAGE: usize = 32;
 const MIN_DIGITS_IN_PRP: u64 = 300;
-const MIN_DIGITS_IN_U: u64 = 2001;
 const U_RESULTS_PER_PAGE: usize = 1;
 const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
@@ -50,7 +49,6 @@ const C_TASK_BUFFER_SIZE: usize = 256;
 const C_MIN_DIGITS: usize = 91;
 const C_MAX_DIGITS: usize = 300;
 const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
-const MIN_CAPACITY_AT_U_RESTART: usize = U_TASK_BUFFER_SIZE / 2;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
 );
@@ -989,7 +987,7 @@ async fn queue_unknowns_from_search<'a>(
     u_filter: &mut InMemoryFilter,
 ) -> Result<(), PermitIterator<'a, CheckTask>> {
     let mut rng = rng();
-    let u_digits = rng.random_range(2000..=200_000);
+    let u_digits = rng.random_range(2001..=200_000);
     let u_start = rng.random_range(0..=100_000);
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={u_digits}");
     let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
@@ -998,7 +996,7 @@ async fn queue_unknowns_from_search<'a>(
     info!("U search results retrieved");
     let ids = id_and_last_digit_regex
         .captures_iter(&results_text)
-        .map(|result| (result[1].parse::<u128>().ok(), result.get(2).map(Match::as_str)))
+        .map(|result| (result[1].parse::<u128>().ok(), result.get(2).map(|m| m.as_str())))
         .unique();
     let mut ids_found = false;
     for (u_id, last_digit) in ids {
@@ -1011,25 +1009,25 @@ async fn queue_unknowns_from_search<'a>(
             let mut even = false;
             let mut divides5 = false;
             match last_digit.chars().last() {
-                '0' => {
+                Some('0') => {
                     even = true;
                     divides5 = true;
                 }
-                '5' => {
+                Some('5') => {
                     divides5 = true;
                 }
-                '2' | '4' | '6' | '8' => {
+                Some('2' | '4' | '6' | '8') => {
                     even = true;
                 }
                 x => {
-                    error!("{u_id}: Invalid last digit: {x}");
+                    error!("{u_id}: Invalid last digit: {x:?}");
                 }
             }
             if even {
                 match http.http.post("https://factordb.com/reportfactor.php")
                     .body(format!("id={u_id}&factor=2"))
                     .send().await {
-                    Ok(()) => info!("{u_id}: reported a factor of 2"),
+                    Ok(response) => info!("{u_id}: reported a factor of 2; response: {:?}", response.text().await),
                     Err(e) => error!("{u_id}: this U has a factor of 2 that we failed to report: {e}"),
                 }
             }
@@ -1037,15 +1035,11 @@ async fn queue_unknowns_from_search<'a>(
                 match http.http.post("https://factordb.com/reportfactor.php")
                     .body(format!("id={u_id}&factor=5"))
                     .send().await {
-                    Ok(()) => info!("{u_id}: reported a factor of 5"),
+                    Ok(response) => info!("{u_id}: reported a factor of 5; response: {:?}", response.text().await),
                     Err(e) => error!("{u_id}: this U has a factor of 5 that we failed to report: {e}"),
                 }
             }
         } else {
-            let Some(u_id) = u_id else {
-                error!("Invalid unknown-status number ID in search results");
-                continue;
-            };
             let u_id_bytes = u_id.to_ne_bytes();
             if u_filter.query(&u_id_bytes).unwrap() {
                 warn!("Skipping duplicate U ID: {}", u_id);
