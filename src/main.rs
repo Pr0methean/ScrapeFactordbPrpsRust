@@ -101,18 +101,16 @@ impl<T> PushbackReceiver<T> {
     }
 
     async fn recv(&mut self) -> T {
+        drop(self.permit.take());
         let result = self.receiver.recv().await.unwrap();
-        if self.permit.is_none() {
-            self.permit = self.sender.clone().try_reserve_owned().ok();
-        }
+        self.permit = self.sender.clone().try_reserve_owned().ok();
         result
     }
 
     fn try_recv(&mut self) -> Option<T> {
+        drop(self.permit.take());
         let result = self.receiver.try_recv().ok()?;
-        if self.permit.is_none() {
-            self.permit = self.sender.clone().try_reserve_owned().ok();
-        }
+        self.permit = self.sender.clone().try_reserve_owned().ok();
         Some(result)
     }
 
