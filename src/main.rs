@@ -13,7 +13,7 @@ use log::{error, info, warn};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
-use regex::{Match, Regex, RegexBuilder};
+use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::from_str;
@@ -31,6 +31,7 @@ use tokio::sync::mpsc::{OwnedPermit, Permit, PermitIterator, Receiver, Sender, c
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use crate::UnknownPrpCheckResult::{Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait};
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -60,6 +61,13 @@ const C_SEARCH_URL_BASE: &str =
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
+
+enum UnknownPrpCheckResult {
+    Assigned,
+    PleaseWait,
+    OtherRetryableFailure,
+    IneligibleForPrpCheck
+}
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(u8)]
@@ -268,7 +276,7 @@ async fn composites_while_waiting(
                 }
             } else if !check_succeeded && !c_filter.query(&id.to_ne_bytes()).unwrap() {
                 if c_receiver.try_send(id) {
-                    info!("ID {id}: Requeued C");
+                    info!("{id}: Requeued C");
                 } else {
                     c_filter.insert(&id.to_ne_bytes()).unwrap();
                     tokio::spawn(dispatch_composite(http.clone(), id, out));
@@ -276,9 +284,9 @@ async fn composites_while_waiting(
             }
         } else if !check_succeeded {
             if c_receiver.try_send(id) {
-                info!("ID {id}: Requeued C");
+                info!("{id}: Requeued C");
             } else {
-                error!("ID {id}: Dropping C");
+                error!("{id}: Dropping C");
             }
         }
         match end.checked_duration_since(Instant::now()) {
@@ -355,7 +363,7 @@ async fn get_prp_remaining_bases(
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
     let bases_text = http.retrying_get_and_decode(&bases_url, RETRY_DELAY).await;
     if !bases_text.contains("&lt;") {
-        error!("ID {id}: Failed to decode status for PRP: {bases_text}");
+        error!("{id}: Failed to decode status for PRP: {bases_text}");
         composites_while_waiting(
             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
             http,
@@ -366,7 +374,7 @@ async fn get_prp_remaining_bases(
         return Err(());
     }
     if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
-        info!("ID {id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
+        info!("{id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
         return Ok(U256::from(0));
     }
     for bases in bases_regex.captures_iter(&bases_text) {
@@ -442,9 +450,9 @@ async fn do_checks(
                             task_type,
                             source_file,
                         }) {
-                            info!("ID {id}: Requeued PRP");
+                            info!("{id}: Requeued PRP");
                         } else {
-                            error!("ID {id}: Dropping PRP");
+                            error!("{id}: Dropping PRP");
                         }
                         continue;
                     };
@@ -465,9 +473,9 @@ async fn do_checks(
                                 task_type,
                                 source_file,
                             }) {
-                                info!("ID {id}: Requeued PRP");
+                                info!("{id}: Requeued PRP");
                             } else {
-                                error!("ID {id}: Dropping PRP");
+                                error!("{id}: Dropping PRP");
                             }
                             composites_while_waiting(
                                 Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
@@ -515,7 +523,7 @@ async fn do_checks(
                         &mut c_filter
                     )
                         .await;
-                    if !try_handle_unknown(
+                    match try_handle_unknown(
                         &http,
                         &mut c_receiver,
                         &u_status_regex,
@@ -524,34 +532,62 @@ async fn do_checks(
                         &mut next_unknown_attempt,
                         source_file,
                         &mut c_filter,
-                    )
-                        .await
+                    ).await
                     {
-                        if source_file.is_some() {
-                            error!(
-                                "Dropping unknown check with ID {} because it came from a dump file",
-                                id
-                            );
-                        } else if !u_receiver.try_send(CheckTask {
-                            id,
-                            task_type,
-                            source_file,
-                        }) {
+                        Assigned | IneligibleForPrpCheck => {},
+                        PleaseWait => {
                             if retry.is_none() {
                                 retry = Some(CheckTask {
                                     id,
                                     task_type,
                                     source_file,
                                 });
-                                info!("ID {id}: put U in retry buffer");
+                                info!("{id}: put U in retry buffer");
+                            } else if u_receiver.try_send(CheckTask {
+                                    id,
+                                    task_type,
+                                    source_file,
+                                }) {
+                                info!("{id}: Requeued U");
+                            } else if retry.is_none() {
+                                retry = Some(CheckTask {
+                                    id,
+                                    task_type,
+                                    source_file,
+                                });
+                                info!("{id}: put U in retry buffer");
                             } else {
                                 error!(
                                     "Dropping unknown check with ID {} because the retry buffer and queue are both full",
                                     id
                                 );
                             }
-                        } else {
-                            info!("ID {id}: Requeued U")
+                        },
+                        OtherRetryableFailure => {
+                            if source_file.is_some() {
+                                error!(
+                                    "Dropping unknown check with ID {} because it came from a dump file",
+                                    id
+                                );
+                            } else if retry.is_none() {
+                                retry = Some(CheckTask {
+                                    id,
+                                    task_type,
+                                    source_file,
+                                });
+                                info!("{id}: put U in retry buffer");
+                            } else if u_receiver.try_send(CheckTask {
+                                id,
+                                task_type,
+                                source_file,
+                            }) {
+                                info!("{id}: Requeued U");
+                            } else {
+                                error!(
+                                    "Dropping unknown check with ID {} because the retry buffer and queue are both full",
+                                    id
+                                );
+                            }
                         }
                     }
                 }
@@ -578,7 +614,7 @@ async fn try_handle_unknown(
     next_attempt: &mut Instant,
     source_file: Option<usize>,
     c_filter: &mut InMemoryFilter
-) -> bool {
+) -> UnknownPrpCheckResult {
     composites_while_waiting(*next_attempt, http, c_receiver, c_filter).await;
     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
     let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
@@ -586,13 +622,12 @@ async fn try_handle_unknown(
         match status.get(1) {
             None => {
                 if many_digits_regex.is_match(&result) {
-                    warn!("ID {id}: U is too large for a PRP check!");
-                    // FIXME: Should restart search if this number came from a search
-                    true
+                    warn!("{id}: U is too large for a PRP check!");
+                    IneligibleForPrpCheck
                 } else {
-                    error!("ID {id}: Failed to decode status for U: {result}");
+                    error!("{id}: Failed to decode status for U: {result}");
                     *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-                    false
+                    OtherRetryableFailure
                 }
             }
             Some(matched_status) => match matched_status.as_str() {
@@ -600,29 +635,28 @@ async fn try_handle_unknown(
                     info!(
                         "Assigned PRP check for unknown-status number with ID {id} from dump file {source_file:?}"
                     );
-                    true
+                    Assigned
                 }
                 "Please wait" => {
                     warn!("Got 'please wait' for unknown-status number with ID {id}");
                     *next_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                    false
+                    PleaseWait
                 }
                 _ => {
                     warn!(
                         "Unknown-status number with ID {id} from dump file {source_file:?} is already being checked"
                     );
-                    true
+                    Assigned
                 }
             },
         }
     } else if many_digits_regex.is_match(&result) {
-        warn!("ID {id}: U is too large for a PRP check!");
-        // FIXME: Should restart search if this number came from a search
-        true
+        warn!("{id}: U is too large for a PRP check!");
+        IneligibleForPrpCheck
     } else {
-        error!("ID {id}: Failed to decode status for U from result: {result}");
+        error!("{id}: Failed to decode status for U from result: {result}");
         *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-        false
+        PleaseWait
     }
 }
 
