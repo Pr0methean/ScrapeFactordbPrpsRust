@@ -2,6 +2,9 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
+use crate::UnknownPrpCheckResult::{
+    Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
+};
 use compact_str::CompactString;
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
@@ -19,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::from_str;
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{Write};
+use std::io::Write;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::ops::Add;
 use std::process::exit;
@@ -31,7 +34,6 @@ use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Receiver, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::UnknownPrpCheckResult::{Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait};
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -53,9 +55,8 @@ const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PE
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
 );
-const U_SEARCH_URL_BASE: &str = formatcp!(
-    "https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start="
-);
+const U_SEARCH_URL_BASE: &str =
+    formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
 const C_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
@@ -66,7 +67,7 @@ enum UnknownPrpCheckResult {
     Assigned,
     PleaseWait,
     OtherRetryableFailure,
-    IneligibleForPrpCheck
+    IneligibleForPrpCheck,
 }
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
@@ -350,7 +351,7 @@ async fn get_prp_remaining_bases(
     http: &ThrottlingHttpClient,
     bases_regex: &Regex,
     c_receiver: &mut PushbackReceiver<u128>,
-    c_filter: &mut InMemoryFilter
+    c_filter: &mut InMemoryFilter,
 ) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
     let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
@@ -361,7 +362,7 @@ async fn get_prp_remaining_bases(
             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
             http,
             c_receiver,
-            c_filter
+            c_filter,
         )
         .await;
         return Err(());
@@ -415,32 +416,36 @@ async fn do_checks(
         &mut c_receiver,
         &mut bases_before_next_cpu_check,
         false,
-        &mut c_filter
-    ).await;
+        &mut c_filter,
+    )
+    .await;
     loop {
         let prp_task = prp_receiver.try_recv();
         let u_tasks = if next_unknown_attempt <= Instant::now() {
-            retry.take().into_iter().chain(u_receiver.try_recv().into_iter())
+            retry
+                .take()
+                .into_iter()
+                .chain(u_receiver.try_recv().into_iter())
         } else {
             None.into_iter().chain(None.into_iter())
         };
         let mut task_done = false;
         let tasks = prp_task.into_iter().chain(u_tasks);
-        for CheckTask {
-            id,
-            task_type
-        } in tasks {
+        for CheckTask { id, task_type } in tasks {
             task_done = true;
             match task_type {
                 CheckTaskType::Prp => {
                     let mut stopped_early = false;
-                    let Ok(bases_left) =
-                        get_prp_remaining_bases(id, &http, &bases_regex, &mut c_receiver, &mut c_filter).await
+                    let Ok(bases_left) = get_prp_remaining_bases(
+                        id,
+                        &http,
+                        &bases_regex,
+                        &mut c_receiver,
+                        &mut c_filter,
+                    )
+                    .await
                     else {
-                        if prp_receiver.try_send(CheckTask {
-                            id,
-                            task_type,
-                        }) {
+                        if prp_receiver.try_send(CheckTask { id, task_type }) {
                             info!("{id}: Requeued PRP");
                         } else {
                             error!("{id}: Dropping PRP");
@@ -459,10 +464,7 @@ async fn do_checks(
                         let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                         if !text.contains(">number<") {
                             error!("Failed to decode result from {url}: {text}");
-                            if prp_receiver.try_send(CheckTask {
-                                id,
-                                task_type,
-                            }) {
+                            if prp_receiver.try_send(CheckTask { id, task_type }) {
                                 info!("{id}: Requeued PRP");
                             } else {
                                 error!("{id}: Dropping PRP");
@@ -473,7 +475,7 @@ async fn do_checks(
                                 &mut c_receiver,
                                 &mut c_filter,
                             )
-                                .await;
+                            .await;
                             break;
                         }
                         throttle_if_necessary(
@@ -481,9 +483,9 @@ async fn do_checks(
                             &mut c_receiver,
                             &mut bases_before_next_cpu_check,
                             true,
-                            &mut c_filter
+                            &mut c_filter,
                         )
-                            .await;
+                        .await;
                         if cert_regex.is_match(&text) {
                             info!("{}: No longer PRP (has certificate)", id);
                             stopped_early = true;
@@ -510,9 +512,9 @@ async fn do_checks(
                         &mut c_receiver,
                         &mut bases_before_next_cpu_check,
                         true,
-                        &mut c_filter
+                        &mut c_filter,
                     )
-                        .await;
+                    .await;
                     match try_handle_unknown(
                         &http,
                         &mut c_receiver,
@@ -521,20 +523,15 @@ async fn do_checks(
                         id,
                         &mut next_unknown_attempt,
                         &mut c_filter,
-                    ).await
+                    )
+                    .await
                     {
-                        Assigned | IneligibleForPrpCheck => {},
+                        Assigned | IneligibleForPrpCheck => {}
                         PleaseWait => {
                             if retry.is_none() {
-                                retry = Some(CheckTask {
-                                    id,
-                                    task_type,
-                                });
+                                retry = Some(CheckTask { id, task_type });
                                 info!("{id}: put U in retry buffer");
-                            } else if u_receiver.try_send(CheckTask {
-                                    id,
-                                    task_type,
-                                }) {
+                            } else if u_receiver.try_send(CheckTask { id, task_type }) {
                                 info!("{id}: Requeued U");
                             } else {
                                 error!(
@@ -542,18 +539,12 @@ async fn do_checks(
                                     id
                                 );
                             }
-                        },
+                        }
                         OtherRetryableFailure => {
-                            if u_receiver.try_send(CheckTask {
-                                id,
-                                task_type,
-                            }) {
+                            if u_receiver.try_send(CheckTask { id, task_type }) {
                                 info!("{id}: Requeued U");
                             } else if retry.is_none() {
-                                retry = Some(CheckTask {
-                                    id,
-                                    task_type,
-                                });
+                                retry = Some(CheckTask { id, task_type });
                                 info!("{id}: put U in retry buffer");
                             } else {
                                 error!(
@@ -570,8 +561,9 @@ async fn do_checks(
                 Instant::now() + Duration::from_secs(1),
                 &http,
                 &mut c_receiver,
-                &mut c_filter
-            ).await;
+                &mut c_filter,
+            )
+            .await;
             continue;
         }
     }
@@ -584,7 +576,7 @@ async fn try_handle_unknown(
     many_digits_regex: &Regex,
     id: u128,
     next_attempt: &mut Instant,
-    c_filter: &mut InMemoryFilter
+    c_filter: &mut InMemoryFilter,
 ) -> UnknownPrpCheckResult {
     composites_while_waiting(*next_attempt, http, c_receiver, c_filter).await;
     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
@@ -603,9 +595,7 @@ async fn try_handle_unknown(
             }
             Some(matched_status) => match matched_status.as_str() {
                 "Assigned" => {
-                    info!(
-                        "Assigned PRP check for unknown-status number with ID {id}"
-                    );
+                    info!("Assigned PRP check for unknown-status number with ID {id}");
                     Assigned
                 }
                 "Please wait" => {
@@ -614,9 +604,7 @@ async fn try_handle_unknown(
                     PleaseWait
                 }
                 _ => {
-                    warn!(
-                        "{id}: U is already being checked"
-                    );
+                    warn!("{id}: U is already being checked");
                     Assigned
                 }
             },
@@ -643,7 +631,13 @@ async fn throttle_if_necessary(
         return;
     }
     if sleep_first {
-        composites_while_waiting(Instant::now() + Duration::from_secs(10), http, c_receiver, c_filter).await; // allow for delay in CPU accounting
+        composites_while_waiting(
+            Instant::now() + Duration::from_secs(10),
+            http,
+            c_receiver,
+            c_filter,
+        )
+        .await; // allow for delay in CPU accounting
     }
     let cpu_check_time = Instant::now();
     // info!("Resources fetched");
@@ -696,11 +690,15 @@ async fn queue_composites(
     id_regex: &Regex,
     http: &ThrottlingHttpClient,
     c_sender: &Sender<u128>,
-    digits: Option<NonZeroUsize>
+    digits: Option<NonZeroUsize>,
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
-    let digits = digits.unwrap_or_else(|| rng.random_range(C_MIN_DIGITS..=C_MAX_DIGITS).try_into().unwrap());
+    let digits = digits.unwrap_or_else(|| {
+        rng.random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
+            .try_into()
+            .unwrap()
+    });
     let start = rng.random_range(0..=100_000);
     info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
@@ -748,13 +746,18 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let c_digits = std::env::var("RUN").ok()
+    let c_digits = std::env::var("RUN")
+        .ok()
         .map(|run_number_str| run_number_str.parse::<usize>().unwrap())
-        .map(|run_number| NonZeroUsize::try_from(C_MIN_DIGITS + (run_number % (C_MAX_DIGITS - C_MIN_DIGITS - 1))).unwrap());
+        .map(|run_number| {
+            NonZeroUsize::try_from(C_MIN_DIGITS + (run_number % (C_MAX_DIGITS - C_MIN_DIGITS - 1)))
+                .unwrap()
+        });
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
-    let id_and_last_digit_regex = Regex::new("index\\.php\\?id=([0-9]+).*(\\.\\.[0-9][024568])?").unwrap();
+    let id_and_last_digit_regex =
+        Regex::new("index\\.php\\?id=([0-9]+).*(\\.\\.[0-9][024568])?").unwrap();
     let resources_regex =
         RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
             .multi_line(true)
@@ -796,12 +799,7 @@ async fn main() {
             .unwrap();
         COMPOSITES_OUT
             .get_or_init(async || {
-                Mutex::new(
-                    File::options()
-                        .append(true)
-                        .open("composites")
-                        .unwrap(),
-                )
+                Mutex::new(File::options().append(true).open("composites").unwrap())
             })
             .await;
     } else {
@@ -831,7 +829,8 @@ async fn main() {
         &http,
         prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
         &mut u_filter,
-    ).await;
+    )
+    .await;
     queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
     let mut restart_prp = false;
     let mut sigterm =
@@ -935,8 +934,8 @@ async fn queue_unknowns(
     }
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
-        if let Err(u_permits) = try_queue_unknowns(id_and_last_digit_regex, http, u_permits, u_filter)
-            .await
+        if let Err(u_permits) =
+            try_queue_unknowns(id_and_last_digit_regex, http, u_permits, u_filter).await
         {
             permits = Some(u_permits);
             sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
@@ -960,7 +959,12 @@ async fn try_queue_unknowns<'a>(
     info!("U search results retrieved");
     let ids = id_and_last_digit_regex
         .captures_iter(&results_text)
-        .map(|result| (result[1].parse::<u128>().ok(), result.get(2).map(|m| m.as_str())))
+        .map(|result| {
+            (
+                result[1].parse::<u128>().ok(),
+                result.get(2).map(|m| m.as_str()),
+            )
+        })
         .unique();
     let mut ids_found = false;
     for (u_id, last_digit) in ids {
@@ -1016,10 +1020,17 @@ async fn try_queue_unknowns<'a>(
 }
 
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: usize) {
-    match http.http.post("https://factordb.com/reportfactor.php")
+    match http
+        .http
+        .post("https://factordb.com/reportfactor.php")
         .body(format!("id={u_id}&factor={factor}"))
-        .send().await {
-        Ok(response) => info!("{u_id}: reported a factor of {factor}; response: {:?}", response.text().await),
+        .send()
+        .await
+    {
+        Ok(response) => info!(
+            "{u_id}: reported a factor of {factor}; response: {:?}",
+            response.text().await
+        ),
         Err(e) => error!("{u_id}: this U has a factor of {factor} that we failed to report: {e}"),
     }
 }
