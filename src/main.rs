@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc::{OwnedPermit, Permit, PermitIterator, Receiver, Sender, channel};
+use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Receiver, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
@@ -393,7 +393,7 @@ const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
-const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 4000;
+const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
 
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
@@ -930,6 +930,9 @@ async fn queue_unknowns(
     u_permits: PermitIterator<'_, CheckTask>,
     u_filter: &mut InMemoryFilter,
 ) {
+    if CPU_TENTHS_SPENT_LAST_CHECK.load(Acquire) >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
+        return;
+    }
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
         if let Err(u_permits) = try_queue_unknowns(id_and_last_digit_regex, http, u_permits, u_filter)
