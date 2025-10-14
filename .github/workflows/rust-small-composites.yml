@@ -11,4 +11,7 @@ env:
 
 jobs:
   build:
+    # Dummy definition on main branch
     runs-on: ubuntu-latest
+    steps:
+    - run: 'true'
