@@ -2,6 +2,7 @@ name: RustSmallComposites
 
 on:
   push:
+    branches-ignore: [ "main", "10-min-run" ]
   pull_request:
     branches: [ "small-composites" ]
   workflow_dispatch:
@@ -10,74 +11,4 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-    - name: Cache Cargo dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo
-        key: cargo-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
-        restore-keys: |
-          cargo-
-    - name: Cache build
-      uses: actions/cache@v4
-      with:
-        path: |
-          target
-          Cargo.lock
-        key: target-${{ hashFiles('.github/workflows/rust.yml', '**/*.rs') }}
-        restore-keys: |
-          target-
-    - name: Let tar run as root
-      run: sudo chown root /bin/tar && sudo chmod u+s /bin/tar
-    - name: Cache apt/dpkg
-      uses: actions/cache@v4
-      with:
-        path: |
-          /usr/lib/x86_64-linux-gnu/libecm.a
-          /var/cache/apt/archives/*.deb
-          /var/lib/dpkg/status
-        key: dpkg-ecm-2025-10-01
-    - run: rustup install nightly
-    - name: Build
-      run: |
-        (
-          mkfifo composites
-          sudo apt-get install libecm-dev gmp-ecm
-        ) &
-        apt_pid=$!
-        cargo +nightly build --release
-        wait ${apt_pid}
-    - name: Run
-      run: |
-        set -x
-        NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 cargo +nightly run --release &
-        rust_pid=$!
-        sleep 21300 &
-        yafu_timer_pid=$!
-        ./yafu.sh <composites &
-        yafu_pid=$!
-        wait "${rust_pid}" || true
-        echo "Rust program exited"
-        wait -n "${yafu_pid}" "${yafu_timer_pid}" || true
-        echo "yafu time is up"
-        # Prevent any more yafu processes from starting
-        rm ./yafu || true
-        rm composites || true
-        yafus=$(ps -C yafu -o pid=)
-        if [ "${yafus}" != "" ]; then
-          echo "Canceling ${#yafus} unfinished yafu processes"
-          xargs kill <<< "${yafus}"
-          sleep 60
-        else
-          echo "No unfinished yafu processes found"
-        fi
-    - name: Upload any failed submissions
-      uses: actions/upload-artifact@v4
-      with:
-        name: failed-submissions.csv
-        path: failed-submissions.csv
-        if-no-files-found: ignore
