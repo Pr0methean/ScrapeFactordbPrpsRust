@@ -569,6 +569,12 @@ async fn do_checks(
                                     "Dropping unknown check with ID {} because it came from a dump file",
                                     id
                                 );
+                            } else if u_receiver.try_send(CheckTask {
+                                id,
+                                task_type,
+                                source_file,
+                            }) {
+                                info!("{id}: Requeued U");
                             } else if retry.is_none() {
                                 retry = Some(CheckTask {
                                     id,
@@ -576,12 +582,6 @@ async fn do_checks(
                                     source_file,
                                 });
                                 info!("{id}: put U in retry buffer");
-                            } else if u_receiver.try_send(CheckTask {
-                                id,
-                                task_type,
-                                source_file,
-                            }) {
-                                info!("{id}: Requeued U");
                             } else {
                                 error!(
                                     "Dropping unknown check with ID {} because the retry buffer and queue are both full",
