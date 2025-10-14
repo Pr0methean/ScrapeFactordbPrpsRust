@@ -543,13 +543,6 @@ async fn do_checks(
                                     source_file,
                                 }) {
                                 info!("{id}: Requeued U");
-                            } else if retry.is_none() {
-                                retry = Some(CheckTask {
-                                    id,
-                                    task_type,
-                                    source_file,
-                                });
-                                info!("{id}: put U in retry buffer");
                             } else {
                                 error!(
                                     "Dropping unknown check with ID {} because the retry buffer and queue are both full",
