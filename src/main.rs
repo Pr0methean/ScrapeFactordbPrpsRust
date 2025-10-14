@@ -1009,20 +1009,10 @@ async fn try_queue_unknowns<'a>(
                 }
             }
             if even {
-                match http.http.post("https://factordb.com/reportfactor.php")
-                    .body(format!("id={u_id}&factor=2"))
-                    .send().await {
-                    Ok(response) => info!("{u_id}: reported a factor of 2; response: {:?}", response.text().await),
-                    Err(e) => error!("{u_id}: this U has a factor of 2 that we failed to report: {e}"),
-                }
+                report_factor_of_u(http, u_id, 2).await;
             }
             if divides5 {
-                match http.http.post("https://factordb.com/reportfactor.php")
-                    .body(format!("id={u_id}&factor=5"))
-                    .send().await {
-                    Ok(response) => info!("{u_id}: reported a factor of 5; response: {:?}", response.text().await),
-                    Err(e) => error!("{u_id}: this U has a factor of 5 that we failed to report: {e}"),
-                }
+                report_factor_of_u(http, u_id, 5).await;
             }
         } else {
             let u_id_bytes = u_id.to_ne_bytes();
@@ -1044,5 +1034,14 @@ async fn try_queue_unknowns<'a>(
     } else {
         error!("Couldn't parse IDs from search result: {results_text}");
         Err(u_permits)
+    }
+}
+
+async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: usize) {
+    match http.http.post("https://factordb.com/reportfactor.php")
+        .body(format!("id={u_id}&factor={factor}"))
+        .send().await {
+        Ok(response) => info!("{u_id}: reported a factor of {factor}; response: {:?}", response.text().await),
+        Err(e) => error!("{u_id}: this U has a factor of {factor} that we failed to report: {e}"),
     }
 }
