@@ -427,7 +427,7 @@ async fn do_checks(
     loop {
         let prp_task = prp_receiver.try_recv();
         let u_tasks = if next_unknown_attempt <= Instant::now() {
-            u_receiver.try_recv().into_iter().chain(retry.take().into_iter())
+            retry.take().into_iter().chain(u_receiver.try_recv().into_iter())
         } else {
             None.into_iter().chain(None.into_iter())
         };
