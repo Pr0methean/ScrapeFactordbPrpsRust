@@ -694,12 +694,16 @@ async fn queue_composites(
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
+    let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
+        0
+    } else {
+        rng.random_range(0..=100_000)
+    };
     let digits = digits.unwrap_or_else(|| {
         rng.random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
             .try_into()
             .unwrap()
     });
-    let start = rng.random_range(0..=100_000);
     info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
         .retrying_get_and_decode(
@@ -746,13 +750,15 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let c_digits = std::env::var("RUN")
-        .ok()
-        .map(|run_number_str| run_number_str.parse::<usize>().unwrap())
-        .map(|run_number| {
-            NonZeroUsize::try_from(C_MIN_DIGITS + (run_number % (C_MAX_DIGITS - C_MIN_DIGITS - 1)))
-                .unwrap()
-        });
+    let mut c_digits = None;
+    if let Ok(run_number) = std::env::var("RUN") {
+        let run_number = run_number.parse::<usize>().unwrap();
+        let mut digits = C_MAX_DIGITS - (run_number % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
+        if digits == C_MIN_DIGITS - 1 {
+            digits = 1;
+        }
+        c_digits = Some(digits.try_into().unwrap());
+    }
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
