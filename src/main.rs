@@ -78,7 +78,6 @@ enum CheckTaskType {
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 struct CheckTask {
     id: u128,
-    source_file: Option<usize>,
     task_type: CheckTaskType,
 }
 
@@ -429,8 +428,7 @@ async fn do_checks(
         let tasks = prp_task.into_iter().chain(u_tasks);
         for CheckTask {
             id,
-            task_type,
-            source_file,
+            task_type
         } in tasks {
             task_done = true;
             match task_type {
@@ -442,7 +440,6 @@ async fn do_checks(
                         if prp_receiver.try_send(CheckTask {
                             id,
                             task_type,
-                            source_file,
                         }) {
                             info!("{id}: Requeued PRP");
                         } else {
@@ -465,7 +462,6 @@ async fn do_checks(
                             if prp_receiver.try_send(CheckTask {
                                 id,
                                 task_type,
-                                source_file,
                             }) {
                                 info!("{id}: Requeued PRP");
                             } else {
@@ -524,7 +520,6 @@ async fn do_checks(
                         &many_digits_regex,
                         id,
                         &mut next_unknown_attempt,
-                        source_file,
                         &mut c_filter,
                     ).await
                     {
@@ -534,13 +529,11 @@ async fn do_checks(
                                 retry = Some(CheckTask {
                                     id,
                                     task_type,
-                                    source_file,
                                 });
                                 info!("{id}: put U in retry buffer");
                             } else if u_receiver.try_send(CheckTask {
                                     id,
                                     task_type,
-                                    source_file,
                                 }) {
                                 info!("{id}: Requeued U");
                             } else {
@@ -551,28 +544,20 @@ async fn do_checks(
                             }
                         },
                         OtherRetryableFailure => {
-                            if source_file.is_some() {
-                                error!(
-                                    "Dropping unknown check with ID {} because it came from a dump file",
-                                    id
-                                );
-                            } else if u_receiver.try_send(CheckTask {
+                            if u_receiver.try_send(CheckTask {
                                 id,
                                 task_type,
-                                source_file,
                             }) {
                                 info!("{id}: Requeued U");
                             } else if retry.is_none() {
                                 retry = Some(CheckTask {
                                     id,
                                     task_type,
-                                    source_file,
                                 });
                                 info!("{id}: put U in retry buffer");
                             } else {
                                 error!(
-                                    "Dropping unknown check with ID {} because the retry buffer and queue are both full",
-                                    id
+                                    "{id}: Dropping U because the retry buffer and queue are both full",
                                 );
                             }
                         }
@@ -599,7 +584,6 @@ async fn try_handle_unknown(
     many_digits_regex: &Regex,
     id: u128,
     next_attempt: &mut Instant,
-    source_file: Option<usize>,
     c_filter: &mut InMemoryFilter
 ) -> UnknownPrpCheckResult {
     composites_while_waiting(*next_attempt, http, c_receiver, c_filter).await;
@@ -620,18 +604,18 @@ async fn try_handle_unknown(
             Some(matched_status) => match matched_status.as_str() {
                 "Assigned" => {
                     info!(
-                        "Assigned PRP check for unknown-status number with ID {id} from dump file {source_file:?}"
+                        "Assigned PRP check for unknown-status number with ID {id}"
                     );
                     Assigned
                 }
                 "Please wait" => {
-                    warn!("Got 'please wait' for unknown-status number with ID {id}");
+                    warn!("{id}: Got 'please wait' for U");
                     *next_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
                     PleaseWait
                 }
                 _ => {
                     warn!(
-                        "Unknown-status number with ID {id} from dump file {source_file:?} is already being checked"
+                        "{id}: U is already being checked"
                     );
                     Assigned
                 }
@@ -872,7 +856,7 @@ async fn main() {
                         c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
                     }
                 }
-                info!("{c_sent} composites sent to channel; {} now in buffer", waiting_c.len());
+                info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
             }
             prp_permits = prp_sender.reserve_many(if restart_prp {
                 MIN_CAPACITY_AT_PRP_RESTART
@@ -901,18 +885,17 @@ async fn main() {
                     };
                     let prp_id_bytes = prp_id.to_ne_bytes();
                     if prp_filter.query(&prp_id_bytes).unwrap() {
-                        warn!("Skipping duplicate PRP ID: {}", prp_id);
+                        warn!("{prp_id}: Skipping duplicate PRP");
                         continue;
                     }
                     prp_filter.insert(&prp_id_bytes).unwrap();
                     let prp_task = CheckTask {
                         id: prp_id,
                         task_type: CheckTaskType::Prp,
-                        source_file: None
                     };
                     results_since_restart += 1;
                     prp_permits.next().unwrap().send(prp_task);
-                    info!("Queued check of probable prime with ID {prp_id} from search");
+                    info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
                         queue_unknowns(&id_and_last_digit_regex, &http, u_permits, &mut u_filter).await;
                     }
@@ -1010,16 +993,15 @@ async fn try_queue_unknowns<'a>(
         } else {
             let u_id_bytes = u_id.to_ne_bytes();
             if u_filter.query(&u_id_bytes).unwrap() {
-                warn!("Skipping duplicate U ID: {}", u_id);
+                warn!("{u_id}: Skipping duplicate U");
                 continue;
             }
             u_filter.insert(&u_id_bytes).unwrap();
             u_permits.next().unwrap().send(CheckTask {
                 id: u_id,
                 task_type: CheckTaskType::U,
-                source_file: None,
             });
-            info!("Queued check of unknown-status number with ID {u_id} from search");
+            info!("{u_id}: Queued U");
         }
     }
     if ids_found {
