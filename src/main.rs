@@ -443,9 +443,12 @@ async fn get_prp_remaining_bases(
             };
             bases_left &= !(U256::from(1) << base);
         }
+        info!("{id}: {} bases left to check", count_ones(bases_left));
+    } else {
+        info!("{id}: no bases checked yet");
     }
     if bases_left == U256::from(0) {
-        info!("ID {id} already has all bases checked");
+        info!("{id}: all bases already checked");
     }
     Ok(bases_left)
 }
@@ -521,8 +524,6 @@ async fn do_checks(
                     if bases_left == U256::from(0) {
                         continue;
                     }
-                    let bases_count = count_ones(bases_left);
-                    info!("{}: {} bases to check", id, bases_count);
                     let url_base =
                         format!("https://factordb.com/index.php?id={id}&open=prime&basetocheck=");
                     for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
@@ -569,7 +570,7 @@ async fn do_checks(
                         }
                     }
                     if !stopped_early {
-                        info!("{}: {} bases checked", id, bases_count);
+                        info!("{}: all bases now checked", id);
                     }
                 }
                 CheckTaskType::U => {
