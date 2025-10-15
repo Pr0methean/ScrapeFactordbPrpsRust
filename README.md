@@ -1,6 +1,6 @@
 ## Finishing the unfinished entries on FactorDB
 
-The scripts in this repository help the field of pure mathematics by factorizing large integers or establishing that they're prime numbers, and submitting the results to factordb.com to be stored. The ways it will help for a given number depend on its current status on factordb.com.
+The programs in this repository help the field of pure mathematics by factorizing large integers or establishing that they're prime numbers, and submitting the results to factordb.com to be stored. You can run them on GitHub Actions and/or your own computer (currently tuned for Linux x86-64). The ways they will help for a given number depend on its current status on factordb.com.
 
 ### Probable prime (PRP, 300 digits or larger)
 
