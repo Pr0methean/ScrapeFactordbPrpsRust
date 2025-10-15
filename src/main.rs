@@ -1058,16 +1058,19 @@ async fn try_queue_unknowns<'a>(
                     if value.contains("...") {
                         let factor_id = &factor[1];
                         let api_response = http
-                            .retrying_get_and_decode(&format!("https://factordb.com/api?id={factor_id}"), RETRY_DELAY)
+                            .retrying_get_and_decode(
+                                &format!("https://factordb.com/api?id={factor_id}"),
+                                RETRY_DELAY,
+                            )
                             .await;
                         match from_str::<NumberStatusApiResponse>(&api_response) {
                             Err(e) => {
-                                error!("{u_id}: Factor {factor_id}: Failed to decode API response: {e}: {api_response}");
+                                error!(
+                                    "{u_id}: Factor {factor_id}: Failed to decode API response: {e}: {api_response}"
+                                );
                             }
                             Ok(api_response) => {
-                                let NumberStatusApiResponse {
-                                    factors, ..
-                                } = api_response;
+                                let NumberStatusApiResponse { factors, .. } = api_response;
                                 for (factor, _) in factors {
                                     report_factor_of_u(http, u_id, &factor).await;
                                 }
@@ -1117,8 +1120,10 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &st
                 if response.is_ok_and(|text| !text.contains("Error")) {
                     return;
                 }
-            },
-            Err(e) => error!("{u_id}: this U has a factor of {factor} that we failed to report: {e}"),
+            }
+            Err(e) => {
+                error!("{u_id}: this U has a factor of {factor} that we failed to report: {e}")
+            }
         }
         sleep(RETRY_DELAY).await;
     }
