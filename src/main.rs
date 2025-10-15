@@ -541,7 +541,7 @@ async fn do_checks(
                                 info!("{id}: Requeued U");
                             } else {
                                 error!(
-                                    "Dropping unknown check with ID {} because the retry buffer and queue are both full",
+                                    "{id}: Dropping U after 'please wait' because the retry buffer and queue are both full",
                                     id
                                 );
                             }
@@ -554,7 +554,7 @@ async fn do_checks(
                                 info!("{id}: put U in retry buffer");
                             } else {
                                 error!(
-                                    "{id}: Dropping U because the retry buffer and queue are both full",
+                                    "{id}: Dropping U after error because the retry buffer and queue are both full",
                                 );
                             }
                         }
@@ -757,13 +757,16 @@ async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = None;
+    let mut u_digits = None;
     if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<usize>().unwrap();
-        let mut digits = C_MAX_DIGITS - (run_number % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
-        if digits == C_MIN_DIGITS - 1 {
-            digits = 1;
+        let mut c_digits_value = C_MAX_DIGITS - (run_number % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
+        if c_digits_value == C_MIN_DIGITS - 1 {
+            c_digits_value = 1;
         }
-        c_digits = Some(digits.try_into().unwrap());
+        c_digits = Some(c_digits_value.try_into().unwrap());
+        let u_digits_value = U_MAX_DIGITS - ((run_number * 100) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
+        u_digits = Some(u_digits_value.try_into().unwrap());
     }
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
@@ -843,6 +846,7 @@ async fn main() {
         &id_and_last_digit_regex,
         &algebraic_factors_regex,
         &http,
+        u_digits,
         prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
         &mut u_filter,
     )
@@ -912,7 +916,7 @@ async fn main() {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_permits, &mut u_filter).await;
+                        queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_digits, u_permits, &mut u_filter).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -929,7 +933,7 @@ async fn main() {
                 }
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_permits.unwrap(), &mut u_filter).await;
+                queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter).await;
             }
             _ = sigterm.recv() => {
                 warn!("Received SIGTERM; exiting");
@@ -943,6 +947,7 @@ async fn queue_unknowns(
     id_and_last_digit_regex: &Regex,
     algebraic_factors_regex: &Regex,
     http: &ThrottlingHttpClient,
+    u_digits: Option<NonZeroUsize>,
     u_permits: PermitIterator<'_, CheckTask>,
     u_filter: &mut InMemoryFilter,
 ) {
@@ -952,7 +957,7 @@ async fn queue_unknowns(
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
         if let Err(u_permits) =
-            try_queue_unknowns(id_and_last_digit_regex, algebraic_factors_regex, http, u_permits, u_filter).await
+            try_queue_unknowns(id_and_last_digit_regex, algebraic_factors_regex, http, u_digits, u_permits, u_filter).await
         {
             permits = Some(u_permits);
             sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
@@ -960,15 +965,23 @@ async fn queue_unknowns(
     }
 }
 
+const U_MIN_DIGITS: usize = 2001;
+const U_MAX_DIGITS: usize = 199_999;
+
 async fn try_queue_unknowns<'a>(
     id_and_last_digit_regex: &Regex,
     algebraic_factors_regex: &Regex,
     http: &ThrottlingHttpClient,
+    u_digits: Option<NonZeroUsize>,
     mut u_permits: PermitIterator<'a, CheckTask>,
     u_filter: &mut InMemoryFilter,
 ) -> Result<(), PermitIterator<'a, CheckTask>> {
     let mut rng = rng();
-    let u_digits = rng.random_range(2001..=200_000);
+    let digits = u_digits.unwrap_or_else(|| {
+        rng.random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
+            .try_into()
+            .unwrap()
+    });
     let u_start = rng.random_range(0..=100_000);
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={u_digits}");
     let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
