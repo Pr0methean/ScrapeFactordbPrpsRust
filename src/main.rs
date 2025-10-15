@@ -1061,11 +1061,11 @@ async fn try_queue_unknowns<'a>(
                 let algebraic_factors = algebraic_factors_regex.captures_iter(algebraic);
                 for factor in algebraic_factors {
                     had_algebraic = true;
-                    info!("{u_id}: algebraic factor: {factor:?}");
                     let value = &factor[2];
                     if value.contains("...") {
                         // Link text isn't an expression for the factor, so we need to look up its value
                         let factor_id = &factor[1];
+                        info!("{u_id}: Found an algebraic factor with ID {factor_id}");
                         let api_response = http
                             .retrying_get_and_decode(
                                 &format!("https://factordb.com/api?id={factor_id}"),
@@ -1086,7 +1086,7 @@ async fn try_queue_unknowns<'a>(
                             }
                         }
                     } else {
-                        // Link text is an expression for the factor, so use it for reporting
+                        info!("{u_id}: Found an algebraic factor with expression {value}");
                         report_factor_of_u(http, u_id, value).await;
                     }
                 }
