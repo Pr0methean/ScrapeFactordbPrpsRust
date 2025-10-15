@@ -95,6 +95,12 @@ struct PushbackReceiver<T> {
     permit: Option<OwnedPermit<T>>,
 }
 
+#[derive(Serialize)]
+struct FactorSubmission<'a> {
+    id: u128,
+    factor: &'a str
+}
+
 impl<T> PushbackReceiver<T> {
     fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
         let sender = sender.clone();
@@ -828,10 +834,14 @@ async fn main() {
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-
+    let algebraic_factors_regex = RegexBuilder::new(
+        "<font[^>]*>([^<]+)</font>")
+        .multi_line(true)
+        .build().unwrap();
     // Use PRP queue so that the first unknown number will start sooner
     let _ = try_queue_unknowns(
         &id_and_last_digit_regex,
+        &algebraic_factors_regex,
         &http,
         prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
         &mut u_filter,
@@ -902,7 +912,7 @@ async fn main() {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_and_last_digit_regex, &http, u_permits, &mut u_filter).await;
+                        queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_permits, &mut u_filter).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -919,7 +929,7 @@ async fn main() {
                 }
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                queue_unknowns(&id_and_last_digit_regex, &http, u_permits.unwrap(), &mut u_filter).await;
+                queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_permits.unwrap(), &mut u_filter).await;
             }
             _ = sigterm.recv() => {
                 warn!("Received SIGTERM; exiting");
@@ -931,6 +941,7 @@ async fn main() {
 
 async fn queue_unknowns(
     id_and_last_digit_regex: &Regex,
+    algebraic_factors_regex: &Regex,
     http: &ThrottlingHttpClient,
     u_permits: PermitIterator<'_, CheckTask>,
     u_filter: &mut InMemoryFilter,
@@ -941,7 +952,7 @@ async fn queue_unknowns(
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
         if let Err(u_permits) =
-            try_queue_unknowns(id_and_last_digit_regex, http, u_permits, u_filter).await
+            try_queue_unknowns(id_and_last_digit_regex, algebraic_factors_regex, http, u_permits, u_filter).await
         {
             permits = Some(u_permits);
             sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
@@ -951,6 +962,7 @@ async fn queue_unknowns(
 
 async fn try_queue_unknowns<'a>(
     id_and_last_digit_regex: &Regex,
+    algebraic_factors_regex: &Regex,
     http: &ThrottlingHttpClient,
     mut u_permits: PermitIterator<'a, CheckTask>,
     u_filter: &mut InMemoryFilter,
@@ -998,10 +1010,10 @@ async fn try_queue_unknowns<'a>(
                 }
             }
             if even {
-                report_factor_of_u(http, u_id, 2).await;
+                report_factor_of_u(http, u_id, "2").await;
             }
             if divides5 {
-                report_factor_of_u(http, u_id, 5).await;
+                report_factor_of_u(http, u_id, "5").await;
             }
         } else {
             let u_id_bytes = u_id.to_ne_bytes();
@@ -1009,12 +1021,32 @@ async fn try_queue_unknowns<'a>(
                 warn!("{u_id}: Skipping duplicate U");
                 continue;
             }
-            u_filter.insert(&u_id_bytes).unwrap();
-            u_permits.next().unwrap().send(CheckTask {
-                id: u_id,
-                task_type: CheckTaskType::U,
-            });
-            info!("{u_id}: Queued U");
+            let url = format!("https://factordb.com/frame_moreinfo.php?id={u_id}");
+            info!("{u_id}: Checking for algebraic factors");
+            let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+            let mut had_algebraic = false;
+            if let Some(algebraic) = result.split("Is factor of").next() {
+                let algebraic_factors = algebraic_factors_regex.captures_iter(&algebraic);
+                for factor in algebraic_factors {
+                    info!("{u_id}: algebraic factor: {factor:?}");
+                    if factor[1] != *"--- none ---" {
+                        let factor = &factor[1];
+                        report_factor_of_u(http, u_id, factor).await;
+                        had_algebraic = true;
+                    }
+                }
+            } else {
+                error!("{u_id}: Invalid result when checking for algebraic factors: {result}");
+            };
+            if !had_algebraic {
+                info!("{u_id}: No algebraic factors found");
+                u_filter.insert(&u_id_bytes).unwrap();
+                u_permits.next().unwrap().send(CheckTask {
+                    id: u_id,
+                    task_type: CheckTaskType::U,
+                });
+                info!("{u_id}: Queued U");
+            }
         }
     }
     if ids_found {
@@ -1025,11 +1057,14 @@ async fn try_queue_unknowns<'a>(
     }
 }
 
-async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: usize) {
+async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &str) {
     match http
         .http
         .post("https://factordb.com/reportfactor.php")
-        .body(format!("id={u_id}&factor={factor}"))
+        .form(&FactorSubmission {
+            id: u_id,
+            factor
+        })
         .send()
         .await
     {
