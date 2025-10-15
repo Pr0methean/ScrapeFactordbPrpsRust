@@ -327,7 +327,9 @@ async fn get_known_factors_of_c_or_cf(
                     .into_iter()
                     .map(|(factor, _exponent)| factor)
                     .collect();
-                info!("{id}: Composite with factors: {}", factors.iter().join(","));
+                if factors.len() > 1 {
+                    info!("{id}: Composite with known factors: {}", factors.iter().join(","));
+                }
                 Ok(factors.into_boxed_slice())
             }
         }
