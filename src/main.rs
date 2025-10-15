@@ -1050,7 +1050,7 @@ async fn try_queue_unknowns<'a>(
             let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
             let mut had_algebraic = false;
             if let Some(algebraic) = result.split("Is factor of").next() {
-                let algebraic_factors = algebraic_factors_regex.captures_iter(&algebraic);
+                let algebraic_factors = algebraic_factors_regex.captures_iter(algebraic);
                 for factor in algebraic_factors {
                     had_algebraic = true;
                     info!("{u_id}: algebraic factor: {factor:?}");
