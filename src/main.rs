@@ -1100,17 +1100,26 @@ async fn try_queue_unknowns<'a>(
 }
 
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &str) {
-    match http
-        .http
-        .post("https://factordb.com/reportfactor.php")
-        .form(&FactorSubmission { id: u_id, factor })
-        .send()
-        .await
-    {
-        Ok(response) => info!(
-            "{u_id}: reported a factor of {factor}; response: {:?}",
-            response.text().await
-        ),
-        Err(e) => error!("{u_id}: this U has a factor of {factor} that we failed to report: {e}"),
+    loop {
+        match http
+            .http
+            .post("https://factordb.com/reportfactor.php")
+            .form(&FactorSubmission { id: u_id, factor })
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let response = response.text().await;
+                info!(
+                    "{u_id}: reported a factor of {factor}; response: {:?}",
+                    response
+                );
+                if response.is_ok_and(|text| !text.contains("Error")) {
+                    return;
+                }
+            },
+            Err(e) => error!("{u_id}: this U has a factor of {factor} that we failed to report: {e}"),
+        }
+        sleep(RETRY_DELAY).await;
     }
 }
