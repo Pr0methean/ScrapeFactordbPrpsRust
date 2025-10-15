@@ -435,9 +435,9 @@ async fn get_prp_remaining_bases(
         info!("{id}: No longer PRP");
         return Ok(U256::from(0));
     }
-    for bases in bases_regex.captures_iter(&bases_text) {
-        for base in bases.iter() {
-            let Ok(base) = base.unwrap().as_str().parse::<u8>() else {
+    if let Some(bases) = bases_regex.captures(&bases_text) {
+        for base in bases[1].split(", ") {
+            let Ok(base) = base.parse::<u8>() else {
                 error!("Invalid PRP-check base: {:?}", base);
                 continue;
             };
@@ -472,7 +472,7 @@ async fn do_checks(
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
     let many_digits_regex =
         Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
-    let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap();
+    let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
     let nm1_np1_regex = Regex::new("id=([0-9]+)\">N-1<.*id=([0-9]+)\">N+1<").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
