@@ -372,7 +372,8 @@ async fn get_prp_remaining_bases(
     id: u128,
     http: &ThrottlingHttpClient,
     bases_regex: &Regex,
-    nm1_np1_regex: &Regex,
+    nm1_regex: &Regex,
+    np1_regex: &Regex,
     c_receiver: &mut PushbackReceiver<u128>,
     c_filter: &mut InMemoryFilter,
 ) -> Result<U256, ()> {
@@ -386,33 +387,35 @@ async fn get_prp_remaining_bases(
     if bases_text.contains("Proven") {
         info!("{id}: No longer PRP");
     }
-    match nm1_np1_regex.captures(&bases_text) {
-        Some(captures) => {
-            let (_, [nm1_id, np1_id]) = captures.extract();
-            let nm1_id = nm1_id.parse::<u128>().unwrap();
-            if get_known_factors_of_c_or_cf(http, nm1_id).await == Ok(Box::new([])) {
-                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                let _ = http
-                    .retrying_get_and_decode(
-                        &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
-                        RETRY_DELAY,
-                    )
-                    .await;
-                return Ok(U256::from(0));
-            }
-            let np1_id = np1_id.parse::<u128>().unwrap();
-            if get_known_factors_of_c_or_cf(http, np1_id).await == Ok(Box::new([])) {
-                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                let _ = http
-                    .retrying_get_and_decode(
-                        &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
-                        RETRY_DELAY,
-                    )
-                    .await;
-                return Ok(U256::from(0));
-            }
+    if let Some(captures) = nm1_regex.captures(&bases_text) {
+        let nm1_id = captures[1].parse::<u128>().unwrap();
+        if get_known_factors_of_c_or_cf(http, nm1_id).await == Ok(Box::new([])) {
+            info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+            let _ = http
+                .retrying_get_and_decode(
+                    &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+                    RETRY_DELAY,
+                )
+                .await;
+            return Ok(U256::from(0));
         }
-        None => error!("{id}: N-1/N+1 IDs for PRP not found"),
+    } else {
+        error!("{id}: N-1 ID not found: {bases_text}");
+    }
+    if let Some(captures) = np1_regex.captures(&bases_text) {
+        let np1_id = captures[1].parse::<u128>().unwrap();
+        if get_known_factors_of_c_or_cf(http, np1_id).await == Ok(Box::new([])) {
+            info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+            let _ = http
+                .retrying_get_and_decode(
+                    &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
+                    RETRY_DELAY,
+                )
+                .await;
+            return Ok(U256::from(0));
+        }
+    } else {
+        error!("{id}: N-1 ID not found: {bases_text}");
     }
     let status_text = http
         .retrying_get_and_decode(
@@ -476,8 +479,8 @@ async fn do_checks(
     let many_digits_regex =
         Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
     let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
-    let nm1_np1_regex = RegexBuilder::new("id=([0-9]+)\">N-1<(?:.|\n)*id=([0-9]+)\">N+1<")
-        .multi_line(true).build().unwrap();
+    let nm1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
+    let np1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     throttle_if_necessary(
@@ -509,7 +512,8 @@ async fn do_checks(
                         id,
                         &http,
                         &bases_regex,
-                        &nm1_np1_regex,
+                        &nm1_regex,
+                        &np1_regex,
                         &mut c_receiver,
                         &mut c_filter,
                     )
