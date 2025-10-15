@@ -837,7 +837,13 @@ async fn main() {
     ));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
-            Mutex::new(File::options().create(true).append(true).open("failed-u-submissions.csv").unwrap())
+            Mutex::new(
+                File::options()
+                    .create(true)
+                    .append(true)
+                    .open("failed-u-submissions.csv")
+                    .unwrap(),
+            )
         })
         .await;
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
@@ -1137,10 +1143,14 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &st
         }
         sleep(RETRY_DELAY).await;
     }
-    match FAILED_U_SUBMISSIONS_OUT.get().unwrap().lock().await.write_fmt(
-        format_args!("{u_id},{factor}\n")) {
+    match FAILED_U_SUBMISSIONS_OUT
+        .get()
+        .unwrap()
+        .lock()
+        .await
+        .write_fmt(format_args!("{u_id},{factor}\n"))
+    {
         Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
         Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
     }
-
 }
