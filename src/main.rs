@@ -274,7 +274,7 @@ async fn composites_while_waiting(
         if let Some(out) = COMPOSITES_OUT.get() {
             if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
                 c_filter.insert(&id.to_ne_bytes()).unwrap();
-                if dispatch_composite(http.clone(), id, out).await {
+                if dispatch_composite(http, id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
             } else if !check_succeeded {
@@ -282,7 +282,8 @@ async fn composites_while_waiting(
                     info!("{id}: Requeued C");
                 } else {
                     c_filter.insert(&id.to_ne_bytes()).unwrap();
-                    tokio::spawn(dispatch_composite(http.clone(), id, out));
+                    let http = http.clone();
+                    task::spawn(async move { dispatch_composite(&http, id, out).await });
                 }
             }
         } else if !check_succeeded {
@@ -333,8 +334,8 @@ async fn get_known_factors_of_c_or_cf(
     }
 }
 
-async fn dispatch_composite(http: ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
-    match get_known_factors_of_c_or_cf(&http, id).await {
+async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
+    match get_known_factors_of_c_or_cf(http, id).await {
         Err(()) => false,
         Ok(factors) => {
             let mut out = out.lock().await;
