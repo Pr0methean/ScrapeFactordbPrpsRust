@@ -98,7 +98,7 @@ struct PushbackReceiver<T> {
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
     id: u128,
-    factor: &'a str
+    factor: &'a str,
 }
 
 impl<T> PushbackReceiver<T> {
@@ -542,7 +542,6 @@ async fn do_checks(
                             } else {
                                 error!(
                                     "{id}: Dropping U after 'please wait' because the retry buffer and queue are both full",
-                                    id
                                 );
                             }
                         }
@@ -765,7 +764,8 @@ async fn main() {
             c_digits_value = 1;
         }
         c_digits = Some(c_digits_value.try_into().unwrap());
-        let u_digits_value = U_MAX_DIGITS - ((run_number * 100) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
+        let u_digits_value =
+            U_MAX_DIGITS - ((run_number * 100) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
         u_digits = Some(u_digits_value.try_into().unwrap());
     }
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
@@ -837,10 +837,10 @@ async fn main() {
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-    let algebraic_factors_regex = RegexBuilder::new(
-        "<font[^>]*>([^<]+)</font>")
+    let algebraic_factors_regex = RegexBuilder::new("<font[^>]*>([^<]+)</font>")
         .multi_line(true)
-        .build().unwrap();
+        .build()
+        .unwrap();
     // Use PRP queue so that the first unknown number will start sooner
     let _ = try_queue_unknowns(
         &id_and_last_digit_regex,
@@ -956,8 +956,15 @@ async fn queue_unknowns(
     }
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
-        if let Err(u_permits) =
-            try_queue_unknowns(id_and_last_digit_regex, algebraic_factors_regex, http, u_digits, u_permits, u_filter).await
+        if let Err(u_permits) = try_queue_unknowns(
+            id_and_last_digit_regex,
+            algebraic_factors_regex,
+            http,
+            u_digits,
+            u_permits,
+            u_filter,
+        )
+        .await
         {
             permits = Some(u_permits);
             sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
@@ -983,7 +990,7 @@ async fn try_queue_unknowns<'a>(
             .unwrap()
     });
     let u_start = rng.random_range(0..=100_000);
-    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={u_digits}");
+    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get());
     let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
         return Err(u_permits);
     };
@@ -1074,10 +1081,7 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &st
     match http
         .http
         .post("https://factordb.com/reportfactor.php")
-        .form(&FactorSubmission {
-            id: u_id,
-            factor
-        })
+        .form(&FactorSubmission { id: u_id, factor })
         .send()
         .await
     {
