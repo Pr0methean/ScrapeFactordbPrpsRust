@@ -763,7 +763,7 @@ async fn main() {
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = None;
     let mut u_digits = None;
-    if let Ok(run_number) = std::env::var("RUN") {
+    let mut prp_start = if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<usize>().unwrap();
         let mut c_digits_value = C_MAX_DIGITS - (run_number % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
         if c_digits_value == C_MIN_DIGITS - 1 {
@@ -773,7 +773,10 @@ async fn main() {
         let u_digits_value =
             U_MAX_DIGITS - ((run_number * 100) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
         u_digits = Some(u_digits_value.try_into().unwrap());
-    }
+        (run_number * 100) % (MAX_START + 1)
+    } else {
+        rng().random_range(0..=MAX_START)
+    };
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
@@ -849,7 +852,6 @@ async fn main() {
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
-    let mut prp_start = 0;
     let mut bases_since_restart = 0;
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
@@ -869,7 +871,6 @@ async fn main() {
     )
     .await;
     queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
-    let mut restart_prp = false;
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
@@ -894,18 +895,7 @@ async fn main() {
                 }
                 info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
             }
-            prp_permits = prp_sender.reserve_many(if restart_prp {
-                MIN_CAPACITY_AT_PRP_RESTART
-            } else {
-                PRP_RESULTS_PER_PAGE
-            }) => {
-                if restart_prp {
-                    restart_prp = false;
-                    prp_start = 0;
-                    results_since_restart = 0;
-                    bases_since_restart = 0;
-                    next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
-                }
+            prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
                 info!("PRP search results retrieved");
@@ -939,14 +929,7 @@ async fn main() {
                 prp_start += PRP_RESULTS_PER_PAGE;
                 if prp_start > MAX_START {
                     info!("Restarting PRP search: reached maximum starting index");
-                    restart_prp = true;
-                } else if results_since_restart >= PRP_TASK_BUFFER_SIZE
-                    && Instant::now() >= next_min_restart
-                {
-                    info!(
-                        "Restarting PRP search: triggered {bases_since_restart} bases in {results_since_restart} search results"
-                    );
-                    restart_prp = true;
+                    prp_start = 0;
                 }
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
