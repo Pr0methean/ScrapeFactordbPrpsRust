@@ -476,7 +476,8 @@ async fn do_checks(
     let many_digits_regex =
         Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
     let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
-    let nm1_np1_regex = Regex::new("id=([0-9]+)\">N-1<.*id=([0-9]+)\">N+1<").unwrap();
+    let nm1_np1_regex = RegexBuilder::new("id=([0-9]+)\">N-1<(?:.|\n)*id=([0-9]+)\">N+1<")
+        .multi_line(true).build().unwrap();
     let mut bases_before_next_cpu_check = 1;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     throttle_if_necessary(
