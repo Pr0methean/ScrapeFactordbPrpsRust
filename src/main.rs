@@ -59,8 +59,10 @@ const U_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
 const C_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
+const SUBMIT_U_FACTOR_MAX_ATTEMPTS: usize = 10;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
+static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
 
 enum UnknownPrpCheckResult {
@@ -833,6 +835,11 @@ async fn main() {
         c_filter,
         http.clone(),
     ));
+    FAILED_U_SUBMISSIONS_OUT
+        .get_or_init(async || {
+            Mutex::new(File::options().create(true).append(true).open("failed-u-submissions.csv").unwrap())
+        })
+        .await;
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
@@ -1049,6 +1056,7 @@ async fn try_queue_unknowns<'a>(
             info!("{u_id}: Checking for algebraic factors");
             let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
             let mut had_algebraic = false;
+            // Links before the "Is factor of" header are algebraic factors; links after it aren't
             if let Some(algebraic) = result.split("Is factor of").next() {
                 let algebraic_factors = algebraic_factors_regex.captures_iter(algebraic);
                 for factor in algebraic_factors {
@@ -1056,6 +1064,7 @@ async fn try_queue_unknowns<'a>(
                     info!("{u_id}: algebraic factor: {factor:?}");
                     let value = &factor[2];
                     if value.contains("...") {
+                        // Link text isn't an expression for the factor, so we need to look up its value
                         let factor_id = &factor[1];
                         let api_response = http
                             .retrying_get_and_decode(
@@ -1077,6 +1086,7 @@ async fn try_queue_unknowns<'a>(
                             }
                         }
                     } else {
+                        // Link text is an expression for the factor, so use it for reporting
                         report_factor_of_u(http, u_id, value).await;
                     }
                 }
@@ -1103,7 +1113,7 @@ async fn try_queue_unknowns<'a>(
 }
 
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &str) {
-    loop {
+    for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
         match http
             .http
             .post("https://factordb.com/reportfactor.php")
@@ -1122,9 +1132,15 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &st
                 }
             }
             Err(e) => {
-                error!("{u_id}: this U has a factor of {factor} that we failed to report: {e}")
+                error!("{u_id}: failed to submit factor {factor}: {e}")
             }
         }
         sleep(RETRY_DELAY).await;
     }
+    match FAILED_U_SUBMISSIONS_OUT.get().unwrap().lock().await.write_fmt(
+        format_args!("{u_id},{factor}\n")) {
+        Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
+        Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
+    }
+
 }

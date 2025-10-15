@@ -81,6 +81,6 @@ jobs:
     - name: Upload any failed submissions
       uses: actions/upload-artifact@v4
       with:
-        name: failed-submissions.csv
-        path: failed-submissions.csv
+        name: Failed submissions
+        path: 'failed-*.csv'
         if-no-files-found: ignore
