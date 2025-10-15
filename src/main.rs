@@ -267,6 +267,10 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
+        if c_filter.query(&id.to_ne_bytes()).unwrap() {
+            info!("{id}: Skipping duplicate C");
+            continue;
+        }
         let check_succeeded = check_composite(http, id).await;
         if let Some(out) = COMPOSITES_OUT.get() {
             if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
@@ -274,7 +278,7 @@ async fn composites_while_waiting(
                 if dispatch_composite(http.clone(), id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
-            } else if !check_succeeded && !c_filter.query(&id.to_ne_bytes()).unwrap() {
+            } else if !check_succeeded {
                 if c_receiver.try_send(id) {
                     info!("{id}: Requeued C");
                 } else {
