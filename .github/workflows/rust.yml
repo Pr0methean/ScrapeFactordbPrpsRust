@@ -52,7 +52,7 @@ jobs:
           sudo apt-get install libecm-dev gmp-ecm
         ) &
         apt_pid=$!
-        cargo +nightly build --release
+        ./build.sh
         wait ${apt_pid}
     - name: Run
       run: |
