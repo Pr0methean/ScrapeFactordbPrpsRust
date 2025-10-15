@@ -40,18 +40,15 @@ const RETRY_DELAY: Duration = Duration::from_secs(1);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
-const MIN_TIME_PER_RESTART: Duration = Duration::from_hours(1);
 const PRP_RESULTS_PER_PAGE: usize = 32;
 const MIN_DIGITS_IN_PRP: usize = 300;
 const U_RESULTS_PER_PAGE: usize = 1;
-const CHECK_ID_URL_BASE: &str = "https://factordb.com/index.php?open=Prime&ct=Proof&id=";
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 256;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 256;
 const C_MIN_DIGITS: usize = 91;
 const C_MAX_DIGITS: usize = 300;
-const MIN_CAPACITY_AT_PRP_RESTART: usize = PRP_TASK_BUFFER_SIZE - PRP_RESULTS_PER_PAGE / 2;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
 );
@@ -305,14 +302,17 @@ async fn composites_while_waiting(
     }
 }
 
-async fn dispatch_composite(http: ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
+async fn get_known_factors_of_c_or_cf(
+    http: &ThrottlingHttpClient,
+    id: u128,
+) -> Result<Box<[CompactString]>, ()> {
     let api_response = http
         .retrying_get_and_decode(&format!("https://factordb.com/api?id={id}"), RETRY_DELAY)
         .await;
     match from_str::<NumberStatusApiResponse>(&api_response) {
         Err(e) => {
             error!("{id}: Failed to decode API response: {e}: {api_response}");
-            false
+            Err(())
         }
         Ok(api_response) => {
             let NumberStatusApiResponse {
@@ -320,26 +320,35 @@ async fn dispatch_composite(http: ThrottlingHttpClient, id: u128, out: &Mutex<Fi
             } = api_response;
             info!("{id}: Fetched status of {status} (previously C)");
             if status == "FF" {
-                false
+                Ok(Box::new([]))
             } else {
-                let mut out = out.lock().await;
                 let factors: Vec<_> = factors
                     .into_iter()
                     .map(|(factor, _exponent)| factor)
                     .collect();
                 info!("{id}: Composite with factors: {}", factors.iter().join(","));
-                let mut result = factors
-                    .into_iter()
-                    .map(|factor| out.write_fmt(format_args!("{factor}\n")))
-                    .flat_map(Result::err)
-                    .take(1);
-                if let Some(error) = result.next() {
-                    error!("{id}: Failed to write factor to FIFO: {error}");
-                    false
-                } else {
-                    info!("{id}: Dispatched C to yafu");
-                    true
-                }
+                Ok(factors.into_boxed_slice())
+            }
+        }
+    }
+}
+
+async fn dispatch_composite(http: ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
+    match get_known_factors_of_c_or_cf(&http, id).await {
+        Err(()) => false,
+        Ok(factors) => {
+            let mut out = out.lock().await;
+            let mut result = factors
+                .into_iter()
+                .map(|factor| out.write_fmt(format_args!("{factor}\n")))
+                .flat_map(Result::err)
+                .take(1);
+            if let Some(error) = result.next() {
+                error!("{id}: Failed to write factor to FIFO: {error}");
+                false
+            } else {
+                info!("{id}: Dispatched C to yafu");
+                true
             }
         }
     }
@@ -362,14 +371,56 @@ async fn get_prp_remaining_bases(
     id: u128,
     http: &ThrottlingHttpClient,
     bases_regex: &Regex,
+    nm1_np1_regex: &Regex,
     c_receiver: &mut PushbackReceiver<u128>,
     c_filter: &mut InMemoryFilter,
 ) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
-    let bases_url = format!("{CHECK_ID_URL_BASE}{id}");
-    let bases_text = http.retrying_get_and_decode(&bases_url, RETRY_DELAY).await;
-    if !bases_text.contains("&lt;") {
-        error!("{id}: Failed to decode status for PRP: {bases_text}");
+    let bases_text = http
+        .retrying_get_and_decode(
+            &format!("https://factordb.com/frame_prime.php?id={id}"),
+            RETRY_DELAY,
+        )
+        .await;
+    if bases_text.contains("Proven") {
+        info!("{id}: No longer PRP");
+    }
+    match nm1_np1_regex.captures(&bases_text) {
+        Some(captures) => {
+            let (_, [nm1_id, np1_id]) = captures.extract();
+            let nm1_id = nm1_id.parse::<u128>().unwrap();
+            if get_known_factors_of_c_or_cf(http, nm1_id).await == Ok(Box::new([])) {
+                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+                let _ = http
+                    .retrying_get_and_decode(
+                        &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+                        RETRY_DELAY,
+                    )
+                    .await;
+                return Ok(U256::from(0));
+            }
+            let np1_id = np1_id.parse::<u128>().unwrap();
+            if get_known_factors_of_c_or_cf(http, np1_id).await == Ok(Box::new([])) {
+                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                let _ = http
+                    .retrying_get_and_decode(
+                        &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
+                        RETRY_DELAY,
+                    )
+                    .await;
+                return Ok(U256::from(0));
+            }
+        }
+        None => error!("{id}: N-1/N+1 IDs for PRP not found"),
+    }
+    let status_text = http
+        .retrying_get_and_decode(
+            &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}"),
+            RETRY_DELAY,
+        )
+        .await;
+    if !status_text.contains("&lt;") {
+        error!("{id}: Failed to decode status for PRP: {status_text}");
         composites_while_waiting(
             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
             http,
@@ -379,8 +430,8 @@ async fn get_prp_remaining_bases(
         .await;
         return Err(());
     }
-    if bases_text.contains(" is prime") || !bases_text.contains("PRP") {
-        info!("{id}: No longer PRP (solved by N-1/N+1 or factor before queueing)");
+    if status_text.contains(" is prime") || !status_text.contains("PRP") {
+        info!("{id}: No longer PRP");
         return Ok(U256::from(0));
     }
     for bases in bases_regex.captures_iter(&bases_text) {
@@ -421,6 +472,7 @@ async fn do_checks(
     let many_digits_regex =
         Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
     let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*(?:([0-9]+),? )+").unwrap();
+    let nm1_np1_regex = Regex::new("id=([0-9]+)\">N-1<.*id=([0-9]+)\">N+1<").unwrap();
     let mut bases_before_next_cpu_check = 1;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     throttle_if_necessary(
@@ -452,6 +504,7 @@ async fn do_checks(
                         id,
                         &http,
                         &bases_regex,
+                        &nm1_np1_regex,
                         &mut c_receiver,
                         &mut c_filter,
                     )
@@ -852,9 +905,6 @@ async fn main() {
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
-    let mut bases_since_restart = 0;
-    let mut results_since_restart: usize = 0;
-    let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     let algebraic_factors_regex = RegexBuilder::new("id=([0-9]+).*<font[^>]*>([^<]+)</font>")
         .multi_line(true)
@@ -919,7 +969,6 @@ async fn main() {
                         id: prp_id,
                         task_type: CheckTaskType::Prp,
                     };
-                    results_since_restart += 1;
                     prp_permits.next().unwrap().send(prp_task);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
@@ -1055,23 +1104,9 @@ async fn try_queue_unknowns<'a>(
                         // Link text isn't an expression for the factor, so we need to look up its value
                         let factor_id = &factor[1];
                         info!("{u_id}: Found an algebraic factor with ID {factor_id}");
-                        let api_response = http
-                            .retrying_get_and_decode(
-                                &format!("https://factordb.com/api?id={factor_id}"),
-                                RETRY_DELAY,
-                            )
-                            .await;
-                        match from_str::<NumberStatusApiResponse>(&api_response) {
-                            Err(e) => {
-                                error!(
-                                    "{u_id}: Factor {factor_id}: Failed to decode API response: {e}: {api_response}"
-                                );
-                            }
-                            Ok(api_response) => {
-                                let NumberStatusApiResponse { factors, .. } = api_response;
-                                for (factor, _) in factors {
-                                    report_factor_of_u(http, u_id, &factor).await;
-                                }
+                        if let Ok(factors) = get_known_factors_of_c_or_cf(http, u_id).await {
+                            for factor in factors {
+                                report_factor_of_u(http, u_id, &factor).await;
                             }
                         }
                     } else {
