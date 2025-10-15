@@ -1110,11 +1110,15 @@ async fn try_queue_unknowns<'a>(
                     if value.contains("...") {
                         // Link text isn't an expression for the factor, so we need to look up its value
                         let factor_id = &factor[1];
-                        info!("{u_id}: Found an algebraic factor with ID {factor_id}");
-                        if let Ok(factors) = get_known_factors_of_c_or_cf(http, u_id).await {
-                            for factor in factors {
-                                report_factor_of_u(http, u_id, &factor).await;
+                        if let Ok(factor_id) = factor_id.parse::<u128>() {
+                            info!("{u_id}: Found an algebraic factor with ID {factor_id}");
+                            if let Ok(factors) = get_known_factors_of_c_or_cf(http, factor_id).await {
+                                for factor in factors {
+                                    report_factor_of_u(http, u_id, &factor).await;
+                                }
                             }
+                        } else {
+                            error!("{u_id}: Invalid ID for algebraic factor: {factor_id}")
                         }
                     } else {
                         info!("{u_id}: Found an algebraic factor with expression {value}");
