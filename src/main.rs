@@ -841,7 +841,7 @@ async fn main() {
     let mut results_since_restart: usize = 0;
     let mut next_min_restart = Instant::now() + MIN_TIME_PER_RESTART;
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-    let algebraic_factors_regex = RegexBuilder::new("<font[^>]*>([^<]+)</font>")
+    let algebraic_factors_regex = RegexBuilder::new("id=([0-9]+).*<font[^>]*>([^<]+)</font>")
         .multi_line(true)
         .build()
         .unwrap();
@@ -1052,11 +1052,29 @@ async fn try_queue_unknowns<'a>(
             if let Some(algebraic) = result.split("Is factor of").next() {
                 let algebraic_factors = algebraic_factors_regex.captures_iter(&algebraic);
                 for factor in algebraic_factors {
+                    had_algebraic = true;
                     info!("{u_id}: algebraic factor: {factor:?}");
-                    if factor[1] != *"--- none ---" {
-                        let factor = &factor[1];
-                        report_factor_of_u(http, u_id, factor).await;
-                        had_algebraic = true;
+                    let value = &factor[2];
+                    if value.contains("...") {
+                        let factor_id = &factor[1];
+                        let api_response = http
+                            .retrying_get_and_decode(&format!("https://factordb.com/api?id={factor_id}"), RETRY_DELAY)
+                            .await;
+                        match from_str::<NumberStatusApiResponse>(&api_response) {
+                            Err(e) => {
+                                error!("{u_id}: Factor {factor_id}: Failed to decode API response: {e}: {api_response}");
+                            }
+                            Ok(api_response) => {
+                                let NumberStatusApiResponse {
+                                    factors, ..
+                                } = api_response;
+                                for (factor, _) in factors {
+                                    report_factor_of_u(http, u_id, &factor).await;
+                                }
+                            }
+                        }
+                    } else {
+                        report_factor_of_u(http, u_id, value).await;
                     }
                 }
             } else {
