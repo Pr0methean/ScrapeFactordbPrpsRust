@@ -2,7 +2,7 @@ name: RustSmallComposites
 
 on:
   push:
-    branches-ignore: [ "main", "10-min-run" ]
+    branches: [ "small-composites", "tiny-composites" ]
   pull_request:
     branches: [ "small-composites" ]
   workflow_dispatch:
