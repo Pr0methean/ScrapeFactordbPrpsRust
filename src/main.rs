@@ -49,7 +49,6 @@ const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: u128 = 32;
 const MIN_DIGITS_IN_PRP: usize = 300;
-const MIN_DIGITS_IN_C: usize = 91;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = (4 * PRP_RESULTS_PER_PAGE) as usize;
 const U_TASK_BUFFER_SIZE: usize = 256;
@@ -63,7 +62,7 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
 const U_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
 const C_SEARCH_URL: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&mindig={MIN_DIGITS_IN_C}&perpage={C_RESULTS_PER_PAGE}&start=0");
+    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=0");
 const SUBMIT_U_FACTOR_MAX_ATTEMPTS: usize = 10;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
@@ -699,7 +698,7 @@ async fn queue_composites(
     waiting_c: &mut VecDeque<CompositeCheckTask>,
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
-    c_sender: &Sender<CompositeCheckTask>
+    c_sender: &Sender<CompositeCheckTask>,
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
