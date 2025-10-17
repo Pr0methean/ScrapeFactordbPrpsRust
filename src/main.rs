@@ -321,7 +321,7 @@ async fn get_known_factors_of_c_or_cf(
             let NumberStatusApiResponse {
                 status, factors, ..
             } = api_response;
-            info!("{id}: Fetched status of {status} (previously C)");
+            info!("{id}: Fetched status of {status}");
             if status == "FF" {
                 Ok(Box::new([]))
             } else {
