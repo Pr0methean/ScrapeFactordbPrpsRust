@@ -1061,57 +1061,56 @@ async fn try_queue_unknowns<'a>(
             continue;
         };
         ids_found = true;
+        let mut had_algebraic = false;
+        let u_id_bytes = u_id.to_ne_bytes();
         let digits_or_expr = &results_text[digits_or_expr_range];
         if digits_or_expr.contains("...") {
-            check_last_digit(http, u_id, digits_or_expr).await;
-        } else {
-            let u_id_bytes = u_id.to_ne_bytes();
-            if u_filter.query(&u_id_bytes).unwrap() {
-                warn!("{u_id}: Skipping duplicate U");
-                continue;
-            }
-            let url = format!("https://factordb.com/frame_moreinfo.php?id={u_id}");
-            let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-            let mut had_algebraic = false;
-            info!("{u_id}: Checking for algebraic factors");
-            // Links before the "Is factor of" header are algebraic factors; links after it aren't
-            if let Some(algebraic) = result.split("Is factor of").next() {
-                let algebraic_factors = algebraic_factors_regex.captures_iter(algebraic);
-                for factor in algebraic_factors {
-                    had_algebraic = true;
-                    let value = &factor[2];
-                    if value.contains("...") {
-                        // Link text isn't an expression for the factor, so we need to look up its value
-                        let factor_id = &factor[1];
-                        if let Ok(factor_id) = factor_id.parse::<u128>() {
-                            info!("{u_id}: Found an algebraic factor with ID {factor_id}");
-                            if let Ok(factors) = get_known_factors_of_c_or_cf(http, factor_id).await
-                            {
-                                for factor in factors {
-                                    report_factor_of_u(http, u_id, &factor).await;
-                                    check_last_digit(http, factor_id, value).await;
-                                }
+            had_algebraic = check_last_digit(http, u_id, digits_or_expr).await;
+        }
+        if u_filter.query(&u_id_bytes).unwrap() {
+            warn!("{u_id}: Skipping duplicate U");
+            continue;
+        }
+        let url = format!("https://factordb.com/frame_moreinfo.php?id={u_id}");
+        let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+        info!("{u_id}: Checking for algebraic factors");
+        // Links before the "Is factor of" header are algebraic factors; links after it aren't
+        if let Some(algebraic) = result.split("Is factor of").next() {
+            let algebraic_factors = algebraic_factors_regex.captures_iter(algebraic);
+            for factor in algebraic_factors {
+                had_algebraic = true;
+                let value = &factor[2];
+                if value.contains("...") {
+                    // Link text isn't an expression for the factor, so we need to look up its value
+                    let factor_id = &factor[1];
+                    if let Ok(factor_id) = factor_id.parse::<u128>() {
+                        info!("{u_id}: Found an algebraic factor with ID {factor_id}");
+                        if let Ok(factors) = get_known_factors_of_c_or_cf(http, factor_id).await
+                        {
+                            for factor in factors {
+                                report_factor_of_u(http, u_id, &factor).await;
+                                check_last_digit(http, factor_id, value).await;
                             }
-                        } else {
-                            error!("{u_id}: Invalid ID for algebraic factor: {factor_id}")
                         }
                     } else {
-                        info!("{u_id}: Found an algebraic factor with expression {value}");
-                        report_factor_of_u(http, u_id, value).await;
+                        error!("{u_id}: Invalid ID for algebraic factor: {factor_id}")
                     }
+                } else {
+                    info!("{u_id}: Found an algebraic factor with expression {value}");
+                    report_factor_of_u(http, u_id, value).await;
                 }
-            } else {
-                error!("{u_id}: Invalid result when checking for algebraic factors: {result}");
-            };
-            if !had_algebraic {
-                info!("{u_id}: No algebraic factors found");
-                u_filter.insert(&u_id_bytes).unwrap();
-                u_permits.next().unwrap().send(CheckTask {
-                    id: u_id,
-                    task_type: CheckTaskType::U,
-                });
-                info!("{u_id}: Queued U");
             }
+        } else {
+            error!("{u_id}: Invalid result when checking for algebraic factors: {result}");
+        };
+        if !had_algebraic {
+            info!("{u_id}: No algebraic factors found");
+            u_filter.insert(&u_id_bytes).unwrap();
+            u_permits.next().unwrap().send(CheckTask {
+                id: u_id,
+                task_type: CheckTaskType::U,
+            });
+            info!("{u_id}: Queued U");
         }
     }
     if ids_found {
