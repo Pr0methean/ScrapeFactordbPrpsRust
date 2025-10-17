@@ -1139,6 +1139,7 @@ async fn check_last_digit(
         Some('2' | '4' | '6' | '8') => {
             even = true;
         }
+        Some('1' | '3' | '7' | '9') => {},
         x => {
             error!("{u_id}: Invalid last digit: {x:?}");
         }
