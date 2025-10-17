@@ -16,7 +16,7 @@ use itertools::Itertools;
 use log::{error, info, warn};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::from_str;
@@ -44,7 +44,6 @@ const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15);
 const PRP_RESULTS_PER_PAGE: usize = 32;
 const MIN_DIGITS_IN_PRP: usize = 300;
-const MIN_DIGITS_IN_C: usize = 91;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 256;
@@ -56,7 +55,7 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
 const U_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
 const C_SEARCH_URL: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&mindig={MIN_DIGITS_IN_C}&perpage={C_RESULTS_PER_PAGE}&start=0");
+    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=0");
 const SUBMIT_U_FACTOR_MAX_ATTEMPTS: usize = 10;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
@@ -618,7 +617,7 @@ async fn queue_composites(
     waiting_c: &mut VecDeque<u128>,
     id_regex: &Regex,
     http: &ThrottlingHttpClient,
-    c_sender: &Sender<u128>
+    c_sender: &Sender<u128>,
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
