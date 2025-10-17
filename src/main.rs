@@ -8,6 +8,7 @@ use crate::UnknownPrpCheckResult::{
 use compact_str::CompactString;
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
+use futures_util::StreamExt;
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Quota, RateLimiter};
@@ -34,6 +35,7 @@ use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Receiver, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use tokio_stream::iter;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -328,7 +330,10 @@ async fn get_known_factors_of_c_or_cf(
                     .map(|(factor, _exponent)| factor)
                     .collect();
                 if factors.len() > 1 {
-                    info!("{id}: Composite with known factors: {}", factors.iter().join(","));
+                    info!(
+                        "{id}: Composite with known factors: {}",
+                        factors.iter().join(",")
+                    );
                 }
                 Ok(factors.into_boxed_slice())
             }
@@ -340,6 +345,11 @@ async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<F
     match get_known_factors_of_c_or_cf(http, id).await {
         Err(()) => false,
         Ok(factors) => {
+            iter(factors.clone())
+                .for_each(async |factor| {
+                    check_last_digit(http, id, &factor).await;
+                })
+                .await;
             let mut out = out.lock().await;
             let mut result = factors
                 .into_iter()
@@ -779,10 +789,7 @@ async fn queue_composites(
     });
     info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
-        .retrying_get_and_decode(
-            &format!("{C_SEARCH_URL_BASE}{start}&mindig={digits}"),
-            RETRY_DELAY,
-        )
+        .retrying_get_and_decode(&format!("{C_SEARCH_URL_BASE}{start}&mindig={digits}"), RETRY_DELAY)
         .await;
     info!("C search results retrieved");
     let c_ids = id_regex
@@ -842,8 +849,6 @@ async fn main() {
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
-    let id_and_last_digit_regex =
-        Regex::new("index\\.php\\?id=([0-9]+).*(\\.\\.[0-9][024568])?").unwrap();
     let resources_regex =
         RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
             .multi_line(true)
@@ -915,13 +920,9 @@ async fn main() {
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-    let algebraic_factors_regex = RegexBuilder::new("id=([0-9]+).*<font[^>]*>([^<]+)</font>")
-        .multi_line(true)
-        .build()
-        .unwrap();
+    let algebraic_factors_regex = Regex::new("id=([0-9]+).*<font[^>]*>([^<]+)</font>").unwrap();
     // Use PRP queue so that the first unknown number will start sooner
     let _ = try_queue_unknowns(
-        &id_and_last_digit_regex,
         &algebraic_factors_regex,
         &http,
         u_digits,
@@ -981,7 +982,7 @@ async fn main() {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_digits, u_permits, &mut u_filter).await;
+                        queue_unknowns(&algebraic_factors_regex, &http, u_digits, u_permits, &mut u_filter).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -991,7 +992,7 @@ async fn main() {
                 }
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                queue_unknowns(&id_and_last_digit_regex, &algebraic_factors_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter).await;
+                queue_unknowns(&algebraic_factors_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter).await;
             }
             _ = sigterm.recv() => {
                 warn!("Received SIGTERM; exiting");
@@ -1002,7 +1003,6 @@ async fn main() {
 }
 
 async fn queue_unknowns(
-    id_and_last_digit_regex: &Regex,
     algebraic_factors_regex: &Regex,
     http: &ThrottlingHttpClient,
     u_digits: Option<NonZeroUsize>,
@@ -1014,15 +1014,8 @@ async fn queue_unknowns(
     }
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
-        if let Err(u_permits) = try_queue_unknowns(
-            id_and_last_digit_regex,
-            algebraic_factors_regex,
-            http,
-            u_digits,
-            u_permits,
-            u_filter,
-        )
-        .await
+        if let Err(u_permits) =
+            try_queue_unknowns(algebraic_factors_regex, http, u_digits, u_permits, u_filter).await
         {
             permits = Some(u_permits);
             sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
@@ -1034,7 +1027,6 @@ const U_MIN_DIGITS: usize = 2001;
 const U_MAX_DIGITS: usize = 199_999;
 
 async fn try_queue_unknowns<'a>(
-    id_and_last_digit_regex: &Regex,
     algebraic_factors_regex: &Regex,
     http: &ThrottlingHttpClient,
     u_digits: Option<NonZeroUsize>,
@@ -1053,46 +1045,25 @@ async fn try_queue_unknowns<'a>(
         return Err(u_permits);
     };
     info!("U search results retrieved");
-    let ids = id_and_last_digit_regex
+    let ids = algebraic_factors_regex
         .captures_iter(&results_text)
         .map(|result| {
             (
                 result[1].parse::<u128>().ok(),
-                result.get(2).map(|m| m.as_str()),
+                result.get(2).unwrap().range(),
             )
         })
         .unique();
     let mut ids_found = false;
-    for (u_id, last_digit) in ids {
+    for (u_id, digits_or_expr_range) in ids {
         let Some(u_id) = u_id else {
             error!("Skipping an invalid ID in U search results");
             continue;
         };
         ids_found = true;
-        if let Some(last_digit) = last_digit {
-            let mut even = false;
-            let mut divides5 = false;
-            match last_digit.chars().last() {
-                Some('0') => {
-                    even = true;
-                    divides5 = true;
-                }
-                Some('5') => {
-                    divides5 = true;
-                }
-                Some('2' | '4' | '6' | '8') => {
-                    even = true;
-                }
-                x => {
-                    error!("{u_id}: Invalid last digit: {x:?}");
-                }
-            }
-            if even {
-                report_factor_of_u(http, u_id, "2").await;
-            }
-            if divides5 {
-                report_factor_of_u(http, u_id, "5").await;
-            }
+        let digits_or_expr = &results_text[digits_or_expr_range];
+        if digits_or_expr.contains("...") {
+            check_last_digit(http, u_id, digits_or_expr).await;
         } else {
             let u_id_bytes = u_id.to_ne_bytes();
             if u_filter.query(&u_id_bytes).unwrap() {
@@ -1100,9 +1071,9 @@ async fn try_queue_unknowns<'a>(
                 continue;
             }
             let url = format!("https://factordb.com/frame_moreinfo.php?id={u_id}");
-            info!("{u_id}: Checking for algebraic factors");
             let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
             let mut had_algebraic = false;
+            info!("{u_id}: Checking for algebraic factors");
             // Links before the "Is factor of" header are algebraic factors; links after it aren't
             if let Some(algebraic) = result.split("Is factor of").next() {
                 let algebraic_factors = algebraic_factors_regex.captures_iter(algebraic);
@@ -1114,9 +1085,11 @@ async fn try_queue_unknowns<'a>(
                         let factor_id = &factor[1];
                         if let Ok(factor_id) = factor_id.parse::<u128>() {
                             info!("{u_id}: Found an algebraic factor with ID {factor_id}");
-                            if let Ok(factors) = get_known_factors_of_c_or_cf(http, factor_id).await {
+                            if let Ok(factors) = get_known_factors_of_c_or_cf(http, factor_id).await
+                            {
                                 for factor in factors {
                                     report_factor_of_u(http, u_id, &factor).await;
+                                    check_last_digit(http, factor_id, value).await;
                                 }
                             }
                         } else {
@@ -1147,6 +1120,37 @@ async fn try_queue_unknowns<'a>(
         error!("Couldn't parse IDs from search result: {results_text}");
         Err(u_permits)
     }
+}
+
+async fn check_last_digit(
+    http: &ThrottlingHttpClient,
+    u_id: u128,
+    string_with_last_digit: &str,
+) -> bool {
+    let mut even = false;
+    let mut divides5 = false;
+    match string_with_last_digit.chars().last() {
+        Some('0') => {
+            even = true;
+            divides5 = true;
+        }
+        Some('5') => {
+            divides5 = true;
+        }
+        Some('2' | '4' | '6' | '8') => {
+            even = true;
+        }
+        x => {
+            error!("{u_id}: Invalid last digit: {x:?}");
+        }
+    }
+    if even {
+        report_factor_of_u(http, u_id, "2").await;
+    }
+    if divides5 {
+        report_factor_of_u(http, u_id, "5").await;
+    }
+    even || divides5
 }
 
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &str) {
