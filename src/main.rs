@@ -274,7 +274,7 @@ async fn get_prp_remaining_bases(
             return Ok(U256::from(0));
         }
     } else {
-        error!("{id}: N-1 ID not found: {bases_text}");
+        error!("{id}: N+1 ID not found: {bases_text}");
     }
     let status_text = http
         .retrying_get_and_decode(
@@ -742,7 +742,7 @@ async fn main() {
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-    let algebraic_factors_regex = Regex::new("id=([0-9]+).*<font[^>]*>([^<]+)</font>").unwrap();
+    let algebraic_factors_regex = Regex::new("id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
     // Use PRP queue so that the first unknown number will start sooner
     let _ = try_queue_unknowns(
         &algebraic_factors_regex,
