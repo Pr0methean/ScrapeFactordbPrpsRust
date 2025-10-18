@@ -2,6 +2,9 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
+mod net;
+mod channel;
+
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
@@ -9,16 +12,12 @@ use compact_str::CompactString;
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use futures_util::StreamExt;
-use governor::clock::DefaultClock;
-use governor::state::{InMemoryState, NotKeyed};
-use governor::{Quota, RateLimiter};
 use itertools::Itertools;
 use log::{error, info, warn};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{Rng, rng};
-use regex::{Regex, RegexBuilder};
-use reqwest::Client;
+use rand::{rng, Rng};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::from_str;
 use std::collections::VecDeque;
@@ -27,15 +26,16 @@ use std::io::Write;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::ops::Add;
 use std::process::exit;
-use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Receiver, Sender, channel};
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::mpsc::{channel, PermitIterator, Sender};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio::{select, task};
 use tokio_stream::iter;
+use channel::PushbackReceiver;
+use net::ThrottlingHttpClient;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -90,164 +90,11 @@ struct NumberStatusApiResponse {
     factors: Box<[(CompactString, u128)]>,
 }
 
-struct PushbackReceiver<T> {
-    sender: Sender<T>,
-    receiver: Receiver<T>,
-    permit: Option<OwnedPermit<T>>,
-}
-
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
     id: u128,
     factor: &'a str,
 }
-
-impl<T> PushbackReceiver<T> {
-    fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
-        let sender = sender.clone();
-        let permit = sender.clone().try_reserve_owned().ok();
-        PushbackReceiver {
-            receiver,
-            sender,
-            permit,
-        }
-    }
-
-    async fn recv(&mut self) -> T {
-        drop(self.permit.take());
-        let result = self.receiver.recv().await.unwrap();
-        self.permit = self.sender.clone().try_reserve_owned().ok();
-        result
-    }
-
-    fn try_recv(&mut self) -> Option<T> {
-        drop(self.permit.take());
-        let result = self.receiver.try_recv().ok()?;
-        self.permit = self.sender.clone().try_reserve_owned().ok();
-        Some(result)
-    }
-
-    fn try_send(&mut self, value: T) -> bool {
-        if let Some(permit) = self.permit.take() {
-            permit.send(value);
-            self.permit = self.sender.clone().try_reserve_owned().ok();
-            true
-        } else {
-            let result = self.sender.try_send(value).is_ok();
-            if result {
-                self.permit = self.sender.clone().try_reserve_owned().ok();
-            }
-            result
-        }
-    }
-}
-
-#[derive(Clone)]
-struct ThrottlingHttpClient {
-    resources_regex: Arc<Regex>,
-    http: Client,
-    rps_limiter: SimpleRateLimiter,
-}
-
-impl ThrottlingHttpClient {
-    fn parse_resource_limits(
-        &self,
-        bases_before_next_cpu_check: &mut u64,
-        resources_text: &str,
-    ) -> Option<(u64, u64)> {
-        let Some(captures) = self.resources_regex.captures_iter(resources_text).next() else {
-            *bases_before_next_cpu_check = 1;
-            return None;
-        };
-        let (
-            _,
-            [
-                cpu_seconds,
-                cpu_tenths_within_second,
-                minutes_to_reset,
-                seconds_within_minute_to_reset,
-            ],
-        ) = captures.extract();
-        // info!("Resources parsed: {}, {}, {}, {}",
-        //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
-        let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10
-            + cpu_tenths_within_second.parse::<u64>().unwrap();
-        CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Release);
-        let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
-            + seconds_within_minute_to_reset.parse::<u64>().unwrap();
-        Some((cpu_tenths_spent_after, seconds_to_reset))
-    }
-    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
-        loop {
-            if let Some(value) = self.try_get_and_decode(url).await {
-                return value;
-            }
-            sleep(retry_delay).await;
-        }
-    }
-
-    async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
-        self.rps_limiter.until_ready().await;
-        match self
-            .http
-            .get(url)
-            .header("Referer", "https://factordb.com")
-            .send()
-            .await
-        {
-            Err(http_error) => {
-                error!("Error reading {url}: {http_error}");
-                None
-            }
-            Ok(body) => match body.text().await {
-                Err(decoding_error) => {
-                    error!("Error reading {url}: {decoding_error}");
-                    None
-                }
-                Ok(text) => {
-                    if text.contains("502 Proxy Error") {
-                        error!("502 error from {url}");
-                        None
-                    } else {
-                        Some(text.into_boxed_str())
-                    }
-                }
-            },
-        }
-    }
-
-    #[allow(const_item_mutation)]
-    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
-        let response = self.try_get_and_decode_core(url).await?;
-        if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &response) {
-            let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
-            if EXIT_TIME
-                .get()
-                .is_some_and(|exit_time| exit_time <= &reset_time)
-            {
-                error!("Resource limits reached and won't reset during this process's lifespan");
-                exit(0);
-            } else {
-                warn!("Resource limits reached; throttling for {seconds_to_reset} seconds");
-                sleep_until(reset_time).await;
-            }
-            return None;
-        }
-        Some(response)
-    }
-
-    async fn try_get_resource_limits(
-        &self,
-        bases_before_next_cpu_check: &mut u64,
-    ) -> Option<(u64, u64)> {
-        let response = self
-            .try_get_and_decode_core("https://factordb.com/res.php")
-            .await?;
-        self.parse_resource_limits(bases_before_next_cpu_check, &response)
-    }
-}
-
-type SimpleRateLimiter = Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>;
 
 fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
@@ -305,7 +152,7 @@ async fn composites_while_waiting(
     }
 }
 
-async fn get_known_factors_of_c_or_cf(
+async fn known_factors_as_digits(
     http: &ThrottlingHttpClient,
     id: u128,
 ) -> Result<Box<[CompactString]>, ()> {
@@ -342,7 +189,7 @@ async fn get_known_factors_of_c_or_cf(
 }
 
 async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
-    match get_known_factors_of_c_or_cf(http, id).await {
+    match known_factors_as_digits(http, id).await {
         Err(()) => false,
         Ok(factors) => {
             iter(factors.clone())
@@ -401,7 +248,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
-        if get_known_factors_of_c_or_cf(http, nm1_id).await == Ok(Box::new([])) {
+        if known_factors_as_digits(http, nm1_id).await == Ok(Box::new([])) {
             info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
             let _ = http
                 .retrying_get_and_decode(
@@ -416,7 +263,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
-        if get_known_factors_of_c_or_cf(http, np1_id).await == Ok(Box::new([])) {
+        if known_factors_as_digits(http, np1_id).await == Ok(Box::new([])) {
             info!("{id}: N+1 (ID {np1_id}) is fully factored!");
             let _ = http
                 .retrying_get_and_decode(
@@ -847,34 +694,9 @@ async fn main() {
         rng().random_range(0..=MAX_START)
     };
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
-    let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
+    let http = ThrottlingHttpClient::new(rph_limit);
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
-    let resources_regex =
-        RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
-            .multi_line(true)
-            .dot_matches_new_line(true)
-            .build()
-            .unwrap();
-    let http = Client::builder()
-        .pool_max_idle_per_host(2)
-        .timeout(NETWORK_TIMEOUT)
-        .build()
-        .unwrap();
 
-    // Guardian rate-limiters start out with their full burst capacity and recharge starting
-    // immediately, but this would lead to twice the allowed number of requests in our first hour,
-    // so we make it start nearly empty instead.
-    rps_limiter
-        .until_n_ready(6050u32.try_into().unwrap())
-        .await
-        .unwrap();
-
-    let rps_limiter = Arc::new(rps_limiter);
-    let http = ThrottlingHttpClient {
-        resources_regex: resources_regex.into(),
-        http,
-        rps_limiter,
-    };
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
@@ -1085,7 +907,7 @@ async fn try_queue_unknowns<'a>(
                     let factor_id = &factor[1];
                     if let Ok(factor_id) = factor_id.parse::<u128>() {
                         info!("{u_id}: Found an algebraic factor with ID {factor_id}");
-                        if let Ok(factors) = get_known_factors_of_c_or_cf(http, factor_id).await
+                        if let Ok(factors) = known_factors_as_digits(http, factor_id).await
                         {
                             for factor in factors {
                                 report_factor_of_u(http, u_id, &factor).await;
@@ -1156,7 +978,6 @@ async fn check_last_digit(
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &str) {
     for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
         match http
-            .http
             .post("https://factordb.com/reportfactor.php")
             .form(&FactorSubmission { id: u_id, factor })
             .send()
