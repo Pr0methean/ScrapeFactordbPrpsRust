@@ -7,16 +7,14 @@ use tokio::time::{sleep, sleep_until, Instant};
 use log::{error, warn};
 use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
-use governor::{Quota, RateLimiter};
-use governor::state::{InMemoryState, NotKeyed};
-use governor::clock::DefaultClock;
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME, NETWORK_TIMEOUT};
 
 #[derive(Clone)]
 pub struct ThrottlingHttpClient {
     resources_regex: Arc<Regex>,
     http: Client,
-    rps_limiter: SimpleRateLimiter,
+    rps_limiter: Arc<DefaultDirectRateLimiter>,
 }
 
 impl ThrottlingHttpClient {
@@ -144,5 +142,3 @@ impl ThrottlingHttpClient {
         self.http.post(url)
     }
 }
-
-type SimpleRateLimiter = Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>;
