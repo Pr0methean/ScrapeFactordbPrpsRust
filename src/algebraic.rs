@@ -1,0 +1,186 @@
+use std::hint::unreachable_unchecked;
+use std::iter::repeat;
+use compact_str::CompactString;
+use log::{warn};
+use num::Integer;
+use num_modular::{ModularCoreOps, ModularPow};
+use num_prime::detail::SMALL_PRIMES;
+use num_prime::ExactRoots;
+use num_prime::nt_funcs::factorize128;
+use regex::{Regex, RegexSet};
+
+pub struct FactorFinder {
+    regexes: Box<[Regex]>,
+    regexes_as_set: RegexSet
+}
+
+fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T>> {
+    let mut result = Vec::new();
+    multiset.sort_unstable(); // Sort to handle duplicates more easily
+
+    fn generate_subsets<T: PartialEq + Copy>(
+        current_subset: &mut Vec<T>,
+        remaining_elements: &mut Vec<T>,
+        all_subsets: &mut Vec<Vec<T>>,
+    ) {
+        // Add the current subset to the result
+        all_subsets.push(current_subset.clone());
+
+        if remaining_elements.is_empty() {
+            return;
+        }
+
+        let mut i = 0;
+        while i < remaining_elements.len() {
+            let element = remaining_elements.remove(i);
+            current_subset.push(element.clone());
+
+            generate_subsets(current_subset, remaining_elements, all_subsets);
+
+            // Backtrack: add the element back and remove from current_subset
+            current_subset.pop();
+            remaining_elements.insert(i, element);
+
+            // Skip duplicate elements to avoid redundant subsets
+            while i < remaining_elements.len() && remaining_elements[i] == element {
+                i += 1;
+            }
+        }
+    }
+
+    let mut current_subset = Vec::new();
+    generate_subsets(&mut current_subset, multiset, &mut result);
+
+    result
+}
+
+impl FactorFinder {
+    pub fn new() -> FactorFinder {
+        let regexes_as_set = RegexSet::new(&[
+            "^lucas\\(([0-9]+)\\)(/[0-9]+)?$",
+            "^I\\(([0-9]+)\\)(/[0-9]+)?$",
+            "^([0-9]+)^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
+            "^\\(([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?\\)/[0-9]$"
+        ]).unwrap();
+        let regexes = regexes_as_set.patterns()
+            .iter()
+            .map(|pat| Regex::new(pat).unwrap())
+            .collect();
+        FactorFinder {
+            regexes, regexes_as_set
+        }
+    }
+
+    pub fn find_factors(&self, expr: &str) -> Box<[CompactString]> {
+        let mut factors = Vec::new();
+        for index in self.regexes_as_set.matches(expr) {
+            let captures = self.regexes[index].captures(expr).unwrap();
+            match index {
+                0 => { // Lucas number
+                    let Ok(term_number) = captures[1].parse::<u128>() else {
+                        warn!("Could not parse term number of a Lucas number: {}", &captures[1]);
+                        continue;
+                    };
+                    let mut factors_of_term = factorize128(term_number);
+                    let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
+                    let mut factors_of_term = factors_of_term.into_iter()
+                        .flat_map(|(key, value)| repeat(key).take(value))
+                        .collect::<Vec<u128>>();
+                    let full_set_size = factors_of_term.len();
+                    for subset in power_multiset(&mut factors_of_term).into_iter() {
+                        if subset.len() < full_set_size {
+                            let product = subset.into_iter().product::<u128>() << power_of_2;
+                            if product > 2 {
+                                factors.push(format!("lucas({product})").into());
+                            }
+                        }
+                    }
+                }
+                1 => { // Fibonacci number
+                    let Ok(term_number) = captures[1].parse::<u128>() else {
+                        warn!("Could not parse term number of a Fibonacci number: {}", &captures[1]);
+                        continue;
+                    };
+                    let factors_of_term = factorize128(term_number);
+                    let mut factors_of_term = factors_of_term.into_iter()
+                        .flat_map(|(key, value)| repeat(key).take(value))
+                        .collect::<Vec<u128>>();
+                    let full_set_size = factors_of_term.len();
+                    for subset in power_multiset(&mut factors_of_term).into_iter() {
+                        if subset.len() < full_set_size && subset.len() > 0 {
+                            let product: u128 = subset.into_iter().product();
+                            if product > 2 {
+                                factors.push(format!("I({product})").into());
+                            }
+                        }
+                    }
+                }
+                2 | 3 => { // (a^n*b + c)/d
+                    let Ok(mut a) = captures[1].parse::<u128>() else {
+                        warn!("Could not parse a in an a^n*b + c expression: {}", &captures[1]);
+                        continue;
+                    };
+                    let Ok(n) = captures[2].parse::<u128>() else {
+                        warn!("Could not parse n in an a^n*b + c expression: {}", &captures[2]);
+                        continue;
+                    };
+                    let mut b = 1u128;
+                    if let Some(b_match) = captures.get(3) && let Ok(parsed_b) = b_match.as_str().parse::<u128>() {
+                        b = parsed_b;
+                    }
+                    let Ok(mut c) = captures[4].parse::<i128>() else {
+                        warn!("Could not parse c in an a^n*b + c expression: {}", &captures[4]);
+                        continue;
+                    };
+                    let mut d = 1u128;
+                    if let Some(d_match) = captures.get(4) && let Ok(parsed_d) = d_match.as_str().parse::<u128>() {
+                        d = parsed_d;
+                    }
+                    match a.checked_mul(b) {
+                        Some(ab) => {
+                            let gcd = ab.gcd(&c.unsigned_abs());
+                            if gcd > 1 && d % gcd != 0 {
+                                a /= a.gcd(&gcd);
+                                b /= b.gcd(&gcd);
+                                c /= gcd as i128;
+                                factors.push(gcd.to_string().into());
+                            }
+                        }
+                        None => {
+                            let gcd = a.gcd(&c.unsigned_abs());
+                            if gcd > 1 && d % gcd != 0 {
+                                factors.push(gcd.to_string().into());
+                                a /= gcd;
+                                c /= gcd as i128;
+                            }
+                            let gcd = b.gcd(&c.unsigned_abs());
+                            if gcd > 1 && d % gcd != 0 {
+                                factors.push(gcd.to_string().into());
+                                b /= gcd;
+                                c /= gcd as i128;
+                            }
+                        }
+                    }
+                    for prime in SMALL_PRIMES {
+                        let prime = prime as u128;
+                        if d % prime != 0 && (a.powm(n, &prime).mulm(b, &prime) as i128 + c) % (prime as i128) == 0 {
+                            factors.push(prime.to_string().into());
+                        }
+                        if n % prime == 0 {
+                            if let Ok(prime_for_root) = prime.try_into()
+                                && (prime != 2 || c > 0)
+                                && let Some(root_c) = c.nth_root_exact(prime_for_root)
+                                && let Some(root_b) = b.nth_root_exact(prime_for_root) {
+                                factors.push(format!("{}^{}*{}{:+}", a, n / prime, root_b, root_c).into());
+                            }
+                        }
+                    }
+                }
+                _ => unsafe { unreachable_unchecked() }
+            }
+        }
+        factors.sort();
+        factors.dedup();
+        factors.into_boxed_slice()
+    }
+}
