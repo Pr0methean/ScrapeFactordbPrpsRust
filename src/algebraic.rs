@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat;
 use compact_str::CompactString;
@@ -57,10 +58,13 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
 impl FactorFinder {
     pub fn new() -> FactorFinder {
         let regexes_as_set = RegexSet::new(&[
-            "^lucas\\(([0-9]+)\\)(/[0-9]+)?$",
-            "^I\\(([0-9]+)\\)(/[0-9]+)?$",
-            "^([0-9]+)^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
-            "^\\(([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?\\)/[0-9]$"
+            "^lucas\\(([0-9]+)\\)$",
+            "^I\\(([0-9]+)\\)$",
+            "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
+            "^([0-9]+)$",
+            "^\\((.*)\\)$",
+            "^([^*]+)\\*(.*)$",
+            "^([^/]+)/(.*)$",
         ]).unwrap();
         let regexes = regexes_as_set.patterns()
             .iter()
@@ -73,13 +77,13 @@ impl FactorFinder {
 
     pub fn find_factors(&self, expr: &str) -> Box<[CompactString]> {
         let mut factors = Vec::new();
-        for index in self.regexes_as_set.matches(expr) {
+        if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
             let captures = self.regexes[index].captures(expr).unwrap();
             match index {
                 0 => { // Lucas number
                     let Ok(term_number) = captures[1].parse::<u128>() else {
                         warn!("Could not parse term number of a Lucas number: {}", &captures[1]);
-                        continue;
+                        return Box::new([]);
                     };
                     let mut factors_of_term = factorize128(term_number);
                     let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
@@ -99,8 +103,11 @@ impl FactorFinder {
                 1 => { // Fibonacci number
                     let Ok(term_number) = captures[1].parse::<u128>() else {
                         warn!("Could not parse term number of a Fibonacci number: {}", &captures[1]);
-                        continue;
+                        return Box::new([]);
                     };
+                    if term_number % 2 == 0 {
+                        factors.push(format!("lucas({})", term_number >> 1).into());
+                    }
                     let factors_of_term = factorize128(term_number);
                     let mut factors_of_term = factors_of_term.into_iter()
                         .flat_map(|(key, value)| repeat(key).take(value))
@@ -115,14 +122,14 @@ impl FactorFinder {
                         }
                     }
                 }
-                2 | 3 => { // (a^n*b + c)/d
+                2 => { // a^n*b + c
                     let Ok(mut a) = captures[1].parse::<u128>() else {
                         warn!("Could not parse a in an a^n*b + c expression: {}", &captures[1]);
-                        continue;
+                        return Box::new([]);
                     };
                     let Ok(n) = captures[2].parse::<u128>() else {
                         warn!("Could not parse n in an a^n*b + c expression: {}", &captures[2]);
-                        continue;
+                        return Box::new([]);
                     };
                     let mut b = 1u128;
                     if let Some(b_match) = captures.get(3) && let Ok(parsed_b) = b_match.as_str().parse::<u128>() {
@@ -130,16 +137,12 @@ impl FactorFinder {
                     }
                     let Ok(mut c) = captures[4].parse::<i128>() else {
                         warn!("Could not parse c in an a^n*b + c expression: {}", &captures[4]);
-                        continue;
+                        return Box::new([]);
                     };
-                    let mut d = 1u128;
-                    if let Some(d_match) = captures.get(4) && let Ok(parsed_d) = d_match.as_str().parse::<u128>() {
-                        d = parsed_d;
-                    }
                     match a.checked_mul(b) {
                         Some(ab) => {
                             let gcd = ab.gcd(&c.unsigned_abs());
-                            if gcd > 1 && d % gcd != 0 {
+                            if gcd > 1 {
                                 a /= a.gcd(&gcd);
                                 b /= b.gcd(&gcd);
                                 c /= gcd as i128;
@@ -148,13 +151,13 @@ impl FactorFinder {
                         }
                         None => {
                             let gcd = a.gcd(&c.unsigned_abs());
-                            if gcd > 1 && d % gcd != 0 {
+                            if gcd > 1 {
                                 factors.push(gcd.to_string().into());
                                 a /= gcd;
                                 c /= gcd as i128;
                             }
                             let gcd = b.gcd(&c.unsigned_abs());
-                            if gcd > 1 && d % gcd != 0 {
+                            if gcd > 1 {
                                 factors.push(gcd.to_string().into());
                                 b /= gcd;
                                 c /= gcd as i128;
@@ -163,7 +166,7 @@ impl FactorFinder {
                     }
                     for prime in SMALL_PRIMES {
                         let prime = prime as u128;
-                        if d % prime != 0 && (a.powm(n, &prime).mulm(b, &prime) as i128 + c) % (prime as i128) == 0 {
+                        if (a.powm(n, &prime).mulm(b, &prime) as i128 + c) % (prime as i128) == 0 {
                             factors.push(prime.to_string().into());
                         }
                         if n % prime == 0 {
@@ -174,6 +177,44 @@ impl FactorFinder {
                                 factors.push(format!("{}^{}*{}{:+}", a, n / prime, root_b, root_c).into());
                             }
                         }
+                    }
+                }
+                3 => { // raw number
+                    if let Ok(num) = expr.parse::<u128>() {
+                        factors.extend(factorize128(num).keys().map(|k| k.to_string().into()));
+                    } else {
+                        factors.push(expr.into());
+                    }
+                }
+                4 => { // parens
+                    factors.extend_from_slice(&self.find_factors(&captures[1]));
+                }
+                5 => { // multiplication
+                    factors.extend_from_slice(&self.find_factors(&captures[1]));
+                    factors.extend_from_slice(&self.find_factors(&captures[2]));
+                }
+                6 => { // division
+                    let denominator = self.find_factors(&captures[2]);
+                    if denominator.is_empty() {
+                        factors.extend_from_slice(&self.find_factors(&captures[1]));
+                    } else {
+                        let mut numerator = self.find_factors(&captures[1]).into_iter().collect::<HashSet<CompactString>>();
+                        for factor in denominator.into_iter() {
+                            if !numerator.remove(&factor) && let Ok(num) = factor.parse::<u128>() {
+                                for other_factor in numerator.clone().into_iter() {
+                                    if let Ok(other_num) = other_factor.parse::<u128>() {
+                                        let gcd = num.gcd(&other_num);
+                                        if gcd > 1 {
+                                            numerator.remove(&other_factor);
+                                            if other_num / gcd > 1 {
+                                                numerator.insert((other_num / gcd).to_string().into());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        factors.extend(numerator.into_iter());
                     }
                 }
                 _ => unsafe { unreachable_unchecked() }

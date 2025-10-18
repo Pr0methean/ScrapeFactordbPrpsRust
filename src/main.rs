@@ -938,10 +938,12 @@ async fn try_queue_unknowns<'a>(
         } else {
             error!("{u_id}: Invalid result when checking for algebraic factors: {result}");
         };
-        if !algebraic.is_empty() {
-            iter(algebraic).for_each(async |factor| {
-                report_factor_of_u(http, u_id, &factor).await;
-            }).await;
+        let mut algebraic_submitted = false;
+        for factor in algebraic {
+            algebraic_submitted |= report_factor_of_u(http, u_id, &factor).await;
+        }
+        if algebraic_submitted {
+            info!("{u_id}: Skipping PRP check because algebraic factors were found");
         } else {
             info!("{u_id}: No algebraic factors found");
             u_filter.insert(&u_id_bytes).unwrap();
