@@ -906,9 +906,9 @@ async fn try_queue_unknowns<'a>(
                 had_algebraic = true;
                 let factor_id = &factor[1];
                 let factor_digits_or_expr = &factor[2];
-                if factor_digits_or_expr.contains("...") || factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
+                if factor_digits_or_expr.contains("...") {
                     // Link text isn't an expression for the factor, so we need to look up its value
-                    info!("{u_id}: Algebraic factor {factor_id} represented as digits: {factor_digits_or_expr}");
+                    info!("{u_id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}");
                     if let Ok(factor_id) = factor_id.parse::<u128>() {
                         if let Ok(factors) = known_factors_as_digits(http, factor_id).await
                         {
@@ -920,8 +920,11 @@ async fn try_queue_unknowns<'a>(
                     } else {
                         error!("{u_id}: Invalid ID for algebraic factor: {factor_id}")
                     }
+                } else if factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
+                    info!("{u_id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}");
+                    report_factor_of_u(http, u_id, &factor_digits_or_expr).await;
                 } else {
-                    info!("{u_id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}");
+                info!("{u_id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}");
                     report_factor_of_u(http, u_id, factor_digits_or_expr).await;
                 }
             }
