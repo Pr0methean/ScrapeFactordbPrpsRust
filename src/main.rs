@@ -887,7 +887,10 @@ async fn try_queue_unknowns<'a>(
         let u_id_bytes = u_id.to_ne_bytes();
         let digits_or_expr = &results_text[digits_or_expr_range];
         if digits_or_expr.contains("...") {
+            info!("{u_id}: U represented as digits: {digits_or_expr}");
             had_algebraic = check_last_digit(http, u_id, digits_or_expr).await;
+        } else {
+            info!("{u_id}: U represented as expression: {digits_or_expr}");
         }
         if u_filter.query(&u_id_bytes).unwrap() {
             warn!("{u_id}: Skipping duplicate U");
@@ -901,25 +904,25 @@ async fn try_queue_unknowns<'a>(
             let algebraic_factors = algebraic_factors_regex.captures_iter(algebraic);
             for factor in algebraic_factors {
                 had_algebraic = true;
-                let value = &factor[2];
-                if value.contains("...") {
+                let factor_id = &factor[1];
+                let factor_digits_or_expr = &factor[2];
+                if factor_digits_or_expr.contains("...") || factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
                     // Link text isn't an expression for the factor, so we need to look up its value
-                    let factor_id = &factor[1];
+                    info!("{u_id}: Algebraic factor {factor_id} represented as digits: {factor_digits_or_expr}");
                     if let Ok(factor_id) = factor_id.parse::<u128>() {
-                        info!("{u_id}: Found an algebraic factor with ID {factor_id}");
                         if let Ok(factors) = known_factors_as_digits(http, factor_id).await
                         {
                             for factor in factors {
                                 report_factor_of_u(http, u_id, &factor).await;
-                                check_last_digit(http, factor_id, value).await;
+                                check_last_digit(http, factor_id, factor_digits_or_expr).await;
                             }
                         }
                     } else {
                         error!("{u_id}: Invalid ID for algebraic factor: {factor_id}")
                     }
                 } else {
-                    info!("{u_id}: Found an algebraic factor with expression {value}");
-                    report_factor_of_u(http, u_id, value).await;
+                    info!("{u_id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}");
+                    report_factor_of_u(http, u_id, factor_digits_or_expr).await;
                 }
             }
         } else {
