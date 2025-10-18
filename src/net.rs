@@ -10,7 +10,7 @@ use reqwest::{Client, RequestBuilder};
 use governor::{Quota, RateLimiter};
 use governor::state::{InMemoryState, NotKeyed};
 use governor::clock::DefaultClock;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle};
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME, NETWORK_TIMEOUT};
 
 #[derive(Clone)]
@@ -38,7 +38,7 @@ impl ThrottlingHttpClient {
         // Guardian rate-limiters start out with their full burst capacity and recharge starting
         // immediately, but this would lead to twice the allowed number of requests in our first hour,
         // so we make it start nearly empty instead.
-        Runtime::new().unwrap().block_on(async {
+        Handle::current().block_on(async {
             rps_limiter
                 .until_n_ready(6050u32.try_into().unwrap())
                 .await
