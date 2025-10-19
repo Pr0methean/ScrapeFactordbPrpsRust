@@ -63,7 +63,7 @@ impl FactorFinder {
             "^I\\(([0-9]+)\\)$",
             "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
             "^([0-9]+)$",
-            "^\\((.*)\\)$",
+            "^\\(([^()]+)\\)$",
             "^([^/]+)/([0-9]+)$",
             "^([^/]+)/(.*)$",
             "^([^*]+)\\*(.*)$",
@@ -227,6 +227,9 @@ impl FactorFinder {
                         let numerator = self.find_factors(&captures[1]).into_iter().collect::<HashSet<CompactString>>();
                         let denominator = self.find_factors(&captures[2]).into_iter().collect::<HashSet<CompactString>>();
                         factors.extend(numerator.difference(&denominator).cloned());
+                    } else {
+                        info!("Skipping {}➗{} because the highlighted division appears to be inside parentheses",
+                            &captures[1], &captures[2]);
                     }
                 }
                 7 => { // multiplication
@@ -240,6 +243,9 @@ impl FactorFinder {
                                 factors.extend_from_slice(&term_factors);
                             }
                         }
+                    } else {
+                        info!("Skipping {}✖{} because the highlighted multiplication appears to be inside parentheses",
+                            &captures[1], &captures[2]);
                     }
                 }
                 _ => unsafe { unreachable_unchecked() }
