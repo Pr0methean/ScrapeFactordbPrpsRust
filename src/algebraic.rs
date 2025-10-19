@@ -169,7 +169,22 @@ impl FactorFinder {
                                 && (prime != 2 || c > 0)
                                 && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                 && let Some(root_b) = b.nth_root_exact(prime_for_root) {
-                                factors.push(format!("{}^{}*{}{:+}", a, n / prime, root_b, root_c).into());
+                                factors.push(format!("{}{}{}{}", a,
+                                                     if (n / prime) > 1 {
+                                                         format!("^{}", n / prime)
+                                                     } else {
+                                                         String::new()
+                                                     },
+                                                     if root_b > 1 {
+                                                         format!("*{}", root_b)
+                                                     } else {
+                                                         String::new()
+                                                     },
+                                                     if root_c != 0 {
+                                                         format!("{:+}", root_c)
+                                                     } else {
+                                                         String::new()
+                                                     }).into());
                             }
                         }
                     }
