@@ -969,6 +969,9 @@ async fn try_queue_unknowns<'a>(
         } else {
             error!("{u_id}: Invalid result when checking for algebraic factors: {result}");
         };
+        if !algebraic.is_empty() {
+            info!("{u_id}: {} algebraic factors to submit", algebraic.len());
+        }
         let mut algebraic_submitted = false;
         for factor in algebraic {
             algebraic_submitted |= report_factor_of_u(http, u_id, &factor).await;
