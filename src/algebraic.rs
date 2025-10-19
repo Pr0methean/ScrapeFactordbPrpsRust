@@ -64,8 +64,9 @@ impl FactorFinder {
             "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
             "^([0-9]+)$",
             "^\\((.*)\\)$",
-            "^([^*]+)\\*(.*)$",
+            "^([^/]+)/([0-9]+)$",
             "^([^/]+)/(.*)$",
+            "^([^*]+)\\*(.*)$",
         ]).unwrap();
         let regexes = regexes_as_set.patterns()
             .iter()
@@ -183,32 +184,41 @@ impl FactorFinder {
                 4 => { // parens
                     factors.extend_from_slice(&self.find_factors(&captures[1]));
                 }
-                5 => { // multiplication
-                    factors.extend_from_slice(&self.find_factors(&captures[1]));
-                    factors.extend_from_slice(&self.find_factors(&captures[2]));
-                }
-                6 => { // division
-                    let denominator = self.find_factors(&captures[2]);
-                    if denominator.is_empty() {
-                        factors.extend_from_slice(&self.find_factors(&captures[1]));
-                    } else {
-                        let mut numerator = self.find_factors(&captures[1]).into_iter().collect::<HashSet<CompactString>>();
-                        for factor in denominator.into_iter() {
-                            if !numerator.remove(&factor) && let Ok(num) = factor.parse::<u128>() {
-                                for other_factor in numerator.clone().into_iter() {
-                                    if let Ok(other_num) = other_factor.parse::<u128>() {
-                                        let gcd = num.gcd(&other_num);
-                                        if gcd > 1 {
-                                            numerator.remove(&other_factor);
-                                            if other_num / gcd > 1 {
-                                                numerator.insert((other_num / gcd).to_string().into());
-                                            }
-                                        }
+                5 => { // division by a raw number
+                    let numerator = self.find_factors(&captures[1]);
+                    let Ok(divisor) = captures[2].parse::<u128>() else {
+                        warn!("Could not parse divisor: {}", &captures[2]);
+                        return numerator;
+                    };
+                    let mut numerator = numerator.into_iter().collect::<HashSet<CompactString>>();
+                    if !numerator.remove(&CompactString::from(divisor.to_string())) {
+                        for other_factor in numerator.clone().into_iter() {
+                            if let Ok(other_num) = other_factor.parse::<u128>() {
+                                let gcd = divisor.gcd(&other_num);
+                                if gcd > 1 {
+                                    numerator.remove(&other_factor);
+                                    if other_num / gcd > 1 {
+                                        numerator.insert((other_num / gcd).to_string().into());
                                     }
                                 }
                             }
                         }
-                        factors.extend(numerator.into_iter());
+                    }
+                    factors.extend(numerator.into_iter());
+                }
+                6 => { // division by another expression
+                    let numerator = self.find_factors(&captures[1]).into_iter().collect::<HashSet<CompactString>>();
+                    let denominator = self.find_factors(&captures[2]).into_iter().collect::<HashSet<CompactString>>();
+                    factors.extend(numerator.difference(&denominator).cloned());
+                }
+                7 => { // multiplication
+                    for term in [&captures[1], &captures[2]] {
+                        let term_factors = self.find_factors(term);
+                        if term_factors.is_empty() {
+                            factors.push(term.into());
+                        } else {
+                            factors.extend_from_slice(&term_factors);
+                        }
                     }
                 }
                 _ => unsafe { unreachable_unchecked() }
@@ -216,7 +226,11 @@ impl FactorFinder {
         }
         factors.sort();
         factors.dedup();
-        info!("Found factors of expression {expr}: {}", factors.iter().join(","));
+        if factors.is_empty() {
+            warn!("No factors found for expression {expr}");
+        } else {
+            info!("Found factors of expression {expr}: {}", factors.iter().join(", "));
+        }
         factors.into_boxed_slice()
     }
 }

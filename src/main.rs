@@ -12,7 +12,7 @@ use crate::UnknownPrpCheckResult::{
 use compact_str::CompactString;
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
-use futures_util::StreamExt;
+use futures_util::{StreamExt};
 use itertools::Itertools;
 use log::{error, info, warn};
 use primitive_types::U256;
@@ -20,7 +20,7 @@ use rand::seq::SliceRandom;
 use rand::{rng, Rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::from_str;
+use serde_json::{from_str, Value};
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
 use std::io::Write;
@@ -29,6 +29,8 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use futures_util::future::join_all;
+use num_prime::nt_funcs::factorize128;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::mpsc::{channel, PermitIterator, Sender};
 use tokio::sync::{Mutex, OnceCell};
@@ -87,7 +89,7 @@ struct CheckTask {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct NumberStatusApiResponse {
-    id: u128,
+    id: Value,
     status: CompactString,
     factors: Box<[(CompactString, u128)]>,
 }
@@ -154,23 +156,34 @@ async fn composites_while_waiting(
     }
 }
 
+#[derive(Debug)]
+enum NumberSpecifier<'a> {
+    Id(u128),
+    Expression(&'a str),
+}
+
 async fn known_factors_as_digits(
     http: &ThrottlingHttpClient,
-    id: u128,
+    id: NumberSpecifier<'_>,
 ) -> Result<Box<[CompactString]>, ()> {
+    let url = match id {
+        NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
+        NumberSpecifier::Expression(ref expr) => format!("https://factordb.com/api?query={expr}"),
+    };
     let api_response = http
-        .retrying_get_and_decode(&format!("https://factordb.com/api?id={id}"), RETRY_DELAY)
+        .retrying_get_and_decode(&url, RETRY_DELAY)
         .await;
+    drop(url);
     match from_str::<NumberStatusApiResponse>(&api_response) {
         Err(e) => {
-            error!("{id}: Failed to decode API response: {e}: {api_response}");
+            error!("{id:?}: Failed to decode API response: {e}: {api_response}");
             Err(())
         }
         Ok(api_response) => {
             let NumberStatusApiResponse {
                 status, factors, ..
             } = api_response;
-            info!("{id}: Fetched status of {status}");
+            info!("{id:?}: Fetched status of {status}");
             if status == "FF" {
                 Ok(Box::new([]))
             } else {
@@ -180,7 +193,7 @@ async fn known_factors_as_digits(
                     .collect();
                 if factors.len() > 1 {
                     info!(
-                        "{id}: Composite with known factors: {}",
+                        "{id:?}: Composite with known factors: {}",
                         factors.iter().join(",")
                     );
                 }
@@ -191,7 +204,7 @@ async fn known_factors_as_digits(
 }
 
 async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
-    match known_factors_as_digits(http, id).await {
+    match known_factors_as_digits(http, NumberSpecifier::Id(id)).await {
         Err(()) => false,
         Ok(factors) => {
             iter(factors.clone())
@@ -250,7 +263,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
-        if known_factors_as_digits(http, nm1_id).await == Ok(Box::new([])) {
+        if known_factors_as_digits(http, NumberSpecifier::Id(nm1_id)).await == Ok(Box::new([])) {
             info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
             let _ = http
                 .retrying_get_and_decode(
@@ -265,7 +278,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
-        if known_factors_as_digits(http, np1_id).await == Ok(Box::new([])) {
+        if known_factors_as_digits(http, NumberSpecifier::Id(np1_id)).await == Ok(Box::new([])) {
             info!("{id}: N+1 (ID {np1_id}) is fully factored!");
             let _ = http
                 .retrying_get_and_decode(
@@ -897,11 +910,27 @@ async fn try_queue_unknowns<'a>(
         let digits_or_expr = &results_text[digits_or_expr_range];
         let mut algebraic = if digits_or_expr.contains("...") {
             info!("{u_id}: U represented as digits: {digits_or_expr}");
-            factor_last_digit(digits_or_expr)
+            factor_last_digit(digits_or_expr).into_iter().collect::<HashSet<CompactString>>()
         } else {
             info!("{u_id}: U represented as expression: {digits_or_expr}");
-            factor_finder.find_factors(digits_or_expr)
-        }.into_iter().collect::<HashSet<CompactString>>();
+            if digits_or_expr.contains('/') {
+                // Factor finding may give some results that have already been divided out
+                join_all(factor_finder.find_factors(digits_or_expr).into_iter()
+                    .map(async |factor|
+                        if factor.len() > 38 || !factor.chars().all(|char| char.is_digit(10)) {
+                            if let Ok(factors) = known_factors_as_digits(http, NumberSpecifier::Expression(&factor)).await && factors.len() > 1 {
+                                factors
+                            } else {
+                                Box::new([factor])
+                            }
+                        } else {
+                            factorize128(factor.parse().unwrap()).keys().map(|factor| factor.to_string().into()).collect()
+                        }
+                    ).collect::<Vec<_>>()).await.into_iter().flatten().collect()
+            } else {
+                factor_finder.find_factors(digits_or_expr).into_iter().collect()
+            }
+        };
         let url = format!("https://factordb.com/frame_moreinfo.php?id={u_id}");
         let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
         info!("{u_id}: Checking for listed algebraic factors");
@@ -915,7 +944,7 @@ async fn try_queue_unknowns<'a>(
                     // Link text isn't an expression for the factor, so we need to look up its value
                     info!("{u_id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}");
                     if let Ok(factor_id) = factor_id.parse::<u128>() {
-                        if let Ok(factors) = known_factors_as_digits(http, factor_id).await
+                        if let Ok(factors) = known_factors_as_digits(http, NumberSpecifier::Id(factor_id)).await
                         {
                             for factor in factors.into_iter() {
                                 factor_last_digit(&factor).into_iter().for_each(|factor| {
