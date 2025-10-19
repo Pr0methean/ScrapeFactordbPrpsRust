@@ -1008,12 +1008,18 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &st
         {
             Ok(response) => {
                 let response = response.text().await;
-                info!(
-                    "{u_id}: reported a factor of {factor}; response: {:?}",
-                    response
-                );
-                if let Ok(text) = response && !text.contains("Error") {
-                    return text.contains("submitted");
+                match response {
+                    Ok(text) => {
+                        info!(
+                            "{u_id}: reported a factor of {factor}; response: {text}",
+                        );
+                        if !text.contains("Error") {
+                            return text.contains("submitted");
+                        }
+                    }
+                    Err(e) => {
+                        error!("{u_id}: Failed to get response: {e}");
+                    }
                 }
             }
             Err(e) => {

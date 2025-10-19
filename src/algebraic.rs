@@ -2,7 +2,8 @@ use std::collections::HashSet;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat;
 use compact_str::CompactString;
-use log::{warn};
+use itertools::Itertools;
+use log::{info, warn};
 use num::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::detail::SMALL_PRIMES;
@@ -76,6 +77,7 @@ impl FactorFinder {
     }
 
     pub fn find_factors(&self, expr: &str) -> Box<[CompactString]> {
+        info!("Searching for factors of expression {expr}");
         let mut factors = Vec::new();
         if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
             let captures = self.regexes[index].captures(expr).unwrap();
@@ -135,35 +137,27 @@ impl FactorFinder {
                     if let Some(b_match) = captures.get(3) && let Ok(parsed_b) = b_match.as_str().parse::<u128>() {
                         b = parsed_b;
                     }
-                    let Ok(mut c) = captures[4].parse::<i128>() else {
-                        warn!("Could not parse c in an a^n*b + c expression: {}", &captures[4]);
-                        return Box::new([]);
+                    let mut c = 0i128;
+                    if let Some(c_match) = captures.get(4) && let Ok(parsed_c) = c_match.as_str().parse::<i128>() {
+                        c = parsed_c;
                     };
-                    match a.checked_mul(b) {
-                        Some(ab) => {
-                            let gcd = ab.gcd(&c.unsigned_abs());
-                            if gcd > 1 {
-                                a /= a.gcd(&gcd);
-                                b /= b.gcd(&gcd);
-                                c /= gcd as i128;
-                                factors.push(gcd.to_string().into());
-                            }
-                        }
-                        None => {
-                            let gcd = a.gcd(&c.unsigned_abs());
-                            if gcd > 1 {
-                                factors.push(gcd.to_string().into());
-                                a /= gcd;
-                                c /= gcd as i128;
-                            }
-                            let gcd = b.gcd(&c.unsigned_abs());
-                            if gcd > 1 {
-                                factors.push(gcd.to_string().into());
-                                b /= gcd;
-                                c /= gcd as i128;
-                            }
-                        }
+                    let mut gcd_ac = a.gcd(&c.unsigned_abs());
+                    let mut gcd_bc = b.gcd(&c.unsigned_abs());
+                    let gcd_abc = gcd_ac.gcd(&gcd_bc);
+                    if gcd_abc > 1 {
+                        factors.push(gcd_abc.to_string().into());
+                        gcd_ac /= gcd_abc;
+                        gcd_bc /= gcd_abc;
                     }
+                    if gcd_ac > 1 {
+                        factors.push(gcd_ac.to_string().into());
+                    }
+                    if gcd_bc > 1 {
+                        factors.push(gcd_bc.to_string().into());
+                    }
+                    a /= gcd_abc;
+                    b /= gcd_abc;
+                    c /= gcd_abc as i128;
                     for prime in SMALL_PRIMES {
                         let prime = prime as u128;
                         if (a.powm(n, &prime).mulm(b, &prime) as i128 + c) % (prime as i128) == 0 {
@@ -222,6 +216,7 @@ impl FactorFinder {
         }
         factors.sort();
         factors.dedup();
+        info!("Found factors of expression {expr}: {}", factors.iter().join(","));
         factors.into_boxed_slice()
     }
 }
