@@ -126,7 +126,7 @@ impl FactorFinder {
                     }
                 }
                 2 => { // a^n*b + c
-                    let Ok(mut a) = captures[1].parse::<u128>() else {
+                    let Ok(a) = captures[1].parse::<u128>() else {
                         warn!("Could not parse a in an a^n*b + c expression: {}", &captures[1]);
                         return Box::new([]);
                     };
@@ -142,23 +142,16 @@ impl FactorFinder {
                     if let Some(c_match) = captures.get(4) && let Ok(parsed_c) = c_match.as_str().parse::<i128>() {
                         c = parsed_c;
                     };
-                    let mut gcd_ac = a.gcd(&c.unsigned_abs());
-                    let mut gcd_bc = b.gcd(&c.unsigned_abs());
-                    let gcd_abc = gcd_ac.gcd(&gcd_bc);
-                    if gcd_abc > 1 {
-                        factors.push(gcd_abc.to_string().into());
-                        gcd_ac /= gcd_abc;
-                        gcd_bc /= gcd_abc;
-                    }
+                    let gcd_ac = a.gcd(&c.unsigned_abs());
+                    let gcd_bc = b.gcd(&c.unsigned_abs());
                     if gcd_ac > 1 {
                         factors.push(gcd_ac.to_string().into());
                     }
                     if gcd_bc > 1 {
                         factors.push(gcd_bc.to_string().into());
                     }
-                    a /= gcd_abc;
-                    b /= gcd_abc;
-                    c /= gcd_abc as i128;
+                    b /= gcd_bc;
+                    c /= gcd_bc as i128;
                     for prime in SMALL_PRIMES {
                         let prime = prime as u128;
                         if (a.powm(n, &prime).mulm(b, &prime) as i128 + c) % (prime as i128) == 0 {
