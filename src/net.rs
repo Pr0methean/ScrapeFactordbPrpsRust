@@ -1,14 +1,14 @@
+use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME, NETWORK_TIMEOUT};
+use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
+use log::{error, warn};
+use regex::{Regex, RegexBuilder};
+use reqwest::{Client, RequestBuilder};
 use std::num::NonZeroU32;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
-use tokio::time::{sleep, sleep_until, Instant};
-use log::{error, warn};
-use regex::{Regex, RegexBuilder};
-use reqwest::{Client, RequestBuilder};
-use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
-use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME, NETWORK_TIMEOUT};
+use tokio::time::{Instant, sleep, sleep_until};
 
 #[derive(Clone)]
 pub struct ThrottlingHttpClient {
@@ -37,9 +37,14 @@ impl ThrottlingHttpClient {
         // so we make it start nearly empty instead.
         rps_limiter
             .check_n(6050u32.try_into().unwrap())
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
 
-        Self { resources_regex: resources_regex.into(), http, rps_limiter: rps_limiter.into() }
+        Self {
+            resources_regex: resources_regex.into(),
+            http,
+            rps_limiter: rps_limiter.into(),
+        }
     }
 
     pub fn parse_resource_limits(

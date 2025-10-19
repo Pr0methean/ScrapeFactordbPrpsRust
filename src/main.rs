@@ -2,25 +2,30 @@
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 
-mod net;
-mod channel;
 mod algebraic;
+mod channel;
+mod net;
 
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
+use crate::algebraic::FactorFinder;
+use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
-use futures_util::{StreamExt};
+use futures_util::StreamExt;
+use futures_util::future::join_all;
 use itertools::Itertools;
 use log::{error, info, warn};
+use net::ThrottlingHttpClient;
+use num_prime::nt_funcs::factorize128;
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{from_str, Value};
+use serde_json::{Value, from_str};
 use std::collections::{HashSet, VecDeque};
 use std::fs::File;
 use std::io::Write;
@@ -29,18 +34,13 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use futures_util::future::join_all;
-use num_prime::nt_funcs::factorize128;
-use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::mpsc::{channel, PermitIterator, Sender};
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc::{PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::time::{sleep, timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 use tokio_stream::iter;
 use urlencoding::encode;
-use channel::PushbackReceiver;
-use net::ThrottlingHttpClient;
-use crate::algebraic::FactorFinder;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -169,12 +169,11 @@ async fn known_factors_as_digits(
 ) -> Result<Box<[CompactString]>, ()> {
     let url = match id {
         NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
-        NumberSpecifier::Expression(ref expr) => format!("https://factordb.com/api?query={}",
-            encode(expr)),
+        NumberSpecifier::Expression(ref expr) => {
+            format!("https://factordb.com/api?query={}", encode(expr))
+        }
     };
-    let api_response = http
-        .retrying_get_and_decode(&url, RETRY_DELAY)
-        .await;
+    let api_response = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
     drop(url);
     match from_str::<NumberStatusApiResponse>(&api_response) {
         Err(e) => {
@@ -653,7 +652,10 @@ async fn queue_composites(
     });
     info!("Retrieving {digits}-digit composites starting from {start}");
     let composites_page = http
-        .retrying_get_and_decode(&format!("{C_SEARCH_URL_BASE}{start}&mindig={digits}"), RETRY_DELAY)
+        .retrying_get_and_decode(
+            &format!("{C_SEARCH_URL_BASE}{start}&mindig={digits}"),
+            RETRY_DELAY,
+        )
         .await;
     info!("C search results retrieved");
     let c_ids = id_regex
@@ -768,7 +770,7 @@ async fn main() {
         u_digits,
         prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
         &mut u_filter,
-        &factor_finder
+        &factor_finder,
     )
     .await;
     queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
@@ -856,8 +858,15 @@ async fn queue_unknowns(
     }
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
-        if let Err(u_permits) =
-            try_queue_unknowns(algebraic_factors_regex, http, u_digits, u_permits, u_filter, factor_finder).await
+        if let Err(u_permits) = try_queue_unknowns(
+            algebraic_factors_regex,
+            http,
+            u_digits,
+            u_permits,
+            u_filter,
+            factor_finder,
+        )
+        .await
         {
             permits = Some(u_permits);
             sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
@@ -912,25 +921,48 @@ async fn try_queue_unknowns<'a>(
         let digits_or_expr = &results_text[digits_or_expr_range];
         let mut algebraic = if digits_or_expr.contains("...") {
             info!("{u_id}: U represented as digits: {digits_or_expr}");
-            factor_last_digit(digits_or_expr).into_iter().collect::<HashSet<CompactString>>()
+            factor_last_digit(digits_or_expr)
+                .into_iter()
+                .collect::<HashSet<CompactString>>()
         } else {
             info!("{u_id}: U represented as expression: {digits_or_expr}");
             if digits_or_expr.contains('/') {
                 // Factor finding may give some results that have already been divided out
-                join_all(factor_finder.find_factors(digits_or_expr).into_iter()
-                    .map(async |factor|
-                        if factor.len() > 38 || !factor.chars().all(|char| char.is_digit(10)) {
-                            if let Ok(factors) = known_factors_as_digits(http, NumberSpecifier::Expression(&factor)).await && factors.len() > 1 {
-                                factors
+                join_all(
+                    factor_finder
+                        .find_factors(digits_or_expr)
+                        .into_iter()
+                        .map(async |factor| {
+                            if factor.len() > 38 || !factor.chars().all(|char| char.is_digit(10)) {
+                                if let Ok(factors) = known_factors_as_digits(
+                                    http,
+                                    NumberSpecifier::Expression(&factor),
+                                )
+                                .await
+                                    && factors.len() > 1
+                                {
+                                    factors
+                                } else {
+                                    Box::new([factor])
+                                }
                             } else {
-                                Box::new([factor])
+                                factorize128(factor.parse().unwrap())
+                                    .keys()
+                                    .map(|factor| factor.to_string().into())
+                                    .collect()
                             }
-                        } else {
-                            factorize128(factor.parse().unwrap()).keys().map(|factor| factor.to_string().into()).collect()
-                        }
-                    ).collect::<Vec<_>>()).await.into_iter().flatten().collect()
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .into_iter()
+                .flatten()
+                .collect()
             } else {
-                factor_finder.find_factors(digits_or_expr).into_iter().collect()
+                factor_finder
+                    .find_factors(digits_or_expr)
+                    .into_iter()
+                    .collect()
             }
         };
         let url = format!("https://factordb.com/frame_moreinfo.php?id={u_id}");
@@ -944,9 +976,12 @@ async fn try_queue_unknowns<'a>(
                 let factor_digits_or_expr = &factor[2];
                 if factor_digits_or_expr.contains("...") {
                     // Link text isn't an expression for the factor, so we need to look up its value
-                    info!("{u_id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}");
+                    info!(
+                        "{u_id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
+                    );
                     if let Ok(factor_id) = factor_id.parse::<u128>() {
-                        if let Ok(factors) = known_factors_as_digits(http, NumberSpecifier::Id(factor_id)).await
+                        if let Ok(factors) =
+                            known_factors_as_digits(http, NumberSpecifier::Id(factor_id)).await
                         {
                             for factor in factors.into_iter() {
                                 factor_last_digit(&factor).into_iter().for_each(|factor| {
@@ -959,10 +994,14 @@ async fn try_queue_unknowns<'a>(
                         error!("{u_id}: Invalid ID for algebraic factor: {factor_id}")
                     }
                 } else if factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
-                    info!("{u_id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}");
+                    info!(
+                        "{u_id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}"
+                    );
                     algebraic.insert(factor_digits_or_expr.into());
                 } else {
-                    info!("{u_id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}");
+                    info!(
+                        "{u_id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}"
+                    );
                     algebraic.insert(factor_digits_or_expr.into());
                 }
             }
@@ -998,18 +1037,10 @@ async fn try_queue_unknowns<'a>(
 
 fn factor_last_digit(string_with_last_digit: &str) -> Box<[CompactString]> {
     match string_with_last_digit.chars().last() {
-        Some('0') => {
-            Box::new(["2".into(), "5".into()])
-        }
-        Some('5') => {
-            Box::new(["5".into()])
-        }
-        Some('2' | '4' | '6' | '8') => {
-            Box::new(["2".into()])
-        }
-        Some('1' | '3' | '7' | '9') => {
-            Box::new([])
-        },
+        Some('0') => Box::new(["2".into(), "5".into()]),
+        Some('5') => Box::new(["5".into()]),
+        Some('2' | '4' | '6' | '8') => Box::new(["2".into()]),
+        Some('1' | '3' | '7' | '9') => Box::new([]),
         x => {
             error!("Invalid last digit: {x:?}");
             Box::new([])
@@ -1044,9 +1075,7 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &st
                 let response = response.text().await;
                 match response {
                     Ok(text) => {
-                        info!(
-                            "{u_id}: reported a factor of {factor}; response: {text}",
-                        );
+                        info!("{u_id}: reported a factor of {factor}; response: {text}",);
                         if !text.contains("Error") {
                             return text.contains("submitted");
                         }
