@@ -64,9 +64,9 @@ impl FactorFinder {
             "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
             "^([0-9]+)$",
             "^\\(([^()]+)\\)$",
-            "^([^/]+)/([0-9]+)$",
-            "^([^/]+)/(.*)$",
-            "^([^*]+)\\*(.*)$",
+            "^([^+-]+|\\([^()]+\\))/([0-9]+)$",
+            "^([^+-]+|\\([^()]+\\))/([^+-]+|\\([^()]+\\))$",
+            "^([^+-]+|\\([^()]+\\))\\*([^+-]+|\\([^()]+\\))$",
         ]).unwrap();
         let regexes = regexes_as_set.patterns()
             .iter()
@@ -215,30 +215,18 @@ impl FactorFinder {
                     factors.extend(numerator.into_iter());
                 }
                 6 => { // division by another expression
-                    let counts = captures[1].chars().counts();
-                    if counts.get(&'(') == counts.get(&')') {
-                        let numerator = self.find_factors(&captures[1]).into_iter().collect::<HashSet<CompactString>>();
-                        let denominator = self.find_factors(&captures[2]).into_iter().collect::<HashSet<CompactString>>();
-                        factors.extend(numerator.difference(&denominator).cloned());
-                    } else {
-                        info!("Skipping {}➗{} because the highlighted division appears to be inside parentheses",
-                            &captures[1], &captures[2]);
-                    }
+                    let numerator = self.find_factors(&captures[1]).into_iter().collect::<HashSet<CompactString>>();
+                    let denominator = self.find_factors(&captures[2]).into_iter().collect::<HashSet<CompactString>>();
+                    factors.extend(numerator.difference(&denominator).cloned());
                 }
                 7 => { // multiplication
-                    let counts = captures[1].chars().counts();
-                    if counts.get(&'(') == counts.get(&')') {
-                        for term in [&captures[1], &captures[2]] {
-                            let term_factors = self.find_factors(term);
-                            if term_factors.is_empty() {
-                                factors.push(term.into());
-                            } else {
-                                factors.extend_from_slice(&term_factors);
-                            }
+                    for term in [&captures[1], &captures[2]] {
+                        let term_factors = self.find_factors(term);
+                        if term_factors.is_empty() {
+                            factors.push(term.into());
+                        } else {
+                            factors.extend_from_slice(&term_factors);
                         }
-                    } else {
-                        info!("Skipping {}✖{} because the highlighted multiplication appears to be inside parentheses",
-                            &captures[1], &captures[2]);
                     }
                 }
                 _ => unsafe { unreachable_unchecked() }
