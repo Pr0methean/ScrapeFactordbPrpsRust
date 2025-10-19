@@ -135,7 +135,7 @@ impl FactorFinder {
                         return Box::new([]);
                     };
                     let mut b = 1u128;
-                    if let Some(b_match) = captures.get(3) && let Ok(parsed_b) = b_match.as_str().parse::<u128>() {
+                    if let Some(b_match) = captures.get(3) && let Ok(parsed_b) = b_match.as_str()[1..].parse::<u128>() {
                         b = parsed_b;
                     }
                     let mut c = 0i128;
@@ -241,4 +241,13 @@ impl FactorFinder {
         }
         factors.into_boxed_slice()
     }
+}
+
+#[test]
+fn test_anbc() {
+    let finder = FactorFinder::new();
+    let factors = finder.find_factors("2^9*3+3");
+    println!("{}", factors.iter().join(", "));
+    assert!(factors.contains(&"3".into()));
+    assert!(factors.contains(&"2^3+1".into()));
 }
