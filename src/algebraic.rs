@@ -67,6 +67,7 @@ impl FactorFinder {
             "^([^+-]+|\\([^()]+\\))/([0-9]+)$",
             "^([^+-]+|\\([^()]+\\))/([^+-]+|\\([^()]+\\))$",
             "^([^+-]+|\\([^()]+\\))\\*([^+-]+|\\([^()]+\\))$",
+            "^([^()]+|\\([^()]+\\))[+-]([^()]+|\\([^()]+\\))$"
         ]).unwrap();
         let regexes = regexes_as_set.patterns()
             .iter()
@@ -227,6 +228,25 @@ impl FactorFinder {
                         } else {
                             factors.extend_from_slice(&term_factors);
                         }
+                    }
+                }
+                8 => { // addition/subtraction; only return common factors of both sides
+                    if captures[2] == *"1" {
+                        // Can't have any common factors
+                        return Box::new([]);
+                    }
+                    let left_factors = self.find_factors(&captures[1]).into_iter().collect::<HashSet<CompactString>>();
+                    let right_factors = self.find_factors(&captures[2]).into_iter().collect::<HashSet<CompactString>>();
+                    if left_factors.is_empty() {
+                        if right_factors.contains::<CompactString>(&captures[1].into()) {
+                            factors.push(captures[1].into());
+                        }
+                    } else if right_factors.is_empty() {
+                        if left_factors.contains::<CompactString>(&captures[2].into()) {
+                            factors.push(captures[2].into());
+                        }
+                    } else {
+                        factors.extend(left_factors.intersection(&right_factors).cloned());
                     }
                 }
                 _ => unsafe { unreachable_unchecked() }
