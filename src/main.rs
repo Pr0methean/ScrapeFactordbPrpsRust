@@ -37,6 +37,7 @@ use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{sleep, timeout, Duration, Instant};
 use tokio::{select, task};
 use tokio_stream::iter;
+use urlencoding::encode;
 use channel::PushbackReceiver;
 use net::ThrottlingHttpClient;
 use crate::algebraic::FactorFinder;
@@ -168,7 +169,8 @@ async fn known_factors_as_digits(
 ) -> Result<Box<[CompactString]>, ()> {
     let url = match id {
         NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
-        NumberSpecifier::Expression(ref expr) => format!("https://factordb.com/api?query={expr}"),
+        NumberSpecifier::Expression(ref expr) => format!("https://factordb.com/api?query={}",
+            encode(expr)),
     };
     let api_response = http
         .retrying_get_and_decode(&url, RETRY_DELAY)
