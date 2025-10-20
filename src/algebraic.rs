@@ -835,7 +835,7 @@ impl FactorFinder {
                                 .collect::<Vec<_>>();
                             let factors_of_n_count = factors_of_n.len();
                             for factor_subset in power_multiset(&mut factors_of_n) {
-                                if factor_subset.len() == factors_of_n_count {
+                                if factor_subset.len() == factors_of_n_count || factor_subset.is_empty() {
                                     continue;
                                 }
                                 let subset_product = factor_subset.into_iter().product();
@@ -952,7 +952,10 @@ impl FactorFinder {
                 _ => unsafe { unreachable_unchecked() },
             }
         }
-        factors.retain(|f| if let Numeric(n) = f {*n > 1} else {true});
+        factors.retain(|f| match f {
+            Numeric(n) => *n > 1,
+            Factor::String(s) => s != expr
+        });
         factors.sort();
         if factors.is_empty() {
             warn!("No factors found for expression {expr}");
