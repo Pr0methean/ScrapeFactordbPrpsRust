@@ -829,14 +829,14 @@ impl FactorFinder {
                         if let Ok(n) = captures[2].parse::<u128>() {
                             b /= gcd_bc;
                             c /= gcd_bc as i128;
-                            if b == 1
-                                && n > MAX_PRIME_IN_LIST
-                            {
+                            if b == 1 && n > MAX_PRIME_IN_LIST {
                                 match c {
                                     -1 => factors.push(format_compact!("{}^{}-1", a, n).into()),
-                                    1 => if n % 2 == 0 {
-                                        factors.push(format_compact!("{}^{}+1", a, n).into())
-                                    },
+                                    1 => {
+                                        if n % 2 == 0 {
+                                            factors.push(format_compact!("{}^{}+1", a, n).into())
+                                        }
+                                    }
                                     _ => {}
                                 }
                             }
