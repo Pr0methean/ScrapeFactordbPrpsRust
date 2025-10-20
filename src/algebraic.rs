@@ -907,7 +907,7 @@ impl FactorFinder {
                         }
                     }
                 }
-                8 => {
+                7 => {
                     // addition/subtraction; only return common factors of both sides
                     if captures[2] == *"1" {
                         // Can't have any common factors
