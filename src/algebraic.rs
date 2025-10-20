@@ -952,6 +952,7 @@ impl FactorFinder {
                 _ => unsafe { unreachable_unchecked() },
             }
         }
+        factors.retain(|f| if let Numeric(n) = f {*n > 1} else {true});
         factors.sort();
         if factors.is_empty() {
             warn!("No factors found for expression {expr}");
