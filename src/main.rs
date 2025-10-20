@@ -922,7 +922,7 @@ async fn try_queue_unknowns<'a>(
         let digits_or_expr = &results_text[digits_or_expr_range];
         let mut algebraic = if digits_or_expr.contains("...") {
             info!("{u_id}: U represented as digits: {digits_or_expr}");
-            factor_last_digit(digits_or_expr)
+            algebraic::factor_last_digit(digits_or_expr)
                 .into_iter()
                 .collect::<HashSet<Factor>>()
         } else {
@@ -980,9 +980,11 @@ async fn try_queue_unknowns<'a>(
                         {
                             for factor in factors.into_iter() {
                                 if let Factor::String(s) = &factor {
-                                    factor_last_digit(s).into_iter().for_each(|factor| {
-                                        let _ = algebraic.insert(factor);
-                                    });
+                                    algebraic::factor_last_digit(s).into_iter().for_each(
+                                        |factor| {
+                                            let _ = algebraic.insert(factor);
+                                        },
+                                    );
                                 }
                                 algebraic.insert(factor);
                             }
@@ -1032,26 +1034,13 @@ async fn try_queue_unknowns<'a>(
     }
 }
 
-fn factor_last_digit(string_with_last_digit: &str) -> Box<[Factor]> {
-    match string_with_last_digit.chars().last() {
-        Some('0') => Box::new([Factor::Numeric(2), Factor::Numeric(5)]),
-        Some('5') => Box::new([Factor::Numeric(5)]),
-        Some('2' | '4' | '6' | '8') => Box::new([Factor::Numeric(2)]),
-        Some('1' | '3' | '7' | '9') => Box::new([]),
-        x => {
-            error!("Invalid last digit: {x:?}");
-            Box::new([])
-        }
-    }
-}
-
 async fn check_last_digit(
     http: &ThrottlingHttpClient,
     u_id: u128,
     string_with_last_digit: &str,
 ) -> bool {
     let mut accepted = false;
-    let factors = factor_last_digit(string_with_last_digit);
+    let factors = algebraic::factor_last_digit(string_with_last_digit);
     for factor in factors {
         if report_factor_of_u(http, u_id, &factor).await {
             accepted = true;

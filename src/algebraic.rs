@@ -1,7 +1,7 @@
 use crate::algebraic::Factor::Numeric;
 use compact_str::{CompactString, format_compact};
 use itertools::Itertools;
-use log::{info, warn};
+use log::{error, info, warn};
 use num::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat;
+use std::mem::swap;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -572,6 +573,12 @@ impl From<CompactString> for Factor {
     }
 }
 
+impl From<&CompactString> for Factor {
+    fn from(value: &CompactString) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
 impl Display for Factor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -602,6 +609,62 @@ impl Ord for Factor {
     }
 }
 
+fn as_u128(factors: &[Factor]) -> Option<u128> {
+    let mut product = 1u128;
+    for factor in factors {
+        if let Numeric(n) = factor
+            && let Some(times_n) = product.checked_mul(*n)
+        {
+            product = times_n;
+        } else {
+            return None;
+        }
+    }
+    Some(product)
+}
+
+fn borrowed_as_u128(factors: &[&Factor]) -> Option<u128> {
+    let mut product = 1u128;
+    for factor in factors {
+        if let Numeric(n) = *factor
+            && let Some(times_n) = product.checked_mul(*n)
+        {
+            product = times_n;
+        } else {
+            return None;
+        }
+    }
+    Some(product)
+}
+
+pub enum SignedFactor {
+    Positive(Factor),
+    Zero,
+    Negative(Factor),
+}
+
+impl SignedFactor {
+    fn abs(&self) -> &Factor {
+        match self {
+            SignedFactor::Positive(f) => f,
+            SignedFactor::Negative(f) => f,
+            SignedFactor::Zero => &Numeric(0),
+        }
+    }
+}
+
+impl From<&str> for SignedFactor {
+    fn from(value: &str) -> Self {
+        if value.starts_with('-') {
+            SignedFactor::Negative(value[1..].into())
+        } else if value == "0" {
+            SignedFactor::Zero
+        } else {
+            SignedFactor::Positive(value.into())
+        }
+    }
+}
+
 pub struct FactorFinder {
     regexes: Box<[Regex]>,
     regexes_as_set: RegexSet,
@@ -616,10 +679,15 @@ fn count_frequencies<T: Eq + std::hash::Hash + Clone>(vec: &[T]) -> HashMap<T, u
 }
 
 fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
-    let counts1 = count_frequencies(vec1);
-    let counts2 = count_frequencies(vec2);
-    let mut intersection_vec = Vec::new();
-
+    if vec1.is_empty() || vec2.is_empty() {
+        return vec![];
+    }
+    let mut counts1 = count_frequencies(vec1);
+    let mut counts2 = count_frequencies(vec2);
+    if counts2.len() < counts1.len() {
+        swap(&mut counts1, &mut counts2);
+    }
+    let mut intersection_vec = Vec::with_capacity(vec1.len().min(vec2.len()));
     for (item, count1) in counts1 {
         if let Some(&count2) = counts2.get(&item) {
             let min_count = count1.min(count2);
@@ -632,9 +700,15 @@ fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]
 }
 
 fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
+    if vec2.is_empty() {
+        return vec1.into();
+    }
+    if vec1.is_empty() {
+        return vec![];
+    }
     let counts1 = count_frequencies(vec1);
     let counts2 = count_frequencies(vec2);
-    let mut intersection_vec = Vec::new();
+    let mut intersection_vec = Vec::with_capacity(vec1.len());
 
     for (item, mut count) in counts1 {
         if let Some(&count2) = counts2.get(&item) {
@@ -655,10 +729,10 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
     } else {
         let mut factors = Vec::new();
         if term % 2 == 0 {
-            factors.extend_from_slice(&fibonacci_factors(term >> 1, true));
-            factors.extend_from_slice(&lucas_factors(term >> 1, true));
+            factors.extend(fibonacci_factors(term >> 1, true));
+            factors.extend(lucas_factors(term >> 1, true));
         } else if !subset_recursion {
-            return Box::new([format_compact!("I({})", term).into()])
+            return Box::new([format_compact!("I({})", term).into()]);
         } else {
             let factors_of_term = factorize128(term);
             let mut factors_of_term = factors_of_term
@@ -670,7 +744,10 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
                 if subset.len() < full_set_size && subset.len() > 0 {
                     let product: u128 = subset.into_iter().product();
                     if product > 2 {
-                        factors.extend_from_slice(&multiset_difference(&fibonacci_factors(product, false), &factors));
+                        factors.extend(multiset_difference(
+                            &fibonacci_factors(product, false),
+                            &factors,
+                        ));
                     }
                 }
             }
@@ -687,7 +764,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
             .map(Factor::from)
             .collect()
     } else if !subset_recursion {
-        return Box::new([format_compact!("lucas({})", term).into()])
+        return Box::new([format_compact!("lucas({})", term).into()]);
     } else {
         let mut factors = Vec::new();
         let mut factors_of_term = factorize128(term);
@@ -701,7 +778,10 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
             if subset.len() < full_set_size {
                 let product = subset.into_iter().product::<u128>() << power_of_2;
                 if product > 2 {
-                    factors.extend_from_slice(&multiset_difference(&lucas_factors(product, false), &factors));
+                    factors.extend(multiset_difference(
+                        &lucas_factors(product, false),
+                        &factors,
+                    ));
                 }
             }
         }
@@ -728,7 +808,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
         let mut i = 0;
         while i < remaining_elements.len() {
             let element = remaining_elements.remove(i);
-            current_subset.push(element.clone());
+            current_subset.push(element);
 
             generate_subsets(current_subset, remaining_elements, all_subsets);
 
@@ -773,204 +853,217 @@ impl FactorFinder {
         }
     }
 
-    fn find_factors(&self, expr: &str) -> Vec<Factor> {
-        info!("Searching for factors of expression {expr}");
-        let mut factors = Vec::new();
-        if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
-            let captures = self.regexes[index].captures(expr).unwrap();
-            match index {
-                0 => {
-                    // Lucas number
-                    let Ok(term_number) = captures[1].parse::<u128>() else {
-                        warn!(
-                            "Could not parse term number of a Lucas number: {}",
-                            &captures[1]
-                        );
-                        return vec![expr.into()];
-                    };
-                    factors.extend(lucas_factors(term_number, true));
-                }
-                1 => {
-                    // Fibonacci number
-                    let Ok(term_number) = captures[1].parse::<u128>() else {
-                        warn!(
-                            "Could not parse term number of a Fibonacci number: {}",
-                            &captures[1]
-                        );
-                        return vec![expr.into()];
-                    };
-                    factors.extend(fibonacci_factors(term_number, true));
-                }
-                2 => {
-                    // a^n*b + c
-                    let mut b = 1u128;
-                    if let Some(b_match) = captures.get(3)
-                        && let Ok(parsed_b) = b_match.as_str()[1..].parse::<u128>()
-                    {
-                        b = parsed_b;
-                    }
-                    let mut c = 0i128;
-                    if let Some(c_match) = captures.get(4) {
-                        if let Ok(parsed_c) = c_match.as_str().parse::<i128>() {
-                            c = parsed_c;
-                        };
-                    } else {
-                        factors.push(format_compact!("{}^{}", &captures[1], &captures[2]).into());
-                    }
-                    let gcd_bc = b.gcd(&c.unsigned_abs());
-                    if gcd_bc > 1 {
-                        factors.extend(factorize128(gcd_bc).keys().copied().map(|k| k.into()));
-                    }
-                    if let Ok(a) = captures[1].parse::<u128>() {
-                        let gcd_ac = a.gcd(&c.unsigned_abs());
-                        if gcd_ac > 1 {
-                            let gcd_abc = gcd_ac.gcd(&gcd_bc);
-                            factors.extend(
-                                multiset_difference(
-                                    &factorize128(gcd_ac).keys().copied().collect::<Box<_>>(),
-                                    &factorize128(gcd_abc).keys().copied().collect::<Box<_>>())
-                                .into_iter()
-                                    .map(|n| Numeric(n)));
+    fn find_factors(&self, expr: &Factor) -> Vec<Factor> {
+        match expr {
+            Numeric(n) => factorize128(*n)
+                .into_iter()
+                .flat_map(|(factor, power)| repeat(factor.into()).take(power))
+                .collect(),
+            Factor::String(expr) => {
+                info!("Searching for factors of expression {expr}");
+                let mut factors = Vec::new();
+                if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
+                    let captures = self.regexes[index].captures(expr).unwrap();
+                    match index {
+                        0 => {
+                            // Lucas number
+                            let Ok(term_number) = captures[1].parse::<u128>() else {
+                                warn!(
+                                    "Could not parse term number of a Lucas number: {}",
+                                    &captures[1]
+                                );
+                                return vec![expr.into()];
+                            };
+                            factors.extend(lucas_factors(term_number, true));
                         }
-                        if let Ok(n) = captures[2].parse::<u128>() {
-                            b /= gcd_bc;
-                            c /= gcd_bc as i128;
-                            let mut factors_of_n = factorize128(n)
-                                .into_iter()
-                                .flat_map(|(factor, power)| repeat(factor).take(power))
-                                .collect::<Vec<_>>();
-                            let factors_of_n_count = factors_of_n.len();
-                            for factor_subset in power_multiset(&mut factors_of_n) {
-                                if factor_subset.len() == factors_of_n_count || factor_subset.is_empty() {
-                                    continue;
-                                }
-                                let subset_product = factor_subset.into_iter().product();
-                                if subset_product > n {
-                                    break;
-                                }
-                                if (a.powm(n, &subset_product).mulm(b, &subset_product) as i128 + c) % (subset_product as i128)
-                                    == 0
+                        1 => {
+                            // Fibonacci number
+                            let Ok(term_number) = captures[1].parse::<u128>() else {
+                                warn!(
+                                    "Could not parse term number of a Fibonacci number: {}",
+                                    &captures[1]
+                                );
+                                return vec![expr.into()];
+                            };
+                            factors.extend(fibonacci_factors(term_number, true));
+                        }
+                        2 => {
+                            // a^n*b + c
+                            let mut b = Numeric(1u128);
+                            if let Some(b_match) = captures.get(3) {
+                                b = Factor::from(&b_match.as_str()[1..]);
+                            }
+                            let mut c_raw = SignedFactor::Zero;
+                            if let Some(c_match) = captures.get(4) {
+                                c_raw = SignedFactor::from(c_match.as_str())
+                            } else {
+                                factors.push(
+                                    format_compact!("{}^{}", &captures[1], &captures[2]).into(),
+                                );
+                            }
+                            let gcd_bc = self.find_common_factors(&b, c_raw.abs());
+                            let b = self.find_factors(&b);
+                            let c_abs = self.find_factors(c_raw.abs());
+                            factors.extend(gcd_bc.clone());
+                            let a = Factor::from(&captures[1]);
+                            let gcd_ac = self.find_common_factors(&a, c_raw.abs());
+                            factors.extend(multiset_difference(&gcd_ac, &gcd_bc));
+                            let n = Factor::from(&captures[2]);
+                            if let Numeric(a) = a
+                                && let Numeric(n) = n
+                            {
+                                let b_reduced = multiset_difference(&b, &gcd_bc);
+                                let c_reduced = multiset_difference(&c_abs, &gcd_bc);
+                                if let Some(b) = as_u128(&b_reduced)
+                                    && let Some(abs_c) = as_u128(&c_reduced)
+                                    && let Some(mut c) = 0i128.checked_add_unsigned(abs_c)
                                 {
-                                    factors.push(subset_product.to_string().into());
-                                }
-                                if n % subset_product == 0 {
-                                    if let Ok(prime_for_root) = subset_product.try_into()
-                                        && (subset_product % 2 != 0 || c > 0)
-                                        && let Some(root_c) = c.nth_root_exact(prime_for_root)
-                                        && let Some(root_b) = b.nth_root_exact(prime_for_root)
-                                    {
-                                        factors.push(
-                                            format_compact!(
-                                                "{}{}{}{}",
-                                                a,
-                                                if (n / subset_product) > 1 {
-                                                    format_compact!("^{}", n / subset_product)
-                                                } else {
-                                                    CompactString::from("")
-                                                },
-                                                if root_b > 1 {
-                                                    format_compact!("*{}", root_b)
-                                                } else {
-                                                    CompactString::from("")
-                                                },
-                                                if root_c != 0 {
-                                                    format_compact!("{:+}", root_c)
-                                                } else {
-                                                    CompactString::from("")
-                                                }
-                                            )
-                                            .into(),
-                                        );
+                                    if let SignedFactor::Negative(_) = c_raw {
+                                        c = -c;
+                                    }
+                                    let factors_of_n = self.find_factors(&Numeric(n));
+                                    let factors_of_n_count = factors_of_n.len();
+                                    let mut factors_of_n =
+                                        factors_of_n.iter().collect::<Vec<&Factor>>();
+                                    for factor_subset in power_multiset(&mut factors_of_n) {
+                                        if factor_subset.len() == factors_of_n_count
+                                            || factor_subset.is_empty()
+                                        {
+                                            continue;
+                                        }
+                                        let Some(subset_product) = borrowed_as_u128(&factor_subset)
+                                        else {
+                                            continue;
+                                        };
+                                        if (a.powm(n, &subset_product).mulm(b, &subset_product)
+                                            as i128
+                                            + c)
+                                            % (subset_product as i128)
+                                            == 0
+                                        {
+                                            factors.push(subset_product.into());
+                                        }
+                                        if n % subset_product == 0 {
+                                            if let Ok(prime_for_root) = subset_product.try_into()
+                                                && (subset_product % 2 != 0 || c > 0)
+                                                && let Some(root_c) =
+                                                    c.nth_root_exact(prime_for_root)
+                                                && let Some(root_b) =
+                                                    b.nth_root_exact(prime_for_root)
+                                            {
+                                                factors.push(
+                                                    format_compact!(
+                                                        "{}{}{}{}",
+                                                        a,
+                                                        if (n / subset_product) > 1 {
+                                                            format_compact!(
+                                                                "^{}",
+                                                                n / subset_product
+                                                            )
+                                                        } else {
+                                                            CompactString::from("")
+                                                        },
+                                                        if root_b > 1 {
+                                                            format_compact!("*{}", root_b)
+                                                        } else {
+                                                            CompactString::from("")
+                                                        },
+                                                        if root_c != 0 {
+                                                            format_compact!("{:+}", root_c)
+                                                        } else {
+                                                            CompactString::from("")
+                                                        }
+                                                    )
+                                                    .into(),
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        } else {
-                            warn!(
-                                "Could not parse n in an a^n*b + c expression: {}",
-                                &captures[2]
-                            );
-                        };
-                    } else {
-                        warn!(
-                            "Could not parse a in an a^n*b + c expression: {}",
-                            &captures[1]
-                        );
-                    };
-                }
-                3 => {
-                    let mut expr_short = expr;
-                    while let Some('0') = expr_short.chars().last()
-                        && expr != "0"
-                    {
-                        factors.push(Numeric(2));
-                        factors.push(Numeric(5));
-                        expr_short = &expr_short[..(expr_short.len() - 1)];
-                    }
-                    if let Ok(num) = expr_short.parse::<u128>() {
-                        factors.extend(factorize128(num).keys().copied().map(|k| k.into()));
-                    } else {
-                        factors.push(expr.into());
-                    }
-                }
-                4 => {
-                    // parens
-                    factors.extend_from_slice(&self.find_factors(&captures[1]));
-                }
-                5 => {
-                    // division by another expression
-                    let numerator = self.find_factors(&captures[1]);
-                    let denominator = self.find_factors(&captures[2]);
-                    factors.extend(multiset_difference(&numerator, &denominator).into_iter());
-                }
-                6 => {
-                    // multiplication
-                    for term in [&captures[1], &captures[2]] {
-                        let term_factors = self.find_factors(term);
-                        if term_factors.is_empty() {
-                            factors.push(term.into());
-                        } else {
-                            factors.extend_from_slice(&term_factors);
                         }
+                        3 => {
+                            let mut expr_short = expr.as_str();
+                            while let Some('0') = expr_short.chars().last()
+                                && expr != "0"
+                            {
+                                factors.push(Numeric(2));
+                                factors.push(Numeric(5));
+                                expr_short = &expr_short[..(expr_short.len() - 1)];
+                            }
+                            if let Ok(num) = expr_short.parse::<u128>() {
+                                factors.extend(
+                                    factorize128(num).into_iter().flat_map(|(factor, power)| {
+                                        repeat(factor.into()).take(power)
+                                    }),
+                                );
+                            } else {
+                                factors.extend(factor_last_digit(expr));
+                                factors.push(expr.into());
+                            }
+                        }
+                        4 => {
+                            // parens
+                            factors.extend(self.find_factors(&captures[1].into()));
+                        }
+                        5 => {
+                            // division by another expression
+                            let numerator = self.find_factors(&captures[1].into());
+                            let denominator = self.find_factors(&captures[2].into());
+                            factors
+                                .extend(multiset_difference(&numerator, &denominator).into_iter());
+                        }
+                        6 => {
+                            // multiplication
+                            for term in [captures[1].into(), captures[2].into()] {
+                                let term_factors = self.find_factors(&term);
+                                if term_factors.is_empty() {
+                                    factors.push(term.into());
+                                } else {
+                                    factors.extend(term_factors);
+                                }
+                            }
+                        }
+                        7 => {
+                            // addition/subtraction; only return common factors of both sides
+                            if captures[2] == *"1" {
+                                // Can't have any common factors
+                                return vec![];
+                            }
+                            return self
+                                .find_common_factors(&captures[1].into(), &captures[2].into());
+                        }
+                        _ => unsafe { unreachable_unchecked() },
                     }
                 }
-                7 => {
-                    // addition/subtraction; only return common factors of both sides
-                    if captures[2] == *"1" {
-                        // Can't have any common factors
-                        return vec![];
-                    }
-                    let left_factors = self.find_factors(&captures[1]);
-                    let right_factors = self.find_factors(&captures[2]);
-                    if left_factors.is_empty() {
-                        if right_factors.contains(&captures[1].into()) {
-                            factors.push(captures[1].into());
-                        }
-                    } else if right_factors.is_empty() {
-                        if left_factors.contains(&captures[2].into()) {
-                            factors.push(captures[2].into());
-                        }
-                    } else {
-                        factors.extend(
-                            multiset_intersection(&left_factors, &right_factors).into_iter(),
-                        );
-                    }
-                }
-                _ => unsafe { unreachable_unchecked() },
+                factors.retain(|f| match f {
+                    Numeric(n) => *n != 1,
+                    Factor::String(_) => true,
+                });
+                factors
             }
         }
-        factors.retain(|f| match f {
-            Numeric(n) => *n != 1,
-            Factor::String(_) => true
-        });
-        factors
+    }
+
+    fn find_common_factors(&self, expr1: &Factor, expr2: &Factor) -> Vec<Factor> {
+        if let Numeric(num1) = expr1
+            && let Numeric(num2) = expr2
+        {
+            factorize128(num1.gcd(&num2))
+                .into_iter()
+                .flat_map(|(factor, power)| repeat(factor.into()).take(power))
+                .collect()
+        } else {
+            multiset_intersection(&self.find_factors(expr1), &self.find_factors(expr2))
+        }
     }
 
     /// Returns all unique, nontrivial factors we can find.
     pub fn find_unique_factors(&self, expr: &str) -> Box<[Factor]> {
-        let mut factors = self.find_factors(expr);
+        let mut factors = self.find_factors(&expr.into());
         factors.retain(|f| match f {
             Numeric(n) => *n > 1,
-            Factor::String(s) => s != expr
+            Factor::String(s) => s != expr,
         });
         factors.sort();
         factors.dedup();
@@ -983,20 +1076,35 @@ impl FactorFinder {
             );
         }
         factors.into_boxed_slice()
+    }
+}
 
+pub fn factor_last_digit(string_with_last_digit: &str) -> Box<[Factor]> {
+    match string_with_last_digit.chars().last() {
+        Some('0') => Box::new([Numeric(2), Numeric(5)]),
+        Some('5') => Box::new([Numeric(5)]),
+        Some('2' | '4' | '6' | '8') => Box::new([Numeric(2)]),
+        Some('1' | '3' | '7' | '9') => Box::new([]),
+        x => {
+            error!("Invalid last digit: {x:?}");
+            Box::new([])
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use itertools::Itertools;
-use crate::algebraic::{fibonacci_factors, lucas_factors, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS};
     use crate::algebraic::Factor::Numeric;
+    use crate::algebraic::{
+        FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
+        lucas_factors,
+    };
+    use itertools::Itertools;
 
     #[test]
     fn test_anbc() {
         let finder = FactorFinder::new();
-        let factors = finder.find_factors("2^9*3+3");
+        let factors = finder.find_factors(&"2^9*3+3".into());
         println!("{}", factors.iter().join(", "));
         assert!(factors.contains(&3.into()));
         assert!(factors.contains(&"2^3+1".into()));
@@ -1020,13 +1128,20 @@ use crate::algebraic::{fibonacci_factors, lucas_factors, FactorFinder, SMALL_FIB
     #[test]
     fn test_fibonacci() {
         let factors = fibonacci_factors(5040, true).into_vec();
-        let larger_factors = factors.iter().cloned().filter(|f| if let Numeric(n) = f {*n > 7} else {true}).collect::<Vec<_>>();
+        let larger_factors = factors
+            .iter()
+            .cloned()
+            .filter(|f| if let Numeric(n) = f { *n > 7 } else { true })
+            .collect::<Vec<_>>();
         let mut unique_larger_factors = larger_factors.clone();
         unique_larger_factors.sort();
         unique_larger_factors.dedup();
         assert_eq!(larger_factors.len(), unique_larger_factors.len());
         println!("{}", factors.iter().join(", "));
-        for divisor in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 24, 28, 30, 35, 36, 40, 42, 45, 48, 56, 60, 63, 70, 72, 80, 84, 90, 105, 112, 120, 126, 140, 144, 168, 180] {
+        for divisor in [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 24, 28, 30, 35, 36, 40, 42,
+            45, 48, 56, 60, 63, 70, 72, 80, 84, 90, 105, 112, 120, 126, 140, 144, 168, 180,
+        ] {
             for factor in SMALL_FIBONACCI_FACTORS[divisor] {
                 assert!(factors.contains(&(*factor).into()));
             }
