@@ -654,7 +654,27 @@ fn fibonacci_factors(term: u128) -> Box<[Factor]> {
             .map(Factor::from)
             .collect()
     } else {
-        [Factor::String(format_compact!("I({term})"))].into()
+        let mut factors = Vec::new();
+        if term % 2 == 0 {
+            factors.extend_from_slice(&fibonacci_factors(term >> 1));
+            factors.extend_from_slice(&lucas_factors(term >> 1));
+        } else {
+            let factors_of_term = factorize128(term);
+            let mut factors_of_term = factors_of_term
+                .into_iter()
+                .flat_map(|(key, value)| repeat(key).take(value))
+                .collect::<Vec<u128>>();
+            let full_set_size = factors_of_term.len();
+            for subset in power_multiset(&mut factors_of_term).into_iter() {
+                if subset.len() < full_set_size && subset.len() > 0 {
+                    let product: u128 = subset.into_iter().product();
+                    if product > 2 {
+                        factors.extend_from_slice(&fibonacci_factors(product));
+                    }
+                }
+            }
+        }
+        factors.into()
     }
 }
 
@@ -666,7 +686,23 @@ fn lucas_factors(term: u128) -> Box<[Factor]> {
             .map(Factor::from)
             .collect()
     } else {
-        [Factor::String(format_compact!("lucas({term})"))].into()
+        let mut factors = Vec::new();
+        let mut factors_of_term = factorize128(term);
+        let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
+        let mut factors_of_term = factors_of_term
+            .into_iter()
+            .flat_map(|(key, value)| repeat(key).take(value))
+            .collect::<Vec<u128>>();
+        let full_set_size = factors_of_term.len();
+        for subset in power_multiset(&mut factors_of_term).into_iter() {
+            if subset.len() < full_set_size {
+                let product = subset.into_iter().product::<u128>() << power_of_2;
+                if product > 2 {
+                    factors.extend_from_slice(&lucas_factors(product));
+                }
+            }
+        }
+        factors.into()
     }
 }
 
@@ -749,21 +785,7 @@ impl FactorFinder {
                         );
                         return Box::new([]);
                     };
-                    let mut factors_of_term = factorize128(term_number);
-                    let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
-                    let mut factors_of_term = factors_of_term
-                        .into_iter()
-                        .flat_map(|(key, value)| repeat(key).take(value))
-                        .collect::<Vec<u128>>();
-                    let full_set_size = factors_of_term.len();
-                    for subset in power_multiset(&mut factors_of_term).into_iter() {
-                        if subset.len() < full_set_size {
-                            let product = subset.into_iter().product::<u128>() << power_of_2;
-                            if product > 2 {
-                                factors.extend_from_slice(&lucas_factors(product));
-                            }
-                        }
-                    }
+                    factors.extend(lucas_factors(term_number));
                 }
                 1 => {
                     // Fibonacci number
@@ -774,23 +796,7 @@ impl FactorFinder {
                         );
                         return Box::new([]);
                     };
-                    if term_number % 2 == 0 {
-                        factors.extend_from_slice(&lucas_factors(term_number >> 1));
-                    }
-                    let factors_of_term = factorize128(term_number);
-                    let mut factors_of_term = factors_of_term
-                        .into_iter()
-                        .flat_map(|(key, value)| repeat(key).take(value))
-                        .collect::<Vec<u128>>();
-                    let full_set_size = factors_of_term.len();
-                    for subset in power_multiset(&mut factors_of_term).into_iter() {
-                        if subset.len() < full_set_size && subset.len() > 0 {
-                            let product: u128 = subset.into_iter().product();
-                            if product > 2 {
-                                factors.extend_from_slice(&fibonacci_factors(product));
-                            }
-                        }
-                    }
+                    factors.extend(fibonacci_factors(term_number));
                 }
                 2 => {
                     // a^n*b + c
@@ -801,20 +807,21 @@ impl FactorFinder {
                         b = parsed_b;
                     }
                     let mut c = 0i128;
-                    if let Some(c_match) = captures.get(4)
-                        && let Ok(parsed_c) = c_match.as_str().parse::<i128>()
-                    {
-                        c = parsed_c;
-                    };
+                    if let Some(c_match) = captures.get(4) {
+                        if let Ok(parsed_c) = c_match.as_str().parse::<i128>() {
+                            c = parsed_c;
+                        };
+                    } else {
+                        factors.push(format_compact!("{}^{}", &captures[1], &captures[2]).into());
+                    }
                     let gcd_bc = b.gcd(&c.unsigned_abs());
                     if gcd_bc > 1 {
-                        factors.push(gcd_bc.to_string().into());
+                        factors.push(gcd_bc.into());
                     }
                     if let Ok(a) = captures[1].parse::<u128>() {
                         let gcd_ac = a.gcd(&c.unsigned_abs());
-
                         if gcd_ac > 1 {
-                            factors.push(gcd_ac.to_string().into());
+                            factors.push(gcd_ac.into());
                         }
                         if let Ok(n) = captures[2].parse::<u128>() {
                             b /= gcd_bc;
@@ -833,23 +840,23 @@ impl FactorFinder {
                                         && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                     {
                                         factors.push(
-                                            format!(
+                                            format_compact!(
                                                 "{}{}{}{}",
                                                 a,
                                                 if (n / prime) > 1 {
-                                                    format!("^{}", n / prime)
+                                                    format_compact!("^{}", n / prime)
                                                 } else {
-                                                    String::new()
+                                                    CompactString::from("")
                                                 },
                                                 if root_b > 1 {
-                                                    format!("*{}", root_b)
+                                                    format_compact!("*{}", root_b)
                                                 } else {
-                                                    String::new()
+                                                    CompactString::from("")
                                                 },
                                                 if root_c != 0 {
-                                                    format!("{:+}", root_c)
+                                                    format_compact!("{:+}", root_c)
                                                 } else {
-                                                    String::new()
+                                                    CompactString::from("")
                                                 }
                                             )
                                             .into(),
@@ -862,7 +869,6 @@ impl FactorFinder {
                                 "Could not parse n in an a^n*b + c expression: {}",
                                 &captures[2]
                             );
-                            return Box::new([]);
                         };
                     } else {
                         warn!(
