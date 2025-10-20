@@ -5,7 +5,6 @@ use log::{info, warn};
 use num::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
-use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexSet};
 use std::cmp::Ordering;
@@ -540,8 +539,6 @@ static LUCAS_FACTORS: [&[u128]; 202] = [
     &[2, 2, 4021, 24994118449, 2686039424221, 940094299967491],
 ];
 
-const MAX_PRIME_IN_LIST: u128 = SMALL_PRIMES[SMALL_PRIMES.len() - 1] as u128;
-
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Factor {
     Numeric(u128),
@@ -829,30 +826,27 @@ impl FactorFinder {
                         if let Ok(n) = captures[2].parse::<u128>() {
                             b /= gcd_bc;
                             c /= gcd_bc as i128;
-                            if b == 1 && n > MAX_PRIME_IN_LIST {
-                                match c {
-                                    -1 => factors.push(format_compact!("{}^{}-1", a, n).into()),
-                                    1 => {
-                                        if n % 2 == 0 {
-                                            factors.push(format_compact!("{}^{}+1", a, n).into())
-                                        }
-                                    }
-                                    _ => {}
+                            let mut factors_of_n = factorize128(n)
+                                .into_iter()
+                                .flat_map(|(factor, power)| repeat(factor).take(power))
+                                .collect::<Vec<_>>();
+                            let factors_of_n_count = factors_of_n.len();
+                            for factor_subset in power_multiset(&mut factors_of_n) {
+                                if factor_subset.len() == factors_of_n_count {
+                                    continue;
                                 }
-                            }
-                            for prime in SMALL_PRIMES {
-                                let prime = prime as u128;
-                                if prime > n {
+                                let subset_product = factor_subset.into_iter().product();
+                                if subset_product > n {
                                     break;
                                 }
-                                if (a.powm(n, &prime).mulm(b, &prime) as i128 + c) % (prime as i128)
+                                if (a.powm(n, &subset_product).mulm(b, &subset_product) as i128 + c) % (subset_product as i128)
                                     == 0
                                 {
-                                    factors.push(prime.to_string().into());
+                                    factors.push(subset_product.to_string().into());
                                 }
-                                if n % prime == 0 {
-                                    if let Ok(prime_for_root) = prime.try_into()
-                                        && (prime != 2 || c > 0)
+                                if n % subset_product == 0 {
+                                    if let Ok(prime_for_root) = subset_product.try_into()
+                                        && (subset_product != 2 || c > 0)
                                         && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                         && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                     {
@@ -860,8 +854,8 @@ impl FactorFinder {
                                             format_compact!(
                                                 "{}{}{}{}",
                                                 a,
-                                                if (n / prime) > 1 {
-                                                    format_compact!("^{}", n / prime)
+                                                if (n / subset_product) > 1 {
+                                                    format_compact!("^{}", n / subset_product)
                                                 } else {
                                                     CompactString::from("")
                                                 },
