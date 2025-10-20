@@ -9,9 +9,9 @@ mod net;
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
-use crate::algebraic::FactorFinder;
+use crate::algebraic::{Factor, FactorFinder};
 use channel::PushbackReceiver;
-use compact_str::CompactString;
+use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use futures_util::StreamExt;
@@ -19,7 +19,6 @@ use futures_util::future::join_all;
 use itertools::Itertools;
 use log::{error, info, warn};
 use net::ThrottlingHttpClient;
-use num_prime::nt_funcs::factorize128;
 use primitive_types::U256;
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
@@ -166,7 +165,7 @@ enum NumberSpecifier<'a> {
 async fn known_factors_as_digits(
     http: &ThrottlingHttpClient,
     id: NumberSpecifier<'_>,
-) -> Result<Box<[CompactString]>, ()> {
+) -> Result<Box<[Factor]>, ()> {
     let url = match id {
         NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
         NumberSpecifier::Expression(ref expr) => {
@@ -190,7 +189,7 @@ async fn known_factors_as_digits(
             } else {
                 let factors: Vec<_> = factors
                     .into_iter()
-                    .map(|(factor, _exponent)| factor)
+                    .map(|(factor, _exponent)| Factor::from(factor))
                     .collect();
                 if factors.len() > 1 {
                     info!(
@@ -210,7 +209,9 @@ async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<F
         Ok(factors) => {
             iter(factors.clone())
                 .for_each(async |factor| {
-                    let _ = check_last_digit(http, id, &factor).await;
+                    if let Factor::String(s) = factor {
+                        let _ = check_last_digit(http, id, &s).await;
+                    }
                 })
                 .await;
             let mut out = out.lock().await;
@@ -923,7 +924,7 @@ async fn try_queue_unknowns<'a>(
             info!("{u_id}: U represented as digits: {digits_or_expr}");
             factor_last_digit(digits_or_expr)
                 .into_iter()
-                .collect::<HashSet<CompactString>>()
+                .collect::<HashSet<Factor>>()
         } else {
             info!("{u_id}: U represented as expression: {digits_or_expr}");
             if digits_or_expr.contains('/') {
@@ -932,24 +933,18 @@ async fn try_queue_unknowns<'a>(
                     factor_finder
                         .find_factors(digits_or_expr)
                         .into_iter()
-                        .map(async |factor| {
-                            if factor.len() > 38 || !factor.chars().all(|char| char.is_digit(10)) {
-                                if let Ok(factors) = known_factors_as_digits(
-                                    http,
-                                    NumberSpecifier::Expression(&factor),
-                                )
-                                .await
+                        .map(async |factor| match factor {
+                            Factor::Numeric(n) => Box::new([Factor::Numeric(n)]),
+                            Factor::String(s) => {
+                                if let Ok(factors) =
+                                    known_factors_as_digits(http, NumberSpecifier::Expression(&s))
+                                        .await
                                     && factors.len() > 1
                                 {
                                     factors
                                 } else {
-                                    Box::new([factor])
+                                    Box::new([Factor::String(s)])
                                 }
-                            } else {
-                                factorize128(factor.parse().unwrap())
-                                    .keys()
-                                    .map(|factor| factor.to_string().into())
-                                    .collect()
                             }
                         })
                         .collect::<Vec<_>>(),
@@ -984,9 +979,11 @@ async fn try_queue_unknowns<'a>(
                             known_factors_as_digits(http, NumberSpecifier::Id(factor_id)).await
                         {
                             for factor in factors.into_iter() {
-                                factor_last_digit(&factor).into_iter().for_each(|factor| {
-                                    let _ = algebraic.insert(factor);
-                                });
+                                if let Factor::String(s) = &factor {
+                                    factor_last_digit(s).into_iter().for_each(|factor| {
+                                        let _ = algebraic.insert(factor);
+                                    });
+                                }
                                 algebraic.insert(factor);
                             }
                         }
@@ -1035,11 +1032,11 @@ async fn try_queue_unknowns<'a>(
     }
 }
 
-fn factor_last_digit(string_with_last_digit: &str) -> Box<[CompactString]> {
+fn factor_last_digit(string_with_last_digit: &str) -> Box<[Factor]> {
     match string_with_last_digit.chars().last() {
-        Some('0') => Box::new(["2".into(), "5".into()]),
-        Some('5') => Box::new(["5".into()]),
-        Some('2' | '4' | '6' | '8') => Box::new(["2".into()]),
+        Some('0') => Box::new([Factor::Numeric(2), Factor::Numeric(5)]),
+        Some('5') => Box::new([Factor::Numeric(5)]),
+        Some('2' | '4' | '6' | '8') => Box::new([Factor::Numeric(2)]),
         Some('1' | '3' | '7' | '9') => Box::new([]),
         x => {
             error!("Invalid last digit: {x:?}");
@@ -1063,11 +1060,14 @@ async fn check_last_digit(
     accepted
 }
 
-async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &str) -> bool {
+async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> bool {
     for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
         match http
             .post("https://factordb.com/reportfactor.php")
-            .form(&FactorSubmission { id: u_id, factor })
+            .form(&FactorSubmission {
+                id: u_id,
+                factor: &factor.to_compact_string(),
+            })
             .send()
             .await
         {
