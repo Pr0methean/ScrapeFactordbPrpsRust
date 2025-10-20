@@ -540,6 +540,8 @@ static LUCAS_FACTORS: [&[u128]; 202] = [
     &[2, 2, 4021, 24994118449, 2686039424221, 940094299967491],
 ];
 
+const MAX_PRIME_IN_LIST: u128 = SMALL_PRIMES[SMALL_PRIMES.len() - 1] as u128;
+
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub enum Factor {
     Numeric(u128),
@@ -696,6 +698,7 @@ fn lucas_factors(term: u128) -> Box<[Factor]> {
         let full_set_size = factors_of_term.len();
         for subset in power_multiset(&mut factors_of_term).into_iter() {
             if subset.len() < full_set_size {
+                // FIXME: This probably includes some factors more than once
                 let product = subset.into_iter().product::<u128>() << power_of_2;
                 if product > 2 {
                     factors.extend_from_slice(&lucas_factors(product));
@@ -826,8 +829,22 @@ impl FactorFinder {
                         if let Ok(n) = captures[2].parse::<u128>() {
                             b /= gcd_bc;
                             c /= gcd_bc as i128;
+                            if b == 1
+                                && n > MAX_PRIME_IN_LIST
+                            {
+                                match c {
+                                    -1 => factors.push(format_compact!("{}^{}-1", a, n).into()),
+                                    1 => if n % 2 == 0 {
+                                        factors.push(format_compact!("{}^{}+1", a, n).into())
+                                    },
+                                    _ => {}
+                                }
+                            }
                             for prime in SMALL_PRIMES {
                                 let prime = prime as u128;
+                                if prime > n {
+                                    break;
+                                }
                                 if (a.powm(n, &prime).mulm(b, &prime) as i128 + c) % (prime as i128)
                                     == 0
                                 {
