@@ -849,7 +849,7 @@ impl FactorFinder {
                                 }
                                 if n % subset_product == 0 {
                                     if let Ok(prime_for_root) = subset_product.try_into()
-                                        && (subset_product != 2 || c > 0)
+                                        && (subset_product % 2 != 0 || c > 0)
                                         && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                         && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                     {
