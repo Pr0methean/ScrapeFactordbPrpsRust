@@ -165,6 +165,7 @@ enum NumberSpecifier<'a> {
 async fn known_factors_as_digits(
     http: &ThrottlingHttpClient,
     id: NumberSpecifier<'_>,
+    include_ff: bool,
 ) -> Result<Box<[Factor]>, ()> {
     let url = match id {
         NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
@@ -184,7 +185,7 @@ async fn known_factors_as_digits(
                 status, factors, ..
             } = api_response;
             info!("{id:?}: Fetched status of {status}");
-            if status == "FF" {
+            if !include_ff && status == "FF" {
                 Ok(Box::new([]))
             } else {
                 let factors: Vec<_> = factors
@@ -204,7 +205,7 @@ async fn known_factors_as_digits(
 }
 
 async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
-    match known_factors_as_digits(http, NumberSpecifier::Id(id)).await {
+    match known_factors_as_digits(http, NumberSpecifier::Id(id), false).await {
         Err(()) => false,
         Ok(factors) => {
             iter(factors.clone())
@@ -265,7 +266,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
-        if known_factors_as_digits(http, NumberSpecifier::Id(nm1_id)).await == Ok(Box::new([])) {
+        if known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), true).await.is_ok_and(|factors| factors.len() < 2) {
             info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
             let _ = http
                 .retrying_get_and_decode(
@@ -280,7 +281,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
-        if known_factors_as_digits(http, NumberSpecifier::Id(np1_id)).await == Ok(Box::new([])) {
+        if known_factors_as_digits(http, NumberSpecifier::Id(np1_id), true).await.is_ok_and(|factors| factors.len() < 2) {
             info!("{id}: N+1 (ID {np1_id}) is fully factored!");
             let _ = http
                 .retrying_get_and_decode(
@@ -937,7 +938,7 @@ async fn try_queue_unknowns<'a>(
                             Factor::Numeric(n) => Box::new([Factor::Numeric(n)]),
                             Factor::String(s) => {
                                 if let Ok(factors) =
-                                    known_factors_as_digits(http, NumberSpecifier::Expression(&s))
+                                    known_factors_as_digits(http, NumberSpecifier::Expression(&s), true)
                                         .await
                                     && factors.len() > 1
                                 {
@@ -976,7 +977,7 @@ async fn try_queue_unknowns<'a>(
                     );
                     if let Ok(factor_id) = factor_id.parse::<u128>() {
                         if let Ok(factors) =
-                            known_factors_as_digits(http, NumberSpecifier::Id(factor_id)).await
+                            known_factors_as_digits(http, NumberSpecifier::Id(factor_id), false).await
                         {
                             for factor in factors.into_iter() {
                                 if let Factor::String(s) = &factor {
