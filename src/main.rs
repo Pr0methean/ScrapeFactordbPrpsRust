@@ -40,6 +40,7 @@ use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 use tokio_stream::iter;
 use urlencoding::encode;
+use crate::algebraic::Factor::Numeric;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -266,30 +267,50 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
-        if known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), true).await.is_ok_and(|factors| factors.len() < 2) {
-            info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-            let _ = http
-                .retrying_get_and_decode(
-                    &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
-                    RETRY_DELAY,
-                )
-                .await;
-            return Ok(U256::from(0));
+        let nm1_result = known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), false).await;
+        if let Ok(nm1_factors) = nm1_result {
+            match nm1_factors.len() {
+                0 => {
+                    info!("{id}: N-1/N+1 (ID {nm1_id}) is fully factored!");
+                    let _ = http
+                        .retrying_get_and_decode(
+                            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+                            RETRY_DELAY,
+                        )
+                        .await;
+                    return Ok(U256::from(0));
+                }
+                1 => {
+                    // no known factors, but N-1 must be even if N is PRP
+                    report_factor_of_u(http, nm1_id, &Numeric(2)).await;
+                },
+                _ => {}
+            }
         }
     } else {
         error!("{id}: N-1 ID not found: {bases_text}");
     }
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
-        if known_factors_as_digits(http, NumberSpecifier::Id(np1_id), true).await.is_ok_and(|factors| factors.len() < 2) {
-            info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-            let _ = http
-                .retrying_get_and_decode(
-                    &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
-                    RETRY_DELAY,
-                )
-                .await;
-            return Ok(U256::from(0));
+        let np1_result = known_factors_as_digits(http, NumberSpecifier::Id(np1_id), false).await;
+        if let Ok(np1_factors) = np1_result {
+            match np1_factors.len() {
+                0 => {
+                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                    let _ = http
+                        .retrying_get_and_decode(
+                            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
+                            RETRY_DELAY,
+                        )
+                        .await;
+                    return Ok(U256::from(0));
+                }
+                1 => {
+                    // no known factors, but N+1 must be even if N is PRP
+                    report_factor_of_u(http, np1_id, &Numeric(2)).await;
+                },
+                _ => {}
+            }
         }
     } else {
         error!("{id}: N+1 ID not found: {bases_text}");
