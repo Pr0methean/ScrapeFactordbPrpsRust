@@ -773,7 +773,7 @@ impl FactorFinder {
         }
     }
 
-    pub fn find_factors(&self, expr: &str) -> Box<[Factor]> {
+    fn find_factors(&self, expr: &str) -> Vec<Factor> {
         info!("Searching for factors of expression {expr}");
         let mut factors = Vec::new();
         if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
@@ -786,7 +786,7 @@ impl FactorFinder {
                             "Could not parse term number of a Lucas number: {}",
                             &captures[1]
                         );
-                        return Box::new([]);
+                        return vec![expr.into()];
                     };
                     factors.extend(lucas_factors(term_number, true));
                 }
@@ -797,7 +797,7 @@ impl FactorFinder {
                             "Could not parse term number of a Fibonacci number: {}",
                             &captures[1]
                         );
-                        return Box::new([]);
+                        return vec![expr.into()];
                     };
                     factors.extend(fibonacci_factors(term_number, true));
                 }
@@ -819,12 +819,18 @@ impl FactorFinder {
                     }
                     let gcd_bc = b.gcd(&c.unsigned_abs());
                     if gcd_bc > 1 {
-                        factors.push(gcd_bc.into());
+                        factors.extend(factorize128(gcd_bc).keys().copied().map(|k| k.into()));
                     }
                     if let Ok(a) = captures[1].parse::<u128>() {
                         let gcd_ac = a.gcd(&c.unsigned_abs());
                         if gcd_ac > 1 {
-                            factors.push(gcd_ac.into());
+                            let gcd_abc = gcd_ac.gcd(&gcd_bc);
+                            factors.extend(
+                                multiset_difference(
+                                    &factorize128(gcd_ac).keys().copied().collect::<Box<_>>(),
+                                    &factorize128(gcd_abc).keys().copied().collect::<Box<_>>())
+                                .into_iter()
+                                    .map(|n| Numeric(n)));
                         }
                         if let Ok(n) = captures[2].parse::<u128>() {
                             b /= gcd_bc;
@@ -931,7 +937,7 @@ impl FactorFinder {
                     // addition/subtraction; only return common factors of both sides
                     if captures[2] == *"1" {
                         // Can't have any common factors
-                        return Box::new([]);
+                        return vec![];
                     }
                     let left_factors = self.find_factors(&captures[1]);
                     let right_factors = self.find_factors(&captures[2]);
@@ -953,10 +959,21 @@ impl FactorFinder {
             }
         }
         factors.retain(|f| match f {
+            Numeric(n) => *n != 1,
+            Factor::String(_) => true
+        });
+        factors
+    }
+
+    /// Returns all unique, nontrivial factors we can find.
+    pub fn find_unique_factors(&self, expr: &str) -> Box<[Factor]> {
+        let mut factors = self.find_factors(expr);
+        factors.retain(|f| match f {
             Numeric(n) => *n > 1,
             Factor::String(s) => s != expr
         });
         factors.sort();
+        factors.dedup();
         if factors.is_empty() {
             warn!("No factors found for expression {expr}");
         } else {
@@ -966,6 +983,7 @@ impl FactorFinder {
             );
         }
         factors.into_boxed_slice()
+
     }
 }
 

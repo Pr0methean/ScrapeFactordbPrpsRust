@@ -931,9 +931,8 @@ async fn try_queue_unknowns<'a>(
                 // Factor finding may give some results that have already been divided out
                 join_all(
                     factor_finder
-                        .find_factors(digits_or_expr)
+                        .find_unique_factors(digits_or_expr)
                         .into_iter()
-                        .unique()
                         .map(async |factor| match factor {
                             Factor::Numeric(n) => Box::new([Factor::Numeric(n)]),
                             Factor::String(s) => {
@@ -956,7 +955,7 @@ async fn try_queue_unknowns<'a>(
                 .collect()
             } else {
                 factor_finder
-                    .find_factors(digits_or_expr)
+                    .find_unique_factors(digits_or_expr)
                     .into_iter()
                     .collect()
             }
