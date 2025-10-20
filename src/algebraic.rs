@@ -13,10 +13,10 @@ use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat;
 
-static FIBONACCI_FACTORS: [&[u128]; 199] = [
+static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
-    &[1],
-    &[1],
+    &[],
+    &[],
     &[2],
     &[3],
     &[5],
@@ -317,9 +317,9 @@ static FIBONACCI_FACTORS: [&[u128]; 199] = [
     ],
 ];
 
-static LUCAS_FACTORS: [&[u128]; 202] = [
+static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
     &[2],
-    &[1],
+    &[],
     &[3],
     &[2, 2],
     &[7],
@@ -645,9 +645,9 @@ fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) 
     intersection_vec
 }
 
-fn fibonacci_factors(term: u128) -> Box<[Factor]> {
-    if term < FIBONACCI_FACTORS.len() as u128 {
-        FIBONACCI_FACTORS[term as usize]
+fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
+    if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
+        SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
             .copied()
             .map(Factor::from)
@@ -655,8 +655,10 @@ fn fibonacci_factors(term: u128) -> Box<[Factor]> {
     } else {
         let mut factors = Vec::new();
         if term % 2 == 0 {
-            factors.extend_from_slice(&fibonacci_factors(term >> 1));
-            factors.extend_from_slice(&lucas_factors(term >> 1));
+            factors.extend_from_slice(&fibonacci_factors(term >> 1, true));
+            factors.extend_from_slice(&lucas_factors(term >> 1, true));
+        } else if !subset_recursion {
+            return Box::new([format_compact!("I({})", term).into()])
         } else {
             let factors_of_term = factorize128(term);
             let mut factors_of_term = factors_of_term
@@ -668,7 +670,7 @@ fn fibonacci_factors(term: u128) -> Box<[Factor]> {
                 if subset.len() < full_set_size && subset.len() > 0 {
                     let product: u128 = subset.into_iter().product();
                     if product > 2 {
-                        factors.extend_from_slice(&fibonacci_factors(product));
+                        factors.extend_from_slice(&multiset_difference(&fibonacci_factors(product, false), &factors));
                     }
                 }
             }
@@ -677,13 +679,15 @@ fn fibonacci_factors(term: u128) -> Box<[Factor]> {
     }
 }
 
-fn lucas_factors(term: u128) -> Box<[Factor]> {
-    if term < LUCAS_FACTORS.len() as u128 {
-        LUCAS_FACTORS[term as usize]
+fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
+    if term < SMALL_LUCAS_FACTORS.len() as u128 {
+        SMALL_LUCAS_FACTORS[term as usize]
             .iter()
             .copied()
             .map(Factor::from)
             .collect()
+    } else if !subset_recursion {
+        return Box::new([format_compact!("lucas({})", term).into()])
     } else {
         let mut factors = Vec::new();
         let mut factors_of_term = factorize128(term);
@@ -695,10 +699,9 @@ fn lucas_factors(term: u128) -> Box<[Factor]> {
         let full_set_size = factors_of_term.len();
         for subset in power_multiset(&mut factors_of_term).into_iter() {
             if subset.len() < full_set_size {
-                // FIXME: This probably includes some factors more than once
                 let product = subset.into_iter().product::<u128>() << power_of_2;
                 if product > 2 {
-                    factors.extend_from_slice(&lucas_factors(product));
+                    factors.extend_from_slice(&multiset_difference(&lucas_factors(product, false), &factors));
                 }
             }
         }
@@ -785,7 +788,7 @@ impl FactorFinder {
                         );
                         return Box::new([]);
                     };
-                    factors.extend(lucas_factors(term_number));
+                    factors.extend(lucas_factors(term_number, true));
                 }
                 1 => {
                     // Fibonacci number
@@ -796,7 +799,7 @@ impl FactorFinder {
                         );
                         return Box::new([]);
                     };
-                    factors.extend(fibonacci_factors(term_number));
+                    factors.extend(fibonacci_factors(term_number, true));
                 }
                 2 => {
                     // a^n*b + c
@@ -962,11 +965,49 @@ impl FactorFinder {
     }
 }
 
-#[test]
-fn test_anbc() {
-    let finder = FactorFinder::new();
-    let factors = finder.find_factors("2^9*3+3");
-    println!("{}", factors.iter().join(", "));
-    assert!(factors.contains(&"3".into()));
-    assert!(factors.contains(&"2^3+1".into()));
+#[cfg(test)]
+mod tests {
+    use itertools::Itertools;
+use crate::algebraic::{fibonacci_factors, lucas_factors, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS};
+    use crate::algebraic::Factor::Numeric;
+
+    #[test]
+    fn test_anbc() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors("2^9*3+3");
+        println!("{}", factors.iter().join(", "));
+        assert!(factors.contains(&3.into()));
+        assert!(factors.contains(&"2^3+1".into()));
+    }
+
+    #[test]
+    fn test_lucas() {
+        let factors = lucas_factors(5040, true).into_vec();
+        let mut unique_factors = factors.clone();
+        unique_factors.sort();
+        unique_factors.dedup();
+        assert_eq!(factors.len(), unique_factors.len());
+        println!("{}", factors.iter().join(", "));
+        for odd_divisor in [35, 45, 63, 105, 315] {
+            for factor in SMALL_LUCAS_FACTORS[5040 / odd_divisor] {
+                assert!(factors.contains(&(*factor).into()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_fibonacci() {
+        let factors = fibonacci_factors(5040, true).into_vec();
+        let larger_factors = factors.iter().cloned().filter(|f| if let Numeric(n) = f {*n > 7} else {true}).collect::<Vec<_>>();
+        let mut unique_larger_factors = larger_factors.clone();
+        unique_larger_factors.sort();
+        unique_larger_factors.dedup();
+        assert_eq!(larger_factors.len(), unique_larger_factors.len());
+        println!("{}", factors.iter().join(", "));
+        for divisor in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 24, 28, 30, 35, 36, 40, 42, 45, 48, 56, 60, 63, 70, 72, 80, 84, 90, 105, 112, 120, 126, 140, 144, 168, 180] {
+            for factor in SMALL_FIBONACCI_FACTORS[divisor] {
+                assert!(factors.contains(&(*factor).into()));
+            }
+        }
+    }
 }
