@@ -1010,9 +1010,14 @@ impl FactorFinder {
                         5 => {
                             // division by another expression
                             let numerator = self.find_factors(&captures[1].into());
-                            let denominator = self.find_factors(&captures[2].into());
+                            let denominator: Factor = captures[2].into();
+                            let denominator = if numerator.contains(&denominator) {
+                                vec![denominator]
+                            } else {
+                                self.find_factors(&denominator)
+                            };
                             factors
-                                .extend(multiset_difference(&numerator, &denominator).into_iter());
+                                    .extend(multiset_difference(&numerator, &denominator).into_iter());
                         }
                         6 => {
                             // multiplication
