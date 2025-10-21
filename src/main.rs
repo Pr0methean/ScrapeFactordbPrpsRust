@@ -1075,6 +1075,7 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
     for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
         match http
             .post("https://factordb.com/reportfactor.php")
+            .await
             .form(&FactorSubmission {
                 id: u_id,
                 factor: &factor.to_compact_string(),

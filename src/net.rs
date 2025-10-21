@@ -143,7 +143,8 @@ impl ThrottlingHttpClient {
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
     }
 
-    pub fn post(&self, url: &str) -> RequestBuilder {
+    pub async fn post(&self, url: &str) -> RequestBuilder {
+        self.rps_limiter.until_ready().await;
         self.http.post(url)
     }
 }
