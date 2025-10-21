@@ -821,7 +821,7 @@ async fn main() {
     }
     let config = config_builder.build().unwrap();
     let c_filter = InMemoryFilter::new(config.clone()).unwrap();
-    let id_and_expr_regex = Regex::new("id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
+    let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
     let factor_finder = FactorFinder::new();
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
