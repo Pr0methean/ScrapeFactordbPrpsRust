@@ -356,7 +356,7 @@ async fn get_prp_remaining_bases(
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
 
-const MIN_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 4;
+const MIN_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 16;
 
 const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
@@ -623,7 +623,7 @@ async fn throttle_if_necessary(
             tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 18000);
     }
     let mut bases_remaining = (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
-    if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS / 2 {
+    if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
             cpu_tenths_spent_after as f64 * 0.1,
