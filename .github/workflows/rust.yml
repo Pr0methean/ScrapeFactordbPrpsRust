@@ -57,6 +57,9 @@ jobs:
     - name: Run
       run: |
         set -x
+        if [ "${{github.event_name}}" == "push" ]; then
+          export RUST_BACKTRACE=full
+        fi
         NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 cargo +nightly run --release &
         rust_pid=$!
         sleep 21300 &
