@@ -9,12 +9,12 @@ mod net;
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
+use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{Factor, FactorFinder};
 use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
-use futures_util::StreamExt;
 use futures_util::future::join_all;
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -25,8 +25,9 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, from_str};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, VecDeque};
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::ops::Add;
@@ -34,13 +35,12 @@ use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
-use tokio_stream::iter;
 use urlencoding::encode;
-use crate::algebraic::Factor::Numeric;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -88,6 +88,24 @@ struct CheckTask {
     task_type: CheckTaskType,
 }
 
+#[derive(Clone, Eq)]
+struct CompositeCheckTask {
+    id: u128,
+    digits_or_expr: CompactString,
+}
+
+impl PartialEq<Self> for CompositeCheckTask {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Hash for CompositeCheckTask {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state)
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct NumberStatusApiResponse {
     id: Value,
@@ -108,15 +126,19 @@ fn count_ones(u256: U256) -> u32 {
 async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
-    c_receiver: &mut PushbackReceiver<u128>,
+    c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut InMemoryFilter,
+    factor_finder: &FactorFinder,
+    algebraic_factors_regex: &Regex,
 ) {
     let Some(mut remaining) = end.checked_duration_since(Instant::now()) else {
         return;
     };
     info!("Processing composites for {remaining:?} while other work is waiting");
     loop {
-        let Ok(id) = timeout(remaining, c_receiver.recv()).await else {
+        let Ok(CompositeCheckTask { id, digits_or_expr }) =
+            timeout(remaining, c_receiver.recv()).await
+        else {
             warn!("Timed out waiting for a composite number to check");
             return;
         };
@@ -124,15 +146,29 @@ async fn composites_while_waiting(
             info!("{id}: Skipping duplicate C");
             continue;
         }
-        let check_succeeded = check_composite(http, id).await;
+        if find_and_submit_factors(
+            http,
+            id,
+            &digits_or_expr,
+            factor_finder,
+            algebraic_factors_regex,
+        )
+        .await
+        {
+            info!("{id}: Skipping C check because algebraic factors were found");
+            continue;
+        }
+        if check_composite(http, id).await {
+            continue;
+        }
         if let Some(out) = COMPOSITES_OUT.get() {
             if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
                 c_filter.insert(&id.to_ne_bytes()).unwrap();
                 if dispatch_composite(http, id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
-            } else if !check_succeeded {
-                if c_receiver.try_send(id) {
+            } else {
+                if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
                     info!("{id}: Requeued C");
                 } else {
                     c_filter.insert(&id.to_ne_bytes()).unwrap();
@@ -140,8 +176,8 @@ async fn composites_while_waiting(
                     task::spawn(async move { dispatch_composite(&http, id, out).await });
                 }
             }
-        } else if !check_succeeded {
-            if c_receiver.try_send(id) {
+        } else {
+            if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
                 info!("{id}: Requeued C");
             } else {
                 error!("{id}: Dropping C");
@@ -209,13 +245,6 @@ async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<F
     match known_factors_as_digits(http, NumberSpecifier::Id(id), false).await {
         Err(()) => false,
         Ok(factors) => {
-            iter(factors.clone())
-                .for_each(async |factor| {
-                    if let Factor::String(s) = factor {
-                        let _ = check_last_digit(http, id, &s).await;
-                    }
-                })
-                .await;
             let mut out = out.lock().await;
             let mut result = factors
                 .into_iter()
@@ -252,8 +281,10 @@ async fn get_prp_remaining_bases(
     bases_regex: &Regex,
     nm1_regex: &Regex,
     np1_regex: &Regex,
-    c_receiver: &mut PushbackReceiver<u128>,
+    c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut InMemoryFilter,
+    factor_finder: &FactorFinder,
+    algebraic_factors_regex: &Regex,
 ) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
     let bases_text = http
@@ -283,7 +314,7 @@ async fn get_prp_remaining_bases(
                 1 => {
                     // no known factors, but N-1 must be even if N is PRP
                     report_factor_of_u(http, nm1_id, &Numeric(2)).await;
-                },
+                }
                 _ => {}
             }
         }
@@ -308,7 +339,7 @@ async fn get_prp_remaining_bases(
                 1 => {
                     // no known factors, but N+1 must be even if N is PRP
                     report_factor_of_u(http, np1_id, &Numeric(2)).await;
-                },
+                }
                 _ => {}
             }
         }
@@ -328,6 +359,8 @@ async fn get_prp_remaining_bases(
             http,
             c_receiver,
             c_filter,
+            factor_finder,
+            algebraic_factors_regex,
         )
         .await;
         return Err(());
@@ -367,9 +400,11 @@ const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
-    mut c_receiver: PushbackReceiver<u128>,
+    mut c_receiver: PushbackReceiver<CompositeCheckTask>,
     mut c_filter: InMemoryFilter,
     http: ThrottlingHttpClient,
+    factor_finder: FactorFinder,
+    algebraic_factors_regex: Regex,
 ) {
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
@@ -387,6 +422,8 @@ async fn do_checks(
         &mut bases_before_next_cpu_check,
         false,
         &mut c_filter,
+        &factor_finder,
+        &algebraic_factors_regex,
     )
     .await;
     loop {
@@ -414,6 +451,8 @@ async fn do_checks(
                         &np1_regex,
                         &mut c_receiver,
                         &mut c_filter,
+                        &factor_finder,
+                        &algebraic_factors_regex,
                     )
                     .await
                     else {
@@ -444,6 +483,8 @@ async fn do_checks(
                                 &http,
                                 &mut c_receiver,
                                 &mut c_filter,
+                                &factor_finder,
+                                &algebraic_factors_regex,
                             )
                             .await;
                             break;
@@ -454,6 +495,8 @@ async fn do_checks(
                             &mut bases_before_next_cpu_check,
                             true,
                             &mut c_filter,
+                            &factor_finder,
+                            &algebraic_factors_regex,
                         )
                         .await;
                         if cert_regex.is_match(&text) {
@@ -477,22 +520,33 @@ async fn do_checks(
                     }
                 }
                 CheckTaskType::U => {
-                    throttle_if_necessary(
+                    if !throttle_if_necessary(
                         &http,
                         &mut c_receiver,
                         &mut bases_before_next_cpu_check,
                         true,
                         &mut c_filter,
+                        &factor_finder,
+                        &algebraic_factors_regex,
                     )
-                    .await;
+                    .await
+                    {
+                        composites_while_waiting(
+                            next_unknown_attempt,
+                            &http,
+                            &mut c_receiver,
+                            &mut c_filter,
+                            &factor_finder,
+                            &algebraic_factors_regex,
+                        )
+                        .await;
+                    }
                     match try_handle_unknown(
                         &http,
-                        &mut c_receiver,
                         &u_status_regex,
                         &many_digits_regex,
                         id,
                         &mut next_unknown_attempt,
-                        &mut c_filter,
                     )
                     .await
                     {
@@ -531,6 +585,8 @@ async fn do_checks(
                 &http,
                 &mut c_receiver,
                 &mut c_filter,
+                &factor_finder,
+                &algebraic_factors_regex,
             )
             .await;
             continue;
@@ -540,14 +596,11 @@ async fn do_checks(
 
 async fn try_handle_unknown(
     http: &ThrottlingHttpClient,
-    c_receiver: &mut PushbackReceiver<u128>,
     u_status_regex: &Regex,
     many_digits_regex: &Regex,
     id: u128,
     next_attempt: &mut Instant,
-    c_filter: &mut InMemoryFilter,
 ) -> UnknownPrpCheckResult {
-    composites_while_waiting(*next_attempt, http, c_receiver, c_filter).await;
     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
     let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
@@ -590,14 +643,16 @@ async fn try_handle_unknown(
 
 async fn throttle_if_necessary(
     http: &ThrottlingHttpClient,
-    c_receiver: &mut PushbackReceiver<u128>,
+    c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut u64,
     sleep_first: bool,
     c_filter: &mut InMemoryFilter,
-) {
+    factor_finder: &FactorFinder,
+    algebraic_factors_regex: &Regex,
+) -> bool {
     *bases_before_next_cpu_check -= 1;
     if *bases_before_next_cpu_check != 0 {
-        return;
+        return false;
     }
     if sleep_first {
         composites_while_waiting(
@@ -605,6 +660,8 @@ async fn throttle_if_necessary(
             http,
             c_receiver,
             c_filter,
+            factor_finder,
+            algebraic_factors_regex,
         )
         .await; // allow for delay in CPU accounting
     }
@@ -615,7 +672,7 @@ async fn throttle_if_necessary(
         .await
     else {
         error!("Failed to parse resource limits");
-        return;
+        return false;
     };
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
     if !NO_RESERVE.load(Acquire) {
@@ -637,7 +694,15 @@ async fn throttle_if_necessary(
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
-        composites_while_waiting(cpu_reset_time, http, c_receiver, c_filter).await;
+        composites_while_waiting(
+            cpu_reset_time,
+            http,
+            c_receiver,
+            c_filter,
+            factor_finder,
+            algebraic_factors_regex,
+        )
+        .await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
         CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
     } else {
@@ -652,13 +717,14 @@ async fn throttle_if_necessary(
         );
         *bases_before_next_cpu_check = bases_remaining;
     }
+    true
 }
 
 async fn queue_composites(
-    waiting_c: &mut VecDeque<u128>,
+    waiting_c: &mut VecDeque<CompositeCheckTask>,
     id_regex: &Regex,
     http: &ThrottlingHttpClient,
-    c_sender: &Sender<u128>,
+    c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZeroUsize>,
 ) -> usize {
     let mut c_sent = 0;
@@ -683,16 +749,17 @@ async fn queue_composites(
     info!("C search results retrieved");
     let c_ids = id_regex
         .captures_iter(&composites_page)
-        .map(|capture| capture.get(1).unwrap().as_str().parse::<u128>().ok())
+        .flat_map(|capture| {
+            Some(CompositeCheckTask {
+                id: capture[1].parse::<u128>().ok()?,
+                digits_or_expr: capture[2].into(),
+            })
+        })
         .unique();
     let mut c_buffered = 0usize;
-    for c_id in c_ids {
-        let Some(c_id) = c_id else {
-            error!("Invalid composite number ID in search results");
-            continue;
-        };
-        if c_sender.try_send(c_id).is_err() {
-            waiting_c.push_back(c_id);
+    for check_task in c_ids {
+        if let Err(Full(check_task)) = c_sender.try_send(check_task) {
+            waiting_c.push_back(check_task);
             c_buffered += 1;
         } else {
             c_sent += 1;
@@ -704,9 +771,9 @@ async fn queue_composites(
         b.shuffle(&mut rng);
         info!("Shuffled C buffer");
     } else {
-        while let Some(c) = waiting_c.pop_front() {
-            if c_sender.try_send(c).is_err() {
-                waiting_c.push_front(c);
+        while let Some(check_task) = waiting_c.pop_front() {
+            if let Err(Full(check_task)) = c_sender.try_send(check_task) {
+                waiting_c.push_front(check_task);
                 break;
             }
             c_sent += 1;
@@ -762,12 +829,16 @@ async fn main() {
     }
     let config = config_builder.build().unwrap();
     let c_filter = InMemoryFilter::new(config.clone()).unwrap();
+    let algebraic_factors_regex = Regex::new("id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
+    let factor_finder = FactorFinder::new();
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
         c_receiver,
         c_filter,
         http.clone(),
+        factor_finder.clone(),
+        algebraic_factors_regex.clone(),
     ));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
@@ -784,8 +855,6 @@ async fn main() {
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     simple_log::console("info").unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-    let algebraic_factors_regex = Regex::new("id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
-    let factor_finder = FactorFinder::new();
     // Use PRP queue so that the first unknown number will start sooner
     let _ = try_queue_unknowns(
         &algebraic_factors_regex,
@@ -808,7 +877,7 @@ async fn main() {
                     Some(c) => {
                         c_permit.unwrap().send(c);
                         while let Some(c) = waiting_c.pop_front() {
-                            if c_sender.try_send(c).is_err() {
+                            if let Err(Full(c)) = c_sender.try_send(c) {
                                 waiting_c.push_front(c);
                                 break;
                             }
@@ -942,101 +1011,15 @@ async fn try_queue_unknowns<'a>(
             continue;
         }
         let digits_or_expr = &results_text[digits_or_expr_range];
-        let mut algebraic = if digits_or_expr.contains("...") {
-            info!("{u_id}: U represented as digits: {digits_or_expr}");
-            algebraic::factor_last_digit(digits_or_expr)
-                .into_iter()
-                .collect::<HashSet<Factor>>()
-        } else {
-            info!("{u_id}: U represented as expression: {digits_or_expr}");
-            if digits_or_expr.contains('/') {
-                // Factor finding may give some results that have already been divided out
-                join_all(
-                    factor_finder
-                        .find_unique_factors(digits_or_expr)
-                        .into_iter()
-                        .map(async |factor| match factor {
-                            Factor::Numeric(n) => Box::new([Factor::Numeric(n)]),
-                            Factor::String(s) => {
-                                if let Ok(factors) =
-                                    known_factors_as_digits(http, NumberSpecifier::Expression(&s), true)
-                                        .await
-                                    && factors.len() > 1
-                                {
-                                    factors
-                                } else {
-                                    Box::new([Factor::String(s)])
-                                }
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .await
-                .into_iter()
-                .flatten()
-                .collect()
-            } else {
-                factor_finder
-                    .find_unique_factors(digits_or_expr)
-                    .into_iter()
-                    .collect()
-            }
-        };
-        let url = format!("https://factordb.com/frame_moreinfo.php?id={u_id}");
-        let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-        info!("{u_id}: Checking for listed algebraic factors");
-        // Links before the "Is factor of" header are algebraic factors; links after it aren't
-        if let Some(listed_algebraic) = result.split("Is factor of").next() {
-            let algebraic_factors = algebraic_factors_regex.captures_iter(listed_algebraic);
-            for factor in algebraic_factors {
-                let factor_id = &factor[1];
-                let factor_digits_or_expr = &factor[2];
-                if factor_digits_or_expr.contains("...") {
-                    // Link text isn't an expression for the factor, so we need to look up its value
-                    info!(
-                        "{u_id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
-                    );
-                    if let Ok(factor_id) = factor_id.parse::<u128>() {
-                        if let Ok(factors) =
-                            known_factors_as_digits(http, NumberSpecifier::Id(factor_id), false).await
-                        {
-                            for factor in factors.into_iter() {
-                                if let Factor::String(s) = &factor {
-                                    algebraic::factor_last_digit(s).into_iter().for_each(
-                                        |factor| {
-                                            let _ = algebraic.insert(factor);
-                                        },
-                                    );
-                                }
-                                algebraic.insert(factor);
-                            }
-                        }
-                    } else {
-                        error!("{u_id}: Invalid ID for algebraic factor: {factor_id}")
-                    }
-                } else if factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
-                    info!(
-                        "{u_id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}"
-                    );
-                    algebraic.insert(factor_digits_or_expr.into());
-                } else {
-                    info!(
-                        "{u_id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}"
-                    );
-                    algebraic.insert(factor_digits_or_expr.into());
-                }
-            }
-        } else {
-            error!("{u_id}: Invalid result when checking for algebraic factors: {result}");
-        };
-        if !algebraic.is_empty() {
-            info!("{u_id}: {} algebraic factors to submit", algebraic.len());
-        }
-        let mut algebraic_submitted = false;
-        for factor in algebraic {
-            algebraic_submitted |= report_factor_of_u(http, u_id, &factor).await;
-        }
-        if algebraic_submitted {
+        if find_and_submit_factors(
+            http,
+            u_id,
+            digits_or_expr,
+            factor_finder,
+            algebraic_factors_regex,
+        )
+        .await
+        {
             info!("{u_id}: Skipping PRP check because algebraic factors were found");
         } else {
             info!("{u_id}: No algebraic factors found");
@@ -1054,21 +1037,6 @@ async fn try_queue_unknowns<'a>(
         error!("Couldn't parse IDs from search result: {results_text}");
         Err(u_permits)
     }
-}
-
-async fn check_last_digit(
-    http: &ThrottlingHttpClient,
-    u_id: u128,
-    string_with_last_digit: &str,
-) -> bool {
-    let mut accepted = false;
-    let factors = algebraic::factor_last_digit(string_with_last_digit);
-    for factor in factors {
-        if report_factor_of_u(http, u_id, &factor).await {
-            accepted = true;
-        }
-    }
-    accepted
 }
 
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> bool {
@@ -1114,4 +1082,127 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
         Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
     }
     true // factor that we failed to submit may still have been valid
+}
+
+async fn find_and_submit_factors(
+    http: &ThrottlingHttpClient,
+    id: u128,
+    digits_or_expr: &str,
+    factor_finder: &FactorFinder,
+    algebraic_factors_regex: &Regex,
+) -> bool {
+    let mut digits_or_expr_full = Vec::new();
+    if digits_or_expr.contains("...") {
+        let Ok(known_factors) = known_factors_as_digits(http, NumberSpecifier::Id(id), true).await
+        else {
+            return false;
+        };
+        if known_factors.is_empty() {
+            warn!("{id}: Already fully factored");
+            return true;
+        }
+        digits_or_expr_full.extend(known_factors);
+    } else {
+        digits_or_expr_full.push(digits_or_expr.into());
+    }
+    let mut factors_to_submit = BTreeSet::new();
+    for digits_or_expr in digits_or_expr_full.into_iter() {
+        if let Factor::String(ref s) = digits_or_expr
+            && s.contains('/')
+        {
+            // Factor finding may give some results that have already been divided out
+            factors_to_submit.extend(
+                join_all(
+                    factor_finder
+                        .find_unique_factors(digits_or_expr)
+                        .into_iter()
+                        .map(async |factor| match factor {
+                            Numeric(n) => Box::new([Numeric(n)]),
+                            Factor::String(s) => {
+                                if let Ok(factors) = known_factors_as_digits(
+                                    http,
+                                    NumberSpecifier::Expression(&s),
+                                    true,
+                                )
+                                .await
+                                    && factors.len() > 1
+                                {
+                                    factors
+                                } else {
+                                    Box::new([Factor::String(s)])
+                                }
+                            }
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .await
+                .into_iter()
+                .flatten(),
+            );
+        } else {
+            factors_to_submit.extend(
+                factor_finder
+                    .find_unique_factors(digits_or_expr)
+                    .into_iter(),
+            );
+        }
+    }
+    let url = format!("https://factordb.com/frame_moreinfo.php?id={id}");
+    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+    info!("{id}: Checking for listed algebraic factors");
+    // Links before the "Is factor of" header are algebraic factors; links after it aren't
+    if let Some(listed_algebraic) = result.split("Is factor of").next() {
+        let algebraic_factors = algebraic_factors_regex.captures_iter(listed_algebraic);
+        for factor in algebraic_factors {
+            let factor_id = &factor[1];
+            let factor_digits_or_expr = &factor[2];
+            if factor_digits_or_expr.contains("...") {
+                // Link text isn't an expression for the factor, so we need to look up its value
+                info!(
+                    "{id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
+                );
+                if let Ok(factor_id) = factor_id.parse::<u128>() {
+                    if let Ok(factors) =
+                        known_factors_as_digits(http, NumberSpecifier::Id(factor_id), false).await
+                    {
+                        for factor in factors.into_iter() {
+                            if let Factor::String(s) = &factor {
+                                algebraic::factor_last_digit(s)
+                                    .into_iter()
+                                    .for_each(|factor| {
+                                        let _ = factors_to_submit.insert(factor);
+                                    });
+                            }
+                            factors_to_submit.insert(factor);
+                        }
+                    }
+                } else {
+                    error!("{id}: Invalid ID for algebraic factor: {factor_id}")
+                }
+            } else if factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
+                info!(
+                    "{id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}"
+                );
+                factors_to_submit.insert(factor_digits_or_expr.into());
+            } else {
+                info!(
+                    "{id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}"
+                );
+                factors_to_submit.insert(factor_digits_or_expr.into());
+            }
+        }
+    } else {
+        error!("{id}: Invalid result when checking for algebraic factors: {result}");
+    };
+    if !factors_to_submit.is_empty() {
+        info!(
+            "{id}: {} algebraic factors to submit",
+            factors_to_submit.len()
+        );
+    }
+    let mut algebraic_submitted = false;
+    for factor in factors_to_submit.into_iter().rev() {
+        algebraic_submitted |= report_factor_of_u(http, id, &factor).await;
+    }
+    algebraic_submitted
 }

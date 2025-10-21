@@ -7,7 +7,7 @@ use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
 use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexSet};
-use std::cmp::Ordering;
+use std::cmp::{Ordering, PartialEq};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
@@ -603,7 +603,7 @@ impl Ord for Factor {
             },
             Factor::String(s) => match other {
                 Numeric(_) => Ordering::Greater,
-                Factor::String(o) => s.cmp(o),
+                Factor::String(o) => s.len().cmp(&o.len()).then_with(|| s.cmp(o)),
             },
         }
     }
@@ -665,6 +665,7 @@ impl From<&str> for SignedFactor {
     }
 }
 
+#[derive(Clone)]
 pub struct FactorFinder {
     regexes: Box<[Regex]>,
     regexes_as_set: RegexSet,
@@ -1059,11 +1060,11 @@ impl FactorFinder {
     }
 
     /// Returns all unique, nontrivial factors we can find.
-    pub fn find_unique_factors(&self, expr: &str) -> Box<[Factor]> {
-        let mut factors = self.find_factors(&expr.into());
+    pub fn find_unique_factors(&self, expr: Factor) -> Box<[Factor]> {
+        let mut factors = self.find_factors(&expr);
         factors.retain(|f| match f {
             Numeric(n) => *n > 1,
-            Factor::String(s) => s != expr,
+            Factor::String(_) => *f != expr,
         });
         factors.sort();
         factors.dedup();
