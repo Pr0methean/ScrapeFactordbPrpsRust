@@ -158,7 +158,12 @@ async fn composites_while_waiting(
             info!("{id}: Skipping C check because algebraic factors were found");
             continue;
         }
-        if check_composite(http, id).await {
+        if http
+            .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+            .await
+            .is_some()
+        {
+            info!("{id}: Checked composite");
             continue;
         }
         if let Some(out) = COMPOSITES_OUT.get() {
@@ -259,19 +264,6 @@ async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<F
                 true
             }
         }
-    }
-}
-
-async fn check_composite(http: &ThrottlingHttpClient, id: u128) -> bool {
-    if http
-        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
-        .await
-        .is_some()
-    {
-        info!("Checked composite with ID {id}");
-        true
-    } else {
-        false
     }
 }
 
