@@ -129,7 +129,7 @@ async fn composites_while_waiting(
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut InMemoryFilter,
     factor_finder: &FactorFinder,
-    algebraic_factors_regex: &Regex,
+    id_and_expr_regex: &Regex,
 ) {
     let Some(mut remaining) = end.checked_duration_since(Instant::now()) else {
         return;
@@ -151,7 +151,7 @@ async fn composites_while_waiting(
             id,
             &digits_or_expr,
             factor_finder,
-            algebraic_factors_regex,
+            id_and_expr_regex,
         )
         .await
         {
@@ -276,7 +276,7 @@ async fn get_prp_remaining_bases(
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut InMemoryFilter,
     factor_finder: &FactorFinder,
-    algebraic_factors_regex: &Regex,
+    id_and_expr_regex: &Regex,
 ) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
     let bases_text = http
@@ -352,7 +352,7 @@ async fn get_prp_remaining_bases(
             c_receiver,
             c_filter,
             factor_finder,
-            algebraic_factors_regex,
+            id_and_expr_regex,
         )
         .await;
         return Err(());
@@ -396,7 +396,7 @@ async fn do_checks(
     mut c_filter: InMemoryFilter,
     http: ThrottlingHttpClient,
     factor_finder: FactorFinder,
-    algebraic_factors_regex: Regex,
+    id_and_expr_regex: Regex,
 ) {
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
@@ -415,7 +415,7 @@ async fn do_checks(
         false,
         &mut c_filter,
         &factor_finder,
-        &algebraic_factors_regex,
+        &id_and_expr_regex,
     )
     .await;
     loop {
@@ -444,7 +444,7 @@ async fn do_checks(
                         &mut c_receiver,
                         &mut c_filter,
                         &factor_finder,
-                        &algebraic_factors_regex,
+                        &id_and_expr_regex,
                     )
                     .await
                     else {
@@ -476,7 +476,7 @@ async fn do_checks(
                                 &mut c_receiver,
                                 &mut c_filter,
                                 &factor_finder,
-                                &algebraic_factors_regex,
+                                &id_and_expr_regex,
                             )
                             .await;
                             break;
@@ -488,7 +488,7 @@ async fn do_checks(
                             true,
                             &mut c_filter,
                             &factor_finder,
-                            &algebraic_factors_regex,
+                            &id_and_expr_regex,
                         )
                         .await;
                         if cert_regex.is_match(&text) {
@@ -519,7 +519,7 @@ async fn do_checks(
                         true,
                         &mut c_filter,
                         &factor_finder,
-                        &algebraic_factors_regex,
+                        &id_and_expr_regex,
                     )
                     .await
                     {
@@ -529,7 +529,7 @@ async fn do_checks(
                             &mut c_receiver,
                             &mut c_filter,
                             &factor_finder,
-                            &algebraic_factors_regex,
+                            &id_and_expr_regex,
                         )
                         .await;
                     }
@@ -578,7 +578,7 @@ async fn do_checks(
                 &mut c_receiver,
                 &mut c_filter,
                 &factor_finder,
-                &algebraic_factors_regex,
+                &id_and_expr_regex,
             )
             .await;
             continue;
@@ -640,7 +640,7 @@ async fn throttle_if_necessary(
     sleep_first: bool,
     c_filter: &mut InMemoryFilter,
     factor_finder: &FactorFinder,
-    algebraic_factors_regex: &Regex,
+    id_and_expr_regex: &Regex,
 ) -> bool {
     *bases_before_next_cpu_check -= 1;
     if *bases_before_next_cpu_check != 0 {
@@ -653,7 +653,7 @@ async fn throttle_if_necessary(
             c_receiver,
             c_filter,
             factor_finder,
-            algebraic_factors_regex,
+            id_and_expr_regex,
         )
         .await; // allow for delay in CPU accounting
     }
@@ -692,7 +692,7 @@ async fn throttle_if_necessary(
             c_receiver,
             c_filter,
             factor_finder,
-            algebraic_factors_regex,
+            id_and_expr_regex,
         )
         .await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
@@ -714,7 +714,7 @@ async fn throttle_if_necessary(
 
 async fn queue_composites(
     waiting_c: &mut VecDeque<CompositeCheckTask>,
-    id_regex: &Regex,
+    id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZeroUsize>,
@@ -739,7 +739,7 @@ async fn queue_composites(
         )
         .await;
     info!("C search results retrieved");
-    let c_ids = id_regex
+    let c_ids = id_and_expr_regex
         .captures_iter(&composites_page)
         .flat_map(|capture| {
             Some(CompositeCheckTask {
@@ -821,7 +821,7 @@ async fn main() {
     }
     let config = config_builder.build().unwrap();
     let c_filter = InMemoryFilter::new(config.clone()).unwrap();
-    let algebraic_factors_regex = Regex::new("id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
+    let id_and_expr_regex = Regex::new("id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
     let factor_finder = FactorFinder::new();
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
@@ -830,7 +830,7 @@ async fn main() {
         c_filter,
         http.clone(),
         factor_finder.clone(),
-        algebraic_factors_regex.clone(),
+        id_and_expr_regex.clone(),
     ));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
@@ -849,7 +849,7 @@ async fn main() {
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     // Use PRP queue so that the first unknown number will start sooner
     let _ = try_queue_unknowns(
-        &algebraic_factors_regex,
+        &id_and_expr_regex,
         &http,
         u_digits,
         prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
@@ -857,7 +857,7 @@ async fn main() {
         &factor_finder,
     )
     .await;
-    queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
+    queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
@@ -877,7 +877,7 @@ async fn main() {
                         }
                     }
                     None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_regex, &http, &c_sender, c_digits).await;
+                        c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
                     }
                 }
                 info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
@@ -909,7 +909,7 @@ async fn main() {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&algebraic_factors_regex, &http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
+                        queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -919,7 +919,7 @@ async fn main() {
                 }
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                queue_unknowns(&algebraic_factors_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
+                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
             }
             _ = sigterm.recv() => {
                 warn!("Received SIGTERM; exiting");
@@ -930,7 +930,7 @@ async fn main() {
 }
 
 async fn queue_unknowns(
-    algebraic_factors_regex: &Regex,
+    id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
     u_digits: Option<NonZeroUsize>,
     u_permits: PermitIterator<'_, CheckTask>,
@@ -943,7 +943,7 @@ async fn queue_unknowns(
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
         if let Err(u_permits) = try_queue_unknowns(
-            algebraic_factors_regex,
+            id_and_expr_regex,
             http,
             u_digits,
             u_permits,
@@ -962,7 +962,7 @@ const U_MIN_DIGITS: usize = 2001;
 const U_MAX_DIGITS: usize = 199_999;
 
 async fn try_queue_unknowns<'a>(
-    algebraic_factors_regex: &Regex,
+    id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
     u_digits: Option<NonZeroUsize>,
     mut u_permits: PermitIterator<'a, CheckTask>,
@@ -981,7 +981,7 @@ async fn try_queue_unknowns<'a>(
         return Err(u_permits);
     };
     info!("U search results retrieved");
-    let ids = algebraic_factors_regex
+    let ids = id_and_expr_regex
         .captures_iter(&results_text)
         .map(|result| {
             (
@@ -1008,7 +1008,7 @@ async fn try_queue_unknowns<'a>(
             u_id,
             digits_or_expr,
             factor_finder,
-            algebraic_factors_regex,
+            id_and_expr_regex,
         )
         .await
         {
@@ -1081,7 +1081,7 @@ async fn find_and_submit_factors(
     id: u128,
     digits_or_expr: &str,
     factor_finder: &FactorFinder,
-    algebraic_factors_regex: &Regex,
+    id_and_expr_regex: &Regex,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
     if digits_or_expr.contains("...") {
@@ -1144,7 +1144,7 @@ async fn find_and_submit_factors(
     info!("{id}: Checking for listed algebraic factors");
     // Links before the "Is factor of" header are algebraic factors; links after it aren't
     if let Some(listed_algebraic) = result.split("Is factor of").next() {
-        let algebraic_factors = algebraic_factors_regex.captures_iter(listed_algebraic);
+        let algebraic_factors = id_and_expr_regex.captures_iter(listed_algebraic);
         for factor in algebraic_factors {
             let factor_id = &factor[1];
             let factor_digits_or_expr = &factor[2];
