@@ -730,7 +730,7 @@ fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) 
         if let Some(&count2) = counts2.get(&item) {
             count = count.saturating_sub(count2);
         }
-        intersection_vec.extend(repeat(item.clone()).take(count));
+        intersection_vec.extend(std::iter::repeat_n(item.clone(), count));
     }
     intersection_vec
 }
@@ -745,7 +745,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
             .collect()
     } else {
         let mut factors = Vec::new();
-        if term % 2 == 0 {
+        if term.is_multiple_of(2) {
             factors.extend(fibonacci_factors(term >> 1, true));
             factors.extend(lucas_factors(term >> 1, true));
         } else if !subset_recursion {
@@ -754,11 +754,11 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
             let factors_of_term = factorize128(term);
             let mut factors_of_term = factors_of_term
                 .into_iter()
-                .flat_map(|(key, value)| repeat(key).take(value))
+                .flat_map(|(key, value)| std::iter::repeat_n(key, value))
                 .collect::<Vec<u128>>();
             let full_set_size = factors_of_term.len();
             for subset in power_multiset(&mut factors_of_term).into_iter() {
-                if subset.len() < full_set_size && subset.len() > 0 {
+                if subset.len() < full_set_size && !subset.is_empty() {
                     let product: u128 = subset.into_iter().product();
                     if product > 2 {
                         factors.extend(multiset_difference(
@@ -782,14 +782,14 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
             .map(Factor::from)
             .collect()
     } else if !subset_recursion {
-        return Box::new([format_compact!("lucas({})", term).into()]);
+        Box::new([format_compact!("lucas({})", term).into()])
     } else {
         let mut factors = Vec::new();
         let mut factors_of_term = factorize128(term);
         let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
         let mut factors_of_term = factors_of_term
             .into_iter()
-            .flat_map(|(key, value)| repeat(key).take(value))
+            .flat_map(|(key, value)| std::iter::repeat_n(key, value))
             .collect::<Vec<u128>>();
         let full_set_size = factors_of_term.len();
         for subset in power_multiset(&mut factors_of_term).into_iter() {
@@ -849,7 +849,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
 
 impl FactorFinder {
     pub fn new() -> FactorFinder {
-        let regexes_as_set = RegexSet::new(&[
+        let regexes_as_set = RegexSet::new([
             "^lucas\\(([0-9]+)\\)$",
             "^I\\(([0-9]+)\\)$",
             "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
@@ -876,7 +876,7 @@ impl FactorFinder {
         match expr {
             Numeric(n) => factorize128(*n)
                 .into_iter()
-                .flat_map(|(factor, power)| repeat(factor.into()).take(power))
+                .flat_map(|(factor, power)| std::iter::repeat_n(factor.into(), power))
                 .collect(),
             Factor::String(expr) => {
                 let mut factors = Vec::new();
@@ -961,8 +961,8 @@ impl FactorFinder {
                                         {
                                             factors.push(subset_product.into());
                                         }
-                                        if n % subset_product == 0 {
-                                            if let Ok(prime_for_root) = subset_product.try_into()
+                                        if n % subset_product == 0
+                                            && let Ok(prime_for_root) = subset_product.try_into()
                                                 && (subset_product % 2 != 0 || c > 0)
                                                 && let Some(root_c) =
                                                     c.nth_root_exact(prime_for_root)
@@ -995,7 +995,6 @@ impl FactorFinder {
                                                     .into(),
                                                 );
                                             }
-                                        }
                                     }
                                 }
                             }
@@ -1012,7 +1011,7 @@ impl FactorFinder {
                             if let Ok(num) = expr_short.parse::<u128>() {
                                 factors.extend(
                                     factorize128(num).into_iter().flat_map(|(factor, power)| {
-                                        repeat(factor.into()).take(power)
+                                        std::iter::repeat_n(factor.into(), power)
                                     }),
                                 );
                             } else {
@@ -1034,14 +1033,14 @@ impl FactorFinder {
                                 self.find_factors(&denominator)
                             };
                             factors
-                                    .extend(multiset_difference(&numerator, &denominator).into_iter());
+                                    .extend(multiset_difference(&numerator, &denominator));
                         }
                         6 => {
                             // multiplication
                             for term in [captures[1].into(), captures[2].into()] {
                                 let term_factors = self.find_factors(&term);
                                 if term_factors.is_empty() {
-                                    factors.push(term.into());
+                                    factors.push(term);
                                 } else {
                                     factors.extend(term_factors);
                                 }
@@ -1072,9 +1071,9 @@ impl FactorFinder {
         if let Numeric(num1) = expr1
             && let Numeric(num2) = expr2
         {
-            factorize128(num1.gcd(&num2))
+            factorize128(num1.gcd(num2))
                 .into_iter()
-                .flat_map(|(factor, power)| repeat(factor.into()).take(power))
+                .flat_map(|(factor, power)| std::iter::repeat_n(factor.into(), power))
                 .collect()
         } else {
             multiset_intersection(&self.find_factors(expr1), &self.find_factors(expr2))

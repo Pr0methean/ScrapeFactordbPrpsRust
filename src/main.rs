@@ -175,21 +175,17 @@ async fn composites_while_waiting(
                 if dispatch_composite(http, id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
-            } else {
-                if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
-                    info!("{id}: Requeued C");
-                } else {
-                    c_filter.insert(&id.to_ne_bytes()).unwrap();
-                    let http = http.clone();
-                    task::spawn(async move { dispatch_composite(&http, id, out).await });
-                }
-            }
-        } else {
-            if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
+            } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
                 info!("{id}: Requeued C");
             } else {
-                error!("{id}: Dropping C");
+                c_filter.insert(&id.to_ne_bytes()).unwrap();
+                let http = http.clone();
+                task::spawn(async move { dispatch_composite(&http, id, out).await });
             }
+        } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
+            info!("{id}: Requeued C");
+        } else {
+            error!("{id}: Dropping C");
         }
         match end.checked_duration_since(Instant::now()) {
             None => {
@@ -214,7 +210,7 @@ async fn known_factors_as_digits(
 ) -> Result<Box<[Factor]>, ()> {
     let url = match id {
         NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
-        NumberSpecifier::Expression(ref expr) => {
+        NumberSpecifier::Expression(expr) => {
             format!("https://factordb.com/api?query={}", encode(expr))
         }
     };
@@ -1176,7 +1172,7 @@ async fn find_and_submit_factors(
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}")
                 }
-            } else if factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
+            } else if factor_digits_or_expr.chars().all(|char| char.is_ascii_digit()) {
                 info!(
                     "{id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}"
                 );
