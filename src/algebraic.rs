@@ -773,6 +773,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
     }
 }
 
+#[inline]
 fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
     if term < SMALL_LUCAS_FACTORS.len() as u128 {
         SMALL_LUCAS_FACTORS[term as usize]
