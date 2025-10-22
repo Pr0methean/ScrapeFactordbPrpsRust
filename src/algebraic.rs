@@ -742,34 +742,32 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             .copied()
             .map(Factor::from)
             .collect()
+    } else if term.is_multiple_of(2) {
+        let mut factors = fibonacci_factors(term >> 1, true);
+        factors.extend(lucas_factors(term >> 1, true));
+        factors
+    } else if !subset_recursion {
+        [format_compact!("I({})", term).into()].into()
     } else {
-        if term.is_multiple_of(2) {
-            let mut factors = fibonacci_factors(term >> 1, true);
-            factors.extend(lucas_factors(term >> 1, true));
-            factors
-        } else if !subset_recursion {
-            [format_compact!("I({})", term).into()].into()
-        } else {
-            let mut factors = Vec::new();
-            let factors_of_term = factorize128(term);
-            let mut factors_of_term = factors_of_term
-                .into_iter()
-                .flat_map(|(key, value)| std::iter::repeat_n(key, value))
-                .collect::<Vec<u128>>();
-            let full_set_size = factors_of_term.len();
-            for subset in power_multiset(&mut factors_of_term).into_iter() {
-                if subset.len() < full_set_size && !subset.is_empty() {
-                    let product: u128 = subset.into_iter().product();
-                    if product > 2 {
-                        factors.extend(multiset_difference(
-                            &fibonacci_factors(product, false),
-                            &factors,
-                        ));
-                    }
+        let mut factors = Vec::new();
+        let factors_of_term = factorize128(term);
+        let mut factors_of_term = factors_of_term
+            .into_iter()
+            .flat_map(|(key, value)| std::iter::repeat_n(key, value))
+            .collect::<Vec<u128>>();
+        let full_set_size = factors_of_term.len();
+        for subset in power_multiset(&mut factors_of_term).into_iter() {
+            if subset.len() < full_set_size && !subset.is_empty() {
+                let product: u128 = subset.into_iter().product();
+                if product > 2 {
+                    factors.extend(multiset_difference(
+                        &fibonacci_factors(product, false),
+                        &factors,
+                    ));
                 }
             }
-            factors
         }
+        factors
     }
 }
 
