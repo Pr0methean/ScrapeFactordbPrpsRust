@@ -111,11 +111,6 @@ struct FactorSubmission<'a> {
     factor: &'a str,
 }
 
-#[inline(always)]
-fn count_ones(u256: U256) -> u32 {
-    u256.0.iter().copied().map(u64::count_ones).sum()
-}
-
 async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
@@ -362,7 +357,7 @@ async fn get_prp_remaining_bases(
             };
             bases_left &= !(U256::from(1) << base);
         }
-        info!("{id}: {} bases left to check", bases_left.0.iter().copied().map(u64::count_ones).sum());
+        info!("{id}: {} bases left to check", bases_left.0.iter().copied().map(u64::count_ones).sum::<u32>());
     } else {
         info!("{id}: no bases checked yet");
     }
@@ -381,220 +376,6 @@ const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
-
-#[inline]
-async fn do_checks(
-    mut prp_receiver: PushbackReceiver<CheckTask>,
-    mut u_receiver: PushbackReceiver<CheckTask>,
-    mut c_receiver: PushbackReceiver<CompositeCheckTask>,
-    mut c_filter: InMemoryFilter,
-    http: ThrottlingHttpClient,
-    factor_finder: FactorFinder,
-    id_and_expr_regex: Regex,
-) {
-    let mut next_unknown_attempt = Instant::now();
-    let mut retry = None;
-    let cert_regex = Regex::new("(Verified|Processing)").unwrap();
-    let many_digits_regex =
-        Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
-    let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
-    let nm1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
-    let np1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
-    let mut bases_before_next_cpu_check = 1;
-    let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
-    throttle_if_necessary(
-        &http,
-        &mut c_receiver,
-        &mut bases_before_next_cpu_check,
-        false,
-        &mut c_filter,
-        &factor_finder,
-        &id_and_expr_regex,
-    )
-    .await;
-    loop {
-        let prp_task = prp_receiver.try_recv();
-        let u_tasks = if next_unknown_attempt <= Instant::now() {
-            retry
-                .take()
-                .into_iter()
-                .chain(u_receiver.try_recv().into_iter())
-        } else {
-            None.into_iter().chain(None.into_iter())
-        };
-        let mut task_done = false;
-        let tasks = prp_task.into_iter().chain(u_tasks);
-        for CheckTask { id, task_type } in tasks {
-            task_done = true;
-            match task_type {
-                CheckTaskType::Prp => {
-                    let mut stopped_early = false;
-                    let Ok(bases_left) = get_prp_remaining_bases(
-                        id,
-                        &http,
-                        &bases_regex,
-                        &nm1_regex,
-                        &np1_regex,
-                        &mut c_receiver,
-                        &mut c_filter,
-                        &factor_finder,
-                        &id_and_expr_regex,
-                    )
-                    .await
-                    else {
-                        if prp_receiver.try_send(CheckTask { id, task_type }) {
-                            info!("{id}: Requeued PRP");
-                        } else {
-                            error!("{id}: Dropping PRP");
-                        }
-                        continue;
-                    };
-                    if bases_left == U256::from(0) {
-                        continue;
-                    }
-                    let url_base =
-                        format!("https://factordb.com/index.php?id={id}&open=prime&basetocheck=");
-                    for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                        let url = format!("{url_base}{base}");
-                        let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-                        if !text.contains(">number<") {
-                            error!("Failed to decode result from {url}: {text}");
-                            if prp_receiver.try_send(CheckTask { id, task_type }) {
-                                info!("{id}: Requeued PRP");
-                            } else {
-                                error!("{id}: Dropping PRP");
-                            }
-                            composites_while_waiting(
-                                Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                                &http,
-                                &mut c_receiver,
-                                &mut c_filter,
-                                &factor_finder,
-                                &id_and_expr_regex,
-                            )
-                            .await;
-                            break;
-                        }
-                        throttle_if_necessary(
-                            &http,
-                            &mut c_receiver,
-                            &mut bases_before_next_cpu_check,
-                            true,
-                            &mut c_filter,
-                            &factor_finder,
-                            &id_and_expr_regex,
-                        )
-                        .await;
-                        if cert_regex.is_match(&text) {
-                            info!("{}: No longer PRP (has certificate)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if text.contains("set to C") {
-                            info!("{}: No longer PRP (ruled out by PRP check)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if !text.contains("PRP") {
-                            info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                    }
-                    if !stopped_early {
-                        info!("{}: all bases now checked", id);
-                    }
-                }
-                CheckTaskType::U => {
-                    if !throttle_if_necessary(
-                        &http,
-                        &mut c_receiver,
-                        &mut bases_before_next_cpu_check,
-                        true,
-                        &mut c_filter,
-                        &factor_finder,
-                        &id_and_expr_regex,
-                    )
-                    .await
-                    {
-                        composites_while_waiting(
-                            next_unknown_attempt,
-                            &http,
-                            &mut c_receiver,
-                            &mut c_filter,
-                            &factor_finder,
-                            &id_and_expr_regex,
-                        )
-                        .await;
-                    }
-                    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-                    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-                    if let Some(status) = u_status_regex.captures_iter(&result).next() {
-                        match status.get(1) {
-                            None => {
-                                if many_digits_regex.is_match(&result) {
-                                    warn!("{id}: U is too large for a PRP check!");
-                                } else {
-                                    error!("{id}: Failed to decode status for U: {result}");
-                                    next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-                                    if u_receiver.try_send(CheckTask { id, task_type }) {
-                                        info!("{id}: Requeued U");
-                                    } else if retry.is_none() {
-                                        retry = Some(CheckTask { id, task_type });
-                                        info!("{id}: put U in retry buffer");
-                                    } else {
-                                        error!(
-                                    "{id}: Dropping U after error because the retry buffer and queue are both full",
-                                );
-                                    }
-                                }
-                            }
-                            Some(matched_status) => match matched_status.as_str() {
-                                "Assigned" => {
-                                    info!("Assigned PRP check for unknown-status number with ID {id}");
-                                }
-                                "Please wait" => {
-                                    warn!("{id}: Got 'please wait' for U");
-                                    next_unknown_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                }
-                                _ => {
-                                    warn!("{id}: U is already being checked");
-                                }
-                            },
-                        }
-                    } else if many_digits_regex.is_match(&result) {
-                        warn!("{id}: U is too large for a PRP check!");
-                    } else {
-                        error!("{id}: Failed to decode status for U from result: {result}");
-                        next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-                        if retry.is_none() {
-                            retry = Some(CheckTask { id, task_type });
-                            info!("{id}: put U in retry buffer");
-                        } else if u_receiver.try_send(CheckTask { id, task_type }) {
-                            info!("{id}: Requeued U");
-                        } else {
-                            error!(
-                                    "{id}: Dropping U after 'please wait' because the retry buffer and queue are both full",
-                                );
-                        }
-                    }
-                }
-            }
-        }
-        if !task_done {
-            composites_while_waiting(
-                Instant::now() + Duration::from_secs(1),
-                &http,
-                &mut c_receiver,
-                &mut c_filter,
-                &factor_finder,
-                &id_and_expr_regex,
-            )
-            .await;
-            continue;
-        }
-    }
-}
 
 async fn throttle_if_necessary(
     http: &ThrottlingHttpClient,
@@ -764,7 +545,7 @@ async fn main() {
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
-    let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
+    let mut c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
     let mut config_builder = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -783,18 +564,221 @@ async fn main() {
         config_builder = config_builder.max_levels(7);
     }
     let config = config_builder.build().unwrap();
-    let c_filter = InMemoryFilter::new(config.clone()).unwrap();
+    let mut c_filter = InMemoryFilter::new(config.clone()).unwrap();
     let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
     let factor_finder = FactorFinder::new();
-    task::spawn(do_checks(
-        PushbackReceiver::new(prp_receiver, &prp_sender),
-        PushbackReceiver::new(u_receiver, &u_sender),
-        c_receiver,
-        c_filter,
-        http.clone(),
-        factor_finder.clone(),
-        id_and_expr_regex.clone(),
-    ));
+    let mut next_unknown_attempt = Instant::now();
+    let mut retry = None;
+    let mut prp_receiver = PushbackReceiver::new(prp_receiver, &prp_sender);
+    let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
+    let checker_thread_http = http.clone();
+    let checker_thread_factor_finder = factor_finder.clone();
+    let checker_thread_id_and_expr_regex = id_and_expr_regex.clone();
+    task::spawn(async move {
+        let http = checker_thread_http;
+        let factor_finder = checker_thread_factor_finder;
+        let id_and_expr_regex = checker_thread_id_and_expr_regex;
+        let cert_regex = Regex::new("(Verified|Processing)").unwrap();
+        let many_digits_regex =
+            Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
+        let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
+        let nm1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
+        let np1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
+        let mut bases_before_next_cpu_check = 1;
+        let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
+        throttle_if_necessary(
+            &http,
+            &mut c_receiver,
+            &mut bases_before_next_cpu_check,
+            false,
+            &mut c_filter,
+            &factor_finder,
+            &id_and_expr_regex,
+        )
+            .await;
+        loop {
+            let prp_task = prp_receiver.try_recv();
+            let u_tasks = if next_unknown_attempt <= Instant::now() {
+                retry
+                    .take()
+                    .into_iter()
+                    .chain(u_receiver.try_recv().into_iter())
+            } else {
+                None.into_iter().chain(None.into_iter())
+            };
+            let mut task_done = false;
+            let tasks = prp_task.into_iter().chain(u_tasks);
+            for CheckTask { id, task_type } in tasks {
+                task_done = true;
+                match task_type {
+                    CheckTaskType::Prp => {
+                        let mut stopped_early = false;
+                        let Ok(bases_left) = get_prp_remaining_bases(
+                            id,
+                            &http,
+                            &bases_regex,
+                            &nm1_regex,
+                            &np1_regex,
+                            &mut c_receiver,
+                            &mut c_filter,
+                            &factor_finder,
+                            &id_and_expr_regex,
+                        )
+                            .await
+                        else {
+                            if prp_receiver.try_send(CheckTask { id, task_type }) {
+                                info!("{id}: Requeued PRP");
+                            } else {
+                                error!("{id}: Dropping PRP");
+                            }
+                            continue;
+                        };
+                        if bases_left == U256::from(0) {
+                            continue;
+                        }
+                        let url_base =
+                            format!("https://factordb.com/index.php?id={id}&open=prime&basetocheck=");
+                        for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
+                            let url = format!("{url_base}{base}");
+                            let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                            if !text.contains(">number<") {
+                                error!("Failed to decode result from {url}: {text}");
+                                if prp_receiver.try_send(CheckTask { id, task_type }) {
+                                    info!("{id}: Requeued PRP");
+                                } else {
+                                    error!("{id}: Dropping PRP");
+                                }
+                                composites_while_waiting(
+                                    Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
+                                    &http,
+                                    &mut c_receiver,
+                                    &mut c_filter,
+                                    &factor_finder,
+                                    &id_and_expr_regex,
+                                )
+                                    .await;
+                                break;
+                            }
+                            throttle_if_necessary(
+                                &http,
+                                &mut c_receiver,
+                                &mut bases_before_next_cpu_check,
+                                true,
+                                &mut c_filter,
+                                &factor_finder,
+                                &id_and_expr_regex,
+                            )
+                                .await;
+                            if cert_regex.is_match(&text) {
+                                info!("{}: No longer PRP (has certificate)", id);
+                                stopped_early = true;
+                                break;
+                            }
+                            if text.contains("set to C") {
+                                info!("{}: No longer PRP (ruled out by PRP check)", id);
+                                stopped_early = true;
+                                break;
+                            }
+                            if !text.contains("PRP") {
+                                info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
+                                stopped_early = true;
+                                break;
+                            }
+                        }
+                        if !stopped_early {
+                            info!("{}: all bases now checked", id);
+                        }
+                    }
+                    CheckTaskType::U => {
+                        if !throttle_if_necessary(
+                            &http,
+                            &mut c_receiver,
+                            &mut bases_before_next_cpu_check,
+                            true,
+                            &mut c_filter,
+                            &factor_finder,
+                            &id_and_expr_regex,
+                        )
+                            .await
+                        {
+                            composites_while_waiting(
+                                next_unknown_attempt,
+                                &http,
+                                &mut c_receiver,
+                                &mut c_filter,
+                                &factor_finder,
+                                &id_and_expr_regex,
+                            )
+                                .await;
+                        }
+                        let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
+                        let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                        if let Some(status) = u_status_regex.captures_iter(&result).next() {
+                            match status.get(1) {
+                                None => {
+                                    if many_digits_regex.is_match(&result) {
+                                        warn!("{id}: U is too large for a PRP check!");
+                                    } else {
+                                        error!("{id}: Failed to decode status for U: {result}");
+                                        next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
+                                        if u_receiver.try_send(CheckTask { id, task_type }) {
+                                            info!("{id}: Requeued U");
+                                        } else if retry.is_none() {
+                                            retry = Some(CheckTask { id, task_type });
+                                            info!("{id}: put U in retry buffer");
+                                        } else {
+                                            error!(
+                                        "{id}: Dropping U after error because the retry buffer and queue are both full",
+                                    );
+                                        }
+                                    }
+                                }
+                                Some(matched_status) => match matched_status.as_str() {
+                                    "Assigned" => {
+                                        info!("Assigned PRP check for unknown-status number with ID {id}");
+                                    }
+                                    "Please wait" => {
+                                        warn!("{id}: Got 'please wait' for U");
+                                        next_unknown_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                                    }
+                                    _ => {
+                                        warn!("{id}: U is already being checked");
+                                    }
+                                },
+                            }
+                        } else if many_digits_regex.is_match(&result) {
+                            warn!("{id}: U is too large for a PRP check!");
+                        } else {
+                            error!("{id}: Failed to decode status for U from result: {result}");
+                            next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
+                            if retry.is_none() {
+                                retry = Some(CheckTask { id, task_type });
+                                info!("{id}: put U in retry buffer");
+                            } else if u_receiver.try_send(CheckTask { id, task_type }) {
+                                info!("{id}: Requeued U");
+                            } else {
+                                error!(
+                                        "{id}: Dropping U after 'please wait' because the retry buffer and queue are both full",
+                                    );
+                            }
+                        }
+                    }
+                }
+            }
+            if !task_done {
+                composites_while_waiting(
+                    Instant::now() + Duration::from_secs(1),
+                    &http,
+                    &mut c_receiver,
+                    &mut c_filter,
+                    &factor_finder,
+                    &id_and_expr_regex,
+                )
+                    .await;
+                continue;
+            }
+        }
+    });
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
