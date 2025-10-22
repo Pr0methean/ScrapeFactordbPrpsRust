@@ -95,12 +95,14 @@ struct CompositeCheckTask {
 }
 
 impl PartialEq<Self> for CompositeCheckTask {
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
 impl Hash for CompositeCheckTask {
+    #[inline(always)]
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.id.hash(state)
     }
@@ -119,6 +121,7 @@ struct FactorSubmission<'a> {
     factor: &'a str,
 }
 
+#[inline(always)]
 fn count_ones(u256: U256) -> u32 {
     u256.0.iter().copied().map(u64::count_ones).sum()
 }
@@ -389,6 +392,7 @@ static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TE
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
 
+#[inline]
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
@@ -586,6 +590,7 @@ async fn do_checks(
     }
 }
 
+#[inline]
 async fn try_handle_unknown(
     http: &ThrottlingHttpClient,
     u_status_regex: &Regex,

@@ -547,12 +547,14 @@ pub enum Factor {
 }
 
 impl From<u128> for Factor {
+    #[inline(always)]
     fn from(value: u128) -> Self {
         Numeric(value)
     }
 }
 
 impl From<&str> for Factor {
+    #[inline(always)]
     fn from(value: &str) -> Self {
         match value.parse::<u128>() {
             Ok(n) => Numeric(n),
@@ -562,39 +564,45 @@ impl From<&str> for Factor {
 }
 
 impl From<String> for Factor {
+    #[inline(always)]
     fn from(value: String) -> Self {
         Self::from(value.as_str())
     }
 }
 
 impl From<CompactString> for Factor {
+    #[inline(always)]
     fn from(value: CompactString) -> Self {
         Self::from(value.as_str())
     }
 }
 
 impl From<&CompactString> for Factor {
+    #[inline(always)]
     fn from(value: &CompactString) -> Self {
         Self::from(value.as_str())
     }
 }
 
 impl Display for Factor {
+    #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Numeric(n) => write!(f, "{}", n),
-            Factor::String(s) => write!(f, "{}", s),
+            Numeric(n) => n.fmt(f),
+            Factor::String(s) => s.fmt(f),
         }
     }
 }
 
 impl PartialOrd<Self> for Factor {
+    #[inline(always)]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(Ord::cmp(self, other))
     }
 }
 
 impl Ord for Factor {
+    #[inline(always)]
     fn cmp(&self, other: &Self) -> Ordering {
         match self {
             Numeric(n) => match other {
@@ -609,6 +617,7 @@ impl Ord for Factor {
     }
 }
 
+#[inline(always)]
 fn as_u128(factors: &[Factor]) -> Option<u128> {
     let mut product = 1u128;
     for factor in factors {
@@ -623,6 +632,7 @@ fn as_u128(factors: &[Factor]) -> Option<u128> {
     Some(product)
 }
 
+#[inline(always)]
 fn borrowed_as_u128(factors: &[&Factor]) -> Option<u128> {
     let mut product = 1u128;
     for factor in factors {
@@ -644,6 +654,7 @@ pub enum SignedFactor {
 }
 
 impl SignedFactor {
+    #[inline(always)]
     fn abs(&self) -> &Factor {
         match self {
             SignedFactor::Positive(f) => f,
@@ -654,6 +665,7 @@ impl SignedFactor {
 }
 
 impl From<&str> for SignedFactor {
+    #[inline(always)]
     fn from(value: &str) -> Self {
         if value.starts_with('-') {
             SignedFactor::Negative(value[1..].into())
@@ -671,6 +683,7 @@ pub struct FactorFinder {
     regexes_as_set: RegexSet,
 }
 
+#[inline(always)]
 fn count_frequencies<T: Eq + std::hash::Hash + Clone>(vec: &[T]) -> HashMap<T, usize> {
     let mut counts = HashMap::new();
     for item in vec {
@@ -679,6 +692,7 @@ fn count_frequencies<T: Eq + std::hash::Hash + Clone>(vec: &[T]) -> HashMap<T, u
     counts
 }
 
+#[inline(always)]
 fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
     if vec1.is_empty() || vec2.is_empty() {
         return vec![];
@@ -700,6 +714,7 @@ fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]
     intersection_vec
 }
 
+#[inline(always)]
 fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
     if vec2.is_empty() {
         return vec1.into();
@@ -720,6 +735,7 @@ fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) 
     intersection_vec
 }
 
+#[inline]
 fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
     if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
         SMALL_FIBONACCI_FACTORS[term as usize]
@@ -854,6 +870,7 @@ impl FactorFinder {
         }
     }
 
+    #[inline]
     fn find_factors(&self, expr: &Factor) -> Vec<Factor> {
         match expr {
             Numeric(n) => factorize128(*n)
