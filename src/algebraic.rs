@@ -666,8 +666,8 @@ impl SignedFactor {
 impl From<&str> for SignedFactor {
     #[inline(always)]
     fn from(value: &str) -> Self {
-        if value.starts_with('-') {
-            SignedFactor::Negative(value[1..].into())
+        if let Some(negated) = value.strip_prefix('-') {
+            SignedFactor::Negative(negated.into())
         } else if value == "0" {
             SignedFactor::Zero
         } else {
