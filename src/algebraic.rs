@@ -1077,8 +1077,10 @@ impl FactorFinder {
         let mut factors = self.find_factors(&expr);
         factors.retain(|f| match f {
             Numeric(n) => *n > 1,
-            Factor::String(_) => *f != expr,
-        });
+            Factor::String(_) => f != &expr,
+        } && if let Factor::String(expr) = &expr {
+            !expr.starts_with(&format!("{f}/"))
+        } else {true});
         factors.sort();
         factors.dedup();
         if factors.is_empty() {
