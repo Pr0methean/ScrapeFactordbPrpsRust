@@ -748,7 +748,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             factors.extend(fibonacci_factors(term >> 1, true));
             factors.extend(lucas_factors(term >> 1, true));
         } else if !subset_recursion {
-            return [format_compact!("I({})", term).into()].into()
+            return [format_compact!("I({})", term).into()].into();
         } else {
             let factors_of_term = factorize128(term);
             let mut factors_of_term = factors_of_term
@@ -962,38 +962,33 @@ impl FactorFinder {
                                         }
                                         if n % subset_product == 0
                                             && let Ok(prime_for_root) = subset_product.try_into()
-                                                && (subset_product % 2 != 0 || c > 0)
-                                                && let Some(root_c) =
-                                                    c.nth_root_exact(prime_for_root)
-                                                && let Some(root_b) =
-                                                    b.nth_root_exact(prime_for_root)
-                                            {
-                                                factors.push(
-                                                    format_compact!(
-                                                        "{}{}{}{}",
-                                                        a,
-                                                        if (n / subset_product) > 1 {
-                                                            format_compact!(
-                                                                "^{}",
-                                                                n / subset_product
-                                                            )
-                                                        } else {
-                                                            CompactString::from("")
-                                                        },
-                                                        if root_b > 1 {
-                                                            format_compact!("*{}", root_b)
-                                                        } else {
-                                                            CompactString::from("")
-                                                        },
-                                                        if root_c != 0 {
-                                                            format_compact!("{:+}", root_c)
-                                                        } else {
-                                                            CompactString::from("")
-                                                        }
-                                                    )
-                                                    .into(),
-                                                );
-                                            }
+                                            && (subset_product % 2 != 0 || c > 0)
+                                            && let Some(root_c) = c.nth_root_exact(prime_for_root)
+                                            && let Some(root_b) = b.nth_root_exact(prime_for_root)
+                                        {
+                                            factors.push(
+                                                format_compact!(
+                                                    "{}{}{}{}",
+                                                    a,
+                                                    if (n / subset_product) > 1 {
+                                                        format_compact!("^{}", n / subset_product)
+                                                    } else {
+                                                        CompactString::from("")
+                                                    },
+                                                    if root_b > 1 {
+                                                        format_compact!("*{}", root_b)
+                                                    } else {
+                                                        CompactString::from("")
+                                                    },
+                                                    if root_c != 0 {
+                                                        format_compact!("{:+}", root_c)
+                                                    } else {
+                                                        CompactString::from("")
+                                                    }
+                                                )
+                                                .into(),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -1010,11 +1005,9 @@ impl FactorFinder {
                                 expr_short = &expr_short[..(expr_short.len() - 1)];
                             }
                             if let Ok(num) = expr_short.parse::<u128>() {
-                                factors.extend(
-                                    factorize128(num).into_iter().flat_map(|(factor, power)| {
-                                        std::iter::repeat_n(factor.into(), power)
-                                    }),
-                                );
+                                factors.extend(factorize128(num).into_iter().flat_map(
+                                    |(factor, power)| std::iter::repeat_n(factor.into(), power),
+                                ));
                             } else {
                                 factors.extend(factor_last_digit(expr));
                                 factors.push(expr.into());

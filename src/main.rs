@@ -149,14 +149,8 @@ async fn composites_while_waiting(
             info!("{id}: Skipping duplicate C");
             continue;
         }
-        if find_and_submit_factors(
-            http,
-            id,
-            &digits_or_expr,
-            factor_finder,
-            id_and_expr_regex,
-        )
-        .await
+        if find_and_submit_factors(http, id, &digits_or_expr, factor_finder, id_and_expr_regex)
+            .await
         {
             info!("{id}: Skipping C check because algebraic factors were found");
             continue;
@@ -368,7 +362,10 @@ async fn get_prp_remaining_bases(
             };
             bases_left &= !(U256::from(1) << base);
         }
-        info!("{id}: {} bases left to check", bases_left.0.iter().copied().map(u64::count_ones).sum());
+        info!(
+            "{id}: {} bases left to check",
+            bases_left.0.iter().copied().map(u64::count_ones).sum()
+        );
     } else {
         info!("{id}: no bases checked yet");
     }
@@ -822,7 +819,8 @@ async fn main() {
     }
     let config = config_builder.build().unwrap();
     let c_filter = InMemoryFilter::new(config.clone()).unwrap();
-    let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
+    let id_and_expr_regex =
+        Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
     let factor_finder = FactorFinder::new();
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
@@ -858,7 +856,14 @@ async fn main() {
         &factor_finder,
     )
     .await;
-    queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
+    queue_composites(
+        &mut waiting_c,
+        &id_and_expr_regex,
+        &http,
+        &c_sender,
+        c_digits,
+    )
+    .await;
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
@@ -1004,14 +1009,8 @@ async fn try_queue_unknowns<'a>(
             continue;
         }
         let digits_or_expr = &results_text[digits_or_expr_range];
-        if find_and_submit_factors(
-            http,
-            u_id,
-            digits_or_expr,
-            factor_finder,
-            id_and_expr_regex,
-        )
-        .await
+        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, id_and_expr_regex)
+            .await
         {
             info!("{u_id}: Skipping PRP check because algebraic factors were found");
         } else {
@@ -1172,7 +1171,10 @@ async fn find_and_submit_factors(
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}")
                 }
-            } else if factor_digits_or_expr.chars().all(|char| char.is_ascii_digit()) {
+            } else if factor_digits_or_expr
+                .chars()
+                .all(|char| char.is_ascii_digit())
+            {
                 info!(
                     "{id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}"
                 );

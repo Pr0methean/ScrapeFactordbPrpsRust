@@ -5,7 +5,7 @@ use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
-use std::process::{exit, Command};
+use std::process::{Command, exit};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
@@ -86,9 +86,7 @@ impl ThrottlingHttpClient {
         error!("Retried {url} too many times; restarting");
         let mut raw_args = std::env::args_os();
         let cmd = raw_args.next().unwrap();
-        let e = Command::new(cmd)
-            .args(raw_args)
-            .exec();
+        let e = Command::new(cmd).args(raw_args).exec();
         panic!("Failed to restart: {e}");
     }
 
