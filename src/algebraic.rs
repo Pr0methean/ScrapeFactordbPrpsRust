@@ -861,7 +861,6 @@ impl FactorFinder {
                 .flat_map(|(factor, power)| repeat(factor.into()).take(power))
                 .collect(),
             Factor::String(expr) => {
-                info!("Searching for factors of expression {expr}");
                 let mut factors = Vec::new();
                 if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
                     let captures = self.regexes[index].captures(expr).unwrap();
