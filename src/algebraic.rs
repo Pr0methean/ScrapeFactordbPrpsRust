@@ -735,7 +735,7 @@ fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) 
 }
 
 #[inline]
-fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
+fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
     if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
         SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
@@ -748,7 +748,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
             factors.extend(fibonacci_factors(term >> 1, true));
             factors.extend(lucas_factors(term >> 1, true));
         } else if !subset_recursion {
-            return Box::new([format_compact!("I({})", term).into()]);
+            return [format_compact!("I({})", term).into()].into()
         } else {
             let factors_of_term = factorize128(term);
             let mut factors_of_term = factors_of_term
@@ -773,7 +773,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
 }
 
 #[inline]
-fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
+fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
     if term < SMALL_LUCAS_FACTORS.len() as u128 {
         SMALL_LUCAS_FACTORS[term as usize]
             .iter()
@@ -781,7 +781,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
             .map(Factor::from)
             .collect()
     } else if !subset_recursion {
-        Box::new([format_compact!("lucas({})", term).into()])
+        [format_compact!("lucas({})", term).into()].into()
     } else {
         let mut factors = Vec::new();
         let mut factors_of_term = factorize128(term);
@@ -802,7 +802,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Box<[Factor]> {
                 }
             }
         }
-        factors.into()
+        factors
     }
 }
 
@@ -878,7 +878,6 @@ impl FactorFinder {
                 .flat_map(|(factor, power)| std::iter::repeat_n(factor.into(), power))
                 .collect(),
             Factor::String(expr) => {
-                let mut factors = Vec::new();
                 if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
                     let captures = self.regexes[index].captures(expr).unwrap();
                     match index {
@@ -891,7 +890,7 @@ impl FactorFinder {
                                 );
                                 return vec![expr.into()];
                             };
-                            factors.extend(lucas_factors(term_number, true));
+                            lucas_factors(term_number, true)
                         }
                         1 => {
                             // Fibonacci number
@@ -902,10 +901,11 @@ impl FactorFinder {
                                 );
                                 return vec![expr.into()];
                             };
-                            factors.extend(fibonacci_factors(term_number, true));
+                            fibonacci_factors(term_number, true)
                         }
                         2 => {
                             // a^n*b + c
+                            let mut factors = Vec::new();
                             let mut b = Numeric(1u128);
                             if let Some(b_match) = captures.get(3) {
                                 b = Factor::from(&b_match.as_str()[1..]);
@@ -997,8 +997,10 @@ impl FactorFinder {
                                     }
                                 }
                             }
+                            factors
                         }
                         3 => {
+                            let mut factors = Vec::new();
                             let mut expr_short = expr.as_str();
                             while let Some('0') = expr_short.chars().last()
                                 && expr != "0"
@@ -1017,10 +1019,11 @@ impl FactorFinder {
                                 factors.extend(factor_last_digit(expr));
                                 factors.push(expr.into());
                             }
+                            factors
                         }
                         4 => {
                             // parens
-                            factors.extend(self.find_factors(&captures[1].into()));
+                            self.find_factors(&captures[1].into())
                         }
                         5 => {
                             // division by another expression
@@ -1031,10 +1034,10 @@ impl FactorFinder {
                             } else {
                                 self.find_factors(&denominator)
                             };
-                            factors
-                                    .extend(multiset_difference(&numerator, &denominator));
+                            multiset_difference(&numerator, &denominator)
                         }
                         6 => {
+                            let mut factors = Vec::new();
                             // multiplication
                             for term in [captures[1].into(), captures[2].into()] {
                                 let term_factors = self.find_factors(&term);
@@ -1044,24 +1047,22 @@ impl FactorFinder {
                                     factors.extend(term_factors);
                                 }
                             }
+                            factors
                         }
                         7 => {
                             // addition/subtraction; only return common factors of both sides
                             if captures[2] == *"1" {
                                 // Can't have any common factors
-                                return vec![];
+                                vec![]
+                            } else {
+                                self.find_common_factors(&captures[1].into(), &captures[2].into())
                             }
-                            return self
-                                .find_common_factors(&captures[1].into(), &captures[2].into());
                         }
                         _ => unsafe { unreachable_unchecked() },
                     }
+                } else {
+                    vec![expr.into()]
                 }
-                factors.retain(|f| match f {
-                    Numeric(n) => *n != 1,
-                    Factor::String(_) => true,
-                });
-                factors
             }
         }
     }
@@ -1133,7 +1134,7 @@ mod tests {
 
     #[test]
     fn test_lucas() {
-        let factors = lucas_factors(5040, true).into_vec();
+        let factors = lucas_factors(5040, true);
         let mut unique_factors = factors.clone();
         unique_factors.sort();
         unique_factors.dedup();
@@ -1148,7 +1149,7 @@ mod tests {
 
     #[test]
     fn test_fibonacci() {
-        let factors = fibonacci_factors(5040, true).into_vec();
+        let factors = fibonacci_factors(5040, true);
         let larger_factors = factors
             .iter()
             .cloned()
