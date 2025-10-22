@@ -998,7 +998,8 @@ impl FactorFinder {
                         3 => {
                             let mut factors = Vec::new();
                             let mut expr_short = expr.as_str();
-                            while expr != "0" && let Some(stripped) = expr_short.strip_suffix('0')
+                            while expr != "0"
+                                && let Some(stripped) = expr_short.strip_suffix('0')
                             {
                                 factors.push(Numeric(2));
                                 factors.push(Numeric(5));

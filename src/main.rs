@@ -359,7 +359,12 @@ async fn get_prp_remaining_bases(
         }
         info!(
             "{id}: {} bases left to check",
-            bases_left.0.iter().copied().map(u64::count_ones).sum::<u32>()
+            bases_left
+                .0
+                .iter()
+                .copied()
+                .map(u64::count_ones)
+                .sum::<u32>()
         );
     } else {
         info!("{id}: no bases checked yet");
