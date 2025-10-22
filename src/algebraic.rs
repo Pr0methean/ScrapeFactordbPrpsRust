@@ -693,28 +693,6 @@ fn count_frequencies<T: Eq + std::hash::Hash + Clone>(vec: &[T]) -> HashMap<T, u
 }
 
 #[inline(always)]
-fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
-    if vec1.is_empty() || vec2.is_empty() {
-        return vec![];
-    }
-    let mut counts1 = count_frequencies(vec1);
-    let mut counts2 = count_frequencies(vec2);
-    if counts2.len() < counts1.len() {
-        swap(&mut counts1, &mut counts2);
-    }
-    let mut intersection_vec = Vec::with_capacity(vec1.len().min(vec2.len()));
-    for (item, count1) in counts1 {
-        if let Some(&count2) = counts2.get(&item) {
-            let min_count = count1.min(count2);
-            for _ in 0..min_count {
-                intersection_vec.push(item.clone());
-            }
-        }
-    }
-    intersection_vec
-}
-
-#[inline(always)]
 fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
     if vec2.is_empty() {
         return vec1.into();
@@ -1077,7 +1055,27 @@ impl FactorFinder {
                 .flat_map(|(factor, power)| repeat(factor.into()).take(power))
                 .collect()
         } else {
-            multiset_intersection(&self.find_factors(expr1), &self.find_factors(expr2))
+            let vec1 = self.find_factors(expr1);
+            let vec2 = self.find_factors(expr2);
+            if vec1.is_empty() || vec2.is_empty() {
+                return vec![];
+            }
+            let mut counts1 = count_frequencies(&vec1);
+            let mut counts2 = count_frequencies(&vec2);
+            if counts2.len() < counts1.len() {
+                swap(&mut counts1, &mut counts2);
+            }
+            let mut intersection_vec = Vec::with_capacity(vec1.len().min(vec2.len()));
+            for (item, count1) in counts1 {
+                if let Some(&count2) = counts2.get(&item) {
+                    let min_count = count1.min(count2);
+                    for _ in 0..min_count {
+                        intersection_vec.push(item.clone());
+                    }
+                }
+            }
+            intersection_vec
+
         }
     }
 
