@@ -743,13 +743,14 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             .map(Factor::from)
             .collect()
     } else {
-        let mut factors = Vec::new();
         if term.is_multiple_of(2) {
-            factors.extend(fibonacci_factors(term >> 1, true));
+            let mut factors = fibonacci_factors(term >> 1, true);
             factors.extend(lucas_factors(term >> 1, true));
+            factors
         } else if !subset_recursion {
-            return [format_compact!("I({})", term).into()].into();
+            [format_compact!("I({})", term).into()].into()
         } else {
+            let mut factors = Vec::new();
             let factors_of_term = factorize128(term);
             let mut factors_of_term = factors_of_term
                 .into_iter()
@@ -767,8 +768,8 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
                     }
                 }
             }
+            factors
         }
-        factors
     }
 }
 
