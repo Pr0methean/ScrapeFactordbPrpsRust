@@ -997,12 +997,11 @@ impl FactorFinder {
                         3 => {
                             let mut factors = Vec::new();
                             let mut expr_short = expr.as_str();
-                            while let Some('0') = expr_short.chars().last()
-                                && expr != "0"
+                            while expr != "0" && let Some(stripped) = expr_short.strip_suffix('0')
                             {
                                 factors.push(Numeric(2));
                                 factors.push(Numeric(5));
-                                expr_short = &expr_short[..(expr_short.len() - 1)];
+                                expr_short = stripped;
                             }
                             if let Ok(num) = expr_short.parse::<u128>() {
                                 factors.extend(factorize128(num).into_iter().flat_map(
