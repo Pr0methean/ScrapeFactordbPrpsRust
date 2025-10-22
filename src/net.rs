@@ -4,7 +4,8 @@ use log::{error, warn};
 use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use std::num::NonZeroU32;
-use std::process::exit;
+use std::os::unix::prelude::CommandExt;
+use std::process::{exit, Command};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
@@ -75,12 +76,20 @@ impl ThrottlingHttpClient {
         Some((cpu_tenths_spent_after, seconds_to_reset))
     }
     pub async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
-        loop {
+        const MAX_RETRIES: usize = 100;
+        for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url).await {
                 return value;
             }
             sleep(retry_delay).await;
         }
+        error!("Retried {url} too many times; restarting");
+        let mut raw_args = std::env::args_os();
+        let cmd = raw_args.next().unwrap();
+        let e = Command::new(cmd)
+            .args(raw_args)
+            .exec();
+        panic!("Failed to restart: {e}");
     }
 
     async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
