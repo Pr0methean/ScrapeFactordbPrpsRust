@@ -75,6 +75,9 @@ impl ThrottlingHttpClient {
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
         Some((cpu_tenths_spent_after, seconds_to_reset))
     }
+
+    /// Executes a GET request with a large reasonable default number of retries, or else
+    /// restarts the process if that request consistently fails.
     pub async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
         const MAX_RETRIES: usize = 40;
         for _ in 0..MAX_RETRIES {
