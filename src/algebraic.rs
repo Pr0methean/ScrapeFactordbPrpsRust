@@ -11,7 +11,6 @@ use std::cmp::{Ordering, PartialEq};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
-use std::iter::repeat;
 use std::mem::swap;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
