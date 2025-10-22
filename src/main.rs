@@ -160,21 +160,17 @@ async fn composites_while_waiting(
                 if dispatch_composite(http, id, out).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
-            } else {
-                if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
-                    info!("{id}: Requeued C");
-                } else {
-                    c_filter.insert(&id.to_ne_bytes()).unwrap();
-                    let http = http.clone();
-                    task::spawn(async move { dispatch_composite(&http, id, out).await });
-                }
-            }
-        } else {
-            if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
+            } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
                 info!("{id}: Requeued C");
             } else {
-                error!("{id}: Dropping C");
+                c_filter.insert(&id.to_ne_bytes()).unwrap();
+                let http = http.clone();
+                task::spawn(async move { dispatch_composite(&http, id, out).await });
             }
+        } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
+            info!("{id}: Requeued C");
+        } else {
+            error!("{id}: Dropping C");
         }
         match end.checked_duration_since(Instant::now()) {
             None => {
@@ -199,7 +195,7 @@ async fn known_factors_as_digits(
 ) -> Result<Box<[Factor]>, ()> {
     let url = match id {
         NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
-        NumberSpecifier::Expression(ref expr) => {
+        NumberSpecifier::Expression(expr) => {
             format!("https://factordb.com/api?query={}", encode(expr))
         }
     };
@@ -588,19 +584,17 @@ async fn main() {
                         if status_text.contains(" is prime") || !status_text.contains("PRP") {
                             info!("{id}: No longer PRP");
                             bases_left = U256::from(0);
-                        } else {
-                            if let Some(bases) = bases_regex.captures(&bases_text) {
-                                for base in bases[1].split(", ") {
-                                    let Ok(base) = base.parse::<u8>() else {
-                                        error!("Invalid PRP-check base: {:?}", base);
-                                        continue;
-                                    };
-                                    bases_left &= !(U256::from(1) << base);
-                                }
-                                info!("{id}: {} bases left to check", bases_left.0.iter().copied().map(u64::count_ones).sum::<u32>());
-                            } else {
-                                info!("{id}: no bases checked yet");
+                        } else if let Some(bases) = bases_regex.captures(&bases_text) {
+                            for base in bases[1].split(", ") {
+                                let Ok(base) = base.parse::<u8>() else {
+                                    error!("Invalid PRP-check base: {:?}", base);
+                                    continue;
+                                };
+                                bases_left &= !(U256::from(1) << base);
                             }
+                            info!("{id}: {} bases left to check", bases_left.0.iter().copied().map(u64::count_ones).sum::<u32>());
+                        } else {
+                            info!("{id}: no bases checked yet");
                         }
                         if bases_left == U256::from(0) {
                             info!("{id}: all bases already checked");
@@ -1088,7 +1082,7 @@ async fn find_and_submit_factors(
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}")
                 }
-            } else if factor_digits_or_expr.chars().all(|char| char.is_digit(10)) {
+            } else if factor_digits_or_expr.chars().all(|char| char.is_ascii_digit()) {
                 info!(
                     "{id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}"
                 );
