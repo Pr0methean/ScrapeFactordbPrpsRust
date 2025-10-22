@@ -76,7 +76,7 @@ impl ThrottlingHttpClient {
         Some((cpu_tenths_spent_after, seconds_to_reset))
     }
     pub async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
-        const MAX_RETRIES: usize = 100;
+        const MAX_RETRIES: usize = 40;
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url).await {
                 return value;
