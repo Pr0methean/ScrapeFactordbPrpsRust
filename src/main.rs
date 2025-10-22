@@ -255,118 +255,6 @@ async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<F
     }
 }
 
-async fn get_prp_remaining_bases(
-    id: u128,
-    http: &ThrottlingHttpClient,
-    bases_regex: &Regex,
-    nm1_regex: &Regex,
-    np1_regex: &Regex,
-    c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
-    c_filter: &mut InMemoryFilter,
-    factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
-) -> Result<U256, ()> {
-    let mut bases_left = U256::MAX - 3;
-    let bases_text = http
-        .retrying_get_and_decode(
-            &format!("https://factordb.com/frame_prime.php?id={id}"),
-            RETRY_DELAY,
-        )
-        .await;
-    if bases_text.contains("Proven") {
-        info!("{id}: No longer PRP");
-    }
-    if let Some(captures) = nm1_regex.captures(&bases_text) {
-        let nm1_id = captures[1].parse::<u128>().unwrap();
-        let nm1_result = known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), false).await;
-        if let Ok(nm1_factors) = nm1_result {
-            match nm1_factors.len() {
-                0 => {
-                    info!("{id}: N-1/N+1 (ID {nm1_id}) is fully factored!");
-                    let _ = http
-                        .retrying_get_and_decode(
-                            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
-                            RETRY_DELAY,
-                        )
-                        .await;
-                    return Ok(U256::from(0));
-                }
-                1 => {
-                    // no known factors, but N-1 must be even if N is PRP
-                    report_factor_of_u(http, nm1_id, &Numeric(2)).await;
-                }
-                _ => {}
-            }
-        }
-    } else {
-        error!("{id}: N-1 ID not found: {bases_text}");
-    }
-    if let Some(captures) = np1_regex.captures(&bases_text) {
-        let np1_id = captures[1].parse::<u128>().unwrap();
-        let np1_result = known_factors_as_digits(http, NumberSpecifier::Id(np1_id), false).await;
-        if let Ok(np1_factors) = np1_result {
-            match np1_factors.len() {
-                0 => {
-                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                    let _ = http
-                        .retrying_get_and_decode(
-                            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
-                            RETRY_DELAY,
-                        )
-                        .await;
-                    return Ok(U256::from(0));
-                }
-                1 => {
-                    // no known factors, but N+1 must be even if N is PRP
-                    report_factor_of_u(http, np1_id, &Numeric(2)).await;
-                }
-                _ => {}
-            }
-        }
-    } else {
-        error!("{id}: N+1 ID not found: {bases_text}");
-    }
-    let status_text = http
-        .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}"),
-            RETRY_DELAY,
-        )
-        .await;
-    if !status_text.contains("&lt;") {
-        error!("{id}: Failed to decode status for PRP: {status_text}");
-        composites_while_waiting(
-            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-            http,
-            c_receiver,
-            c_filter,
-            factor_finder,
-            id_and_expr_regex,
-        )
-        .await;
-        return Err(());
-    }
-    if status_text.contains(" is prime") || !status_text.contains("PRP") {
-        info!("{id}: No longer PRP");
-        return Ok(U256::from(0));
-    }
-    if let Some(bases) = bases_regex.captures(&bases_text) {
-        for base in bases[1].split(", ") {
-            let Ok(base) = base.parse::<u8>() else {
-                error!("Invalid PRP-check base: {:?}", base);
-                continue;
-            };
-            bases_left &= !(U256::from(1) << base);
-        }
-        info!("{id}: {} bases left to check", bases_left.0.iter().copied().map(u64::count_ones).sum::<u32>());
-    } else {
-        info!("{id}: no bases checked yet");
-    }
-    if bases_left == U256::from(0) {
-        info!("{id}: all bases already checked");
-    }
-    Ok(bases_left)
-}
-
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
 
 const MIN_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 16;
@@ -613,27 +501,109 @@ async fn main() {
                 match task_type {
                     CheckTaskType::Prp => {
                         let mut stopped_early = false;
-                        let Ok(bases_left) = get_prp_remaining_bases(
-                            id,
-                            &http,
-                            &bases_regex,
-                            &nm1_regex,
-                            &np1_regex,
-                            &mut c_receiver,
-                            &mut c_filter,
-                            &factor_finder,
-                            &id_and_expr_regex,
-                        )
-                            .await
-                        else {
+                        let mut bases_left = U256::MAX - 3;
+                        let bases_text = http
+                            .retrying_get_and_decode(
+                                &format!("https://factordb.com/frame_prime.php?id={id}"),
+                                RETRY_DELAY,
+                            )
+                            .await;
+                        if bases_text.contains("Proven") {
+                            info!("{id}: No longer PRP");
+                        }
+                        if let Some(captures) = nm1_regex.captures(&bases_text) {
+                            let nm1_id = captures[1].parse::<u128>().unwrap();
+                            let nm1_result = known_factors_as_digits(&http, NumberSpecifier::Id(nm1_id), false).await;
+                            if let Ok(nm1_factors) = nm1_result {
+                                match nm1_factors.len() {
+                                    0 => {
+                                        info!("{id}: N-1/N+1 (ID {nm1_id}) is fully factored!");
+                                        let _ = http
+                                            .retrying_get_and_decode(
+                                                &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+                                                RETRY_DELAY,
+                                            )
+                                            .await;
+                                        continue;
+                                    }
+                                    1 => {
+                                        // no known factors, but N-1 must be even if N is PRP
+                                        report_factor_of_u(&http, nm1_id, &Numeric(2)).await;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        } else {
+                            error!("{id}: N-1 ID not found: {bases_text}");
+                        }
+                        if let Some(captures) = np1_regex.captures(&bases_text) {
+                            let np1_id = captures[1].parse::<u128>().unwrap();
+                            let np1_result = known_factors_as_digits(&http, NumberSpecifier::Id(np1_id), false).await;
+                            if let Ok(np1_factors) = np1_result {
+                                match np1_factors.len() {
+                                    0 => {
+                                        info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                                        let _ = http
+                                            .retrying_get_and_decode(
+                                                &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
+                                                RETRY_DELAY,
+                                            )
+                                            .await;
+                                        continue;
+                                    }
+                                    1 => {
+                                        // no known factors, but N+1 must be even if N is PRP
+                                        report_factor_of_u(&http, np1_id, &Numeric(2)).await;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        } else {
+                            error!("{id}: N+1 ID not found: {bases_text}");
+                        }
+                        let status_text = http
+                            .retrying_get_and_decode(
+                                &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}"),
+                                RETRY_DELAY,
+                            )
+                            .await;
+                        if !status_text.contains("&lt;") {
+                            error!("{id}: Failed to decode status for PRP: {status_text}");
+                            composites_while_waiting(
+                                Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
+                                &http,
+                                &mut c_receiver,
+                                &mut c_filter,
+                                &factor_finder,
+                                &id_and_expr_regex,
+                            )
+                                .await;
                             if prp_receiver.try_send(CheckTask { id, task_type }) {
                                 info!("{id}: Requeued PRP");
                             } else {
                                 error!("{id}: Dropping PRP");
                             }
                             continue;
-                        };
+                        }
+                        if status_text.contains(" is prime") || !status_text.contains("PRP") {
+                            info!("{id}: No longer PRP");
+                            bases_left = U256::from(0);
+                        } else {
+                            if let Some(bases) = bases_regex.captures(&bases_text) {
+                                for base in bases[1].split(", ") {
+                                    let Ok(base) = base.parse::<u8>() else {
+                                        error!("Invalid PRP-check base: {:?}", base);
+                                        continue;
+                                    };
+                                    bases_left &= !(U256::from(1) << base);
+                                }
+                                info!("{id}: {} bases left to check", bases_left.0.iter().copied().map(u64::count_ones).sum::<u32>());
+                            } else {
+                                info!("{id}: no bases checked yet");
+                            }
+                        }
                         if bases_left == U256::from(0) {
+                            info!("{id}: all bases already checked");
                             continue;
                         }
                         let url_base =
