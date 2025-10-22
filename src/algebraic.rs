@@ -1009,7 +1009,10 @@ impl FactorFinder {
                                 ));
                             } else {
                                 factors.extend(factor_last_digit(expr_short));
-                                let sum_of_digits: u128 = expr_short.chars().map(|digit| digit as u128 - '0' as u128).sum();
+                                let sum_of_digits: u128 = expr_short
+                                    .chars()
+                                    .map(|digit| digit as u128 - '0' as u128)
+                                    .sum();
                                 match sum_of_digits % 9 {
                                     0 => {
                                         factors.push(Numeric(3));
