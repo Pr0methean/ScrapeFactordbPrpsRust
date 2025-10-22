@@ -11,6 +11,8 @@ use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
 use tokio::time::{Instant, sleep, sleep_until};
 
+pub const MAX_RETRIES: usize = 40;
+
 #[derive(Clone)]
 pub struct ThrottlingHttpClient {
     resources_regex: Arc<Regex>,
@@ -79,7 +81,7 @@ impl ThrottlingHttpClient {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     pub async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
-        const MAX_RETRIES: usize = 40;
+        
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url).await {
                 return value;

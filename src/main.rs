@@ -41,6 +41,7 @@ use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 use urlencoding::encode;
+use crate::net::MAX_RETRIES;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -1031,7 +1032,7 @@ async fn try_queue_unknowns<'a>(
     }
 }
 
-async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> bool {
+async fn try_report_factor(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> Result<bool,()> {
     for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
         match http
             .post("https://factordb.com/reportfactor.php")
@@ -1049,7 +1050,7 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
                     Ok(text) => {
                         info!("{u_id}: reported a factor of {factor}; response: {text}",);
                         if !text.contains("Error") {
-                            return text.contains("submitted");
+                            return Ok(text.contains("submitted"));
                         }
                     }
                     Err(e) => {
@@ -1060,6 +1061,15 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
             Err(e) => {
                 error!("{u_id}: failed to submit factor {factor}: {e}")
             }
+        }
+    }
+    Err(())
+}
+
+async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> bool {
+    for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
+        if let Ok(result) = try_report_factor(http, u_id, factor).await {
+            return result;
         }
         sleep(RETRY_DELAY).await;
     }
@@ -1099,10 +1109,8 @@ async fn find_and_submit_factors(
     }
     let mut factors_to_submit = BTreeSet::new();
     for digits_or_expr in digits_or_expr_full.into_iter() {
-        if let Factor::String(ref s) = digits_or_expr
-            && s.contains('/')
-        {
-            // Factor finding may give some results that have already been divided out
+        if let Factor::String(ref s) = digits_or_expr && s.contains('/') {
+            // Factor finding may gie some results that have already been divided out
             factors_to_submit.extend(
                 join_all(
                     factor_finder
@@ -1188,7 +1196,7 @@ async fn find_and_submit_factors(
         }
     } else {
         error!("{id}: Invalid result when checking for algebraic factors: {result}");
-    };
+    }
     if !factors_to_submit.is_empty() {
         info!(
             "{id}: {} algebraic factors to submit",
@@ -1196,8 +1204,19 @@ async fn find_and_submit_factors(
         );
     }
     let mut algebraic_submitted = false;
-    for factor in factors_to_submit.into_iter().rev() {
-        algebraic_submitted |= report_factor_of_u(http, id, &factor).await;
+    let mut factors_to_retry = Vec::new();
+    let mut iters_without_progress = 0;
+    while iters_without_progress < MAX_RETRIES && !factors_to_submit.is_empty() {
+        iters_without_progress += 1;
+        for factor in factors_to_submit.into_iter().rev() {
+            let Ok(factor_accepted) = try_report_factor(http, id, &factor).await else {
+                factors_to_retry.push(factor);
+                continue;
+            };
+            iters_without_progress = 0;
+            algebraic_submitted |= factor_accepted;
+        }
+        factors_to_submit = factors_to_retry.iter().cloned().collect();
     }
     algebraic_submitted
 }
