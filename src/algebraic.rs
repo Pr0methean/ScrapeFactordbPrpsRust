@@ -1008,8 +1008,19 @@ impl FactorFinder {
                                     |(factor, power)| std::iter::repeat_n(factor.into(), power),
                                 ));
                             } else {
-                                factors.extend(factor_last_digit(expr));
-                                factors.push(expr.into());
+                                factors.extend(factor_last_digit(expr_short));
+                                let sum_of_digits: u128 = expr_short.chars().map(|digit| digit as u128 - '0' as u128).sum();
+                                match sum_of_digits % 9 {
+                                    0 => {
+                                        factors.push(Numeric(3));
+                                        factors.push(Numeric(3));
+                                    }
+                                    3 | 6 => {
+                                        factors.push(Numeric(3));
+                                    }
+                                    _ => {}
+                                }
+                                factors.push(expr_short.into());
                             }
                             factors
                         }
@@ -1073,11 +1084,11 @@ impl FactorFinder {
     }
 
     /// Returns all unique, nontrivial factors we can find.
-    pub fn find_unique_factors(&self, expr: Factor) -> Box<[Factor]> {
+    pub fn find_unique_factors(&self, expr: &Factor) -> Box<[Factor]> {
         let mut factors = self.find_factors(&expr);
         factors.retain(|f| match f {
             Numeric(n) => *n > 1,
-            Factor::String(_) => f != &expr,
+            Factor::String(_) => f != expr,
         } && if let Factor::String(expr) = &expr {
             !expr.starts_with(&format!("{f}/"))
         } else {true});

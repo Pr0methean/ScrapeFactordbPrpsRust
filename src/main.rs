@@ -1120,7 +1120,7 @@ async fn find_and_submit_factors(
             factors_to_submit.extend(
                 join_all(
                     factor_finder
-                        .find_unique_factors(digits_or_expr)
+                        .find_unique_factors(&digits_or_expr)
                         .into_iter()
                         .map(async |factor| match factor {
                             Numeric(n) => Box::new([Numeric(n)]),
@@ -1148,7 +1148,7 @@ async fn find_and_submit_factors(
         } else {
             factors_to_submit.extend(
                 factor_finder
-                    .find_unique_factors(digits_or_expr)
+                    .find_unique_factors(&digits_or_expr)
                     .into_iter(),
             );
         }
@@ -1172,14 +1172,12 @@ async fn find_and_submit_factors(
                         known_factors_as_digits(http, NumberSpecifier::Id(factor_id), false).await
                     {
                         for factor in factors.into_iter() {
-                            if let Factor::String(s) = &factor {
-                                algebraic::factor_last_digit(s)
-                                    .into_iter()
-                                    .for_each(|factor| {
-                                        let _ = factors_to_submit.insert(factor);
-                                    });
+                            let subfactors = factor_finder.find_unique_factors(&factor);
+                            if subfactors.is_empty() {
+                                factors_to_submit.insert(factor);
+                            } else {
+                                factors_to_submit.extend(subfactors);
                             }
-                            factors_to_submit.insert(factor);
                         }
                     }
                 } else {
