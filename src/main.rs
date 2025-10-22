@@ -11,6 +11,7 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{Factor, FactorFinder};
+use crate::net::MAX_RETRIES;
 use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
@@ -41,7 +42,6 @@ use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 use urlencoding::encode;
-use crate::net::MAX_RETRIES;
 
 const MAX_START: usize = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -1032,7 +1032,11 @@ async fn try_queue_unknowns<'a>(
     }
 }
 
-async fn try_report_factor(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> Result<bool,()> {
+async fn try_report_factor(
+    http: &ThrottlingHttpClient,
+    u_id: u128,
+    factor: &Factor,
+) -> Result<bool, ()> {
     for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
         match http
             .post("https://factordb.com/reportfactor.php")
@@ -1109,7 +1113,9 @@ async fn find_and_submit_factors(
     }
     let mut factors_to_submit = BTreeSet::new();
     for digits_or_expr in digits_or_expr_full.into_iter() {
-        if let Factor::String(ref s) = digits_or_expr && s.contains('/') {
+        if let Factor::String(ref s) = digits_or_expr
+            && s.contains('/')
+        {
             // Factor finding may gie some results that have already been divided out
             factors_to_submit.extend(
                 join_all(
