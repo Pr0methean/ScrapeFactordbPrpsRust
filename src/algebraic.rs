@@ -768,7 +768,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
                 }
             }
         }
-        factors.into()
+        factors
     }
 }
 

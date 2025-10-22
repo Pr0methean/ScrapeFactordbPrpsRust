@@ -121,11 +121,6 @@ struct FactorSubmission<'a> {
     factor: &'a str,
 }
 
-#[inline(always)]
-fn count_ones(u256: U256) -> u32 {
-    u256.0.iter().copied().map(u64::count_ones).sum()
-}
-
 async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
