@@ -1088,7 +1088,7 @@ impl FactorFinder {
 
     /// Returns all unique, nontrivial factors we can find.
     pub fn find_unique_factors(&self, expr: &Factor) -> Box<[Factor]> {
-        let mut factors = self.find_factors(&expr);
+        let mut factors = self.find_factors(expr);
         factors.retain(|f| match f {
             Numeric(n) => *n > 1,
             Factor::String(_) => f != expr,
