@@ -6,9 +6,6 @@ mod algebraic;
 mod channel;
 mod net;
 
-use crate::UnknownPrpCheckResult::{
-    Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
-};
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{Factor, FactorFinder};
 use channel::PushbackReceiver;
@@ -68,13 +65,6 @@ static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
-
-enum UnknownPrpCheckResult {
-    Assigned,
-    PleaseWait,
-    OtherRetryableFailure,
-    IneligibleForPrpCheck,
-}
 
 #[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
 #[repr(u8)]
@@ -537,39 +527,55 @@ async fn do_checks(
                         )
                         .await;
                     }
-                    match try_handle_unknown(
-                        &http,
-                        &u_status_regex,
-                        &many_digits_regex,
-                        id,
-                        &mut next_unknown_attempt,
-                    )
-                    .await
-                    {
-                        Assigned | IneligibleForPrpCheck => {}
-                        PleaseWait => {
-                            if retry.is_none() {
-                                retry = Some(CheckTask { id, task_type });
-                                info!("{id}: put U in retry buffer");
-                            } else if u_receiver.try_send(CheckTask { id, task_type }) {
-                                info!("{id}: Requeued U");
-                            } else {
-                                error!(
-                                    "{id}: Dropping U after 'please wait' because the retry buffer and queue are both full",
-                                );
-                            }
-                        }
-                        OtherRetryableFailure => {
-                            if u_receiver.try_send(CheckTask { id, task_type }) {
-                                info!("{id}: Requeued U");
-                            } else if retry.is_none() {
-                                retry = Some(CheckTask { id, task_type });
-                                info!("{id}: put U in retry buffer");
-                            } else {
-                                error!(
+                    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
+                    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                    if let Some(status) = u_status_regex.captures_iter(&result).next() {
+                        match status.get(1) {
+                            None => {
+                                if many_digits_regex.is_match(&result) {
+                                    warn!("{id}: U is too large for a PRP check!");
+                                } else {
+                                    error!("{id}: Failed to decode status for U: {result}");
+                                    next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
+                                    if u_receiver.try_send(CheckTask { id, task_type }) {
+                                        info!("{id}: Requeued U");
+                                    } else if retry.is_none() {
+                                        retry = Some(CheckTask { id, task_type });
+                                        info!("{id}: put U in retry buffer");
+                                    } else {
+                                        error!(
                                     "{id}: Dropping U after error because the retry buffer and queue are both full",
                                 );
+                                    }
+                                }
                             }
+                            Some(matched_status) => match matched_status.as_str() {
+                                "Assigned" => {
+                                    info!("Assigned PRP check for unknown-status number with ID {id}");
+                                }
+                                "Please wait" => {
+                                    warn!("{id}: Got 'please wait' for U");
+                                    next_unknown_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                                }
+                                _ => {
+                                    warn!("{id}: U is already being checked");
+                                }
+                            },
+                        }
+                    } else if many_digits_regex.is_match(&result) {
+                        warn!("{id}: U is too large for a PRP check!");
+                    } else {
+                        error!("{id}: Failed to decode status for U from result: {result}");
+                        next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
+                        if retry.is_none() {
+                            retry = Some(CheckTask { id, task_type });
+                            info!("{id}: put U in retry buffer");
+                        } else if u_receiver.try_send(CheckTask { id, task_type }) {
+                            info!("{id}: Requeued U");
+                        } else {
+                            error!(
+                                    "{id}: Dropping U after 'please wait' because the retry buffer and queue are both full",
+                                );
                         }
                     }
                 }
@@ -587,54 +593,6 @@ async fn do_checks(
             .await;
             continue;
         }
-    }
-}
-
-#[inline]
-async fn try_handle_unknown(
-    http: &ThrottlingHttpClient,
-    u_status_regex: &Regex,
-    many_digits_regex: &Regex,
-    id: u128,
-    next_attempt: &mut Instant,
-) -> UnknownPrpCheckResult {
-    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-    if let Some(status) = u_status_regex.captures_iter(&result).next() {
-        match status.get(1) {
-            None => {
-                if many_digits_regex.is_match(&result) {
-                    warn!("{id}: U is too large for a PRP check!");
-                    IneligibleForPrpCheck
-                } else {
-                    error!("{id}: Failed to decode status for U: {result}");
-                    *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-                    OtherRetryableFailure
-                }
-            }
-            Some(matched_status) => match matched_status.as_str() {
-                "Assigned" => {
-                    info!("Assigned PRP check for unknown-status number with ID {id}");
-                    Assigned
-                }
-                "Please wait" => {
-                    warn!("{id}: Got 'please wait' for U");
-                    *next_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                    PleaseWait
-                }
-                _ => {
-                    warn!("{id}: U is already being checked");
-                    Assigned
-                }
-            },
-        }
-    } else if many_digits_regex.is_match(&result) {
-        warn!("{id}: U is too large for a PRP check!");
-        IneligibleForPrpCheck
-    } else {
-        error!("{id}: Failed to decode status for U from result: {result}");
-        *next_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-        PleaseWait
     }
 }
 
