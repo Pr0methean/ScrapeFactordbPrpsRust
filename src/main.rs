@@ -215,7 +215,7 @@ async fn known_factors_as_digits(
             let NumberStatusApiResponse {
                 status, factors, ..
             } = api_response;
-            info!("{id:?}: Fetched status of {status}");
+            info!("{id:?}: Fetched status of {status} and {} factors", factors.len());
             if !include_ff && status == "FF" {
                 Ok(Box::new([]))
             } else {
@@ -1124,6 +1124,7 @@ async fn find_and_submit_factors(
     let try_subfactors = if digits_or_expr.contains('/') {
         Some(digits_or_expr)
     } else {
+        info!("{id}: Will not try to report sub-factors because expression {digits_or_expr} doesn't contain division");
         None
     };
     for digits_or_expr in digits_or_expr_full.into_iter() {
