@@ -1153,9 +1153,9 @@ async fn find_and_submit_factors(
             );
         }
     }
+    info!("{id}: Checking for listed algebraic factors");
     let url = format!("https://factordb.com/frame_moreinfo.php?id={id}");
     let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-    info!("{id}: Checking for listed algebraic factors");
     // Links before the "Is factor of" header are algebraic factors; links after it aren't
     if let Some(listed_algebraic) = result.split("Is factor of").next() {
         let algebraic_factors = id_and_expr_regex.captures_iter(listed_algebraic);
@@ -1183,17 +1183,9 @@ async fn find_and_submit_factors(
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}")
                 }
-            } else if factor_digits_or_expr
-                .chars()
-                .all(|char| char.is_ascii_digit())
-            {
-                info!(
-                    "{id}: Algebraic factor {factor_id} represented in full as digits: {factor_digits_or_expr}"
-                );
-                factors_to_submit.insert(factor_digits_or_expr.into());
             } else {
                 info!(
-                    "{id}: Algebraic factor {factor_id} represented as expression: {factor_digits_or_expr}"
+                    "{id}: Algebraic factor {factor_id} represented in full: {factor_digits_or_expr}"
                 );
                 factors_to_submit.insert(factor_digits_or_expr.into());
             }
@@ -1201,12 +1193,13 @@ async fn find_and_submit_factors(
     } else {
         error!("{id}: Invalid result when checking for algebraic factors: {result}");
     }
-    if !factors_to_submit.is_empty() {
-        info!(
-            "{id}: {} algebraic factors to submit",
-            factors_to_submit.len()
-        );
+    if factors_to_submit.is_empty() {
+        return false;
     }
+    info!(
+        "{id}: {} algebraic factors to submit",
+        factors_to_submit.len()
+    );
     let mut algebraic_submitted = false;
     let mut factors_to_retry = Vec::new();
     let mut iters_without_progress = 0;
@@ -1221,6 +1214,7 @@ async fn find_and_submit_factors(
             algebraic_submitted |= factor_accepted;
         }
         factors_to_submit = factors_to_retry.iter().cloned().collect();
+        factors_to_retry.clear();
     }
     algebraic_submitted
 }
