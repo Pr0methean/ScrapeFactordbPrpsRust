@@ -1120,6 +1120,7 @@ async fn find_and_submit_factors(
     };
     let mut attempted_factors = BTreeSet::new();
     let mut factors_to_retry = BTreeSet::new();
+    let mut accepted_factors = false;
     let try_subfactors = if digits_or_expr.contains('/') {
         Some(digits_or_expr)
     } else {
@@ -1136,7 +1137,9 @@ async fn find_and_submit_factors(
                 continue;
             }
             match try_report_factor(http, id, &factor).await {
-                Ok(true) => {},
+                Ok(true) => {
+                    accepted_factors = true;
+                },
                 Err(()) => {
                     factors_to_retry.insert(factor);
                 },
@@ -1196,8 +1199,12 @@ async fn find_and_submit_factors(
             };
             for subfactor in subfactors {
                 if attempted_factors.insert(subfactor.clone()) {
-                    if try_report_factor(http, id, &subfactor).await.is_err() {
-                        factors_to_retry.insert(subfactor);
+                    match try_report_factor(http, id, &subfactor).await {
+                        Ok(true) => accepted_factors = true,
+                        Ok(false) => {},
+                        Err(()) => {
+                            factors_to_retry.insert(subfactor);
+                        },
                     }
                 }
             }
@@ -1206,11 +1213,10 @@ async fn find_and_submit_factors(
         error!("{id}: Invalid result when checking for algebraic factors: {result}");
     }
     if factors_to_retry.is_empty() {
-        return !attempted_factors.is_empty();
+        return accepted_factors;
     }
     drop(attempted_factors);
     let mut iters_without_progress = 0;
-    let mut retry_succeeded = false;
     while iters_without_progress < MAX_RETRIES && !factors_to_retry.is_empty() {
         iters_without_progress += 1;
         let mut new_factors_to_retry = BTreeSet::new();
@@ -1220,9 +1226,9 @@ async fn find_and_submit_factors(
                 continue;
             };
             iters_without_progress = 0;
-            retry_succeeded |= factor_accepted;
+            accepted_factors |= factor_accepted;
         }
         factors_to_retry.retain(|factor| new_factors_to_retry.contains(&factor));
     }
-    retry_succeeded
+    accepted_factors
 }
