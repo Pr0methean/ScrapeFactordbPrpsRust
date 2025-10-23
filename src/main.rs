@@ -1127,7 +1127,7 @@ async fn find_and_submit_factors(
     };
     for digits_or_expr in digits_or_expr_full.into_iter() {
         let factors = factor_finder.find_unique_factors(&digits_or_expr);
-        if digits_or_expr_full_contains_self && factors.is_empty() && attempted_factors.insert(digits_or_expr.clone())
+        if !digits_or_expr_full_contains_self && factors.is_empty() && attempted_factors.insert(digits_or_expr.clone())
             && try_report_factor(http, id, &digits_or_expr).await.is_err() {
             factors_to_retry.insert(digits_or_expr);
         }
