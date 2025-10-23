@@ -1011,7 +1011,7 @@ impl FactorFinder {
                                 match expr_short.chars().last() {
                                     Some('5') => factors.push(Numeric(5)),
                                     Some('2' | '4' | '6' | '8') => factors.push(Numeric(2)),
-                                    Some('1' | '3' | '7' | '9') => {},
+                                    Some('1' | '3' | '7' | '9') => {}
                                     x => {
                                         error!("Invalid last digit: {x:?}");
                                     }
