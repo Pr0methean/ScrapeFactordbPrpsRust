@@ -1050,6 +1050,7 @@ impl FactorFinder {
                             factors
                         }
                         5 => {
+                            // Raw number
                             let mut factors = Vec::new();
                             let mut expr_short = expr.as_str();
                             while expr != "0"
