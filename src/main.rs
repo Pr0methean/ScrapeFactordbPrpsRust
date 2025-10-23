@@ -1,6 +1,7 @@
 #![allow(stable_features)]
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
+#![feature(const_destruct)]
 
 mod algebraic;
 mod channel;

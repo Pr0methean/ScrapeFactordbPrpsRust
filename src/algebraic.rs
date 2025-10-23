@@ -11,7 +11,10 @@ use std::cmp::{Ordering, PartialEq};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
+use std::marker::Destruct;
 use std::mem::swap;
+use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
+use num_prime::Primality::No;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -676,10 +679,27 @@ impl From<&str> for SignedFactor {
     }
 }
 
-#[derive(Clone)]
 pub struct FactorFinder {
     regexes: Box<[Regex]>,
     regexes_as_set: RegexSet,
+    sieve: NaiveBuffer,
+}
+
+impl Clone for FactorFinder {
+    fn clone(&self) -> Self {
+        FactorFinder {
+            regexes: self.regexes.clone(),
+            regexes_as_set: self.regexes_as_set.clone(),
+            sieve: NaiveBuffer::new()
+        }
+    }
+
+    fn clone_from(&mut self, _source: &Self)
+    where
+        Self: Destruct,
+    {
+        // No-op because all instances are interchangeables
+    }
 }
 
 #[inline(always)]
@@ -851,6 +871,8 @@ impl FactorFinder {
             "^lucas\\(([0-9]+)\\)$",
             "^I\\(([0-9]+)\\)$",
             "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
+            "^([0-9]+!)$",
+            "^([0-9]+#)$",
             "^([0-9]+)$",
             "^\\(([^()]+)\\)$",
             "^([^+-]+|\\([^()]+\\))/([^+-]+|\\([^()]+\\))$",
@@ -863,9 +885,11 @@ impl FactorFinder {
             .iter()
             .map(|pat| Regex::new(pat).unwrap())
             .collect();
+        let sieve = NaiveBuffer::new().into();
         FactorFinder {
             regexes,
             regexes_as_set,
+            sieve
         }
     }
 
@@ -994,6 +1018,38 @@ impl FactorFinder {
                             factors
                         }
                         3 => {
+                            // factorial
+                            let Ok(input) = captures[1].parse::<u128>() else {
+                                warn!(
+                                    "Could not parse input to factorial function: {}",
+                                    &captures[1]
+                                );
+                                return vec![expr.into()];
+                            };
+                            let mut factors = Vec::new();
+                            for i in 2..=input {
+                                factors.extend(self.find_factors(&Numeric(i)));
+                            }
+                            factors
+                        }
+                        4 => {
+                            // primorial
+                            let Ok(input) = captures[1].parse::<u128>() else {
+                                warn!(
+                                    "Could not parse input to primorial function: {}",
+                                    &captures[1]
+                                );
+                                return vec![expr.into()];
+                            };
+                            let mut factors = Vec::new();
+                            for i in 2..=input {
+                                if self.sieve.is_prime(&i, None) != No {
+                                    factors.push(Numeric(i));
+                                }
+                            }
+                            factors
+                        }
+                        5 => {
                             let mut factors = Vec::new();
                             let mut expr_short = expr.as_str();
                             while expr != "0"
@@ -1034,11 +1090,11 @@ impl FactorFinder {
                             }
                             factors
                         }
-                        4 => {
+                        6 => {
                             // parens
                             self.find_factors(&captures[1].into())
                         }
-                        5 => {
+                        7 => {
                             // division by another expression
                             let numerator = self.find_factors(&captures[1].into());
                             let denominator: Factor = captures[2].into();
@@ -1049,7 +1105,7 @@ impl FactorFinder {
                             };
                             multiset_difference(&numerator, &denominator)
                         }
-                        6 => {
+                        8 => {
                             let mut factors = Vec::new();
                             // multiplication
                             for term in [captures[1].into(), captures[2].into()] {
@@ -1062,7 +1118,7 @@ impl FactorFinder {
                             }
                             factors
                         }
-                        7 => {
+                        9 => {
                             // addition/subtraction; only return common factors of both sides
                             if captures[2] == *"1" {
                                 // Can't have any common factors
