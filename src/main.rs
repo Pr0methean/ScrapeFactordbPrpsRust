@@ -1201,7 +1201,10 @@ async fn find_and_submit_factors(
                 if attempted_factors.insert(subfactor.clone()) {
                     match try_report_factor(http, id, &subfactor).await {
                         Ok(true) => accepted_factors = true,
-                        Ok(false) => {},
+                        Ok(false) => {
+                            // Can't recurse without the subfactor ID, and factors we could find
+                            // that way would probably have been found in a previous step anyway
+                        },
                         Err(()) => {
                             factors_to_retry.insert(subfactor);
                         },
