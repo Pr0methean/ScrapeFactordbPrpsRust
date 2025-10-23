@@ -423,17 +423,10 @@ async fn do_checks(
     )
     .await;
     loop {
-        let prp_task = prp_receiver.try_recv();
-        let u_tasks = if next_unknown_attempt <= Instant::now() {
-            retry
-                .take()
-                .into_iter()
-                .chain(u_receiver.try_recv().into_iter())
-        } else {
-            None.into_iter().chain(None.into_iter())
-        };
+        let tasks = prp_receiver.try_recv().into_iter()
+            .chain(retry.take().into_iter())
+            .chain(u_receiver.try_recv().into_iter());
         let mut task_done = false;
-        let tasks = prp_task.into_iter().chain(u_tasks);
         for CheckTask { id, task_type } in tasks {
             task_done = true;
             match task_type {
