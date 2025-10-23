@@ -1181,11 +1181,12 @@ async fn find_and_submit_factors(
                     {
                         subfactors
                     } else {
-                        Box::new([factor_digits_or_expr.into()])
+                        error!("{id}: Skipping ellided factor with ID {factor_id} because we failed to fetch it in full");
+                        [].into()
                     }
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}");
-                    [factor_digits_or_expr.into()].into()
+                    [].into()
                 }
             } else {
                 info!(
