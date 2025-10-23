@@ -1145,6 +1145,7 @@ async fn find_and_submit_factors(
                 },
                 Ok(false) => {
                     if let Some(s) = try_subfactors {
+                        info!("{id}: Checking for sub-factors of {factor}");
                         if let Ok(subfactors) = known_factors_as_digits(
                             http,
                             NumberSpecifier::Expression(&s),
@@ -1152,6 +1153,7 @@ async fn find_and_submit_factors(
                         ).await
                             && subfactors.len() > 1 {
                             for subfactor in subfactors {
+                                info!("{id}: Found sub-factor {subfactor} of {factor}");
                                 if attempted_factors.insert(subfactor.clone()) {
                                     if try_report_factor(http, id, &subfactor).await.is_err() {
                                         factors_to_retry.insert(subfactor);
