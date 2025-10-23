@@ -17,7 +17,6 @@ use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
 use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
-use futures_util::future::join_all;
 use itertools::Itertools;
 use log::{error, info, warn};
 use net::ThrottlingHttpClient;
@@ -1099,59 +1098,67 @@ async fn find_and_submit_factors(
     id_and_expr_regex: &Regex,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
-    if digits_or_expr.contains("...") {
+    let digits_or_expr_full_contains_self = if digits_or_expr.contains("...") {
         let Ok(known_factors) = known_factors_as_digits(http, NumberSpecifier::Id(id), true).await
         else {
             return false;
         };
-        if known_factors.is_empty() {
-            warn!("{id}: Already fully factored");
-            return true;
+        match known_factors.len() {
+            0 => {
+                warn!("{id}: Already fully factored");
+                return true;
+            } 1 => {
+                digits_or_expr_full.extend(known_factors);
+                true
+            } _ => {
+                false
+            }
         }
-        digits_or_expr_full.extend(known_factors);
     } else {
         digits_or_expr_full.push(digits_or_expr.into());
-    }
-    let mut factors_to_submit = BTreeSet::new();
+        true
+    };
+    let mut attempted_factors = BTreeSet::new();
+    let mut factors_to_retry = BTreeSet::new();
+    let try_subfactors = if digits_or_expr.contains('/') {
+        Some(digits_or_expr)
+    } else {
+        None
+    };
     for digits_or_expr in digits_or_expr_full.into_iter() {
-        if let Factor::String(ref s) = digits_or_expr
-            && s.contains('/')
-        {
-            // Factor finding may gie some results that have already been divided out
-            factors_to_submit.extend(
-                join_all(
-                    factor_finder
-                        .find_unique_factors(&digits_or_expr)
-                        .into_iter()
-                        .map(async |factor| match factor {
-                            Numeric(n) => Box::new([Numeric(n)]),
-                            Factor::String(s) => {
-                                if let Ok(factors) = known_factors_as_digits(
-                                    http,
-                                    NumberSpecifier::Expression(&s),
-                                    true,
-                                )
-                                .await
-                                    && factors.len() > 1
-                                {
-                                    factors
-                                } else {
-                                    Box::new([Factor::String(s)])
+        let factors = factor_finder.find_unique_factors(&digits_or_expr);
+        if digits_or_expr_full_contains_self && factors.is_empty() && attempted_factors.insert(digits_or_expr.clone())
+            && try_report_factor(http, id, &digits_or_expr).await.is_err() {
+            factors_to_retry.insert(digits_or_expr);
+        }
+        for factor in factors {
+            if !attempted_factors.insert(factor.clone()) {
+                continue;
+            }
+            match try_report_factor(http, id, &factor).await {
+                Ok(true) => {},
+                Err(()) => {
+                    factors_to_retry.insert(factor);
+                },
+                Ok(false) => {
+                    if let Some(s) = try_subfactors {
+                        if let Ok(subfactors) = known_factors_as_digits(
+                            http,
+                            NumberSpecifier::Expression(&s),
+                            true,
+                        ).await
+                            && subfactors.len() > 1 {
+                            for subfactor in subfactors {
+                                if attempted_factors.insert(subfactor.clone()) {
+                                    if try_report_factor(http, id, &subfactor).await.is_err() {
+                                        factors_to_retry.insert(subfactor);
+                                    }
                                 }
                             }
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .await
-                .into_iter()
-                .flatten(),
-            );
-        } else {
-            factors_to_submit.extend(
-                factor_finder
-                    .find_unique_factors(&digits_or_expr)
-                    .into_iter(),
-            );
+                        }
+                    }
+                }
+            }
         }
     }
     info!("{id}: Checking for listed algebraic factors");
@@ -1163,59 +1170,58 @@ async fn find_and_submit_factors(
         for factor in algebraic_factors {
             let factor_id = &factor[1];
             let factor_digits_or_expr = &factor[2];
-            if factor_digits_or_expr.contains("...") {
+            let subfactors: Box<[Factor]> = if factor_digits_or_expr.contains("...") {
                 // Link text isn't an expression for the factor, so we need to look up its value
                 info!(
                     "{id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                 );
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
-                    if let Ok(factors) =
-                        known_factors_as_digits(http, NumberSpecifier::Id(factor_id), false).await
+                    if let Ok(subfactors) =
+                        known_factors_as_digits(http, NumberSpecifier::Id(factor_id), true).await
                     {
-                        for factor in factors.into_iter() {
-                            let subfactors = factor_finder.find_unique_factors(&factor);
-                            if subfactors.is_empty() {
-                                factors_to_submit.insert(factor);
-                            } else {
-                                factors_to_submit.extend(subfactors);
-                            }
-                        }
+                        subfactors
+                    } else {
+                        Box::new([factor_digits_or_expr.into()])
                     }
                 } else {
-                    error!("{id}: Invalid ID for algebraic factor: {factor_id}")
+                    error!("{id}: Invalid ID for algebraic factor: {factor_id}");
+                    [factor_digits_or_expr.into()].into()
                 }
             } else {
                 info!(
                     "{id}: Algebraic factor {factor_id} represented in full: {factor_digits_or_expr}"
                 );
-                factors_to_submit.insert(factor_digits_or_expr.into());
+                [factor_digits_or_expr.into()].into()
+            };
+            for subfactor in subfactors {
+                if attempted_factors.insert(subfactor.clone()) {
+                    if try_report_factor(http, id, &subfactor).await.is_err() {
+                        factors_to_retry.insert(subfactor);
+                    }
+                }
             }
         }
     } else {
         error!("{id}: Invalid result when checking for algebraic factors: {result}");
     }
-    if factors_to_submit.is_empty() {
-        return false;
+    if factors_to_retry.is_empty() {
+        return !attempted_factors.is_empty();
     }
-    info!(
-        "{id}: {} algebraic factors to submit",
-        factors_to_submit.len()
-    );
-    let mut algebraic_submitted = false;
-    let mut factors_to_retry = Vec::new();
+    drop(attempted_factors);
     let mut iters_without_progress = 0;
-    while iters_without_progress < MAX_RETRIES && !factors_to_submit.is_empty() {
+    let mut retry_succeeded = false;
+    while iters_without_progress < MAX_RETRIES && !factors_to_retry.is_empty() {
         iters_without_progress += 1;
-        for factor in factors_to_submit.into_iter().rev() {
-            let Ok(factor_accepted) = try_report_factor(http, id, &factor).await else {
-                factors_to_retry.push(factor);
+        let mut new_factors_to_retry = BTreeSet::new();
+        for factor in factors_to_retry.iter().rev() {
+            let Ok(factor_accepted) = try_report_factor(http, id, factor).await else {
+                new_factors_to_retry.insert(factor.clone());
                 continue;
             };
             iters_without_progress = 0;
-            algebraic_submitted |= factor_accepted;
+            retry_succeeded |= factor_accepted;
         }
-        factors_to_submit = factors_to_retry.iter().cloned().collect();
-        factors_to_retry.clear();
+        factors_to_retry.retain(|factor| new_factors_to_retry.contains(&factor));
     }
-    algebraic_submitted
+    retry_succeeded
 }
