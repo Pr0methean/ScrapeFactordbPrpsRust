@@ -162,7 +162,7 @@ async fn composites_while_waiting(
         if let Some(out) = COMPOSITES_OUT.get() {
             if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
                 c_filter.insert(&id.to_ne_bytes()).unwrap();
-                if dispatch_composite(http, id, out).await {
+                if dispatch_composite(http, id, out, factor_finder).await {
                     HAVE_DISPATCHED_TO_YAFU.store(true, Release);
                 }
             } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
@@ -170,7 +170,8 @@ async fn composites_while_waiting(
             } else {
                 c_filter.insert(&id.to_ne_bytes()).unwrap();
                 let http = http.clone();
-                task::spawn(async move { dispatch_composite(&http, id, out).await });
+                let factor_finder = factor_finder.clone();
+                task::spawn(async move { dispatch_composite(&http, id, out, &factor_finder).await });
             }
         } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
             info!("{id}: Requeued C");
@@ -197,7 +198,12 @@ async fn known_factors_as_digits(
     http: &ThrottlingHttpClient,
     id: NumberSpecifier<'_>,
     include_ff: bool,
+    factor_finder: &FactorFinder
 ) -> Result<Box<[Factor]>, ()> {
+    if let NumberSpecifier::Expression(expr) = id
+        && let Numeric(n) = expr.into() {
+        return Ok(factor_finder.find_unique_factors(&Numeric(n)));
+    }
     let url = match id {
         NumberSpecifier::Id(id) => format!("https://factordb.com/api?id={id}"),
         NumberSpecifier::Expression(expr) => {
@@ -235,8 +241,8 @@ async fn known_factors_as_digits(
     }
 }
 
-async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<File>) -> bool {
-    match known_factors_as_digits(http, NumberSpecifier::Id(id), false).await {
+async fn dispatch_composite(http: &ThrottlingHttpClient, id: u128, out: &Mutex<File>, factor_finder: &FactorFinder) -> bool {
+    match known_factors_as_digits(http, NumberSpecifier::Id(id), false, &factor_finder).await {
         Err(()) => false,
         Ok(factors) => {
             let mut out = out.lock().await;
@@ -279,7 +285,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
-        let nm1_result = known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), false).await;
+        let nm1_result = known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), false, &factor_finder).await;
         if let Ok(nm1_factors) = nm1_result {
             match nm1_factors.len() {
                 0 => {
@@ -304,7 +310,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
-        let np1_result = known_factors_as_digits(http, NumberSpecifier::Id(np1_id), false).await;
+        let np1_result = known_factors_as_digits(http, NumberSpecifier::Id(np1_id), false, &factor_finder).await;
         if let Ok(np1_factors) = np1_result {
             match np1_factors.len() {
                 0 => {
@@ -1099,7 +1105,7 @@ async fn find_and_submit_factors(
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
     let digits_or_expr_full_contains_self = if digits_or_expr.contains("...") {
-        let Ok(known_factors) = known_factors_as_digits(http, NumberSpecifier::Id(id), true).await
+        let Ok(known_factors) = known_factors_as_digits(http, NumberSpecifier::Id(id), true, &factor_finder).await
         else {
             return false;
         };
@@ -1151,6 +1157,7 @@ async fn find_and_submit_factors(
                             http,
                             NumberSpecifier::Expression(&factor.to_compact_string()),
                             true,
+                            &factor_finder
                         ).await
                             && subfactors.len() > 1 {
                             for subfactor in subfactors {
@@ -1183,7 +1190,7 @@ async fn find_and_submit_factors(
                 );
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
                     if let Ok(subfactors) =
-                        known_factors_as_digits(http, NumberSpecifier::Id(factor_id), true).await
+                        known_factors_as_digits(http, NumberSpecifier::Id(factor_id), true, &factor_finder).await
                     {
                         subfactors
                     } else {
