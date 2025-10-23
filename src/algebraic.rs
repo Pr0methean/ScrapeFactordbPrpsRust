@@ -975,6 +975,9 @@ impl FactorFinder {
                                         else {
                                             continue;
                                         };
+                                        if c > 0 && (n / subset_product).is_multiple_of(2) {
+                                            continue;
+                                        }
                                         if (a.powm(n, &subset_product).mulm(b, &subset_product)
                                             as i128
                                             + c)
