@@ -1145,11 +1145,11 @@ async fn find_and_submit_factors(
                     factors_to_retry.insert(factor);
                 },
                 Ok(false) => {
-                    if let Some(s) = try_subfactors {
+                    if let Some(_) = try_subfactors {
                         info!("{id}: Checking for sub-factors of {factor}");
                         if let Ok(subfactors) = known_factors_as_digits(
                             http,
-                            NumberSpecifier::Expression(&s),
+                            NumberSpecifier::Expression(&factor.to_compact_string()),
                             true,
                         ).await
                             && subfactors.len() > 1 {
