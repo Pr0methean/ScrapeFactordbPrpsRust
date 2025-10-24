@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
 use governor::middleware::StateInformationMiddleware;
+use tokio::sync::Semaphore;
 use tokio::time::{Instant, sleep, sleep_until};
 
 pub const MAX_RETRIES: usize = 40;
@@ -25,6 +26,7 @@ pub struct ThrottlingHttpClient {
     rate_limiter: Arc<DefaultDirectRateLimiter<StateInformationMiddleware>>,
     requests_left_last_check: Arc<AtomicU32>,
     requests_per_hour: u32,
+    request_semaphore: Arc<Semaphore>,
 }
 
 impl ThrottlingHttpClient {
@@ -57,7 +59,8 @@ impl ThrottlingHttpClient {
             http,
             rate_limiter: rate_limiter.into(),
             requests_per_hour: requests_per_hour.get().into(),
-            requests_left_last_check: requests_left_last_check.into()
+            requests_left_last_check: requests_left_last_check.into(),
+            request_semaphore: Semaphore::const_new(2).into()
         }
     }
 
@@ -85,7 +88,7 @@ impl ThrottlingHttpClient {
         let prev_requests_left = self.requests_left_last_check.swap(requests, Ordering::AcqRel);
         if prev_requests_left > requests_left && let Ok(state) = self.rate_limiter.check() {
             let limiter_burst_capacity = state.remaining_burst_capacity();
-            if let Some(excess) = limiter_burst_capacity.checked_sub(requests_left as u32)
+            if let Some(excess) = limiter_burst_capacity.checked_sub(requests_left)
             && let Some(excess) = NonZeroU32::new(excess) {
                 warn!("{excess} more requests consumed than expected");
                 self.rate_limiter.until_n_ready(excess).await.unwrap();
@@ -119,18 +122,20 @@ impl ThrottlingHttpClient {
 
     async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
         self.rate_limiter.until_ready().await;
-        match self
+        let permit = self.request_semaphore.acquire().await.unwrap();
+        let result = self
             .http
             .get(url)
             .header("Referer", "https://factordb.com")
             .send()
-            .await
-        {
+            .await;
+        drop(permit);
+        match result {
             Err(http_error) => {
                 error!("Error reading {url}: {http_error}");
                 None
             }
-            Ok(body) => match body.text().await {
+            Ok(response) => match response.text().await {
                 Err(decoding_error) => {
                     error!("Error reading {url}: {decoding_error}");
                     None
