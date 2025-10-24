@@ -1,9 +1,10 @@
+use anyhow::Error;
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use log::{error, warn};
 use regex::{Regex, RegexBuilder};
-use reqwest::{Client, RequestBuilder};
+use reqwest::{Client, RequestBuilder, Response};
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
@@ -11,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::Release;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
+use serde::Serialize;
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, sleep, sleep_until};
 
@@ -27,6 +29,30 @@ pub struct ThrottlingHttpClient {
     requests_left_last_check: Arc<AtomicU32>,
     requests_per_hour: u32,
     request_semaphore: Arc<Semaphore>,
+}
+
+pub struct ThrottlingRequestBuilder<'a> {
+    inner: RequestBuilder,
+    client: &'a ThrottlingHttpClient
+}
+
+impl <'a> ThrottlingRequestBuilder<'a> {
+    pub fn form<T: Serialize + ?Sized>(self, payload: &T) -> Self {
+        ThrottlingRequestBuilder {
+            inner: self.inner.form(payload),
+            client: self.client
+        }
+    }
+
+    pub async fn send(self) -> Result<Response, Error> {
+        self.client.rate_limiter.until_ready().await;
+        match self.client.request_semaphore.acquire().await {
+            Ok(_permit) => {
+                self.inner.send().await.map_err(Error::from)
+            }
+            Err(e) => Err(e.into())
+        }
+    }
 }
 
 impl ThrottlingHttpClient {
@@ -190,8 +216,10 @@ impl ThrottlingHttpClient {
             .await
     }
 
-    pub async fn post(&self, url: &str) -> RequestBuilder {
-        self.rate_limiter.until_ready().await;
-        self.http.post(url)
+    pub fn post(&'_ self, url: &str) -> ThrottlingRequestBuilder<'_> {
+        ThrottlingRequestBuilder {
+            inner: self.http.post(url),
+            client: &self
+        }
     }
 }

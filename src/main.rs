@@ -1053,7 +1053,6 @@ async fn try_report_factor(
     for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
         match http
             .post("https://factordb.com/reportfactor.php")
-            .await
             .form(&FactorSubmission {
                 id: u_id,
                 factor: &factor.to_compact_string(),
