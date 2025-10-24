@@ -252,7 +252,7 @@ async fn dispatch_composite(
     out: &Mutex<File>,
     factor_finder: &FactorFinder,
 ) -> bool {
-    match known_factors_as_digits(http, NumberSpecifier::Id(id), false, &factor_finder).await {
+    match known_factors_as_digits(http, NumberSpecifier::Id(id), false, factor_finder).await {
         Err(()) => false,
         Ok(factors) => {
             let mut out = out.lock().await;
@@ -296,7 +296,7 @@ async fn get_prp_remaining_bases(
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
         let nm1_result =
-            known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), false, &factor_finder).await;
+            known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), false, factor_finder).await;
         if let Ok(nm1_factors) = nm1_result {
             match nm1_factors.len() {
                 0 => {
@@ -322,7 +322,7 @@ async fn get_prp_remaining_bases(
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
         let np1_result =
-            known_factors_as_digits(http, NumberSpecifier::Id(np1_id), false, &factor_finder).await;
+            known_factors_as_digits(http, NumberSpecifier::Id(np1_id), false, factor_finder).await;
         if let Ok(np1_factors) = np1_result {
             match np1_factors.len() {
                 0 => {
@@ -1113,7 +1113,7 @@ async fn find_and_submit_factors(
     let mut digits_or_expr_full = Vec::new();
     let digits_or_expr_full_contains_self = if digits_or_expr.contains("...") {
         let Ok(known_factors) =
-            known_factors_as_digits(http, NumberSpecifier::Id(id), true, &factor_finder).await
+            known_factors_as_digits(http, NumberSpecifier::Id(id), true, factor_finder).await
         else {
             return false;
         };
@@ -1164,24 +1164,23 @@ async fn find_and_submit_factors(
                     factors_to_retry.insert(factor);
                 }
                 Ok(false) => {
-                    if let Some(_) = try_subfactors {
+                    if try_subfactors.is_some() {
                         info!("{id}: Checking for sub-factors of {factor}");
                         if let Ok(subfactors) = known_factors_as_digits(
                             http,
                             NumberSpecifier::Expression(&factor.to_compact_string()),
                             true,
-                            &factor_finder,
+                            factor_finder,
                         )
                         .await
                             && subfactors.len() > 1
                         {
                             for subfactor in subfactors {
                                 info!("{id}: Found sub-factor {subfactor} of {factor}");
-                                if attempted_factors.insert(subfactor.clone()) {
-                                    if try_report_factor(http, id, &subfactor).await.is_err() {
+                                if attempted_factors.insert(subfactor.clone())
+                                    && try_report_factor(http, id, &subfactor).await.is_err() {
                                         factors_to_retry.insert(subfactor);
                                     }
-                                }
                             }
                         }
                     }
@@ -1208,7 +1207,7 @@ async fn find_and_submit_factors(
                         http,
                         NumberSpecifier::Id(factor_id),
                         true,
-                        &factor_finder,
+                        factor_finder,
                     )
                     .await
                     {
@@ -1263,7 +1262,7 @@ async fn find_and_submit_factors(
             iters_without_progress = 0;
             accepted_factors |= factor_accepted;
         }
-        factors_to_retry.retain(|factor| new_factors_to_retry.contains(&factor));
+        factors_to_retry.retain(|factor| new_factors_to_retry.contains(factor));
     }
     accepted_factors
 }

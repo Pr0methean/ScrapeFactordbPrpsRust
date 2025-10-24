@@ -885,7 +885,7 @@ impl FactorFinder {
             .iter()
             .map(|pat| Regex::new(pat).unwrap())
             .collect();
-        let sieve = NaiveBuffer::new().into();
+        let sieve = NaiveBuffer::new();
         FactorFinder {
             regexes,
             regexes_as_set,
