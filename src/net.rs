@@ -7,8 +7,10 @@ use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
+use governor::middleware::StateInformationMiddleware;
 use tokio::time::{Instant, sleep, sleep_until};
 
 pub const MAX_RETRIES: usize = 40;
@@ -20,14 +22,17 @@ const E2E_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ThrottlingHttpClient {
     resources_regex: Arc<Regex>,
     http: Client,
-    rps_limiter: Arc<DefaultDirectRateLimiter>,
+    rate_limiter: Arc<DefaultDirectRateLimiter<StateInformationMiddleware>>,
+    requests_left_last_check: Arc<AtomicU32>,
+    requests_per_hour: u32,
 }
 
 impl ThrottlingHttpClient {
-    pub fn new(rph_limit: NonZeroU32) -> Self {
-        let rps_limiter = RateLimiter::direct(Quota::per_hour(rph_limit));
+    pub fn new(requests_per_hour: NonZeroU32) -> Self {
+        let rate_limiter = RateLimiter::direct(Quota::per_hour(requests_per_hour))
+            .with_middleware();
         let resources_regex =
-            RegexBuilder::new("([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
+            RegexBuilder::new("Page requests(?:[^0-9])+([0-9,]+).*CPU.*([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
                 .multi_line(true)
                 .dot_matches_new_line(true)
                 .build()
@@ -42,19 +47,21 @@ impl ThrottlingHttpClient {
         // Governor rate-limiters start out with their full burst capacity and recharge starting
         // immediately, but this would lead to twice the allowed number of requests in our first hour,
         // so we make it start nearly empty instead.
-        rps_limiter
+        rate_limiter
             .check_n(6050u32.try_into().unwrap())
             .unwrap()
             .unwrap();
-
+        let requests_left_last_check = AtomicU32::new(requests_per_hour.get());
         Self {
             resources_regex: resources_regex.into(),
             http,
-            rps_limiter: rps_limiter.into(),
+            rate_limiter: rate_limiter.into(),
+            requests_per_hour: requests_per_hour.get().into(),
+            requests_left_last_check: requests_left_last_check.into()
         }
     }
 
-    pub fn parse_resource_limits(
+    pub async fn parse_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut u64,
         resources_text: &str,
@@ -66,12 +73,24 @@ impl ThrottlingHttpClient {
         let (
             _,
             [
+                requests,
                 cpu_seconds,
                 cpu_tenths_within_second,
                 minutes_to_reset,
                 seconds_within_minute_to_reset,
             ],
         ) = captures.extract();
+        let requests = requests.replace(",","").parse::<u32>().unwrap();
+        let requests_left = self.requests_per_hour - requests;
+        let prev_requests_left = self.requests_left_last_check.swap(requests, Ordering::AcqRel);
+        if prev_requests_left > requests_left && let Ok(state) = self.rate_limiter.check() {
+            let limiter_burst_capacity = state.remaining_burst_capacity();
+            if let Some(excess) = limiter_burst_capacity.checked_sub(requests_left as u32)
+            && let Some(excess) = NonZeroU32::new(excess) {
+                warn!("{excess} more requests consumed than expected");
+                self.rate_limiter.until_n_ready(excess).await.unwrap();
+            }
+        }
         // info!("Resources parsed: {}, {}, {}, {}",
         //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
         let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10
@@ -99,7 +118,7 @@ impl ThrottlingHttpClient {
     }
 
     async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
-        self.rps_limiter.until_ready().await;
+        self.rate_limiter.until_ready().await;
         match self
             .http
             .get(url)
@@ -131,7 +150,7 @@ impl ThrottlingHttpClient {
     #[allow(const_item_mutation)]
     pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
         let response = self.try_get_and_decode_core(url).await?;
-        if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &response) {
+        if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &response).await {
             let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
             if EXIT_TIME
                 .get()
@@ -155,11 +174,11 @@ impl ThrottlingHttpClient {
         let response = self
             .try_get_and_decode_core("https://factordb.com/res.php")
             .await?;
-        self.parse_resource_limits(bases_before_next_cpu_check, &response)
+        self.parse_resource_limits(bases_before_next_cpu_check, &response).await
     }
 
     pub async fn post(&self, url: &str) -> RequestBuilder {
-        self.rps_limiter.until_ready().await;
+        self.rate_limiter.until_ready().await;
         self.http.post(url)
     }
 }
