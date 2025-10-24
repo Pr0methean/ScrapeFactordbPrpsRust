@@ -5,6 +5,8 @@ use log::{error, info, warn};
 use num::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
+use num_prime::Primality::No;
+use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexSet};
 use std::cmp::{Ordering, PartialEq};
@@ -13,8 +15,6 @@ use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
 use std::marker::Destruct;
 use std::mem::swap;
-use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
-use num_prime::Primality::No;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -690,7 +690,7 @@ impl Clone for FactorFinder {
         FactorFinder {
             regexes: self.regexes.clone(),
             regexes_as_set: self.regexes_as_set.clone(),
-            sieve: NaiveBuffer::new()
+            sieve: NaiveBuffer::new(),
         }
     }
 
@@ -889,7 +889,7 @@ impl FactorFinder {
         FactorFinder {
             regexes,
             regexes_as_set,
-            sieve
+            sieve,
         }
     }
 

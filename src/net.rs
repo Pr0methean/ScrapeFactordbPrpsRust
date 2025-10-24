@@ -5,11 +5,11 @@ use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
-use std::process::{exit, Command};
+use std::process::{Command, exit};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
-use tokio::time::{sleep, sleep_until, Instant};
+use tokio::time::{Instant, sleep, sleep_until};
 
 pub const MAX_RETRIES: usize = 40;
 
