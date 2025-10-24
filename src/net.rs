@@ -1,4 +1,5 @@
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
+use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use log::{error, warn};
 use regex::{Regex, RegexBuilder};
@@ -7,10 +8,9 @@ use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::atomic::Ordering::Release;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use governor::middleware::StateInformationMiddleware;
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, sleep, sleep_until};
 
@@ -31,8 +31,8 @@ pub struct ThrottlingHttpClient {
 
 impl ThrottlingHttpClient {
     pub fn new(requests_per_hour: NonZeroU32) -> Self {
-        let rate_limiter = RateLimiter::direct(Quota::per_hour(requests_per_hour))
-            .with_middleware();
+        let rate_limiter =
+            RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
             RegexBuilder::new("Page requests(?:[^0-9])+([0-9,]+).*CPU.*([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
                 .multi_line(true)
@@ -60,7 +60,7 @@ impl ThrottlingHttpClient {
             rate_limiter: rate_limiter.into(),
             requests_per_hour: requests_per_hour.get().into(),
             requests_left_last_check: requests_left_last_check.into(),
-            request_semaphore: Semaphore::const_new(2).into()
+            request_semaphore: Semaphore::const_new(2).into(),
         }
     }
 
@@ -83,13 +83,18 @@ impl ThrottlingHttpClient {
                 seconds_within_minute_to_reset,
             ],
         ) = captures.extract();
-        let requests = requests.replace(",","").parse::<u32>().unwrap();
+        let requests = requests.replace(",", "").parse::<u32>().unwrap();
         let requests_left = self.requests_per_hour - requests;
-        let prev_requests_left = self.requests_left_last_check.swap(requests, Ordering::AcqRel);
-        if prev_requests_left > requests_left && let Ok(state) = self.rate_limiter.check() {
+        let prev_requests_left = self
+            .requests_left_last_check
+            .swap(requests, Ordering::AcqRel);
+        if prev_requests_left > requests_left
+            && let Ok(state) = self.rate_limiter.check()
+        {
             let limiter_burst_capacity = state.remaining_burst_capacity();
             if let Some(excess) = limiter_burst_capacity.checked_sub(requests_left)
-            && let Some(excess) = NonZeroU32::new(excess) {
+                && let Some(excess) = NonZeroU32::new(excess)
+            {
                 warn!("{excess} more requests consumed than expected");
                 self.rate_limiter.until_n_ready(excess).await.unwrap();
             }
@@ -155,7 +160,9 @@ impl ThrottlingHttpClient {
     #[allow(const_item_mutation)]
     pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
         let response = self.try_get_and_decode_core(url).await?;
-        if let Some((_, seconds_to_reset)) = self.parse_resource_limits(&mut u64::MAX, &response).await {
+        if let Some((_, seconds_to_reset)) =
+            self.parse_resource_limits(&mut u64::MAX, &response).await
+        {
             let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
             if EXIT_TIME
                 .get()
@@ -179,7 +186,8 @@ impl ThrottlingHttpClient {
         let response = self
             .try_get_and_decode_core("https://factordb.com/res.php")
             .await?;
-        self.parse_resource_limits(bases_before_next_cpu_check, &response).await
+        self.parse_resource_limits(bases_before_next_cpu_check, &response)
+            .await
     }
 
     pub async fn post(&self, url: &str) -> RequestBuilder {
