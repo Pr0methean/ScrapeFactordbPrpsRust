@@ -1135,14 +1135,7 @@ async fn find_and_submit_factors(
     let mut attempted_factors = BTreeSet::new();
     let mut factors_to_retry = BTreeSet::new();
     let mut accepted_factors = false;
-    let try_subfactors = if digits_or_expr.contains('/') {
-        Some(digits_or_expr)
-    } else {
-        info!(
-            "{id}: Will not try to report sub-factors because expression {digits_or_expr} doesn't contain division"
-        );
-        None
-    };
+    let try_subfactors = digits_or_expr.contains('/');
     for digits_or_expr in digits_or_expr_full.into_iter() {
         let factors = factor_finder.find_unique_factors(&digits_or_expr);
         if !digits_or_expr_full_contains_self
@@ -1164,7 +1157,7 @@ async fn find_and_submit_factors(
                     factors_to_retry.insert(factor);
                 }
                 Ok(false) => {
-                    if try_subfactors.is_some() {
+                    if try_subfactors {
                         info!("{id}: Checking for sub-factors of {factor}");
                         if let Ok(subfactors) = known_factors_as_digits(
                             http,
@@ -1178,9 +1171,10 @@ async fn find_and_submit_factors(
                             for subfactor in subfactors {
                                 info!("{id}: Found sub-factor {subfactor} of {factor}");
                                 if attempted_factors.insert(subfactor.clone())
-                                    && try_report_factor(http, id, &subfactor).await.is_err() {
-                                        factors_to_retry.insert(subfactor);
-                                    }
+                                    && try_report_factor(http, id, &subfactor).await.is_err()
+                                {
+                                    factors_to_retry.insert(subfactor);
+                                }
                             }
                         }
                     }
