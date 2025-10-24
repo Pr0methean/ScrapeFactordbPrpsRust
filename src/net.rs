@@ -60,7 +60,7 @@ impl ThrottlingHttpClient {
             rate_limiter: rate_limiter.into(),
             requests_per_hour: requests_per_hour.get(),
             requests_left_last_check: requests_left_last_check.into(),
-            request_semaphore: Semaphore::const_new(2).into(),
+            request_semaphore: Semaphore::const_new(3).into(),
         }
     }
 
