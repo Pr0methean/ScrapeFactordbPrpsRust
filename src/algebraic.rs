@@ -2,7 +2,7 @@ use crate::algebraic::Factor::Numeric;
 use compact_str::{CompactString, format_compact};
 use itertools::Itertools;
 use log::{error, info, warn};
-use num::Integer;
+use num_integer::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;

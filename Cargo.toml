@@ -26,3 +26,4 @@ num-modular = "0.6"
 num-prime = { version = "0.4", features = ["big-table"] }
 urlencoding = "2.1"
 anyhow = "1.0"
+num-integer = "0.1"
