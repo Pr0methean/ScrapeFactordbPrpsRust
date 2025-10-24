@@ -30,7 +30,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU32, NonZeroUsize};
+use std::num::{NonZeroU128, NonZeroU32};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
@@ -43,19 +43,22 @@ use tokio::time::{Duration, Instant, sleep, timeout};
 use tokio::{select, task};
 use urlencoding::encode;
 
-const MAX_START: usize = 100_000;
+const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
-const PRP_RESULTS_PER_PAGE: usize = 32;
+const PRP_RESULTS_PER_PAGE: u128 = 32;
 const MIN_DIGITS_IN_PRP: usize = 300;
 const U_RESULTS_PER_PAGE: usize = 1;
-const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
+const PRP_TASK_BUFFER_SIZE: usize = (4 * PRP_RESULTS_PER_PAGE) as usize;
 const U_TASK_BUFFER_SIZE: usize = 256;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 256;
-const C_MIN_DIGITS: usize = 91;
-const C_MAX_DIGITS: usize = 300;
+const C_MIN_DIGITS: u128 = 91;
+const C_MAX_DIGITS: u128 = 300;
+
+const U_MIN_DIGITS: u128 = 2001;
+const U_MAX_DIGITS: u128 = 199_999;
 const PRP_SEARCH_URL_BASE: &str = formatcp!(
     "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
 );
@@ -729,7 +732,7 @@ async fn queue_composites(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
     c_sender: &Sender<CompositeCheckTask>,
-    digits: Option<NonZeroUsize>,
+    digits: Option<NonZeroU128>,
 ) -> usize {
     let mut c_sent = 0;
     let mut rng = rng();
@@ -793,16 +796,16 @@ async fn main() {
     let mut c_digits = None;
     let mut u_digits = None;
     let mut prp_start = if let Ok(run_number) = std::env::var("RUN") {
-        let run_number = run_number.parse::<usize>().unwrap();
-        let mut c_digits_value = C_MAX_DIGITS - (run_number % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
+        let run_number = run_number.parse::<u128>().unwrap();
+        let mut c_digits_value = C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
         if c_digits_value == C_MIN_DIGITS - 1 {
             c_digits_value = 1;
         }
         c_digits = Some(c_digits_value.try_into().unwrap());
         let u_digits_value =
-            U_MAX_DIGITS - ((run_number * 100) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
+            U_MAX_DIGITS - ((run_number * 19793) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
         u_digits = Some(u_digits_value.try_into().unwrap());
-        (run_number * 100) % (MAX_START + 1)
+        (run_number * 9973) % (MAX_START + 1)
     } else {
         rng().random_range(0..=MAX_START)
     };
@@ -902,7 +905,7 @@ async fn main() {
                 }
                 info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
             }
-            prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
+            prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
                 info!("PRP search results retrieved");
@@ -952,7 +955,7 @@ async fn main() {
 async fn queue_unknowns(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
-    u_digits: Option<NonZeroUsize>,
+    u_digits: Option<NonZeroU128>,
     u_permits: PermitIterator<'_, CheckTask>,
     u_filter: &mut InMemoryFilter,
     factor_finder: &FactorFinder,
@@ -978,13 +981,10 @@ async fn queue_unknowns(
     }
 }
 
-const U_MIN_DIGITS: usize = 2001;
-const U_MAX_DIGITS: usize = 199_999;
-
 async fn try_queue_unknowns<'a>(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
-    u_digits: Option<NonZeroUsize>,
+    u_digits: Option<NonZeroU128>,
     mut u_permits: PermitIterator<'a, CheckTask>,
     u_filter: &mut InMemoryFilter,
     factor_finder: &FactorFinder,
