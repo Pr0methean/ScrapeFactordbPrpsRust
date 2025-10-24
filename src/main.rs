@@ -402,7 +402,7 @@ const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
 const MIN_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 16;
 
 const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
-const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_secs(15);
+const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
