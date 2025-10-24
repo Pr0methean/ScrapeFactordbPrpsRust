@@ -1,17 +1,20 @@
-use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME, NETWORK_TIMEOUT};
+use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use log::{error, warn};
 use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Release;
 use std::time::Duration;
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::time::{sleep, sleep_until, Instant};
 
 pub const MAX_RETRIES: usize = 40;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const E2E_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ThrottlingHttpClient {
@@ -31,7 +34,8 @@ impl ThrottlingHttpClient {
                 .unwrap();
         let http = Client::builder()
             .pool_max_idle_per_host(2)
-            .timeout(NETWORK_TIMEOUT)
+            .timeout(E2E_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .unwrap();
 
