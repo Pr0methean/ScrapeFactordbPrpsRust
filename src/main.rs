@@ -778,7 +778,7 @@ async fn main() {
         rng().random_range(0..=MAX_START)
     };
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
-    let http = ThrottlingHttpClient::new(rph_limit);
+    let mut max_concurrent_requests = 2usize;
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
 
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
@@ -799,6 +799,7 @@ async fn main() {
                 Mutex::new(File::options().append(true).open("composites").unwrap())
             })
             .await;
+        max_concurrent_requests = 3;
     } else {
         config_builder = config_builder.max_levels(7);
     }
@@ -807,6 +808,7 @@ async fn main() {
     let id_and_expr_regex =
         Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
     let factor_finder = FactorFinder::new();
+    let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests);
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),

@@ -56,7 +56,7 @@ impl <'a> ThrottlingRequestBuilder<'a> {
 }
 
 impl ThrottlingHttpClient {
-    pub fn new(requests_per_hour: NonZeroU32) -> Self {
+    pub fn new(requests_per_hour: NonZeroU32, max_concurrent_requests: usize) -> Self {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
@@ -86,7 +86,7 @@ impl ThrottlingHttpClient {
             rate_limiter: rate_limiter.into(),
             requests_per_hour: requests_per_hour.get(),
             requests_left_last_check: requests_left_last_check.into(),
-            request_semaphore: Semaphore::const_new(3).into(),
+            request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
         }
     }
 
