@@ -1,5 +1,5 @@
 use tokio::select;
-use tokio::sync::mpsc::{channel, OwnedPermit, Receiver, Sender};
+use tokio::sync::mpsc::{OwnedPermit, Receiver, Sender, channel};
 
 pub struct PushbackReceiver<T> {
     receiver: Receiver<T>,
@@ -42,8 +42,14 @@ impl<T> PushbackReceiver<T> {
                 }
             }
             None => {
-                let received = self.return_receiver.try_recv().expect("Failed to receive a returned item when no return permits are available");
-                let return_permit = self.return_sender.clone().try_reserve_owned().expect("Failed to obtain a return permit after receiving a returned item");
+                let received = self.return_receiver.try_recv().expect(
+                    "Failed to receive a returned item when no return permits are available",
+                );
+                let return_permit = self
+                    .return_sender
+                    .clone()
+                    .try_reserve_owned()
+                    .expect("Failed to obtain a return permit after receiving a returned item");
                 Some((received, return_permit))
             }
         }

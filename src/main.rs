@@ -30,7 +30,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU128, NonZeroU32};
+use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
@@ -161,7 +161,9 @@ async fn composites_while_waiting(
             info!("{id}: Checked composite");
             continue;
         }
-        if let Some(out) = COMPOSITES_OUT.get() && dispatch_composite(http, id, out, factor_finder).await {
+        if let Some(out) = COMPOSITES_OUT.get()
+            && dispatch_composite(http, id, out, factor_finder).await
+        {
             HAVE_DISPATCHED_TO_YAFU.store(true, Release);
         } else {
             return_permit.send(CompositeCheckTask { id, digits_or_expr });
@@ -765,7 +767,8 @@ async fn main() {
     let mut u_digits = None;
     let mut prp_start = if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<u128>().unwrap();
-        let mut c_digits_value = C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
+        let mut c_digits_value =
+            C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
         if c_digits_value == C_MIN_DIGITS - 1 {
             c_digits_value = 1;
         }
