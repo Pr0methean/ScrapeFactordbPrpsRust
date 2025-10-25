@@ -137,7 +137,7 @@ async fn composites_while_waiting(
     };
     info!("Processing composites for {remaining:?} while other work is waiting");
     loop {
-        let Ok(CompositeCheckTask { id, digits_or_expr }) =
+        let Ok((CompositeCheckTask { id, digits_or_expr }, return_permit)) =
             timeout(remaining, c_receiver.recv()).await
         else {
             warn!("Timed out waiting for a composite number to check");
@@ -161,26 +161,11 @@ async fn composites_while_waiting(
             info!("{id}: Checked composite");
             continue;
         }
-        if let Some(out) = COMPOSITES_OUT.get() {
-            if !HAVE_DISPATCHED_TO_YAFU.load(Acquire) {
-                c_filter.insert(&id.to_ne_bytes()).unwrap();
-                if dispatch_composite(http, id, out, factor_finder).await {
-                    HAVE_DISPATCHED_TO_YAFU.store(true, Release);
-                }
-            } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
-                info!("{id}: Requeued C");
-            } else {
-                c_filter.insert(&id.to_ne_bytes()).unwrap();
-                let http = http.clone();
-                let factor_finder = factor_finder.clone();
-                task::spawn(
-                    async move { dispatch_composite(&http, id, out, &factor_finder).await },
-                );
-            }
-        } else if c_receiver.try_send(CompositeCheckTask { id, digits_or_expr }) {
-            info!("{id}: Requeued C");
+        if let Some(out) = COMPOSITES_OUT.get() && dispatch_composite(http, id, out, factor_finder).await {
+            HAVE_DISPATCHED_TO_YAFU.store(true, Release);
         } else {
-            error!("{id}: Dropping C");
+            return_permit.send(CompositeCheckTask { id, digits_or_expr });
+            info!("{id}: Requeued C");
         }
         match end.checked_duration_since(Instant::now()) {
             None => {
@@ -444,7 +429,7 @@ async fn do_checks(
             .chain(retry.take().into_iter())
             .chain(u_receiver.try_recv().into_iter());
         let mut task_done = false;
-        for CheckTask { id, task_type } in tasks {
+        for (CheckTask { id, task_type }, task_return_permit) in tasks {
             task_done = true;
             match task_type {
                 CheckTaskType::Prp => {
@@ -462,11 +447,8 @@ async fn do_checks(
                     )
                     .await
                     else {
-                        if prp_receiver.try_send(CheckTask { id, task_type }) {
-                            info!("{id}: Requeued PRP");
-                        } else {
-                            error!("{id}: Dropping PRP");
-                        }
+                        task_return_permit.send(CheckTask { id, task_type });
+                        info!("{id}: Requeued PRP");
                         continue;
                     };
                     if bases_left == U256::from(0) {
@@ -479,11 +461,8 @@ async fn do_checks(
                         let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                         if !text.contains(">number<") {
                             error!("Failed to decode result from {url}: {text}");
-                            if prp_receiver.try_send(CheckTask { id, task_type }) {
-                                info!("{id}: Requeued PRP");
-                            } else {
-                                error!("{id}: Dropping PRP");
-                            }
+                            task_return_permit.send(CheckTask { id, task_type });
+                            info!("{id}: Requeued PRP");
                             composites_while_waiting(
                                 Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                                 &http,
@@ -559,27 +538,16 @@ async fn do_checks(
                         Assigned | IneligibleForPrpCheck => {}
                         PleaseWait => {
                             if retry.is_none() {
-                                retry = Some(CheckTask { id, task_type });
+                                retry = Some((CheckTask { id, task_type }, task_return_permit));
                                 info!("{id}: put U in retry buffer");
-                            } else if u_receiver.try_send(CheckTask { id, task_type }) {
-                                info!("{id}: Requeued U");
                             } else {
-                                error!(
-                                    "{id}: Dropping U after 'please wait' because the retry buffer and queue are both full",
-                                );
+                                task_return_permit.send(CheckTask { id, task_type });
+                                info!("{id}: Requeued U");
                             }
                         }
                         OtherRetryableFailure => {
-                            if u_receiver.try_send(CheckTask { id, task_type }) {
-                                info!("{id}: Requeued U");
-                            } else if retry.is_none() {
-                                retry = Some(CheckTask { id, task_type });
-                                info!("{id}: put U in retry buffer");
-                            } else {
-                                error!(
-                                    "{id}: Dropping U after error because the retry buffer and queue are both full",
-                                );
-                            }
+                            task_return_permit.send(CheckTask { id, task_type });
+                            info!("{id}: Requeued U");
                         }
                     }
                 }
