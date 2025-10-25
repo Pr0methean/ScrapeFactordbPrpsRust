@@ -217,7 +217,7 @@ impl ThrottlingHttpClient {
     pub fn post(&'_ self, url: &str) -> ThrottlingRequestBuilder<'_> {
         ThrottlingRequestBuilder {
             inner: self.http.post(url),
-            client: &self,
+            client: self,
         }
     }
 }
