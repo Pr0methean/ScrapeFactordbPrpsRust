@@ -1135,7 +1135,7 @@ async fn find_and_submit_factors(
             let subfactors: Box<[Factor]> = if factor_digits_or_expr.contains("...") {
                 // Link text isn't an expression for the factor, so we need to look up its value
                 info!(
-                    "{id}: Algebraic factor {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
+                    "{id}: Algebraic factor with ID {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                 );
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
                     if let Ok(subfactors) = factor_finder
@@ -1155,7 +1155,7 @@ async fn find_and_submit_factors(
                 }
             } else {
                 info!(
-                    "{id}: Algebraic factor {factor_id} represented in full: {factor_digits_or_expr}"
+                    "{id}: Algebraic factor with ID {factor_id} represented in full: {factor_digits_or_expr}"
                 );
                 [factor_digits_or_expr.into()].into()
             };
