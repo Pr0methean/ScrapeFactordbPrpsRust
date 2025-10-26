@@ -17,6 +17,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{Instant, sleep, sleep_until};
 
 pub const MAX_RETRIES: usize = 40;
+const MAX_RETRIES_WITH_FALLBACK: usize = 10;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const E2E_TIMEOUT: Duration = Duration::from_secs(30);
@@ -147,6 +148,23 @@ impl ThrottlingHttpClient {
         let cmd = raw_args.next().unwrap();
         let e = Command::new(cmd).args(raw_args).exec();
         panic!("Failed to restart: {e}");
+    }
+
+    pub async fn retrying_get_and_decode_or(
+        &self,
+        url: &str,
+        retry_delay: Duration,
+        alt_url_supplier: impl FnOnce() -> String,
+    ) -> Result<Box<str>, Box<str>> {
+        for _ in 0..MAX_RETRIES_WITH_FALLBACK {
+            if let Some(value) = self.try_get_and_decode(url).await {
+                return Ok(value);
+            }
+            sleep(retry_delay).await;
+        }
+        Err(self
+            .retrying_get_and_decode(&alt_url_supplier.call_once(()), retry_delay)
+            .await)
     }
 
     async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {

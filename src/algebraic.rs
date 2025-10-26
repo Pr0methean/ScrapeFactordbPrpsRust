@@ -1,4 +1,6 @@
 use crate::algebraic::Factor::Numeric;
+use crate::net::ThrottlingHttpClient;
+use crate::{NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use compact_str::{CompactString, format_compact};
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -8,13 +10,15 @@ use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::nt_funcs::factorize128;
-use regex::{Regex, RegexSet};
+use regex::{Regex, RegexBuilder, RegexSet};
+use serde_json::from_str;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
 use std::marker::Destruct;
 use std::mem::swap;
+use urlencoding::encode;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -683,6 +687,7 @@ pub struct FactorFinder {
     regexes: Box<[Regex]>,
     regexes_as_set: RegexSet,
     sieve: NaiveBuffer,
+    digits_fallback_regex: Regex,
 }
 
 impl Clone for FactorFinder {
@@ -691,6 +696,7 @@ impl Clone for FactorFinder {
             regexes: self.regexes.clone(),
             regexes_as_set: self.regexes_as_set.clone(),
             sieve: NaiveBuffer::new(),
+            digits_fallback_regex: self.digits_fallback_regex.clone(),
         }
     }
 
@@ -886,10 +892,17 @@ impl FactorFinder {
             .map(|pat| Regex::new(pat).unwrap())
             .collect();
         let sieve = NaiveBuffer::new();
+        let digits_fallback_regex =
+            RegexBuilder::new("<tr><td>Number</td>[^<]*<td[^>]*>([0-9br<>\\pZ]+)")
+                .multi_line(true)
+                .dot_matches_new_line(true)
+                .build()
+                .unwrap();
         FactorFinder {
             regexes,
             regexes_as_set,
             sieve,
+            digits_fallback_regex,
         }
     }
 
@@ -1173,6 +1186,82 @@ impl FactorFinder {
             );
         }
         factors.into_boxed_slice()
+    }
+
+    // FIXME: This uses Web requests to find factors that FactorDB already knows of and/or convert
+    // them to digit form. That would be out of scope for this struct if we had anywhere else to put
+    // this method.
+    pub async fn known_factors_as_digits(
+        &self,
+        http: &ThrottlingHttpClient,
+        id: NumberSpecifier<'_>,
+        include_ff: bool,
+    ) -> Result<Box<[Factor]>, ()> {
+        if let NumberSpecifier::Expression(expr) = id
+            && let Numeric(n) = expr.into()
+        {
+            return Ok(self.find_unique_factors(&Numeric(n)));
+        }
+        let response = match id {
+            NumberSpecifier::Id(id) => {
+                let url = format!("https://factordb.com/api?id={id}");
+                http.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
+                    format!("https://factordb.com/index.php?showid={id}")
+                })
+                .await
+            }
+            NumberSpecifier::Expression(expr) => {
+                let url = format!("https://factordb.com/api?query={}", encode(expr));
+                Ok(http.retrying_get_and_decode(&url, RETRY_DELAY).await)
+            }
+        };
+        match response {
+            Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
+                Err(e) => {
+                    error!("{id:?}: Failed to decode API response: {e}: {api_response}");
+                    Err(())
+                }
+                Ok(NumberStatusApiResponse {
+                    status, factors, ..
+                }) => {
+                    info!(
+                        "{id:?}: Fetched status of {status} and {} factors",
+                        factors.len()
+                    );
+                    if !include_ff && status == "FF" {
+                        Ok(Box::new([]))
+                    } else {
+                        let factors: Vec<_> = factors
+                            .into_iter()
+                            .map(|(factor, _exponent)| Factor::from(factor))
+                            .collect();
+                        if factors.len() > 1 {
+                            info!(
+                                "{id:?}: Composite with known factors: {}",
+                                factors.iter().join(",")
+                            );
+                        }
+                        Ok(factors.into_boxed_slice())
+                    }
+                }
+            },
+            Err(fallback_response) => {
+                let Some(digits_cell) = self
+                    .digits_fallback_regex
+                    .captures(&fallback_response)
+                    .and_then(|c| c.get(1))
+                else {
+                    return Err(());
+                };
+                Ok([digits_cell
+                    .as_str()
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .collect::<String>()
+                    .into()]
+                .into())
+            }
+        }
     }
 }
 
