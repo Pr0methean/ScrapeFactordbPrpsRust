@@ -448,14 +448,18 @@ async fn do_checks(
     )
     .await;
     loop {
+        let select_start = Instant::now();
         let tasks: Vec<_> = select! {
             _ = sleep_until(next_unknown_attempt) => {
+                info!("Ready to retry a U after {:?}", Instant::now() - select_start);
                 retry.take().into_iter().chain(u_receiver.try_recv().into_iter()).collect()
             }
             prp_task = prp_receiver.recv() => {
+                info!("Ready to check a C after {:?}", Instant::now() - select_start);
                 vec![prp_task]
             }
             c_task = c_receiver.recv() => {
+                info!("Ready to check a C after {:?}", Instant::now() - select_start);
                 let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
                 check_composite(&http, &mut c_filter, &factor_finder, &id_and_expr_regex, id, digits_or_expr, return_permit).await;
                 vec![]
@@ -863,8 +867,10 @@ async fn main() {
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
+        let select_start = Instant::now();
         select! {
             c_permit = c_sender.reserve() => {
+                info!("Ready to send C's after {:?}", Instant::now() - select_start);
                 let c = waiting_c.pop_front();
                 let mut c_sent = 1usize;
                 match c {
@@ -885,6 +891,7 @@ async fn main() {
                 info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
+                info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
                 let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
                 let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
                 info!("PRP search results retrieved");
@@ -921,6 +928,7 @@ async fn main() {
                 }
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+                info!("Ready to search for U's after {:?}", Instant::now() - select_start);
                 queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
             }
             _ = sigterm.recv() => {
