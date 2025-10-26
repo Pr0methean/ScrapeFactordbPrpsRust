@@ -37,9 +37,9 @@ use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::error::TrySendError::Full;
-use tokio::sync::mpsc::{PermitIterator, Sender, channel};
+use tokio::sync::mpsc::{PermitIterator, Sender, channel, OwnedPermit};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::time::{Duration, Instant, sleep, timeout};
+use tokio::time::{Duration, Instant, sleep, timeout, sleep_until};
 use tokio::{select, task};
 use urlencoding::encode;
 
@@ -143,32 +143,7 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        if c_filter.query(&id.to_ne_bytes()).unwrap() {
-            info!("{id}: Skipping duplicate C");
-            continue;
-        }
-        if find_and_submit_factors(http, id, &digits_or_expr, factor_finder, id_and_expr_regex)
-            .await
-        {
-            info!("{id}: Skipping C check because algebraic factors were found");
-            continue;
-        }
-        if http
-            .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
-            .await
-            .is_some()
-        {
-            info!("{id}: Checked composite");
-            continue;
-        }
-        if let Some(out) = COMPOSITES_OUT.get()
-            && dispatch_composite(http, id, out, factor_finder).await
-        {
-            HAVE_DISPATCHED_TO_YAFU.store(true, Release);
-        } else {
-            return_permit.send(CompositeCheckTask { id, digits_or_expr });
-            info!("{id}: Requeued C");
-        }
+        if check_composite(http, c_filter, factor_finder, id_and_expr_regex, id, digits_or_expr, return_permit).await { continue; }
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");
@@ -177,6 +152,36 @@ async fn composites_while_waiting(
             Some(new_remaining) => remaining = new_remaining,
         };
     }
+}
+
+async fn check_composite(http: &ThrottlingHttpClient, c_filter: &mut InMemoryFilter, factor_finder: &FactorFinder, id_and_expr_regex: &Regex, id: u128, digits_or_expr: CompactString, return_permit: OwnedPermit<CompositeCheckTask>) -> bool {
+    if c_filter.query(&id.to_ne_bytes()).unwrap() {
+        info!("{id}: Skipping duplicate C");
+        return true;
+    }
+    if find_and_submit_factors(http, id, &digits_or_expr, factor_finder, id_and_expr_regex)
+        .await
+    {
+        info!("{id}: Skipping C check because algebraic factors were found");
+        return true;
+    }
+    if http
+        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+        .await
+        .is_some()
+    {
+        info!("{id}: Checked composite");
+        return true;
+    }
+    if let Some(out) = COMPOSITES_OUT.get()
+        && dispatch_composite(http, id, out, factor_finder).await
+    {
+        HAVE_DISPATCHED_TO_YAFU.store(true, Release);
+    } else {
+        return_permit.send(CompositeCheckTask { id, digits_or_expr });
+        info!("{id}: Requeued C");
+    }
+    false
 }
 
 #[derive(Debug)]
@@ -425,14 +430,20 @@ async fn do_checks(
     )
     .await;
     loop {
-        let tasks = prp_receiver
-            .try_recv()
-            .into_iter()
-            .chain(retry.take().into_iter())
-            .chain(u_receiver.try_recv().into_iter());
-        let mut task_done = false;
+        let tasks: Vec<_> = select! {
+            _ = sleep_until(next_unknown_attempt) => {
+                retry.take().into_iter().chain(u_receiver.try_recv().into_iter()).collect()
+            }
+            prp_task = prp_receiver.recv() => {
+                vec![prp_task]
+            }
+            c_task = c_receiver.recv() => {
+                let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
+                check_composite(&http, &mut c_filter, &factor_finder, &id_and_expr_regex, id, digits_or_expr, return_permit).await;
+                vec![]
+            }
+        };
         for (CheckTask { id, task_type }, task_return_permit) in tasks {
-            task_done = true;
             match task_type {
                 CheckTaskType::Prp => {
                     let mut stopped_early = false;
@@ -507,7 +518,7 @@ async fn do_checks(
                     }
                 }
                 CheckTaskType::U => {
-                    if !throttle_if_necessary(
+                    throttle_if_necessary(
                         &http,
                         &mut c_receiver,
                         &mut bases_before_next_cpu_check,
@@ -516,18 +527,7 @@ async fn do_checks(
                         &factor_finder,
                         &id_and_expr_regex,
                     )
-                    .await
-                    {
-                        composites_while_waiting(
-                            next_unknown_attempt,
-                            &http,
-                            &mut c_receiver,
-                            &mut c_filter,
-                            &factor_finder,
-                            &id_and_expr_regex,
-                        )
-                        .await;
-                    }
+                    .await;
                     match try_handle_unknown(
                         &http,
                         &u_status_regex,
@@ -554,18 +554,6 @@ async fn do_checks(
                     }
                 }
             }
-        }
-        if !task_done {
-            composites_while_waiting(
-                Instant::now() + Duration::from_secs(1),
-                &http,
-                &mut c_receiver,
-                &mut c_filter,
-                &factor_finder,
-                &id_and_expr_regex,
-            )
-            .await;
-            continue;
         }
     }
 }
