@@ -37,9 +37,9 @@ use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::error::TrySendError::Full;
-use tokio::sync::mpsc::{PermitIterator, Sender, channel, OwnedPermit};
+use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
-use tokio::time::{Duration, Instant, sleep, timeout, sleep_until};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 use urlencoding::encode;
 
@@ -143,7 +143,19 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        if check_composite(http, c_filter, factor_finder, id_and_expr_regex, id, digits_or_expr, return_permit).await { continue; }
+        if check_composite(
+            http,
+            c_filter,
+            factor_finder,
+            id_and_expr_regex,
+            id,
+            digits_or_expr,
+            return_permit,
+        )
+        .await
+        {
+            continue;
+        }
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");
@@ -154,14 +166,20 @@ async fn composites_while_waiting(
     }
 }
 
-async fn check_composite(http: &ThrottlingHttpClient, c_filter: &mut InMemoryFilter, factor_finder: &FactorFinder, id_and_expr_regex: &Regex, id: u128, digits_or_expr: CompactString, return_permit: OwnedPermit<CompositeCheckTask>) -> bool {
+async fn check_composite(
+    http: &ThrottlingHttpClient,
+    c_filter: &mut InMemoryFilter,
+    factor_finder: &FactorFinder,
+    id_and_expr_regex: &Regex,
+    id: u128,
+    digits_or_expr: CompactString,
+    return_permit: OwnedPermit<CompositeCheckTask>,
+) -> bool {
     if c_filter.query(&id.to_ne_bytes()).unwrap() {
         info!("{id}: Skipping duplicate C");
         return true;
     }
-    if find_and_submit_factors(http, id, &digits_or_expr, factor_finder, id_and_expr_regex)
-        .await
-    {
+    if find_and_submit_factors(http, id, &digits_or_expr, factor_finder, id_and_expr_regex).await {
         info!("{id}: Skipping C check because algebraic factors were found");
         return true;
     }
