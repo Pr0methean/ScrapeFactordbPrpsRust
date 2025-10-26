@@ -313,7 +313,7 @@ async fn get_prp_remaining_bases(
         if let Ok(nm1_factors) = nm1_result {
             match nm1_factors.len() {
                 0 => {
-                    info!("{id}: N-1/N+1 (ID {nm1_id}) is fully factored!");
+                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                     let _ = http
                         .retrying_get_and_decode(
                             &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
