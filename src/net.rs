@@ -1,5 +1,6 @@
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use anyhow::Error;
+use atomic_time::AtomicInstant;
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use log::{error, warn};
@@ -10,7 +11,7 @@ use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
 use std::sync::Arc;
-use std::sync::atomic::Ordering::Release;
+use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -30,6 +31,7 @@ pub struct ThrottlingHttpClient {
     requests_left_last_check: Arc<AtomicU32>,
     requests_per_hour: u32,
     request_semaphore: Arc<Semaphore>,
+    all_threads_blocked_until: Arc<AtomicInstant>,
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -46,6 +48,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
     }
 
     pub async fn send(self) -> Result<Response, Error> {
+        sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
         self.client.rate_limiter.until_ready().await;
         match self.client.request_semaphore.acquire().await {
             Ok(_permit) => self.inner.send().await.map_err(Error::from),
@@ -86,6 +89,7 @@ impl ThrottlingHttpClient {
             requests_per_hour: requests_per_hour.get(),
             requests_left_last_check: requests_left_last_check.into(),
             request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
+            all_threads_blocked_until: AtomicInstant::now().into(),
         }
     }
 
@@ -201,11 +205,14 @@ impl ThrottlingHttpClient {
 
     #[allow(const_item_mutation)]
     pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
+        sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
         if let Some((_, seconds_to_reset)) =
             self.parse_resource_limits(&mut u64::MAX, &response).await
         {
             let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
+            self.all_threads_blocked_until
+                .store(reset_time.into(), Release);
             if EXIT_TIME
                 .get()
                 .is_some_and(|exit_time| exit_time <= &reset_time)
@@ -214,7 +221,6 @@ impl ThrottlingHttpClient {
                 exit(0);
             } else {
                 warn!("Resource limits reached; throttling for {seconds_to_reset} seconds");
-                sleep_until(reset_time).await;
             }
             return None;
         }
