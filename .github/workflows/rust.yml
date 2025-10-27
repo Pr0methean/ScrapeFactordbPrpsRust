@@ -60,7 +60,7 @@ jobs:
         if [ "${{github.event_name}}" == "push" ]; then
           export RUST_BACKTRACE=full
         fi
-        NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 cargo +nightly run --release &
+        RUSTFLAGS="-C target-cpu=native" NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 cargo +nightly run --release &
         rust_pid=$!
         sleep 21300 &
         yafu_timer_pid=$!
