@@ -2,7 +2,7 @@
 
 The programs in this repository help the field of pure mathematics by factorizing large integers or establishing that they're prime numbers, and submitting the results to factordb.com to be stored. You can run them on GitHub Actions and/or your own computer (currently tuned for Linux x86-64). The ways they will help for a given number depend on its current status on factordb.com.
 
-### Probable prime (PRP, 300 digits or larger)
+### Probable prime (PRP, 300 to 200,000 digits)
 
 * Request an N-1/N+1 combined proof attempt for the number. This can confirm or disconfirm its primality.
 * Request Lucas probable-prime checks to all available bases (2 through 255). This can't confirm primality, but will almost always disconfirm it if the "probable prime" is actually composite.
