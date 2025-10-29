@@ -259,6 +259,7 @@ async fn get_prp_remaining_bases(
     if bases_text.contains("Proven") {
         info!("{id}: No longer PRP");
     }
+    let mut nm1_divides_3 = false;
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
         let nm1_result = factor_finder
@@ -279,8 +280,11 @@ async fn get_prp_remaining_bases(
                 1 => {
                     // no known factors, but N-1 must be even if N is PRP
                     report_factor_of_u(http, nm1_id, &Numeric(2)).await;
+                    nm1_divides_3 = report_factor_of_u(http, nm1_id, &Numeric(3)).await;
                 }
-                _ => {}
+                _ => {
+                    nm1_divides_3 = nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3);
+                }
             }
         }
     } else {
@@ -306,8 +310,17 @@ async fn get_prp_remaining_bases(
                 1 => {
                     // no known factors, but N+1 must be even if N is PRP
                     report_factor_of_u(http, np1_id, &Numeric(2)).await;
+                    if !nm1_divides_3 {
+                        // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
+                        report_factor_of_u(http, np1_id, &Numeric(3)).await;
+                    }
                 }
-                _ => {}
+                _ => {
+                    if !nm1_divides_3 && np1_factors[0] != Numeric(3) && np1_factors[1] != Numeric(3) {
+                        // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
+                        report_factor_of_u(http, np1_id, &Numeric(3)).await;
+                    }
+                }
             }
         }
     } else {
