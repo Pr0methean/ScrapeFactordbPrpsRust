@@ -69,7 +69,7 @@ const U_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
 const C_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
-const SUBMIT_U_FACTOR_MAX_ATTEMPTS: usize = 10;
+const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 40;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
@@ -1036,42 +1036,41 @@ async fn try_report_factor(
     u_id: u128,
     factor: &Factor,
 ) -> Result<bool, ()> {
-    for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
-        match http
-            .post("https://factordb.com/reportfactor.php")
-            .form(&FactorSubmission {
-                id: u_id,
-                factor: &factor.to_compact_string(),
-            })
-            .send()
-            .await
-        {
-            Ok(response) => {
-                let response = response.text().await;
-                match response {
-                    Ok(text) => {
-                        info!("{u_id}: reported a factor of {factor}; response: {text}",);
-                        return if text.contains("Error") {
-                            Err(())
-                        } else {
-                            Ok(text.contains("submitted"))
-                        };
-                    }
-                    Err(e) => {
-                        error!("{u_id}: Failed to get response: {e}");
-                    }
+    match http
+        .post("https://factordb.com/reportfactor.php")
+        .form(&FactorSubmission {
+            id: u_id,
+            factor: &factor.to_compact_string(),
+        })
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let response = response.text().await;
+            match response {
+                Ok(text) => {
+                    info!("{u_id}: reported a factor of {factor}; response: {text}",);
+                    return if text.contains("Error") {
+                        Err(())
+                    } else {
+                        Ok(text.contains("submitted"))
+                    };
+                }
+                Err(e) => {
+                    error!("{u_id}: Failed to get response: {e}");
                 }
             }
-            Err(e) => {
-                error!("{u_id}: failed to submit factor {factor}: {e}")
-            }
+        }
+        Err(e) => {
+            error!("{u_id}: failed to submit factor {factor}: {e}")
         }
     }
+    sleep(RETRY_DELAY).await;
     Err(())
 }
 
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> bool {
-    for _ in 0..SUBMIT_U_FACTOR_MAX_ATTEMPTS {
+    for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
         if let Ok(result) = try_report_factor(http, u_id, factor).await {
             return result;
         }
@@ -1142,7 +1141,7 @@ async fn find_and_submit_factors(
     }
     get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors).await;
     let mut iters_without_progress = 0;
-    while iters_without_progress < SUBMIT_U_FACTOR_MAX_ATTEMPTS {
+    while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
         let mut new_subfactors = BTreeMap::new();
         let mut any_error = false;
