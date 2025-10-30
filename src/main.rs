@@ -801,15 +801,6 @@ async fn main() {
         Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
     let factor_finder = FactorFinder::new();
     let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests);
-    task::spawn(do_checks(
-        PushbackReceiver::new(prp_receiver, &prp_sender),
-        PushbackReceiver::new(u_receiver, &u_sender),
-        c_receiver,
-        c_filter,
-        http.clone(),
-        factor_finder.clone(),
-        id_and_expr_regex.clone(),
-    ));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -830,7 +821,7 @@ async fn main() {
         &id_and_expr_regex,
         &http,
         u_digits,
-        prp_sender.reserve_many(PRP_TASK_BUFFER_SIZE).await.unwrap(),
+        prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize).await.unwrap(),
         &mut u_filter,
         &factor_finder,
     )
@@ -843,6 +834,15 @@ async fn main() {
         c_digits,
     )
     .await;
+    task::spawn(do_checks(
+        PushbackReceiver::new(prp_receiver, &prp_sender),
+        PushbackReceiver::new(u_receiver, &u_sender),
+        c_receiver,
+        c_filter,
+        http.clone(),
+        factor_finder.clone(),
+        id_and_expr_regex.clone(),
+    ));
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
