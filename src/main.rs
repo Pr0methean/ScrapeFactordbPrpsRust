@@ -444,9 +444,8 @@ async fn do_checks(
                     info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
                     retry.take()
                 } else {
-                    u_receiver.try_recv().map(|task| {
+                    u_receiver.try_recv().inspect(|_| {
                         info!("Ready to check a U after {:?}", Instant::now() - successful_select_end);
-                        task
                     })
                 }
             }
