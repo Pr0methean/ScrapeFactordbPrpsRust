@@ -47,7 +47,7 @@ use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
 const MAX_START: u128 = 100_000;
-const RETRY_DELAY: Duration = Duration::from_secs(1);
+const RETRY_DELAY: Duration = Duration::from_secs(3);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: u128 = 32;
@@ -1074,7 +1074,6 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
         if let Ok(result) = try_report_factor(http, u_id, factor).await {
             return result;
         }
-        sleep(RETRY_DELAY).await;
     }
     match FAILED_U_SUBMISSIONS_OUT
         .get()
