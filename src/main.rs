@@ -422,21 +422,25 @@ async fn do_checks(
         &id_and_expr_regex,
     )
     .await;
+    let mut successful_select_end = Instant::now();
     loop {
-        let select_start = Instant::now();
         let tasks: Vec<_> = select! {
             _ = sleep_until(next_unknown_attempt) => {
-                info!("Ready to retry a U after {:?}", Instant::now() - select_start);
-                retry.take().into_iter().chain(u_receiver.try_recv().into_iter()).collect()
+                let ready_us: Vec<_> = retry.take().into_iter().chain(u_receiver.try_recv().into_iter()).collect();
+                if !ready_us.is_empty() {
+                    info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
+                }
+                ready_us
             }
             prp_task = prp_receiver.recv() => {
-                info!("Ready to check a C after {:?}", Instant::now() - select_start);
+                info!("Ready to check a PRP after {:?}", Instant::now() - successful_select_end);
                 vec![prp_task]
             }
             c_task = c_receiver.recv() => {
-                info!("Ready to check a C after {:?}", Instant::now() - select_start);
+                info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
                 let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
                 check_composite(&http, &mut c_filter, &factor_finder, &id_and_expr_regex, id, digits_or_expr, return_permit).await;
+                successful_select_end = Instant::now();
                 vec![]
             }
         };
@@ -551,6 +555,7 @@ async fn do_checks(
                     }
                 }
             }
+            successful_select_end = Instant::now();
         }
     }
 }
