@@ -1005,28 +1005,35 @@ impl FactorFinder {
                                             && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                         {
-                                            factors.push(
-                                                format_compact!(
-                                                    "{}{}{}{}",
-                                                    a,
-                                                    if (n / subset_product) > 1 {
-                                                        format_compact!("^{}", n / subset_product)
-                                                    } else {
-                                                        CompactString::from("")
-                                                    },
-                                                    if root_b > 1 {
-                                                        format_compact!("*{}", root_b)
-                                                    } else {
-                                                        CompactString::from("")
-                                                    },
-                                                    if root_c != 0 {
-                                                        format_compact!("{:+}", root_c)
-                                                    } else {
-                                                        CompactString::from("")
-                                                    }
-                                                )
-                                                .into(),
-                                            );
+                                            if let Ok(n) = n.try_into()
+                                                && let Some(anbc) = a.checked_pow(n)
+                                                .and_then(|an| an.checked_mul(b))
+                                                .and_then(|anb| anb.checked_add_signed(c)) {
+                                               factors.extend(self.find_factors(&Numeric(anbc)));
+                                            } else {
+                                                factors.push(
+                                                    format_compact!(
+                                                        "{}{}{}{}",
+                                                        a,
+                                                        if (n / subset_product) > 1 {
+                                                            format_compact!("^{}", n / subset_product)
+                                                        } else {
+                                                            CompactString::from("")
+                                                        },
+                                                        if root_b > 1 {
+                                                            format_compact!("*{}", root_b)
+                                                        } else {
+                                                            CompactString::from("")
+                                                        },
+                                                        if root_c != 0 {
+                                                            format_compact!("{:+}", root_c)
+                                                        } else {
+                                                            CompactString::from("")
+                                                        }
+                                                    )
+                                                        .into(),
+                                                );
+                                            }
                                         }
                                     }
                                 }
