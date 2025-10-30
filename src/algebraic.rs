@@ -1005,14 +1005,7 @@ impl FactorFinder {
                                             && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                         {
-                                            if let Ok(n) = n.try_into()
-                                                && let Some(anbc) = a.checked_pow(n)
-                                                .and_then(|an| an.checked_mul(b))
-                                                .and_then(|anb| anb.checked_add_signed(c)) {
-                                               factors.extend(self.find_factors(&Numeric(anbc)));
-                                            } else {
-                                                factors.push(
-                                                    format_compact!(
+                                            let anbc_expr = format_compact!(
                                                         "{}{}{}{}",
                                                         a,
                                                         if (n / subset_product) > 1 {
@@ -1030,9 +1023,15 @@ impl FactorFinder {
                                                         } else {
                                                             CompactString::from("")
                                                         }
-                                                    )
-                                                        .into(),
-                                                );
+                                                    );
+                                            if let Ok(n) = n.try_into()
+                                                && let Some(anbc) = a.checked_pow(n)
+                                                .and_then(|an| an.checked_mul(b))
+                                                .and_then(|anb| anb.checked_add_signed(c)) {
+                                                info!("Evaluated {anbc_expr} as {anbc}");
+                                               factors.extend(self.find_factors(&Numeric(anbc)));
+                                            } else {
+                                                factors.push(anbc_expr.into());
                                             }
                                         }
                                     }
