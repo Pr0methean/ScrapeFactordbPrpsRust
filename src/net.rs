@@ -62,7 +62,7 @@ impl ThrottlingHttpClient {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
-            RegexBuilder::new("Page requests(?:[^0-9])+([0-9,]+).*CPU.*([0-9]+)\\.([0-9]) seconds.*([0-6][0-9]):([0-6][0-9])")
+            RegexBuilder::new("Page requests(?:[^0-9])+([0-9,]+).*CPU.*([0-9]+)\\.([0-9]) seconds.*600.0 seconds.*([0-6][0-9]):([0-6][0-9])")
                 .multi_line(true)
                 .dot_matches_new_line(true)
                 .build()
