@@ -44,7 +44,7 @@ use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 use crate::NumberSpecifier::{Expression, Id};
-use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById, NoSubfactorHandling};
+use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById};
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -1080,7 +1080,6 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
 enum SubfactorHandling {
     ById(u128),
     ByExpression,
-    NoSubfactorHandling,
     AlreadySubmitted
 }
 
@@ -1119,10 +1118,13 @@ async fn find_and_submit_factors(
     let try_subfactors = digits_or_expr.contains('/');
     for digits_or_expr in digits_or_expr_full.into_iter() {
         let factors = factor_finder.find_unique_factors(&digits_or_expr);
-        if !digits_or_expr_full_contains_self
-            && factors.is_empty()
-            && !all_factors.contains_key(&digits_or_expr) {
-            all_factors.insert(digits_or_expr, ByExpression);
+        if factors.is_empty() {
+            if !digits_or_expr_full_contains_self
+                && !all_factors.contains_key(&digits_or_expr) {
+                all_factors.insert(digits_or_expr, ByExpression);
+            }
+        } else {
+            all_factors.extend(factors.into_iter().map(|factor| (factor, ByExpression)));
         }
     }
     get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors).await;
@@ -1143,31 +1145,32 @@ async fn find_and_submit_factors(
                 }
                 Ok(false) => {
                     if try_subfactors {
-                        match subfactor_handling {
+                        let specifier_to_get_subfactors = match subfactor_handling {
                             ById(factor_id) => {
                                 get_known_algebraic_factors(http, *factor_id, factor_finder, id_and_expr_regex, &mut new_subfactors).await;
+                                Id(*factor_id)
                             }
-                            ByExpression => {
-                                if let Ok(subfactors) = factor_finder
-                                    .known_factors_as_digits(
-                                        http,
-                                        Expression(&factor.to_compact_string()),
-                                        true,
-                                    )
-                                    .await
-                                    && subfactors.len() > 1
-                                {
-                                    for subfactor in subfactors {
-                                        info!("{id}: Found sub-factor {subfactor} of {factor}");
-                                        if !new_subfactors.contains_key(&subfactor) {
-                                            new_subfactors.insert(subfactor, NoSubfactorHandling);
-                                        }
-                                    }
-                                }
-                            }
-                            NoSubfactorHandling => continue,
+                            ByExpression => Expression(&factor.to_compact_string()),
                             AlreadySubmitted => unsafe { unreachable_unchecked() }
                         };
+                        let subfactors = factor_finder.find_unique_factors(&factor);
+                        new_subfactors.extend(subfactors.into_iter().map(|subfactor| (subfactor, ByExpression)));
+                        if let Ok(subfactors) = factor_finder
+                            .known_factors_as_digits(
+                                http,
+                                specifier_to_get_subfactors,
+                                true,
+                            )
+                            .await
+                            && subfactors.len() > 1
+                        {
+                            for subfactor in subfactors {
+                                info!("{id}: Found sub-factor {subfactor} of {factor}");
+                                if !new_subfactors.contains_key(&subfactor) {
+                                    new_subfactors.insert(subfactor, ByExpression);
+                                }
+                            }
+                        }
                     }
                     *subfactor_handling = AlreadySubmitted;
                 }
@@ -1183,6 +1186,21 @@ async fn find_and_submit_factors(
             iters_without_progress = 0;
         }
         all_factors.extend(new_subfactors);
+    }
+    for (factor, subfactor_handling) in all_factors.into_iter() {
+        if subfactor_handling == AlreadySubmitted {
+            continue;
+        }
+        match FAILED_U_SUBMISSIONS_OUT
+            .get()
+            .unwrap()
+            .lock()
+            .await
+            .write_fmt(format_args!("{id},{factor}\n"))
+        {
+            Ok(_) => warn!("{id}: wrote {factor} to failed submissions file"),
+            Err(e) => error!("{id}: failed to write {factor} to failed submissions file: {e}"),
+        }
     }
     accepted_factors
 }
