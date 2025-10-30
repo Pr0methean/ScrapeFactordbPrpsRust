@@ -9,6 +9,8 @@ mod algebraic;
 mod channel;
 mod net;
 
+use crate::NumberSpecifier::{Expression, Id};
+use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
@@ -43,8 +45,6 @@ use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::NumberSpecifier::{Expression, Id};
-use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById};
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(1);
@@ -287,9 +287,10 @@ async fn get_prp_remaining_bases(
                     nm1_divides_3 = report_factor_of_u(http, nm1_id, &Numeric(3)).await;
                 }
                 _ => {
-                    nm1_divides_3 = nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3)
+                    nm1_divides_3 = nm1_factors[0] == Numeric(3)
+                        || nm1_factors[1] == Numeric(3)
                         || report_factor_of_u(http, nm1_id, &Numeric(3)).await;
-        }
+                }
             }
         }
     } else {
@@ -317,16 +318,27 @@ async fn get_prp_remaining_bases(
                     report_factor_of_u(http, np1_id, &Numeric(2)).await;
                     if !nm1_divides_3 {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await && let Some(nm1_id) = nm1_id_if_available {
-                            error!("{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})");
+                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await
+                            && let Some(nm1_id) = nm1_id_if_available
+                        {
+                            error!(
+                                "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})"
+                            );
                         }
                     }
                 }
                 _ => {
-                    if !nm1_divides_3 && np1_factors[0] != Numeric(3) && np1_factors[1] != Numeric(3) {
+                    if !nm1_divides_3
+                        && np1_factors[0] != Numeric(3)
+                        && np1_factors[1] != Numeric(3)
+                    {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await && let Some(nm1_id) = nm1_id_if_available {
-                            error!("{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})");
+                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await
+                            && let Some(nm1_id) = nm1_id_if_available
+                        {
+                            error!(
+                                "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})"
+                            );
                         }
                     }
                 }
@@ -827,7 +839,10 @@ async fn main() {
         &id_and_expr_regex,
         &http,
         u_digits,
-        prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize).await.unwrap(),
+        prp_sender
+            .reserve_many(PRP_RESULTS_PER_PAGE as usize)
+            .await
+            .unwrap(),
         &mut u_filter,
         &factor_finder,
     )
@@ -1041,7 +1056,7 @@ async fn try_report_factor(
                             Err(())
                         } else {
                             Ok(text.contains("submitted"))
-                        }
+                        };
                     }
                     Err(e) => {
                         error!("{u_id}: Failed to get response: {e}");
@@ -1080,7 +1095,7 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
 enum SubfactorHandling {
     ById(u128),
     ByExpression,
-    AlreadySubmitted
+    AlreadySubmitted,
 }
 
 async fn find_and_submit_factors(
@@ -1119,8 +1134,7 @@ async fn find_and_submit_factors(
     for digits_or_expr in digits_or_expr_full.into_iter() {
         let factors = factor_finder.find_unique_factors(&digits_or_expr);
         if factors.is_empty() {
-            if !digits_or_expr_full_contains_self
-                && !all_factors.contains_key(&digits_or_expr) {
+            if !digits_or_expr_full_contains_self && !all_factors.contains_key(&digits_or_expr) {
                 all_factors.insert(digits_or_expr, ByExpression);
             }
         } else {
@@ -1147,20 +1161,27 @@ async fn find_and_submit_factors(
                     if try_subfactors {
                         let specifier_to_get_subfactors = match subfactor_handling {
                             ById(factor_id) => {
-                                get_known_algebraic_factors(http, *factor_id, factor_finder, id_and_expr_regex, &mut new_subfactors).await;
+                                get_known_algebraic_factors(
+                                    http,
+                                    *factor_id,
+                                    factor_finder,
+                                    id_and_expr_regex,
+                                    &mut new_subfactors,
+                                )
+                                .await;
                                 Id(*factor_id)
                             }
                             ByExpression => Expression(&factor.to_compact_string()),
-                            AlreadySubmitted => unsafe { unreachable_unchecked() }
+                            AlreadySubmitted => unsafe { unreachable_unchecked() },
                         };
                         let subfactors = factor_finder.find_unique_factors(&factor);
-                        new_subfactors.extend(subfactors.into_iter().map(|subfactor| (subfactor, ByExpression)));
+                        new_subfactors.extend(
+                            subfactors
+                                .into_iter()
+                                .map(|subfactor| (subfactor, ByExpression)),
+                        );
                         if let Ok(subfactors) = factor_finder
-                            .known_factors_as_digits(
-                                http,
-                                specifier_to_get_subfactors,
-                                true,
-                            )
+                            .known_factors_as_digits(http, specifier_to_get_subfactors, true)
                             .await
                             && subfactors.len() > 1
                         {
@@ -1174,7 +1195,7 @@ async fn find_and_submit_factors(
                     }
                     *subfactor_handling = AlreadySubmitted;
                 }
-                Err(()) => any_error = true
+                Err(()) => any_error = true,
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
@@ -1205,7 +1226,13 @@ async fn find_and_submit_factors(
     accepted_factors
 }
 
-async fn get_known_algebraic_factors(http: &ThrottlingHttpClient, id: u128, factor_finder: &FactorFinder, id_and_expr_regex: &Regex, all_factors: &mut BTreeMap<Factor, SubfactorHandling>) {
+async fn get_known_algebraic_factors(
+    http: &ThrottlingHttpClient,
+    id: u128,
+    factor_finder: &FactorFinder,
+    id_and_expr_regex: &Regex,
+    all_factors: &mut BTreeMap<Factor, SubfactorHandling>,
+) {
     info!("{id}: Checking for listed algebraic factors");
     // Links before the "Is factor of" header are algebraic factors; links after it aren't
     let url = format!("https://factordb.com/frame_moreinfo.php?id={id}");
@@ -1218,8 +1245,8 @@ async fn get_known_algebraic_factors(http: &ThrottlingHttpClient, id: u128, fact
             if factor_digits_or_expr.contains("...") {
                 // Link text isn't an expression for the factor, so we need to look up its value
                 info!(
-                "{id}: Algebraic factor with ID {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
-            );
+                    "{id}: Algebraic factor with ID {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
+                );
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
                     if let Ok(subfactors) = factor_finder
                         .known_factors_as_digits(http, Id(factor_id), true)
@@ -1232,23 +1259,26 @@ async fn get_known_algebraic_factors(http: &ThrottlingHttpClient, id: u128, fact
                         }
                     } else {
                         error!(
-                        "{id}: Skipping ellided factor with ID {factor_id} because we failed to fetch it in full"
-                    );
+                            "{id}: Skipping ellided factor with ID {factor_id} because we failed to fetch it in full"
+                        );
                     }
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}");
                 }
             } else {
                 info!(
-                "{id}: Algebraic factor with ID {factor_id} represented in full: {factor_digits_or_expr}"
-            );
+                    "{id}: Algebraic factor with ID {factor_id} represented in full: {factor_digits_or_expr}"
+                );
                 let factor = factor_digits_or_expr.into();
                 if !all_factors.contains_key(&factor) {
-                    all_factors.insert(factor, if let Ok(factor_id) = factor_id.parse::<u128>() {
-                        ById(factor_id)
-                    } else {
-                        ByExpression
-                    });
+                    all_factors.insert(
+                        factor,
+                        if let Ok(factor_id) = factor_id.parse::<u128>() {
+                            ById(factor_id)
+                        } else {
+                            ByExpression
+                        },
+                    );
                 }
             }
         }
