@@ -285,8 +285,9 @@ async fn get_prp_remaining_bases(
                     nm1_divides_3 = report_factor_of_u(http, nm1_id, &Numeric(3)).await;
                 }
                 _ => {
-                    nm1_divides_3 = nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3);
-                }
+                    nm1_divides_3 = nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3)
+                        || report_factor_of_u(http, nm1_id, &Numeric(3)).await;
+        }
             }
         }
     } else {
