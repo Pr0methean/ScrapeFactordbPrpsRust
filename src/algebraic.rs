@@ -1170,7 +1170,11 @@ impl FactorFinder {
     pub fn find_unique_factors(&self, expr: &Factor) -> Box<[Factor]> {
         let mut factors = self.find_factors(expr);
         factors.retain(|f| match f {
-            Numeric(n) => *n > 1,
+            Numeric(n) => *n > 1 && if let Numeric(expr) = expr {
+                *n <= *expr >> 1
+            } else {
+                true
+            },
             Factor::String(_) => f != expr,
         } && if let Factor::String(expr) = &expr {
             !expr.starts_with(&format!("{f}/"))
