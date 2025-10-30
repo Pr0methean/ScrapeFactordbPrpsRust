@@ -404,7 +404,6 @@ const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
 static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
-const CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES: u64 = 5000;
 
 #[inline]
 async fn do_checks(
@@ -946,9 +945,6 @@ async fn queue_unknowns(
     u_filter: &mut InMemoryFilter,
     factor_finder: &FactorFinder,
 ) {
-    if CPU_TENTHS_SPENT_LAST_CHECK.load(Acquire) >= CPU_TENTHS_TO_THROTTLE_UNKNOWN_SEARCHES {
-        return;
-    }
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
         if let Err(u_permits) = try_queue_unknowns(
