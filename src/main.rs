@@ -259,9 +259,11 @@ async fn get_prp_remaining_bases(
     if bases_text.contains("Proven") {
         info!("{id}: No longer PRP");
     }
+    let mut nm1_id_if_available = None;
     let mut nm1_divides_3 = false;
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
+        nm1_id_if_available = Some(nm1_id);
         let nm1_result = factor_finder
             .known_factors_as_digits(http, NumberSpecifier::Id(nm1_id), false)
             .await;
@@ -312,13 +314,17 @@ async fn get_prp_remaining_bases(
                     report_factor_of_u(http, np1_id, &Numeric(2)).await;
                     if !nm1_divides_3 {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        report_factor_of_u(http, np1_id, &Numeric(3)).await;
+                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await && let Some(nm1_id) = nm1_id_if_available {
+                            error!("{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})");
+                        }
                     }
                 }
                 _ => {
                     if !nm1_divides_3 && np1_factors[0] != Numeric(3) && np1_factors[1] != Numeric(3) {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        report_factor_of_u(http, np1_id, &Numeric(3)).await;
+                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await && let Some(nm1_id) = nm1_id_if_available {
+                            error!("{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})");
+                        }
                     }
                 }
             }
