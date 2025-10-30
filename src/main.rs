@@ -424,27 +424,31 @@ async fn do_checks(
     .await;
     let mut successful_select_end = Instant::now();
     loop {
-        let tasks: Vec<_> = select! {
+        let task = select! {
             _ = sleep_until(next_unknown_attempt) => {
-                let ready_us: Vec<_> = retry.take().into_iter().chain(u_receiver.try_recv().into_iter()).collect();
-                if !ready_us.is_empty() {
+                if retry.is_some() {
                     info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
+                    retry.take()
+                } else {
+                    u_receiver.try_recv().map(|task| {
+                        info!("Ready to check a U after {:?}", Instant::now() - successful_select_end);
+                        task
+                    })
                 }
-                ready_us
             }
             prp_task = prp_receiver.recv() => {
                 info!("Ready to check a PRP after {:?}", Instant::now() - successful_select_end);
-                vec![prp_task]
+                Some(prp_task)
             }
             c_task = c_receiver.recv() => {
                 info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
                 let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
                 check_composite(&http, &mut c_filter, &factor_finder, &id_and_expr_regex, id, digits_or_expr, return_permit).await;
                 successful_select_end = Instant::now();
-                vec![]
+                None
             }
         };
-        for (CheckTask { id, task_type }, task_return_permit) in tasks {
+        if let Some((CheckTask { id, task_type }, task_return_permit)) = task {
             match task_type {
                 CheckTaskType::Prp => {
                     let mut stopped_early = false;
