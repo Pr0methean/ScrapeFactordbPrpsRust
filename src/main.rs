@@ -1151,7 +1151,7 @@ async fn find_and_submit_factors(
             if *subfactor_handling == AlreadySubmitted {
                 continue;
             }
-            match try_report_factor(http, id, &factor).await {
+            match try_report_factor(http, id, factor).await {
                 Ok(true) => {
                     accepted_factors = true;
                     iters_without_progress = 0;
@@ -1174,7 +1174,7 @@ async fn find_and_submit_factors(
                             ByExpression => Expression(&factor.to_compact_string()),
                             AlreadySubmitted => unsafe { unreachable_unchecked() },
                         };
-                        let subfactors = factor_finder.find_unique_factors(&factor);
+                        let subfactors = factor_finder.find_unique_factors(factor);
                         new_subfactors.extend(
                             subfactors
                                 .into_iter()
@@ -1187,9 +1187,7 @@ async fn find_and_submit_factors(
                         {
                             for subfactor in subfactors {
                                 info!("{id}: Found sub-factor {subfactor} of {factor}");
-                                if !new_subfactors.contains_key(&subfactor) {
-                                    new_subfactors.insert(subfactor, ByExpression);
-                                }
+                                new_subfactors.entry(subfactor).or_insert(ByExpression);
                             }
                         }
                     }
@@ -1253,9 +1251,7 @@ async fn get_known_algebraic_factors(
                         .await
                     {
                         for subfactor in subfactors {
-                            if !all_factors.contains_key(&subfactor) {
-                                all_factors.insert(subfactor, ByExpression);
-                            }
+                            all_factors.entry(subfactor).or_insert(ByExpression);
                         }
                     } else {
                         error!(
@@ -1270,16 +1266,11 @@ async fn get_known_algebraic_factors(
                     "{id}: Algebraic factor with ID {factor_id} represented in full: {factor_digits_or_expr}"
                 );
                 let factor = factor_digits_or_expr.into();
-                if !all_factors.contains_key(&factor) {
-                    all_factors.insert(
-                        factor,
-                        if let Ok(factor_id) = factor_id.parse::<u128>() {
+                all_factors.entry(factor).or_insert_with(|| if let Ok(factor_id) = factor_id.parse::<u128>() {
                             ById(factor_id)
                         } else {
                             ByExpression
-                        },
-                    );
-                }
+                        });
             }
         }
     }
