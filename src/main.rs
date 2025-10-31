@@ -29,8 +29,7 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::btree_map::Entry::{Occupied, Vacant};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
@@ -122,7 +121,8 @@ struct NumberStatusApiResponse {
 
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
-    id: u128,
+    id: Option<u128>,
+    number: Option<&'a str>,
     factor: &'a str,
 }
 
@@ -278,7 +278,7 @@ async fn check_composite(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier<'a> {
     Id(u128),
     Expression(&'a str),
@@ -1114,13 +1114,22 @@ async fn try_queue_unknowns<'a>(
 
 async fn try_report_factor(
     http: &ThrottlingHttpClient,
-    u_id: u128,
+    u_id: NumberSpecifier<'_>,
     factor: &Factor,
 ) -> Result<bool, ()> {
     match http
         .post("https://factordb.com/reportfactor.php")
         .form(&FactorSubmission {
-            id: u_id,
+            id: if let Id(id) = u_id {
+                Some(id)
+            } else {
+                None
+            },
+            number: if let Expression(expr) = u_id {
+                Some(expr)
+            } else {
+                None
+            },
             factor: &factor.to_compact_string(),
         })
         .send()
@@ -1130,7 +1139,7 @@ async fn try_report_factor(
             let response = response.text().await;
             match response {
                 Ok(text) => {
-                    info!("{u_id}: reported a factor of {factor}; response: {text}",);
+                    info!("{u_id:?}: reported a factor of {factor}; response: {text}",);
                     return if text.contains("Error") {
                         Err(())
                     } else {
@@ -1138,12 +1147,12 @@ async fn try_report_factor(
                     };
                 }
                 Err(e) => {
-                    error!("{u_id}: Failed to get response: {e}");
+                    error!("{u_id:?}: Failed to get response: {e}");
                 }
             }
         }
         Err(e) => {
-            error!("{u_id}: failed to submit factor {factor}: {e}")
+            error!("{u_id:?}: failed to submit factor {factor}: {e}")
         }
     }
     sleep(RETRY_DELAY).await;
@@ -1152,7 +1161,7 @@ async fn try_report_factor(
 
 async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> bool {
     for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-        if let Ok(result) = try_report_factor(http, u_id, factor).await {
+        if let Ok(result) = try_report_factor(http, Id(u_id), factor).await {
             return result;
         }
     }
@@ -1228,6 +1237,7 @@ async fn find_and_submit_factors(
         get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors)
             .await;
     }
+    let mut dest_subfactors: BTreeSet<CompactString> = BTreeSet::new();
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
@@ -1239,7 +1249,7 @@ async fn find_and_submit_factors(
             if *subfactor_handling == AlreadySubmitted {
                 continue;
             }
-            match try_report_factor(http, id, factor).await {
+            match try_report_factor(http, Id(id), factor).await {
                 Ok(true) => {
                     accepted_factors = true;
                     accepted_this_iter += 1;
@@ -1249,41 +1259,36 @@ async fn find_and_submit_factors(
                 Ok(false) => {
                     did_not_divide_this_iter += 1;
                     if try_subfactors {
-                        let specifier_to_get_subfactors = match subfactor_handling {
-                            ById(factor_id) => {
-                                get_known_algebraic_factors(
-                                    http,
-                                    *factor_id,
-                                    factor_finder,
-                                    id_and_expr_regex,
-                                    &mut new_subfactors,
-                                )
-                                .await;
-                                Id(*factor_id)
-                            }
-                            ByExpression => Expression(&factor.to_compact_string()),
-                            AlreadySubmitted => unsafe { unreachable_unchecked() },
-                        };
-                        let subfactors = factor_finder.find_unique_factors(factor);
-                        new_subfactors.extend(
-                            subfactors
-                                .into_iter()
-                                .map(|subfactor| (subfactor, ByExpression)),
-                        );
-                        if let Ok(subfactors) = factor_finder
-                            .known_factors_as_digits(http, specifier_to_get_subfactors, true)
-                            .await
-                            && subfactors.len() > 1
-                        {
-                            for subfactor in subfactors {
-                                info!("{id}: Found sub-factor {subfactor} of {factor}");
-                                new_subfactors.entry(subfactor).or_insert(ByExpression);
-                            }
-                        }
+                        try_find_subfactors(http, id, factor_finder, id_and_expr_regex, &mut new_subfactors, &factor, subfactor_handling).await;
                     }
                     *subfactor_handling = AlreadySubmitted;
                 }
-                Err(()) => errors_this_iter += 1,
+                Err(()) => {
+                    let mut dest_subfactors_do_not_divide = true;
+                    let mut submitted_to_subfactor = false;
+                    for dest_subfactor in dest_subfactors.iter() {
+                        match try_report_factor(http, Expression(dest_subfactor.as_str()), factor).await {
+                            Ok(true) => {
+                                submitted_to_subfactor = true;
+                                break;
+                            }
+                            Ok(false) => {}
+                            Err(()) => {
+                                dest_subfactors_do_not_divide = false;
+                            }
+                        }
+                    }
+                    if submitted_to_subfactor {
+                        accepted_this_iter += 1;
+                        *subfactor_handling = AlreadySubmitted;
+                    } else if dest_subfactors_do_not_divide {
+                        try_find_subfactors(http, id, factor_finder, id_and_expr_regex, &mut new_subfactors, &factor, subfactor_handling).await;
+                        did_not_divide_this_iter += 1;
+                    } else {
+                        errors_this_iter += 1;
+                        *subfactor_handling = AlreadySubmitted;
+                    }
+                },
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
@@ -1309,23 +1314,24 @@ async fn find_and_submit_factors(
             if already_known_factors.len() > 1 {
                 let mut already_submitted_elsewhere = 0usize;
                 for factor in already_known_factors {
-                    match all_factors.entry(factor) {
-                        Vacant(e) => {
-                            e.insert(AlreadySubmitted);
+                    let prev_handling = all_factors.get(&factor);
+                    let prev_unknown = prev_handling.is_none();
+                    if prev_handling != Some(&AlreadySubmitted) {
+                        if let Factor::String(ref s) = factor {
+                            dest_subfactors.insert(s.clone());
+                            iters_without_progress = 0;
                         }
-                        Occupied(mut e) => {
-                            if *e.get() != AlreadySubmitted {
-                                e.insert(AlreadySubmitted);
-                                already_submitted_elsewhere += 1;
-                            }
+                        all_factors.insert(factor, AlreadySubmitted);
+                        if !prev_unknown {
+                            already_submitted_elsewhere += 1;
                         }
                     }
-                    if already_submitted_elsewhere > 0 {
-                        accepted_factors = true; // As long as it's no longer U or C
-                        warn!(
+                }
+                if already_submitted_elsewhere > 0 {
+                    accepted_factors = true; // As long as it's no longer U or C
+                    warn!(
                             "{id}: Not retrying {already_submitted_elsewhere} factors because someone else has submitted them or they were false failures"
                         );
-                    }
                 }
             }
         }
@@ -1346,6 +1352,40 @@ async fn find_and_submit_factors(
         }
     }
     accepted_factors
+}
+
+async fn try_find_subfactors(http: &ThrottlingHttpClient, id: u128, factor_finder: &FactorFinder, id_and_expr_regex: &Regex, mut new_subfactors: &mut BTreeMap<Factor, SubfactorHandling>, factor: &&Factor, subfactor_handling: &mut SubfactorHandling) {
+    let specifier_to_get_subfactors = match subfactor_handling {
+        ById(factor_id) => {
+            get_known_algebraic_factors(
+                http,
+                *factor_id,
+                factor_finder,
+                id_and_expr_regex,
+                &mut new_subfactors,
+            )
+                .await;
+            Id(*factor_id)
+        }
+        ByExpression => Expression(&factor.to_compact_string()),
+        AlreadySubmitted => unsafe { unreachable_unchecked() },
+    };
+    let subfactors = factor_finder.find_unique_factors(factor);
+    new_subfactors.extend(
+        subfactors
+            .into_iter()
+            .map(|subfactor| (subfactor, ByExpression)),
+    );
+    if let Ok(subfactors) = factor_finder
+        .known_factors_as_digits(http, specifier_to_get_subfactors, true)
+        .await
+        && subfactors.len() > 1
+    {
+        for subfactor in subfactors {
+            info!("{id}: Found sub-factor {subfactor} of {factor}");
+            new_subfactors.entry(subfactor).or_insert(ByExpression);
+        }
+    }
 }
 
 async fn get_known_algebraic_factors(
