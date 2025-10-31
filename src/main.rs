@@ -29,8 +29,8 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, VecDeque};
 use std::collections::btree_map::Entry::{Occupied, Vacant};
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
@@ -222,7 +222,9 @@ async fn check_composite(
                     let (id_for_submission, may_have_separate_listed_algebraic) =
                         if let ById(factor_id) = subfactor_handling {
                             if http
-                                .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={factor_id}"))
+                                .try_get_and_decode(&format!(
+                                    "https://factordb.com/sequences.php?check={factor_id}"
+                                ))
                                 .await
                                 .is_some()
                             {
@@ -242,9 +244,9 @@ async fn check_composite(
                         true,
                         !may_have_separate_listed_algebraic,
                     )
-                        .await
+                    .await
                         || (*subfactor_handling != AlreadySubmitted
-                        && report_factor_of_u(http, id, factor).await);
+                            && report_factor_of_u(http, id, factor).await);
                 }
             }
             if factors_found {
@@ -254,7 +256,9 @@ async fn check_composite(
             let mut dispatched = false;
             if let Some(out) = COMPOSITES_OUT.get() {
                 let mut out = out.lock().await;
-                let mut result = factors.into_keys().map(|factor| out.write_fmt(format_args!("{factor}\n")))
+                let mut result = factors
+                    .into_keys()
+                    .map(|factor| out.write_fmt(format_args!("{factor}\n")))
                     .flat_map(Result::err)
                     .take(1);
                 if let Some(error) = result.next() {
@@ -1274,7 +1278,9 @@ async fn find_and_submit_factors(
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-        info!("This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors");
+        info!(
+            "This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors"
+        );
         if new_subfactors.is_empty() {
             if errors_this_iter == 0 {
                 return accepted_factors;
@@ -1283,7 +1289,10 @@ async fn find_and_submit_factors(
             iters_without_progress = 0;
         }
         all_factors.extend(new_subfactors);
-        if let Ok(already_known_factors) = factor_finder.known_factors_as_digits(http, Id(id), false).await {
+        if let Ok(already_known_factors) = factor_finder
+            .known_factors_as_digits(http, Id(id), false)
+            .await
+        {
             if already_known_factors.is_empty() {
                 info!("{id}: Already fully factored");
                 return true;
@@ -1294,15 +1303,19 @@ async fn find_and_submit_factors(
                     match all_factors.entry(factor) {
                         Vacant(e) => {
                             e.insert(AlreadySubmitted);
-                        },
-                        Occupied(mut e) => if *e.get() != AlreadySubmitted {
-                            e.insert(AlreadySubmitted);
-                            already_submitted_elsewhere += 1;
+                        }
+                        Occupied(mut e) => {
+                            if *e.get() != AlreadySubmitted {
+                                e.insert(AlreadySubmitted);
+                                already_submitted_elsewhere += 1;
+                            }
                         }
                     }
                     if already_submitted_elsewhere > 0 {
                         accepted_factors = true; // As long as it's no longer U or C
-                        warn!("{id}: Not retrying {already_submitted_elsewhere} factors because someone else has submitted them or they were false failures");
+                        warn!(
+                            "{id}: Not retrying {already_submitted_elsewhere} factors because someone else has submitted them or they were false failures"
+                        );
                     }
                 }
             }

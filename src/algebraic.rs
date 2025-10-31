@@ -980,7 +980,9 @@ impl FactorFinder {
                                 c_raw = SignedFactor::from(c_match.as_str())
                             } else {
                                 let n = captures[2].parse::<u128>().unwrap_or(16).min(16) as usize;
-                                factors.extend(repeat_n(self.find_factors(&captures[1].into()), n).flatten());
+                                factors.extend(
+                                    repeat_n(self.find_factors(&captures[1].into()), n).flatten(),
+                                );
                                 factors.extend(self.find_factors(&captures[3].into()));
                                 return factors;
                             }
