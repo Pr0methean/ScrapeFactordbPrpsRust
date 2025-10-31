@@ -194,9 +194,11 @@ async fn check_composite(
                 return true;
             }
             let mut factors_found = false;
+            let mut checked_algebraic = false;
             for factor in factors.iter() {
                 if let Factor::String(s) = factor {
-                    factors_found |= find_and_submit_factors(http, id, &s, factor_finder, id_and_expr_regex, true).await;
+                    factors_found |= find_and_submit_factors(http, id, &s, factor_finder, id_and_expr_regex, true, checked_algebraic).await;
+                    checked_algebraic = true;
                 }
             }
             if factors_found {
@@ -1011,7 +1013,7 @@ async fn try_queue_unknowns<'a>(
             continue;
         }
         let digits_or_expr = &results_text[digits_or_expr_range];
-        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, id_and_expr_regex, false)
+        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, id_and_expr_regex, false, false)
             .await
         {
             info!("{u_id}: Skipping PRP check because algebraic factors were found");
@@ -1104,6 +1106,7 @@ async fn find_and_submit_factors(
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
     skip_looking_up_known: bool,
+    skip_looking_up_listed_algebraic: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
     let digits_or_expr_full_contains_self = if skip_looking_up_known {
@@ -1144,7 +1147,9 @@ async fn find_and_submit_factors(
             all_factors.extend(factors.into_iter().map(|factor| (factor, ByExpression)));
         }
     }
-    get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors).await;
+    if !skip_looking_up_listed_algebraic {
+        get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors).await;
+    }
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
