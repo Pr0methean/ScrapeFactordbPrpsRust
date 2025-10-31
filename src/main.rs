@@ -1217,8 +1217,10 @@ async fn find_and_submit_factors(
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
+        let mut accepted_this_iter = 0usize;
+        let mut did_not_divide_this_iter = 0usize;
+        let mut errors_this_iter = 0usize;
         let mut new_subfactors = BTreeMap::new();
-        let mut any_error = false;
         for (factor, subfactor_handling) in all_factors.iter_mut().rev() {
             if *subfactor_handling == AlreadySubmitted {
                 continue;
@@ -1226,10 +1228,12 @@ async fn find_and_submit_factors(
             match try_report_factor(http, id, factor).await {
                 Ok(true) => {
                     accepted_factors = true;
+                    accepted_this_iter += 1;
                     iters_without_progress = 0;
                     *subfactor_handling = AlreadySubmitted;
                 }
                 Ok(false) => {
+                    did_not_divide_this_iter += 1;
                     if try_subfactors {
                         let specifier_to_get_subfactors = match subfactor_handling {
                             ById(factor_id) => {
@@ -1265,17 +1269,18 @@ async fn find_and_submit_factors(
                     }
                     *subfactor_handling = AlreadySubmitted;
                 }
-                Err(()) => any_error = true,
+                Err(()) => errors_this_iter += 1,
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         if new_subfactors.is_empty() {
-            if !any_error {
+            if errors_this_iter == 0 {
                 return accepted_factors;
             }
         } else {
             iters_without_progress = 0;
         }
+        info!("This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors");
         all_factors.extend(new_subfactors);
     }
     for (factor, subfactor_handling) in all_factors.into_iter() {
