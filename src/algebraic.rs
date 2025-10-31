@@ -971,6 +971,7 @@ impl FactorFinder {
                         2 => {
                             // a^n*b + c
                             let mut factors = Vec::new();
+                            let a = Factor::from(&captures[1]);
                             let mut b = Numeric(1u128);
                             if let Some(b_match) = captures.get(3) {
                                 b = Factor::from(&b_match.as_str()[1..]);
@@ -980,16 +981,13 @@ impl FactorFinder {
                                 c_raw = SignedFactor::from(c_match.as_str())
                             } else {
                                 let n = captures[2].parse::<u128>().unwrap_or(16).min(16) as usize;
-                                factors.extend(
-                                    repeat_n(self.find_factors(&captures[1].into()), n).flatten(),
-                                );
-                                factors.extend(self.find_factors(&captures[3].into()));
+                                factors.extend(repeat_n(self.find_factors(&a), n).flatten());
+                                factors.extend(self.find_factors(&b));
                                 return factors;
                             }
                             let gcd_bc = self.find_common_factors(&b, c_raw.abs(), false);
                             let b = self.find_factors(&b);
                             let c_abs = self.find_factors(c_raw.abs());
-                            let a = Factor::from(&captures[1]);
                             let gcd_ac = self.find_common_factors(&a, c_raw.abs(), false);
                             let n = Factor::from(&captures[2]);
                             if let Numeric(a) = a
