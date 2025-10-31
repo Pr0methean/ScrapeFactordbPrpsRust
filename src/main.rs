@@ -1381,9 +1381,12 @@ async fn try_find_subfactors(
     subfactor_handling: &mut SubfactorHandling,
 ) {
     if let Numeric(_) = factor {
-        new_subfactors.extend(factor_finder.find_unique_factors(factor)
-                                  .into_iter()
-                                  .map(|factor| (factor, NoSubfactorHandling)));
+        new_subfactors.extend(
+            factor_finder
+                .find_unique_factors(factor)
+                .into_iter()
+                .map(|factor| (factor, NoSubfactorHandling)),
+        );
         return;
     }
     let specifier_to_get_subfactors = match subfactor_handling {
