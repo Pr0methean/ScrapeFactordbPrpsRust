@@ -1120,11 +1120,7 @@ async fn try_report_factor(
     match http
         .post("https://factordb.com/reportfactor.php")
         .form(&FactorSubmission {
-            id: if let Id(id) = u_id {
-                Some(id)
-            } else {
-                None
-            },
+            id: if let Id(id) = u_id { Some(id) } else { None },
             number: if let Expression(expr) = u_id {
                 Some(expr)
             } else {
@@ -1259,7 +1255,16 @@ async fn find_and_submit_factors(
                 Ok(false) => {
                     did_not_divide_this_iter += 1;
                     if try_subfactors {
-                        try_find_subfactors(http, id, factor_finder, id_and_expr_regex, &mut new_subfactors, &factor, subfactor_handling).await;
+                        try_find_subfactors(
+                            http,
+                            id,
+                            factor_finder,
+                            id_and_expr_regex,
+                            &mut new_subfactors,
+                            factor,
+                            subfactor_handling,
+                        )
+                        .await;
                     }
                     *subfactor_handling = AlreadySubmitted;
                 }
@@ -1267,7 +1272,9 @@ async fn find_and_submit_factors(
                     let mut dest_subfactors_do_not_divide = true;
                     let mut submitted_to_subfactor = false;
                     for dest_subfactor in dest_subfactors.iter() {
-                        match try_report_factor(http, Expression(dest_subfactor.as_str()), factor).await {
+                        match try_report_factor(http, Expression(dest_subfactor.as_str()), factor)
+                            .await
+                        {
                             Ok(true) => {
                                 submitted_to_subfactor = true;
                                 break;
@@ -1282,13 +1289,22 @@ async fn find_and_submit_factors(
                         accepted_this_iter += 1;
                         *subfactor_handling = AlreadySubmitted;
                     } else if dest_subfactors_do_not_divide {
-                        try_find_subfactors(http, id, factor_finder, id_and_expr_regex, &mut new_subfactors, &factor, subfactor_handling).await;
+                        try_find_subfactors(
+                            http,
+                            id,
+                            factor_finder,
+                            id_and_expr_regex,
+                            &mut new_subfactors,
+                            factor,
+                            subfactor_handling,
+                        )
+                        .await;
                         did_not_divide_this_iter += 1;
                     } else {
                         errors_this_iter += 1;
                         *subfactor_handling = AlreadySubmitted;
                     }
-                },
+                }
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
@@ -1330,8 +1346,8 @@ async fn find_and_submit_factors(
                 if already_submitted_elsewhere > 0 {
                     accepted_factors = true; // As long as it's no longer U or C
                     warn!(
-                            "{id}: Not retrying {already_submitted_elsewhere} factors because someone else has submitted them or they were false failures"
-                        );
+                        "{id}: Not retrying {already_submitted_elsewhere} factors because someone else has submitted them or they were false failures"
+                    );
                 }
             }
         }
@@ -1354,7 +1370,15 @@ async fn find_and_submit_factors(
     accepted_factors
 }
 
-async fn try_find_subfactors(http: &ThrottlingHttpClient, id: u128, factor_finder: &FactorFinder, id_and_expr_regex: &Regex, mut new_subfactors: &mut BTreeMap<Factor, SubfactorHandling>, factor: &&Factor, subfactor_handling: &mut SubfactorHandling) {
+async fn try_find_subfactors(
+    http: &ThrottlingHttpClient,
+    id: u128,
+    factor_finder: &FactorFinder,
+    id_and_expr_regex: &Regex,
+    new_subfactors: &mut BTreeMap<Factor, SubfactorHandling>,
+    factor: &Factor,
+    subfactor_handling: &mut SubfactorHandling,
+) {
     let specifier_to_get_subfactors = match subfactor_handling {
         ById(factor_id) => {
             get_known_algebraic_factors(
@@ -1362,9 +1386,9 @@ async fn try_find_subfactors(http: &ThrottlingHttpClient, id: u128, factor_finde
                 *factor_id,
                 factor_finder,
                 id_and_expr_regex,
-                &mut new_subfactors,
+                new_subfactors,
             )
-                .await;
+            .await;
             Id(*factor_id)
         }
         ByExpression => Expression(&factor.to_compact_string()),
