@@ -751,8 +751,11 @@ fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec
 
 #[inline(always)]
 fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
-    if vec1.is_empty() || vec2.is_empty() {
-        return vec![];
+    if vec1.is_empty() {
+        return vec2;
+    }
+    if vec2.is_empty() {
+        return vec1;
     }
     let mut counts1 = count_frequencies(vec1);
     let mut counts2 = count_frequencies(vec2);
@@ -771,7 +774,7 @@ fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
 #[inline(always)]
 fn multiset_difference<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: &[T]) -> Vec<T> {
     if vec2.is_empty() {
-        return vec1.into();
+        return vec1;
     }
     if vec1.is_empty() {
         return vec![];
