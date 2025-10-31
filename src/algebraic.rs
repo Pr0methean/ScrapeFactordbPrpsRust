@@ -988,13 +988,13 @@ impl FactorFinder {
                             let c_abs = self.find_factors(c_raw.abs());
                             let a = Factor::from(&captures[1]);
                             let gcd_ac = self.find_common_factors(&a, c_raw.abs(), false);
-                            factors.extend(multiset_union(gcd_ac, gcd_bc.clone()));
                             let n = Factor::from(&captures[2]);
                             if let Numeric(a) = a
                                 && let Numeric(n) = n
                             {
                                 let b_reduced = multiset_difference(b, &gcd_bc);
                                 let c_reduced = multiset_difference(c_abs, &gcd_bc);
+                                factors.extend(multiset_union(gcd_ac, gcd_bc));
                                 if let Some(b) = as_u128(&b_reduced)
                                     && let Some(abs_c) = as_u128(&c_reduced)
                                 {
@@ -1079,6 +1079,8 @@ impl FactorFinder {
                                         }
                                     }
                                 }
+                            } else {
+                                factors.extend(multiset_union(gcd_ac, gcd_bc));
                             }
                             factors
                         }
