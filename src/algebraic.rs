@@ -979,9 +979,9 @@ impl FactorFinder {
                             if let Some(c_match) = captures.get(4) {
                                 c_raw = SignedFactor::from(c_match.as_str())
                             } else {
-                                factors.push(
-                                    format_compact!("{}^{}", &captures[1], &captures[2]).into(),
-                                );
+                                factors.extend(self.find_factors(&captures[1].into()));
+                                factors.extend(self.find_factors(&captures[3].into()));
+                                return factors;
                             }
                             let gcd_bc = self.find_common_factors(&b, c_raw.abs(), false);
                             let b = self.find_factors(&b);
