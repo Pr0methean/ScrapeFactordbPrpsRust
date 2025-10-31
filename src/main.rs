@@ -918,14 +918,18 @@ async fn main() {
         &mut u_filter,
         &factor_finder,
     )
-    .await.is_err() && queue_composites(
+    .await
+    .is_err()
+        && queue_composites(
             &mut waiting_c,
             &id_and_expr_regex,
             &http,
             &c_sender,
             c_digits,
         )
-            .await == 0 {}
+        .await
+            == 0
+    {}
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
