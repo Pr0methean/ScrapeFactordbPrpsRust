@@ -30,6 +30,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, VecDeque};
+use std::collections::btree_map::Entry::{Occupied, Vacant};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
@@ -1282,6 +1283,30 @@ async fn find_and_submit_factors(
             iters_without_progress = 0;
         }
         all_factors.extend(new_subfactors);
+        if let Ok(already_known_factors) = factor_finder.known_factors_as_digits(http, Id(id), false).await {
+            if already_known_factors.is_empty() {
+                info!("{id}: Already fully factored");
+                return true;
+            }
+            if already_known_factors.len() > 1 {
+                let mut already_submitted_elsewhere = 0usize;
+                for factor in already_known_factors {
+                    match all_factors.entry(factor) {
+                        Vacant(e) => {
+                            e.insert(AlreadySubmitted);
+                        },
+                        Occupied(mut e) => if *e.get() != AlreadySubmitted {
+                            e.insert(AlreadySubmitted);
+                            already_submitted_elsewhere += 1;
+                        }
+                    }
+                    if already_submitted_elsewhere > 0 {
+                        accepted_factors = true; // As long as it's no longer U or C
+                        warn!("{id}: Not retrying {already_submitted_elsewhere} factors because someone else has submitted them or they were false failures");
+                    }
+                }
+            }
+        }
     }
     for (factor, subfactor_handling) in all_factors.into_iter() {
         if subfactor_handling == AlreadySubmitted {
