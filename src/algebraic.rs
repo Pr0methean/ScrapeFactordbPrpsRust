@@ -13,7 +13,7 @@ use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexBuilder, RegexSet};
 use serde_json::from_str;
 use std::cmp::{Ordering, PartialEq};
-use std::collections::HashMap;
+use std::collections::{BTreeMap};
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
@@ -712,26 +712,35 @@ impl Clone for FactorFinder {
 }
 
 #[inline(always)]
-fn count_frequencies<T: Eq + std::hash::Hash + Clone>(vec: &[T]) -> HashMap<T, usize> {
-    let mut counts = HashMap::new();
+fn count_frequencies<T: Eq + Ord>(vec: Vec<T>) -> BTreeMap<T, usize> {
+    let mut counts = BTreeMap::new();
     for item in vec {
-        *counts.entry(item.clone()).or_insert(0) += 1;
+        *counts.entry(item).or_insert(0) += 1;
     }
     counts
 }
 
 #[inline(always)]
-fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
+fn count_frequencies_ref<T: Eq + Ord>(vec: &[T]) -> BTreeMap<&T, usize> {
+    let mut counts = BTreeMap::new();
+    for item in vec {
+        *counts.entry(item).or_insert(0) += 1;
+    }
+    counts
+}
+
+#[inline(always)]
+fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
     if vec1.is_empty() || vec2.is_empty() {
         return vec![];
     }
-    let mut counts1 = count_frequencies(&vec1);
-    let mut counts2 = count_frequencies(&vec2);
+    let mut intersection_vec = Vec::with_capacity(vec1.len().min(vec2.len()));
+    let mut counts1 = count_frequencies(vec1);
+    let mut counts2 = count_frequencies(vec2);
     if counts2.len() < counts1.len() {
         swap(&mut counts1, &mut counts2);
     }
-    let mut intersection_vec = Vec::with_capacity(vec1.len().min(vec2.len()));
-    for (item, count1) in counts1 {
+    for (item, count1) in counts1.into_iter() {
         if let Some(&count2) = counts2.get(&item) {
             let min_count = count1.min(count2);
             intersection_vec.extend(repeat_n(item, min_count));
@@ -741,24 +750,40 @@ fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: Vec<T>, vec2: Ve
 }
 
 #[inline(always)]
-fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
+fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
+    if vec1.is_empty() || vec2.is_empty() {
+        return vec![];
+    }
+    let mut counts1 = count_frequencies(vec1);
+    let mut counts2 = count_frequencies(vec2);
+    if counts2.len() < counts1.len() {
+        swap(&mut counts1, &mut counts2);
+    }
+    for (item, count1) in counts1.into_iter() {
+        *counts2.entry(item).or_insert(0) += count1;
+    }
+    counts2.into_iter().flat_map(|(item, count)| repeat_n(item, count)).collect()
+}
+
+#[inline(always)]
+fn multiset_difference<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: &[T]) -> Vec<T> {
     if vec2.is_empty() {
         return vec1.into();
     }
     if vec1.is_empty() {
         return vec![];
     }
+    let mut difference_vec = Vec::with_capacity(vec1.len());
     let counts1 = count_frequencies(vec1);
-    let counts2 = count_frequencies(vec2);
-    let mut intersection_vec = Vec::with_capacity(vec1.len());
+    let counts2 = count_frequencies_ref(vec2);
 
     for (item, mut count) in counts1 {
         if let Some(&count2) = counts2.get(&item) {
             count = count.saturating_sub(count2);
         }
-        intersection_vec.extend(repeat_n(item.clone(), count));
+        difference_vec.extend(repeat_n(item, count));
     }
-    intersection_vec
+    difference_vec
 }
 
 #[inline]
@@ -787,10 +812,10 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             if subset.len() < full_set_size && !subset.is_empty() {
                 let product: u128 = subset.into_iter().product();
                 if product > 2 {
-                    factors.extend(multiset_difference(
-                        &fibonacci_factors(product, false),
-                        &factors,
-                    ));
+                    factors = multiset_union(
+                        fibonacci_factors(product, false),
+                        factors,
+                    );
                 }
             }
         }
@@ -821,10 +846,10 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             if subset.len() < full_set_size {
                 let product = subset.into_iter().product::<u128>() << power_of_2;
                 if product > 2 {
-                    factors.extend(multiset_difference(
-                        &lucas_factors(product, false),
-                        &factors,
-                    ));
+                    factors = multiset_union(
+                        lucas_factors(product, false),
+                        factors,
+                    );
                 }
             }
         }
@@ -961,16 +986,15 @@ impl FactorFinder {
                             let gcd_bc = self.find_common_factors(&b, c_raw.abs(), false);
                             let b = self.find_factors(&b);
                             let c_abs = self.find_factors(c_raw.abs());
-                            factors.extend(gcd_bc.clone());
                             let a = Factor::from(&captures[1]);
                             let gcd_ac = self.find_common_factors(&a, c_raw.abs(), false);
-                            factors.extend(multiset_difference(&gcd_ac, &gcd_bc));
+                            factors.extend(multiset_union(gcd_ac, gcd_bc.clone()));
                             let n = Factor::from(&captures[2]);
                             if let Numeric(a) = a
                                 && let Numeric(n) = n
                             {
-                                let b_reduced = multiset_difference(&b, &gcd_bc);
-                                let c_reduced = multiset_difference(&c_abs, &gcd_bc);
+                                let b_reduced = multiset_difference(b, &gcd_bc);
+                                let c_reduced = multiset_difference(c_abs, &gcd_bc);
                                 if let Some(b) = as_u128(&b_reduced)
                                     && let Some(abs_c) = as_u128(&c_reduced)
                                 {
@@ -1143,7 +1167,7 @@ impl FactorFinder {
                             } else {
                                 self.find_factors(&denominator)
                             };
-                            multiset_difference(&numerator, &denominator)
+                            multiset_difference(numerator, &denominator)
                         }
                         8 => {
                             let mut factors = Vec::new();
