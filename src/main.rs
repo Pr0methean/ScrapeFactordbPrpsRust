@@ -218,7 +218,7 @@ async fn check_composite(
                     factors_found |= find_and_submit_factors(
                         http,
                         id_for_submission,
-                        &s,
+                        s,
                         factor_finder,
                         id_and_expr_regex,
                         true,
@@ -236,9 +236,7 @@ async fn check_composite(
                 let mut dispatched = false;
                 if let Some(out) = COMPOSITES_OUT.get() {
                     let mut out = out.lock().await;
-                    let mut result = factors
-                        .into_iter()
-                        .map(|(factor, _)| out.write_fmt(format_args!("{factor}\n")))
+                    let mut result = factors.into_keys().map(|factor| out.write_fmt(format_args!("{factor}\n")))
                         .flat_map(Result::err)
                         .take(1);
                     if let Some(error) = result.next() {
@@ -256,14 +254,12 @@ async fn check_composite(
                 {
                     info!("{id}: Checked composite");
                     true
+                } else if !dispatched {
+                    return_permit.send(CompositeCheckTask { id, digits_or_expr });
+                    info!("{id}: Requeued C");
+                    false
                 } else {
-                    if !dispatched {
-                        return_permit.send(CompositeCheckTask { id, digits_or_expr });
-                        info!("{id}: Requeued C");
-                        false
-                    } else {
-                        true
-                    }
+                    true
                 }
             }
         }
