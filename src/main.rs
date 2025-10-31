@@ -10,7 +10,7 @@ mod channel;
 mod net;
 
 use crate::NumberSpecifier::{Expression, Id};
-use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById};
+use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById, NoSubfactorHandling};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
@@ -1176,6 +1176,7 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
 
 #[derive(PartialEq)]
 enum SubfactorHandling {
+    NoSubfactorHandling,
     ById(u128),
     ByExpression,
     AlreadySubmitted,
@@ -1379,7 +1380,16 @@ async fn try_find_subfactors(
     factor: &Factor,
     subfactor_handling: &mut SubfactorHandling,
 ) {
+    if let Numeric(_) = factor {
+        new_subfactors.extend(factor_finder.find_unique_factors(&factor)
+                                  .into_iter()
+                                  .map(|factor| (factor, NoSubfactorHandling)));
+        return;
+    }
     let specifier_to_get_subfactors = match subfactor_handling {
+        NoSubfactorHandling => {
+            return;
+        }
         ById(factor_id) => {
             get_known_algebraic_factors(
                 http,
@@ -1454,13 +1464,12 @@ async fn get_known_algebraic_factors(
                     "{id}: Algebraic factor with ID {factor_id} represented in full: {factor_digits_or_expr}"
                 );
                 let factor = factor_digits_or_expr.into();
-                all_factors.entry(factor).or_insert_with(|| {
-                    if let Ok(factor_id) = factor_id.parse::<u128>() {
-                        ById(factor_id)
-                    } else {
-                        ByExpression
-                    }
-                });
+                let subfactor_handling = if let Ok(factor_id) = factor_id.parse::<u128>() {
+                    ById(factor_id)
+                } else {
+                    ByExpression
+                };
+                all_factors.entry(factor).or_insert(subfactor_handling);
             }
         }
     }
