@@ -691,6 +691,7 @@ pub struct FactorFinder {
 }
 
 impl Clone for FactorFinder {
+    #[inline(always)]
     fn clone(&self) -> Self {
         FactorFinder {
             regexes: self.regexes.clone(),
@@ -700,6 +701,7 @@ impl Clone for FactorFinder {
         }
     }
 
+    #[inline(always)]
     fn clone_from(&mut self, _source: &Self)
     where
         Self: Destruct,
@@ -831,10 +833,12 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
     }
 }
 
+#[inline]
 fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T>> {
     let mut result = Vec::new();
     multiset.sort_unstable(); // Sort to handle duplicates more easily
 
+    #[inline]
     fn generate_subsets<T: PartialEq + Copy>(
         current_subset: &mut Vec<T>,
         remaining_elements: &mut Vec<T>,
@@ -872,6 +876,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
 }
 
 impl FactorFinder {
+    #[inline(always)]
     pub fn new() -> FactorFinder {
         let regexes_as_set = RegexSet::new([
             "^lucas\\(([0-9]+)\\)$",
@@ -1172,6 +1177,7 @@ impl FactorFinder {
         }
     }
 
+    #[inline]
     fn find_common_factors(&self, expr1: &Factor, expr2: &Factor) -> Vec<Factor> {
         if let Numeric(num1) = expr1
             && let Numeric(num2) = expr2
@@ -1186,6 +1192,7 @@ impl FactorFinder {
     }
 
     /// Returns all unique, nontrivial factors we can find.
+    #[inline(always)]
     pub fn find_unique_factors(&self, expr: &Factor) -> Box<[Factor]> {
         let mut factors = self.find_factors(expr);
         factors.retain(|f| match f {
@@ -1222,6 +1229,7 @@ impl FactorFinder {
     // FIXME: This uses Web requests to find factors that FactorDB already knows of and/or convert
     // them to digit form. That would be out of scope for this struct if we had anywhere else to put
     // this method.
+    #[inline]
     pub async fn known_factors_as_digits(
         &self,
         http: &ThrottlingHttpClient,
