@@ -1307,8 +1307,9 @@ impl FactorFinder {
                     status, factors, ..
                 }) => {
                     info!(
-                        "{id:?}: Fetched status of {status} and {} factors",
-                        factors.len()
+                        "{id:?}: Fetched status of {status} and {} factors of sizes {}",
+                        factors.len(),
+                        factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
                     if !include_ff && status == "FF" {
                         Ok(Box::new([]))
@@ -1317,12 +1318,6 @@ impl FactorFinder {
                             .into_iter()
                             .map(|(factor, _exponent)| Factor::from(factor))
                             .collect();
-                        if factors.len() > 1 {
-                            info!(
-                                "{id:?}: Composite with known factors: {}",
-                                factors.iter().join(",")
-                            );
-                        }
                         Ok(factors.into_boxed_slice())
                     }
                 }
