@@ -68,8 +68,6 @@ const PRP_SEARCH_URL_BASE: &str = formatcp!(
 );
 const U_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
-const C_SEARCH_URL_BASE: &str =
-    formatcp!("https://factordb.com/listtype.php?t=3&perpage={C_RESULTS_PER_PAGE}&start=");
 const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 5;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
@@ -769,12 +767,20 @@ async fn queue_composites(
             .unwrap()
     });
     info!("Retrieving {digits}-digit composites starting from {start}");
-    let composites_page = http
-        .retrying_get_and_decode(
-            &format!("{C_SEARCH_URL_BASE}{start}&mindig={digits}"),
-            RETRY_DELAY,
-        )
-        .await;
+    let mut results_per_page = C_RESULTS_PER_PAGE;
+    let mut composites_page = None;
+    while composites_page.is_none() && results_per_page > 0 {
+        composites_page = http.try_get_and_decode(
+            &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}")
+        ).await;
+        if composites_page.is_none() {
+            results_per_page >>= 1;
+            sleep(RETRY_DELAY).await;
+        }
+    }
+    let Some(composites_page) = composites_page else {
+        return 0;
+    };
     info!("C search results retrieved");
     let c_ids = id_and_expr_regex
         .captures_iter(&composites_page)
@@ -901,7 +907,7 @@ async fn main() {
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     // Use PRP queue so that the first unknown number will start sooner
-    let _ = try_queue_unknowns(
+    while try_queue_unknowns(
         &id_and_expr_regex,
         &http,
         u_digits,
@@ -912,15 +918,14 @@ async fn main() {
         &mut u_filter,
         &factor_finder,
     )
-    .await;
-    queue_composites(
-        &mut waiting_c,
-        &id_and_expr_regex,
-        &http,
-        &c_sender,
-        c_digits,
-    )
-    .await;
+    .await.is_err() && queue_composites(
+            &mut waiting_c,
+            &id_and_expr_regex,
+            &http,
+            &c_sender,
+            c_digits,
+        )
+            .await == 0 {}
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
