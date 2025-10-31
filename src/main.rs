@@ -189,36 +189,44 @@ async fn check_composite(
             return_permit.send(CompositeCheckTask { id, digits_or_expr });
             info!("{id}: Requeued C");
             false
-        },
+        }
         Ok(factors) => {
             if factors.is_empty() {
                 warn!("{id}: Already fully factored");
                 return true;
             }
             let subfactors_may_have_algebraic = factors.len() > 1;
-            let mut factors: BTreeMap<Factor, SubfactorHandling> = factors.into_iter().map(|factor| (factor, AlreadySubmitted)).collect();
+            let mut factors: BTreeMap<Factor, SubfactorHandling> = factors
+                .into_iter()
+                .map(|factor| (factor, AlreadySubmitted))
+                .collect();
             // Only look up listed algebraic factors once, since we only have the one ID and not the
             // IDs of any known factors
-            get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut factors).await;
+            get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut factors)
+                .await;
             let mut factors_found = false;
             for (factor, subfactor_handling) in factors.iter() {
                 if let Factor::String(s) = factor {
-
                     // If we have a subfactor's ID, we can submit factors to it instead of to the
                     // bigger factor, and it may have algebraic factors that we can find separately.
-                    let (id_for_submission, may_have_separate_listed_algebraic) = if let ById(factor_id) = subfactor_handling {
-                        (*factor_id, subfactors_may_have_algebraic)
-                    } else {
-                        (id, false)
-                    };
-                    factors_found |= find_and_submit_factors(http,
-                                                             id_for_submission,
-                                                             &s,
-                                                             factor_finder,
-                                                             id_and_expr_regex,
-                                                             true,
-                                                             !may_have_separate_listed_algebraic).await
-                        || (*subfactor_handling != AlreadySubmitted && report_factor_of_u(http, id, factor).await);
+                    let (id_for_submission, may_have_separate_listed_algebraic) =
+                        if let ById(factor_id) = subfactor_handling {
+                            (*factor_id, subfactors_may_have_algebraic)
+                        } else {
+                            (id, false)
+                        };
+                    factors_found |= find_and_submit_factors(
+                        http,
+                        id_for_submission,
+                        &s,
+                        factor_finder,
+                        id_and_expr_regex,
+                        true,
+                        !may_have_separate_listed_algebraic,
+                    )
+                    .await
+                        || (*subfactor_handling != AlreadySubmitted
+                            && report_factor_of_u(http, id, factor).await);
                 }
             }
             if factors_found {
@@ -797,9 +805,15 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let mut c_digits = std::env::var("C_DIGITS").ok().and_then(|s| s.parse::<NonZeroU128>().ok());
-    let mut u_digits = std::env::var("U_DIGITS").ok().and_then(|s| s.parse::<NonZeroU128>().ok());
-    let mut prp_start = std::env::var("PRP_START").ok().and_then(|s| s.parse::<u128>().ok());
+    let mut c_digits = std::env::var("C_DIGITS")
+        .ok()
+        .and_then(|s| s.parse::<NonZeroU128>().ok());
+    let mut u_digits = std::env::var("U_DIGITS")
+        .ok()
+        .and_then(|s| s.parse::<NonZeroU128>().ok());
+    let mut prp_start = std::env::var("PRP_START")
+        .ok()
+        .and_then(|s| s.parse::<u128>().ok());
     simple_log::console("info").unwrap();
     if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<u128>().unwrap();
@@ -1049,8 +1063,16 @@ async fn try_queue_unknowns<'a>(
             continue;
         }
         let digits_or_expr = &results_text[digits_or_expr_range];
-        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, id_and_expr_regex, false, false)
-            .await
+        if find_and_submit_factors(
+            http,
+            u_id,
+            digits_or_expr,
+            factor_finder,
+            id_and_expr_regex,
+            false,
+            false,
+        )
+        .await
         {
             info!("{u_id}: Skipping PRP check because algebraic factors were found");
         } else {
@@ -1184,7 +1206,8 @@ async fn find_and_submit_factors(
         }
     }
     if !skip_looking_up_listed_algebraic {
-        get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors).await;
+        get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors)
+            .await;
     }
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {

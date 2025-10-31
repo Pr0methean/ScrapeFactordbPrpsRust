@@ -13,7 +13,7 @@ use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexBuilder, RegexSet};
 use serde_json::from_str;
 use std::cmp::{Ordering, PartialEq};
-use std::collections::{BTreeMap};
+use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
@@ -762,7 +762,10 @@ fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
     for (item, count1) in counts1.into_iter() {
         *counts2.entry(item).or_insert(0) += count1;
     }
-    counts2.into_iter().flat_map(|(item, count)| repeat_n(item, count)).collect()
+    counts2
+        .into_iter()
+        .flat_map(|(item, count)| repeat_n(item, count))
+        .collect()
 }
 
 #[inline(always)]
@@ -812,10 +815,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             if subset.len() < full_set_size && !subset.is_empty() {
                 let product: u128 = subset.into_iter().product();
                 if product > 2 {
-                    factors = multiset_union(
-                        fibonacci_factors(product, false),
-                        factors,
-                    );
+                    factors = multiset_union(fibonacci_factors(product, false), factors);
                 }
             }
         }
@@ -846,10 +846,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             if subset.len() < full_set_size {
                 let product = subset.into_iter().product::<u128>() << power_of_2;
                 if product > 2 {
-                    factors = multiset_union(
-                        lucas_factors(product, false),
-                        factors,
-                    );
+                    factors = multiset_union(lucas_factors(product, false), factors);
                 }
             }
         }
@@ -1190,7 +1187,11 @@ impl FactorFinder {
                                 // Can't have any common factors
                                 vec![]
                             } else {
-                                self.find_common_factors(&captures[1].into(), &captures[2].into(), true)
+                                self.find_common_factors(
+                                    &captures[1].into(),
+                                    &captures[2].into(),
+                                    true,
+                                )
                             }
                         }
                         _ => unsafe { unreachable_unchecked() },
@@ -1203,7 +1204,12 @@ impl FactorFinder {
     }
 
     #[inline]
-    fn find_common_factors(&self, expr1: &Factor, expr2: &Factor, for_add_or_sub: bool) -> Vec<Factor> {
+    fn find_common_factors(
+        &self,
+        expr1: &Factor,
+        expr2: &Factor,
+        for_add_or_sub: bool,
+    ) -> Vec<Factor> {
         if let Numeric(num1) = expr1
             && let Numeric(num2) = expr2
         {
@@ -1214,7 +1220,9 @@ impl FactorFinder {
         } else {
             let expr1_factors = self.find_factors(expr1);
             let expr2_factors = self.find_factors(expr2);
-            let both_odd = for_add_or_sub && !expr1_factors.contains(&Numeric(2)) && !expr2_factors.contains(&Numeric(2));
+            let both_odd = for_add_or_sub
+                && !expr1_factors.contains(&Numeric(2))
+                && !expr2_factors.contains(&Numeric(2));
             let mut results = multiset_intersection(expr1_factors, expr2_factors);
             if both_odd {
                 results.push(Numeric(2));
