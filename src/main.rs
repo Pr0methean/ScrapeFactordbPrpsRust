@@ -179,6 +179,8 @@ async fn check_composite(
         info!("{id}: Skipping duplicate C");
         return true;
     }
+
+    // First, convert the composite to digits
     match factor_finder
         .known_factors_as_digits(http, Id(id), false)
         .await
@@ -193,12 +195,30 @@ async fn check_composite(
                 warn!("{id}: Already fully factored");
                 return true;
             }
+            let subfactors_may_have_algebraic = factors.len() > 1;
+            let mut factors: BTreeMap<Factor, SubfactorHandling> = factors.into_iter().map(|factor| (factor, AlreadySubmitted)).collect();
+            // Only look up listed algebraic factors once, since we only have the one ID and not the
+            // IDs of any known factors
+            get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut factors).await;
             let mut factors_found = false;
-            let mut checked_algebraic = false;
-            for factor in factors.iter() {
+            for (factor, subfactor_handling) in factors.iter() {
                 if let Factor::String(s) = factor {
-                    factors_found |= find_and_submit_factors(http, id, &s, factor_finder, id_and_expr_regex, true, checked_algebraic).await;
-                    checked_algebraic = true;
+
+                    // If we have a subfactor's ID, we can submit factors to it instead of to the
+                    // bigger factor, and it may have algebraic factors that we can find separately.
+                    let (id_for_submission, may_have_separate_listed_algebraic) = if let ById(factor_id) = subfactor_handling {
+                        (*factor_id, subfactors_may_have_algebraic)
+                    } else {
+                        (id, false)
+                    };
+                    factors_found |= find_and_submit_factors(http,
+                                                             id_for_submission,
+                                                             &s,
+                                                             factor_finder,
+                                                             id_and_expr_regex,
+                                                             true,
+                                                             !may_have_separate_listed_algebraic).await
+                        || (*subfactor_handling != AlreadySubmitted && report_factor_of_u(http, id, factor).await);
                 }
             }
             if factors_found {
@@ -210,7 +230,7 @@ async fn check_composite(
                     let mut out = out.lock().await;
                     let mut result = factors
                         .into_iter()
-                        .map(|factor| out.write_fmt(format_args!("{factor}\n")))
+                        .map(|(factor, _)| out.write_fmt(format_args!("{factor}\n")))
                         .flat_map(Result::err)
                         .take(1);
                     if let Some(error) = result.next() {
