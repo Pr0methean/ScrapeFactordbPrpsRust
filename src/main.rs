@@ -1273,6 +1273,7 @@ async fn find_and_submit_factors(
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
+        info!("This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors");
         if new_subfactors.is_empty() {
             if errors_this_iter == 0 {
                 return accepted_factors;
@@ -1280,7 +1281,6 @@ async fn find_and_submit_factors(
         } else {
             iters_without_progress = 0;
         }
-        info!("This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors");
         all_factors.extend(new_subfactors);
     }
     for (factor, subfactor_handling) in all_factors.into_iter() {
