@@ -16,6 +16,7 @@ use std::cmp::{Ordering, PartialEq};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::hint::unreachable_unchecked;
+use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
 use urlencoding::encode;
@@ -720,12 +721,12 @@ fn count_frequencies<T: Eq + std::hash::Hash + Clone>(vec: &[T]) -> HashMap<T, u
 }
 
 #[inline(always)]
-fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) -> Vec<T> {
+fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
     if vec1.is_empty() || vec2.is_empty() {
         return vec![];
     }
-    let mut counts1 = count_frequencies(vec1);
-    let mut counts2 = count_frequencies(vec2);
+    let mut counts1 = count_frequencies(&vec1);
+    let mut counts2 = count_frequencies(&vec2);
     if counts2.len() < counts1.len() {
         swap(&mut counts1, &mut counts2);
     }
@@ -733,9 +734,7 @@ fn multiset_intersection<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]
     for (item, count1) in counts1 {
         if let Some(&count2) = counts2.get(&item) {
             let min_count = count1.min(count2);
-            for _ in 0..min_count {
-                intersection_vec.push(item.clone());
-            }
+            intersection_vec.extend(repeat_n(item, min_count));
         }
     }
     intersection_vec
@@ -757,7 +756,7 @@ fn multiset_difference<T: Eq + std::hash::Hash + Clone>(vec1: &[T], vec2: &[T]) 
         if let Some(&count2) = counts2.get(&item) {
             count = count.saturating_sub(count2);
         }
-        intersection_vec.extend(std::iter::repeat_n(item.clone(), count));
+        intersection_vec.extend(repeat_n(item.clone(), count));
     }
     intersection_vec
 }
@@ -781,7 +780,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
         let factors_of_term = factorize128(term);
         let mut factors_of_term = factors_of_term
             .into_iter()
-            .flat_map(|(key, value)| std::iter::repeat_n(key, value))
+            .flat_map(|(key, value)| repeat_n(key, value))
             .collect::<Vec<u128>>();
         let full_set_size = factors_of_term.len();
         for subset in power_multiset(&mut factors_of_term).into_iter() {
@@ -815,7 +814,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
         let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
         let mut factors_of_term = factors_of_term
             .into_iter()
-            .flat_map(|(key, value)| std::iter::repeat_n(key, value))
+            .flat_map(|(key, value)| repeat_n(key, value))
             .collect::<Vec<u128>>();
         let full_set_size = factors_of_term.len();
         for subset in power_multiset(&mut factors_of_term).into_iter() {
@@ -916,7 +915,7 @@ impl FactorFinder {
         match expr {
             Numeric(n) => factorize128(*n)
                 .into_iter()
-                .flat_map(|(factor, power)| std::iter::repeat_n(factor.into(), power))
+                .flat_map(|(factor, power)| repeat_n(factor.into(), power))
                 .collect(),
             Factor::String(expr) => {
                 if let Some(index) = self.regexes_as_set.matches(expr).into_iter().next() {
@@ -959,12 +958,12 @@ impl FactorFinder {
                                     format_compact!("{}^{}", &captures[1], &captures[2]).into(),
                                 );
                             }
-                            let gcd_bc = self.find_common_factors(&b, c_raw.abs());
+                            let gcd_bc = self.find_common_factors(&b, c_raw.abs(), false);
                             let b = self.find_factors(&b);
                             let c_abs = self.find_factors(c_raw.abs());
                             factors.extend(gcd_bc.clone());
                             let a = Factor::from(&captures[1]);
-                            let gcd_ac = self.find_common_factors(&a, c_raw.abs());
+                            let gcd_ac = self.find_common_factors(&a, c_raw.abs(), false);
                             factors.extend(multiset_difference(&gcd_ac, &gcd_bc));
                             let n = Factor::from(&captures[2]);
                             if let Numeric(a) = a
@@ -1165,7 +1164,7 @@ impl FactorFinder {
                                 // Can't have any common factors
                                 vec![]
                             } else {
-                                self.find_common_factors(&captures[1].into(), &captures[2].into())
+                                self.find_common_factors(&captures[1].into(), &captures[2].into(), true)
                             }
                         }
                         _ => unsafe { unreachable_unchecked() },
@@ -1178,16 +1177,23 @@ impl FactorFinder {
     }
 
     #[inline]
-    fn find_common_factors(&self, expr1: &Factor, expr2: &Factor) -> Vec<Factor> {
+    fn find_common_factors(&self, expr1: &Factor, expr2: &Factor, for_add_or_sub: bool) -> Vec<Factor> {
         if let Numeric(num1) = expr1
             && let Numeric(num2) = expr2
         {
             factorize128(num1.gcd(num2))
                 .into_iter()
-                .flat_map(|(factor, power)| std::iter::repeat_n(factor.into(), power))
+                .flat_map(|(factor, power)| repeat_n(factor.into(), power))
                 .collect()
         } else {
-            multiset_intersection(&self.find_factors(expr1), &self.find_factors(expr2))
+            let expr1_factors = self.find_factors(expr1);
+            let expr2_factors = self.find_factors(expr2);
+            let both_odd = for_add_or_sub && !expr1_factors.contains(&Numeric(2)) && !expr2_factors.contains(&Numeric(2));
+            let mut results = multiset_intersection(expr1_factors, expr2_factors);
+            if both_odd {
+                results.push(Numeric(2));
+            }
+            results
         }
     }
 
