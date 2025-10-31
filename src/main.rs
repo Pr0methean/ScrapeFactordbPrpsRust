@@ -146,7 +146,7 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        if check_composite(
+        check_composite(
             http,
             c_filter,
             factor_finder,
@@ -155,10 +155,7 @@ async fn composites_while_waiting(
             digits_or_expr,
             return_permit,
         )
-        .await
-        {
-            continue;
-        }
+        .await;
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");
@@ -182,62 +179,71 @@ async fn check_composite(
         info!("{id}: Skipping duplicate C");
         return true;
     }
-    if find_and_submit_factors(http, id, &digits_or_expr, factor_finder, id_and_expr_regex).await {
-        info!("{id}: Skipping C check because algebraic factors were found");
-        return true;
-    }
-    if http
-        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+    match factor_finder
+        .known_factors_as_digits(http, Id(id), false)
         .await
-        .is_some()
     {
-        info!("{id}: Checked composite");
-        return true;
+        Err(()) => {
+            return_permit.send(CompositeCheckTask { id, digits_or_expr });
+            info!("{id}: Requeued C");
+            false
+        },
+        Ok(factors) => {
+            if factors.is_empty() {
+                warn!("{id}: Already fully factored");
+                return true;
+            }
+            let mut factors_found = false;
+            for factor in factors.iter() {
+                if let Factor::String(s) = factor {
+                    factors_found |= find_and_submit_factors(http, id, &s, factor_finder, id_and_expr_regex, true).await;
+                }
+            }
+            if factors_found {
+                info!("{id}: Skipping C check because algebraic factors were found");
+                true
+            } else {
+                let mut dispatched = false;
+                if let Some(out) = COMPOSITES_OUT.get() {
+                    let mut out = out.lock().await;
+                    let mut result = factors
+                        .into_iter()
+                        .map(|factor| out.write_fmt(format_args!("{factor}\n")))
+                        .flat_map(Result::err)
+                        .take(1);
+                    if let Some(error) = result.next() {
+                        error!("{id}: Failed to write factor to FIFO: {error}");
+                    } else {
+                        info!("{id}: Dispatched C to yafu");
+                        HAVE_DISPATCHED_TO_YAFU.store(true, Release);
+                        dispatched = true;
+                    }
+                }
+                if http
+                    .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+                    .await
+                    .is_some()
+                {
+                    info!("{id}: Checked composite");
+                    true
+                } else {
+                    if !dispatched {
+                        return_permit.send(CompositeCheckTask { id, digits_or_expr });
+                        info!("{id}: Requeued C");
+                        false
+                    } else {
+                        true
+                    }
+                }
+            }
+        }
     }
-    if let Some(out) = COMPOSITES_OUT.get()
-        && dispatch_composite(http, id, out, factor_finder).await
-    {
-        HAVE_DISPATCHED_TO_YAFU.store(true, Release);
-    } else {
-        return_permit.send(CompositeCheckTask { id, digits_or_expr });
-        info!("{id}: Requeued C");
-    }
-    false
 }
 
 #[derive(Debug)]
 enum NumberSpecifier<'a> {
     Id(u128),
     Expression(&'a str),
-}
-
-async fn dispatch_composite(
-    http: &ThrottlingHttpClient,
-    id: u128,
-    out: &Mutex<File>,
-    factor_finder: &FactorFinder,
-) -> bool {
-    match factor_finder
-        .known_factors_as_digits(http, Id(id), false)
-        .await
-    {
-        Err(()) => false,
-        Ok(factors) => {
-            let mut out = out.lock().await;
-            let mut result = factors
-                .into_iter()
-                .map(|factor| out.write_fmt(format_args!("{factor}\n")))
-                .flat_map(Result::err)
-                .take(1);
-            if let Some(error) = result.next() {
-                error!("{id}: Failed to write factor to FIFO: {error}");
-                false
-            } else {
-                info!("{id}: Dispatched C to yafu");
-                true
-            }
-        }
-    }
 }
 
 async fn get_prp_remaining_bases(
@@ -1005,7 +1011,7 @@ async fn try_queue_unknowns<'a>(
             continue;
         }
         let digits_or_expr = &results_text[digits_or_expr_range];
-        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, id_and_expr_regex)
+        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, id_and_expr_regex, false)
             .await
         {
             info!("{u_id}: Skipping PRP check because algebraic factors were found");
@@ -1097,9 +1103,13 @@ async fn find_and_submit_factors(
     digits_or_expr: &str,
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
+    skip_looking_up_known: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
-    let digits_or_expr_full_contains_self = if digits_or_expr.contains("...") {
+    let digits_or_expr_full_contains_self = if skip_looking_up_known {
+        digits_or_expr_full.push(Factor::String(digits_or_expr.into()));
+        true
+    } else if digits_or_expr.contains("...") {
         let Ok(known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), true)
             .await
