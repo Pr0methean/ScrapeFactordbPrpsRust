@@ -797,23 +797,40 @@ async fn queue_composites(
 async fn main() {
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
-    let mut c_digits = None;
-    let mut u_digits = None;
-    let mut prp_start = if let Ok(run_number) = std::env::var("RUN") {
+    let mut c_digits = std::env::var("C_DIGITS").ok().and_then(|s| s.parse::<NonZeroU128>().ok());
+    let mut u_digits = std::env::var("U_DIGITS").ok().and_then(|s| s.parse::<NonZeroU128>().ok());
+    let mut prp_start = std::env::var("PRP_START").ok().and_then(|s| s.parse::<u128>().ok());
+    simple_log::console("info").unwrap();
+    if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<u128>().unwrap();
-        let mut c_digits_value =
-            C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
-        if c_digits_value == C_MIN_DIGITS - 1 {
-            c_digits_value = 1;
+        if c_digits.is_none() {
+            let mut c_digits_value =
+                C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
+            if c_digits_value == C_MIN_DIGITS - 1 {
+                c_digits_value = 1;
+            }
+            c_digits = Some(c_digits_value.try_into().unwrap());
         }
-        c_digits = Some(c_digits_value.try_into().unwrap());
-        let u_digits_value =
-            U_MAX_DIGITS - ((run_number * 19793) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
-        u_digits = Some(u_digits_value.try_into().unwrap());
-        (run_number * 9973) % (MAX_START + 1)
-    } else {
-        rng().random_range(0..=MAX_START)
-    };
+        if u_digits.is_none() {
+            let u_digits_value =
+                U_MAX_DIGITS - ((run_number * 19793) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
+            u_digits = Some(u_digits_value.try_into().unwrap());
+        }
+        if prp_start.is_none() {
+            prp_start = Some((run_number * 9973) % (MAX_START + 1));
+        }
+        info!("Run number is {run_number}");
+    }
+    match c_digits {
+        Some(c_digits) => info!("C's will be {c_digits} digits"),
+        None => info!("C's will be random sizes"),
+    }
+    match u_digits {
+        Some(u_digits) => info!("U's will be {u_digits} digits"),
+        None => info!("U's will be random sizes"),
+    }
+    let mut prp_start = prp_start.unwrap_or_else(|| rng().random_range(0..=MAX_START));
+    info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
     let mut max_concurrent_requests = 2usize;
     let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
@@ -858,7 +875,6 @@ async fn main() {
         .await;
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
-    simple_log::console("info").unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     // Use PRP queue so that the first unknown number will start sooner
     let _ = try_queue_unknowns(

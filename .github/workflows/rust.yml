@@ -7,12 +7,27 @@ on:
   schedule:
     - cron: "6,26,46 * * * *"
   workflow_dispatch:
+    inputs:
+      c_digits:
+        description: "Length of composites to process, in decimal digits"
+        required: false
+        type: number
+      u_digits:
+        description: "Length of unknown-status numbers to process, in decimal digits"
+        required: false
+        type: number
+      prp_start:
+        description: "Number of probable primes to skip before the first one to process"
+        required: false
+        type: number
 env:
   CARGO_TERM_COLOR: always
+  C_DIGITS: ${{ inputs.c_digits }}
+  U_DIGITS: ${{ inputs.u_digits }}
+  PRP_START: ${{ inputs.prp_start }}
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
