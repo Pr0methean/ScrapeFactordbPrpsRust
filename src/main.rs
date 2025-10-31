@@ -179,7 +179,16 @@ async fn check_composite(
         info!("{id}: Skipping duplicate C");
         return true;
     }
-
+    let mut checks_triggered = if http
+        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+        .await
+        .is_some()
+    {
+        info!("{id}: Checked C");
+        true
+    } else {
+        false
+    };
     // First, convert the composite to digits
     match factor_finder
         .known_factors_as_digits(http, Id(id), false)
@@ -211,6 +220,14 @@ async fn check_composite(
                     // bigger factor, and it may have algebraic factors that we can find separately.
                     let (id_for_submission, may_have_separate_listed_algebraic) =
                         if let ById(factor_id) = subfactor_handling {
+                            if http
+                                .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={factor_id}"))
+                                .await
+                                .is_some()
+                            {
+                                info!("{id}: Checked C subfactor {factor_id}");
+                                checks_triggered = true;
+                            }
                             (*factor_id, subfactors_may_have_algebraic)
                         } else {
                             (id, false)
@@ -224,43 +241,35 @@ async fn check_composite(
                         true,
                         !may_have_separate_listed_algebraic,
                     )
-                    .await
+                        .await
                         || (*subfactor_handling != AlreadySubmitted
-                            && report_factor_of_u(http, id, factor).await);
+                        && report_factor_of_u(http, id, factor).await);
                 }
             }
             if factors_found {
-                info!("{id}: Skipping C check because algebraic factors were found");
-                true
-            } else {
-                let mut dispatched = false;
-                if let Some(out) = COMPOSITES_OUT.get() {
-                    let mut out = out.lock().await;
-                    let mut result = factors.into_keys().map(|factor| out.write_fmt(format_args!("{factor}\n")))
-                        .flat_map(Result::err)
-                        .take(1);
-                    if let Some(error) = result.next() {
-                        error!("{id}: Failed to write factor to FIFO: {error}");
-                    } else {
-                        info!("{id}: Dispatched C to yafu");
-                        HAVE_DISPATCHED_TO_YAFU.store(true, Release);
-                        dispatched = true;
-                    }
-                }
-                if http
-                    .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
-                    .await
-                    .is_some()
-                {
-                    info!("{id}: Checked composite");
-                    true
-                } else if !dispatched {
-                    return_permit.send(CompositeCheckTask { id, digits_or_expr });
-                    info!("{id}: Requeued C");
-                    false
+                info!("{id}: Skipping further C checks because factors were found");
+                return true;
+            }
+            let mut dispatched = false;
+            if let Some(out) = COMPOSITES_OUT.get() {
+                let mut out = out.lock().await;
+                let mut result = factors.into_keys().map(|factor| out.write_fmt(format_args!("{factor}\n")))
+                    .flat_map(Result::err)
+                    .take(1);
+                if let Some(error) = result.next() {
+                    error!("{id}: Failed to write factor to FIFO: {error}");
                 } else {
-                    true
+                    info!("{id}: Dispatched C to yafu");
+                    HAVE_DISPATCHED_TO_YAFU.store(true, Release);
+                    dispatched = true;
                 }
+            }
+            if !dispatched && !checks_triggered {
+                return_permit.send(CompositeCheckTask { id, digits_or_expr });
+                info!("{id}: Requeued C");
+                false
+            } else {
+                true
             }
         }
     }
