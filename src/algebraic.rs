@@ -962,81 +962,94 @@ impl FactorFinder {
                             let gcd_ac = self.find_common_factors(&a, c_raw.abs());
                             factors.extend(multiset_difference(&gcd_ac, &gcd_bc));
                             let n = Factor::from(&captures[2]);
-                            if let Numeric(a) = a && let Numeric(n) = n {
+                            if let Numeric(a) = a
+                                && let Numeric(n) = n
+                            {
                                 let b_reduced = multiset_difference(&b, &gcd_bc);
                                 let c_reduced = multiset_difference(&c_abs, &gcd_bc);
                                 if let Some(b) = as_u128(&b_reduced)
                                     && let Some(abs_c) = as_u128(&c_reduced)
                                 {
-                                        let anb_u128 = n.try_into().ok()
-                                            .and_then(|n| a.checked_pow(n))
-                                            .and_then(|an| an.checked_mul(b));
-                                        let (c, anbc_u128) = if let SignedFactor::Negative(_) = c_raw {
-                                            (0i128.checked_sub_unsigned(abs_c), anb_u128.and_then(|anb| anb.checked_sub(abs_c)))
-                                        } else {
-                                            (0i128.checked_add_unsigned(abs_c), anb_u128.and_then(|anb| anb.checked_add(abs_c)))
-                                        };
-                                        if let Some(anbc) = anbc_u128 {
-                                            info!("Evaluated {expr} as {}*{anbc}", factors.iter().join("*"));
-                                            factors.extend(self.find_factors(&Numeric(anbc)));
-                                            return factors;
+                                    let anb_u128 = n
+                                        .try_into()
+                                        .ok()
+                                        .and_then(|n| a.checked_pow(n))
+                                        .and_then(|an| an.checked_mul(b));
+                                    let (c, anbc_u128) = if let SignedFactor::Negative(_) = c_raw {
+                                        (
+                                            0i128.checked_sub_unsigned(abs_c),
+                                            anb_u128.and_then(|anb| anb.checked_sub(abs_c)),
+                                        )
+                                    } else {
+                                        (
+                                            0i128.checked_add_unsigned(abs_c),
+                                            anb_u128.and_then(|anb| anb.checked_add(abs_c)),
+                                        )
+                                    };
+                                    if let Some(anbc) = anbc_u128 {
+                                        info!(
+                                            "Evaluated {expr} as {}*{anbc}",
+                                            factors.iter().join("*")
+                                        );
+                                        factors.extend(self.find_factors(&Numeric(anbc)));
+                                        return factors;
+                                    }
+                                    let Some(c) = c else {
+                                        return factors;
+                                    };
+                                    let factors_of_n = self.find_factors(&Numeric(n));
+                                    let factors_of_n_count = factors_of_n.len();
+                                    let mut factors_of_n =
+                                        factors_of_n.iter().collect::<Vec<&Factor>>();
+                                    for factor_subset in power_multiset(&mut factors_of_n) {
+                                        if factor_subset.len() == factors_of_n_count
+                                            || factor_subset.is_empty()
+                                        {
+                                            continue;
                                         }
-                                        let Some(c) = c else {
-                                            return factors;
+                                        let Some(subset_product) = borrowed_as_u128(&factor_subset)
+                                        else {
+                                            continue;
                                         };
-                                        let factors_of_n = self.find_factors(&Numeric(n));
-                                        let factors_of_n_count = factors_of_n.len();
-                                        let mut factors_of_n =
-                                            factors_of_n.iter().collect::<Vec<&Factor>>();
-                                        for factor_subset in power_multiset(&mut factors_of_n) {
-                                            if factor_subset.len() == factors_of_n_count
-                                                || factor_subset.is_empty()
-                                            {
-                                                continue;
-                                            }
-                                            let Some(subset_product) = borrowed_as_u128(&factor_subset)
-                                            else {
-                                                continue;
-                                            };
-                                            if c > 0 && (n / subset_product).is_multiple_of(2) {
-                                                continue;
-                                            }
-                                            if (a.powm(n, &subset_product).mulm(b, &subset_product)
-                                                as i128
-                                                + c)
-                                                % (subset_product as i128)
-                                                == 0
-                                            {
-                                                factors.push(subset_product.into());
-                                            }
-                                            if n % subset_product == 0
-                                                && let Ok(prime_for_root) = subset_product.try_into()
-                                                && (subset_product % 2 != 0 || c > 0)
-                                                && let Some(root_c) = c.nth_root_exact(prime_for_root)
-                                                && let Some(root_b) = b.nth_root_exact(prime_for_root)
-                                            {
-                                                let anbc_expr = format_compact!(
-                                                            "{}{}{}{}",
-                                                            a,
-                                                            if (n / subset_product) > 1 {
-                                                                format_compact!("^{}", n / subset_product)
-                                                            } else {
-                                                                CompactString::from("")
-                                                            },
-                                                            if root_b > 1 {
-                                                                format_compact!("*{}", root_b)
-                                                            } else {
-                                                                CompactString::from("")
-                                                            },
-                                                            if root_c != 0 {
-                                                                format_compact!("{:+}", root_c)
-                                                            } else {
-                                                                CompactString::from("")
-                                                            }
-                                                        );
-                                                factors.push(anbc_expr.into());
-                                            }
+                                        if c > 0 && (n / subset_product).is_multiple_of(2) {
+                                            continue;
                                         }
+                                        if (a.powm(n, &subset_product).mulm(b, &subset_product)
+                                            as i128
+                                            + c)
+                                            % (subset_product as i128)
+                                            == 0
+                                        {
+                                            factors.push(subset_product.into());
+                                        }
+                                        if n % subset_product == 0
+                                            && let Ok(prime_for_root) = subset_product.try_into()
+                                            && (subset_product % 2 != 0 || c > 0)
+                                            && let Some(root_c) = c.nth_root_exact(prime_for_root)
+                                            && let Some(root_b) = b.nth_root_exact(prime_for_root)
+                                        {
+                                            let anbc_expr = format_compact!(
+                                                "{}{}{}{}",
+                                                a,
+                                                if (n / subset_product) > 1 {
+                                                    format_compact!("^{}", n / subset_product)
+                                                } else {
+                                                    CompactString::from("")
+                                                },
+                                                if root_b > 1 {
+                                                    format_compact!("*{}", root_b)
+                                                } else {
+                                                    CompactString::from("")
+                                                },
+                                                if root_c != 0 {
+                                                    format_compact!("{:+}", root_c)
+                                                } else {
+                                                    CompactString::from("")
+                                                }
+                                            );
+                                            factors.push(anbc_expr.into());
+                                        }
+                                    }
                                 }
                             }
                             factors
@@ -1085,8 +1098,7 @@ impl FactorFinder {
                                 expr_short = stripped;
                             }
                             if let Ok(num) = expr_short.parse::<u128>() {
-                                factors.extend(self.find_factors(&Numeric(num)),
-                                );
+                                factors.extend(self.find_factors(&Numeric(num)));
                             } else {
                                 match expr_short.chars().last() {
                                     Some('5') => factors.push(Numeric(5)),
@@ -1177,15 +1189,23 @@ impl FactorFinder {
     pub fn find_unique_factors(&self, expr: &Factor) -> Box<[Factor]> {
         let mut factors = self.find_factors(expr);
         factors.retain(|f| match f {
-            Numeric(n) => *n > 1 && if let Numeric(expr) = expr {
-                *n <= *expr >> 1
-            } else {
-                true
-            },
-            Factor::String(_) => f != expr,
-        } && if let Factor::String(expr) = &expr {
-            !expr.starts_with(&format!("{f}/"))
-        } else {true});
+            Numeric(n) => {
+                *n > 1
+                    && if let Numeric(expr) = expr {
+                        *n <= *expr >> 1
+                    } else {
+                        true
+                    }
+            }
+            Factor::String(s) => {
+                f != expr
+                    && if let Factor::String(expr) = &expr {
+                        !expr.starts_with(&format!("{s}/"))
+                    } else {
+                        true
+                    }
+            }
+        });
         factors.sort();
         factors.dedup();
         if factors.is_empty() {
