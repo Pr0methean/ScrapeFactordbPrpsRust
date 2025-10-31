@@ -1259,11 +1259,13 @@ async fn get_known_algebraic_factors(
                     "{id}: Algebraic factor with ID {factor_id} represented in full: {factor_digits_or_expr}"
                 );
                 let factor = factor_digits_or_expr.into();
-                all_factors.entry(factor).or_insert_with(|| if let Ok(factor_id) = factor_id.parse::<u128>() {
-                            ById(factor_id)
-                        } else {
-                            ByExpression
-                        });
+                all_factors.entry(factor).or_insert_with(|| {
+                    if let Ok(factor_id) = factor_id.parse::<u128>() {
+                        ById(factor_id)
+                    } else {
+                        ByExpression
+                    }
+                });
             }
         }
     }
