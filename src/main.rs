@@ -1313,15 +1313,11 @@ async fn find_and_submit_factors(
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-        let new_subfactors_count = new_subfactors.len();
         if new_subfactors.is_empty() {
             if errors_this_iter == 0 {
                 return accepted_factors;
             }
-        } else {
-            iters_without_progress = 0;
         }
-        all_factors.extend(new_subfactors);
         let mut already_submitted_elsewhere = 0usize;
         if let Ok(already_known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false)
@@ -1345,6 +1341,16 @@ async fn find_and_submit_factors(
                     }
                 }
             }
+        }
+        new_subfactors.retain(|key, _| !all_factors.contains_key(key));
+        let new_subfactors_count = new_subfactors.len();
+        if new_subfactors.is_empty() {
+            if errors_this_iter == 0 {
+                return accepted_factors;
+            }
+        } else {
+            iters_without_progress = 0;
+            all_factors.extend(new_subfactors);
         }
         info!(
             "{id}: This iteration: {accepted_this_iter} factors accepted, \
