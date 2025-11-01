@@ -1344,6 +1344,10 @@ async fn find_and_submit_factors(
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         if new_subfactors.is_empty() && errors_this_iter == 0 {
+            info!(
+                "{id}: Final iteration: {accepted_this_iter} factors accepted, \
+                {did_not_divide_this_iter} did not divide"
+            );
             return accepted_factors;
         }
         let mut already_submitted_elsewhere = 0usize;
@@ -1374,6 +1378,11 @@ async fn find_and_submit_factors(
         let new_subfactors_count = new_subfactors.len();
         if new_subfactors.is_empty() {
             if errors_this_iter == 0 {
+                info!(
+                    "{id}: Final iteration: {accepted_this_iter} factors accepted, \
+                    {did_not_divide_this_iter} did not divide, \
+                    {already_submitted_elsewhere} submitted by someone else"
+                );
                 return accepted_factors;
             }
         } else {
