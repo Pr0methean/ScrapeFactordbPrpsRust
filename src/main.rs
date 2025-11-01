@@ -830,6 +830,10 @@ async fn queue_composites(
 
 #[tokio::main]
 async fn main() {
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
+    let mut sigint =
+        signal(SignalKind::interrupt()).expect("Failed to create SIGINT signal stream");
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -918,29 +922,6 @@ async fn main() {
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     let (termination_sender, termination_receiver) = oneshot::channel();
-    while try_queue_unknowns(
-        &id_and_expr_regex,
-        &http,
-        u_digits,
-        u_sender
-            .reserve_many(PRP_RESULTS_PER_PAGE as usize)
-            .await
-            .unwrap(),
-        &mut u_filter,
-        &factor_finder,
-    )
-    .await
-    .is_err()
-        && queue_composites(
-            &mut waiting_c,
-            &id_and_expr_regex,
-            &http,
-            &c_sender,
-            c_digits,
-        )
-        .await
-            == 0
-    {}
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
@@ -951,10 +932,6 @@ async fn main() {
         id_and_expr_regex.clone(),
         termination_receiver,
     ));
-    let mut sigterm =
-        signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
-    let mut sigint =
-        signal(SignalKind::interrupt()).expect("Failed to create SIGINT signal stream");
     loop {
         let select_start = Instant::now();
         select! {
@@ -968,31 +945,6 @@ async fn main() {
                 warn!("Received SIGINT; signaling do_checks thread to exit");
                 termination_sender.send(()).unwrap();
                 return;
-            }
-            u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
-            }
-            c_permit = c_sender.reserve() => {
-                info!("Ready to send C's after {:?}", Instant::now() - select_start);
-                let c = waiting_c.pop_front();
-                let mut c_sent = 1usize;
-                match c {
-                    Some(c) => {
-                        c_permit.unwrap().send(c);
-                        while let Some(c) = waiting_c.pop_front() {
-                            if let Err(Full(c)) = c_sender.try_send(c) {
-                                waiting_c.push_front(c);
-                                break;
-                            }
-                            c_sent += 1;
-                        }
-                    }
-                    None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
-                    }
-                }
-                info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
                 info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
@@ -1030,6 +982,31 @@ async fn main() {
                     info!("Restarting PRP search: reached maximum starting index");
                     prp_start = 0;
                 }
+            }
+            u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+                info!("Ready to search for U's after {:?}", Instant::now() - select_start);
+                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
+            }
+            c_permit = c_sender.reserve() => {
+                info!("Ready to send C's after {:?}", Instant::now() - select_start);
+                let c = waiting_c.pop_front();
+                let mut c_sent = 1usize;
+                match c {
+                    Some(c) => {
+                        c_permit.unwrap().send(c);
+                        while let Some(c) = waiting_c.pop_front() {
+                            if let Err(Full(c)) = c_sender.try_send(c) {
+                                waiting_c.push_front(c);
+                                break;
+                            }
+                            c_sent += 1;
+                        }
+                    }
+                    None => {
+                        c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
+                    }
+                }
+                info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
             }
         }
     }
