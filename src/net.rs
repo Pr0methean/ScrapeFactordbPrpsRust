@@ -166,8 +166,10 @@ impl ThrottlingHttpClient {
             }
             sleep(retry_delay).await;
         }
+        let alt_url = alt_url_supplier.call_once(());
+        warn!("Giving up on reaching {url} and falling back to {alt_url}");
         Err(self
-            .retrying_get_and_decode(&alt_url_supplier.call_once(()), retry_delay)
+            .retrying_get_and_decode(&alt_url, retry_delay)
             .await)
     }
 
