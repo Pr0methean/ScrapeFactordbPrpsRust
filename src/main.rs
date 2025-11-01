@@ -10,7 +10,7 @@ mod channel;
 mod net;
 
 use crate::NumberSpecifier::{Expression, Id};
-use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById, NoSubfactorHandling};
+use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById, Irreducible};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
@@ -1174,9 +1174,9 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
     true // factor that we failed to submit may still have been valid
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 enum SubfactorHandling {
-    NoSubfactorHandling,
+    Irreducible,
     ById(u128),
     ByExpression,
     AlreadySubmitted,
@@ -1254,7 +1254,9 @@ async fn find_and_submit_factors(
                     *subfactor_handling = AlreadySubmitted;
                 }
                 Ok(false) => {
+                    if dest_factors.is_empty() {
                     did_not_divide_this_iter += 1;
+                        }
                     if try_subfactors {
                         try_find_subfactors(
                             http,
@@ -1290,16 +1292,18 @@ async fn find_and_submit_factors(
                         accepted_this_iter += 1;
                         *subfactor_handling = AlreadySubmitted;
                     } else if dest_factors_do_not_divide && !dest_factors.is_empty() {
-                        try_find_subfactors(
-                            http,
-                            id,
-                            factor_finder,
-                            id_and_expr_regex,
-                            &mut new_subfactors,
-                            factor,
-                            subfactor_handling,
-                        )
-                        .await;
+                        if try_subfactors {
+                            try_find_subfactors(
+                                http,
+                                id,
+                                factor_finder,
+                                id_and_expr_regex,
+                                &mut new_subfactors,
+                                factor,
+                                subfactor_handling,
+                            )
+                                .await;
+                        }
                         *subfactor_handling = AlreadySubmitted;
                         did_not_divide_this_iter += 1;
                     } else {
@@ -1384,13 +1388,13 @@ async fn try_find_subfactors(
         let factors = factor_finder
             .find_unique_factors(factor)
             .into_iter()
-            .map(|factor| (factor, NoSubfactorHandling));
+            .map(|factor| (factor, Irreducible));
         let success = factors.len() > 1;
         new_subfactors.extend(factors);
         return success;
     }
     let specifier_to_get_subfactors = match subfactor_handling {
-        NoSubfactorHandling => {
+        Irreducible => {
             return false;
         }
         ById(factor_id) => {
