@@ -30,9 +30,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::btree_map::Entry::Vacant;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
-use std::hint::unreachable_unchecked;
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
@@ -1270,26 +1270,26 @@ async fn find_and_submit_factors(
                     *subfactor_handling = AlreadySubmitted;
                 }
                 Err(()) => {
-                    let mut dest_subfactors_do_not_divide = true;
-                    let mut submitted_to_subfactor = false;
-                    for dest_subfactor in dest_factors.iter() {
-                        match try_report_factor(http, Expression(dest_subfactor.as_str()), factor)
+                    let mut dest_factors_do_not_divide = true;
+                    let mut submitted_to_dest_factor = false;
+                    for dest_factor in dest_factors.iter() {
+                        match try_report_factor(http, Expression(dest_factor.as_str()), factor)
                             .await
                         {
                             Ok(true) => {
-                                submitted_to_subfactor = true;
+                                submitted_to_dest_factor = true;
                                 break;
                             }
                             Ok(false) => {}
                             Err(()) => {
-                                dest_subfactors_do_not_divide = false;
+                                dest_factors_do_not_divide = false;
                             }
                         }
                     }
-                    if submitted_to_subfactor {
+                    if submitted_to_dest_factor {
                         accepted_this_iter += 1;
                         *subfactor_handling = AlreadySubmitted;
-                    } else if dest_subfactors_do_not_divide {
+                    } else if dest_factors_do_not_divide && !dest_factors.is_empty() {
                         try_find_subfactors(
                             http,
                             id,
@@ -1300,10 +1300,10 @@ async fn find_and_submit_factors(
                             subfactor_handling,
                         )
                         .await;
+                        *subfactor_handling = AlreadySubmitted;
                         did_not_divide_this_iter += 1;
                     } else {
                         errors_this_iter += 1;
-                        *subfactor_handling = AlreadySubmitted;
                     }
                 }
             }
@@ -1379,19 +1379,19 @@ async fn try_find_subfactors(
     new_subfactors: &mut BTreeMap<Factor, SubfactorHandling>,
     factor: &Factor,
     subfactor_handling: &mut SubfactorHandling,
-) {
+) -> bool {
     if let Numeric(_) = factor {
-        new_subfactors.extend(
-            factor_finder
-                .find_unique_factors(factor)
-                .into_iter()
-                .map(|factor| (factor, NoSubfactorHandling)),
-        );
-        return;
+        let factors = factor_finder
+            .find_unique_factors(factor)
+            .into_iter()
+            .map(|factor| (factor, NoSubfactorHandling));
+        let success = factors.len() > 1;
+        new_subfactors.extend(factors);
+        return success;
     }
     let specifier_to_get_subfactors = match subfactor_handling {
         NoSubfactorHandling => {
-            return;
+            return false;
         }
         ById(factor_id) => {
             get_known_algebraic_factors(
@@ -1405,24 +1405,26 @@ async fn try_find_subfactors(
             Id(*factor_id)
         }
         ByExpression => Expression(&factor.to_compact_string()),
-        AlreadySubmitted => unsafe { unreachable_unchecked() },
+        AlreadySubmitted => return false,
     };
-    let subfactors = factor_finder.find_unique_factors(factor);
-    new_subfactors.extend(
-        subfactors
-            .into_iter()
-            .map(|subfactor| (subfactor, ByExpression)),
-    );
-    if let Ok(subfactors) = factor_finder
+    let mut subfactors: BTreeSet<_> = factor_finder.find_unique_factors(factor).into_iter().collect();
+    if let Ok(known_subfactors) = factor_finder
         .known_factors_as_digits(http, specifier_to_get_subfactors, true)
         .await
-        && subfactors.len() > 1
+        && known_subfactors.len() > 1
     {
-        for subfactor in subfactors {
-            info!("{id}: Found sub-factor {subfactor} of {factor}");
-            new_subfactors.entry(subfactor).or_insert(ByExpression);
+        subfactors.extend(known_subfactors);
+    }
+    let mut success = false;
+    for subfactor in subfactors {
+        info!("{id}: Found sub-factor {subfactor} of {factor}");
+        let entry = new_subfactors.entry(subfactor);
+        if let Vacant(v) = entry {
+            v.insert(ByExpression);
+            success = true;
         }
     }
+    success
 }
 
 async fn get_known_algebraic_factors(
