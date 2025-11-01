@@ -1293,7 +1293,9 @@ async fn find_and_submit_factors(
                     if **subfactor_handling == AlreadySubmitted {
                         continue;
                     }
-                    if let Factor::String(s) = factor && dest_factor == s {
+                    if let Factor::String(s) = factor
+                        && dest_factor == s
+                    {
                         continue;
                     }
                     match try_report_factor(http, Expression(dest_factor.as_str()), factor).await {
