@@ -489,26 +489,36 @@ async fn do_checks(
                 warn!("Received termination signal; exiting");
                 return;
             }
-            _ = sleep_until(next_unknown_attempt) => {
-                if retry.is_some() {
-                    info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
-                    retry.take()
-                } else {
-                    u_receiver.try_recv().inspect(|_| {
-                        info!("Ready to check a U after {:?}", Instant::now() - successful_select_end);
-                    })
+            // Nested select should prevent bias between U, PRP and C, but keep bias in favor of SIGTERM
+            _ = sleep(Duration::ZERO) => {
+                select! {
+                    // Duplicate termination recv so we won't stall inside the inner select
+                    _ = &mut termination_receiver => {
+                        warn!("Received termination signal; exiting");
+                        return;
+                    }
+                    _ = sleep_until(next_unknown_attempt) => {
+                        if retry.is_some() {
+                            info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
+                            retry.take()
+                        } else {
+                            u_receiver.try_recv().inspect(|_| {
+                                info!("Ready to check a U after {:?}", Instant::now() - successful_select_end);
+                            })
+                        }
+                    }
+                    prp_task = prp_receiver.recv() => {
+                        info!("Ready to check a PRP after {:?}", Instant::now() - successful_select_end);
+                        Some(prp_task)
+                    }
+                    c_task = c_receiver.recv() => {
+                        info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
+                        let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
+                        check_composite(&http, &mut c_filter, &factor_finder, &id_and_expr_regex, id, digits_or_expr, return_permit).await;
+                        successful_select_end = Instant::now();
+                        None
+                    }
                 }
-            }
-            prp_task = prp_receiver.recv() => {
-                info!("Ready to check a PRP after {:?}", Instant::now() - successful_select_end);
-                Some(prp_task)
-            }
-            c_task = c_receiver.recv() => {
-                info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
-                let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
-                check_composite(&http, &mut c_filter, &factor_finder, &id_and_expr_regex, id, digits_or_expr, return_permit).await;
-                successful_select_end = Instant::now();
-                None
             }
         };
         if let Some((CheckTask { id, task_type }, task_return_permit)) = task {
@@ -959,66 +969,75 @@ async fn main() {
                 termination_sender.send(()).unwrap();
                 return;
             }
-            u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
-            }
-            c_permit = c_sender.reserve() => {
-                info!("Ready to send C's after {:?}", Instant::now() - select_start);
-                let c = waiting_c.pop_front();
-                let mut c_sent = 1usize;
-                match c {
-                    Some(c) => {
-                        c_permit.unwrap().send(c);
-                        while let Some(c) = waiting_c.pop_front() {
-                            if let Err(Full(c)) = c_sender.try_send(c) {
-                                waiting_c.push_front(c);
-                                break;
+            // Nested select should prevent bias between U, PRP and C, but keep bias in favor of SIGTERM
+            _ = sleep(Duration::ZERO) => select! {
+                // Duplicate sigterm recv so we won't stall inside the inner select
+                _ = sigterm.recv() => {
+                    warn!("Received SIGTERM; signaling do_checks thread to exit");
+                    termination_sender.send(()).unwrap();
+                    return;
+                }
+                u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+                    info!("Ready to search for U's after {:?}", Instant::now() - select_start);
+                    queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
+                }
+                c_permit = c_sender.reserve() => {
+                    info!("Ready to send C's after {:?}", Instant::now() - select_start);
+                    let c = waiting_c.pop_front();
+                    let mut c_sent = 1usize;
+                    match c {
+                        Some(c) => {
+                            c_permit.unwrap().send(c);
+                            while let Some(c) = waiting_c.pop_front() {
+                                if let Err(Full(c)) = c_sender.try_send(c) {
+                                    waiting_c.push_front(c);
+                                    break;
+                                }
+                                c_sent += 1;
                             }
-                            c_sent += 1;
+                        }
+                        None => {
+                            c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
                         }
                     }
-                    None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
-                    }
+                    info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
                 }
-                info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
-            }
-            prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
-                info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
-                let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
-                let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
-                info!("PRP search results retrieved");
-                let mut prp_permits = prp_permits.unwrap();
-                for prp_id in id_regex
-                    .captures_iter(&results_text)
-                    .map(|result| result[1].parse::<u128>().ok())
-                    .unique()
-                {
-                    let Some(prp_id) = prp_id else {
-                        error!("Invalid PRP ID found");
-                        continue;
-                    };
-                    let prp_id_bytes = prp_id.to_ne_bytes();
-                    if prp_filter.query(&prp_id_bytes).unwrap() {
-                        warn!("{prp_id}: Skipping duplicate PRP");
-                        continue;
+                prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
+                    info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
+                    let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
+                    let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
+                    info!("PRP search results retrieved");
+                    let mut prp_permits = prp_permits.unwrap();
+                    for prp_id in id_regex
+                        .captures_iter(&results_text)
+                        .map(|result| result[1].parse::<u128>().ok())
+                        .unique()
+                    {
+                        let Some(prp_id) = prp_id else {
+                            error!("Invalid PRP ID found");
+                            continue;
+                        };
+                        let prp_id_bytes = prp_id.to_ne_bytes();
+                        if prp_filter.query(&prp_id_bytes).unwrap() {
+                            warn!("{prp_id}: Skipping duplicate PRP");
+                            continue;
+                        }
+                        prp_filter.insert(&prp_id_bytes).unwrap();
+                        let prp_task = CheckTask {
+                            id: prp_id,
+                            task_type: CheckTaskType::Prp,
+                        };
+                        prp_permits.next().unwrap().send(prp_task);
+                        info!("{prp_id}: Queued PRP from search");
+                        if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
+                            queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
+                        }
                     }
-                    prp_filter.insert(&prp_id_bytes).unwrap();
-                    let prp_task = CheckTask {
-                        id: prp_id,
-                        task_type: CheckTaskType::Prp,
-                    };
-                    prp_permits.next().unwrap().send(prp_task);
-                    info!("{prp_id}: Queued PRP from search");
-                    if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
+                    prp_start += PRP_RESULTS_PER_PAGE;
+                    if prp_start > MAX_START {
+                        info!("Restarting PRP search: reached maximum starting index");
+                        prp_start = 0;
                     }
-                }
-                prp_start += PRP_RESULTS_PER_PAGE;
-                if prp_start > MAX_START {
-                    info!("Restarting PRP search: reached maximum starting index");
-                    prp_start = 0;
                 }
             }
         }
