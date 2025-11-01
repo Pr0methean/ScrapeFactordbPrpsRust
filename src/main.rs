@@ -29,8 +29,8 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::collections::btree_map::Entry::Vacant;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
@@ -1255,8 +1255,8 @@ async fn find_and_submit_factors(
                 }
                 Ok(false) => {
                     if dest_factors.is_empty() {
-                    did_not_divide_this_iter += 1;
-                        }
+                        did_not_divide_this_iter += 1;
+                    }
                     if try_subfactors {
                         try_find_subfactors(
                             http,
@@ -1302,7 +1302,7 @@ async fn find_and_submit_factors(
                                 factor,
                                 subfactor_handling,
                             )
-                                .await;
+                            .await;
                         }
                         *subfactor_handling = AlreadySubmitted;
                         did_not_divide_this_iter += 1;
@@ -1411,7 +1411,10 @@ async fn try_find_subfactors(
         ByExpression => Expression(&factor.to_compact_string()),
         AlreadySubmitted => return false,
     };
-    let mut subfactors: BTreeSet<_> = factor_finder.find_unique_factors(factor).into_iter().collect();
+    let mut subfactors: BTreeSet<_> = factor_finder
+        .find_unique_factors(factor)
+        .into_iter()
+        .collect();
     if let Ok(known_subfactors) = factor_finder
         .known_factors_as_digits(http, specifier_to_get_subfactors, true)
         .await

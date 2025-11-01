@@ -168,9 +168,7 @@ impl ThrottlingHttpClient {
         }
         let alt_url = alt_url_supplier.call_once(());
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
-        Err(self
-            .retrying_get_and_decode(&alt_url, retry_delay)
-            .await)
+        Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
     }
 
     async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
