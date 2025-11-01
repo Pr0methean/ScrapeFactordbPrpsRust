@@ -484,7 +484,6 @@ async fn do_checks(
     let mut successful_select_end = Instant::now();
     loop {
         let task = select! {
-            biased;
             _ = &mut termination_receiver => {
                 warn!("Received termination signal; exiting");
                 return;
@@ -511,6 +510,11 @@ async fn do_checks(
                 None
             }
         };
+        // Extra poll to eliminate the need for a biased select!
+        if termination_receiver.try_recv().is_ok() {
+            warn!("Received termination signal; exiting");
+            return;
+        }
         if let Some((CheckTask { id, task_type }, task_return_permit)) = task {
             match task_type {
                 CheckTaskType::Prp => {
@@ -949,12 +953,19 @@ async fn main() {
     ));
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
+    let mut sigint =
+        signal(SignalKind::interrupt()).expect("Failed to create SIGINT signal stream");
     loop {
         let select_start = Instant::now();
         select! {
             biased;
             _ = sigterm.recv() => {
                 warn!("Received SIGTERM; signaling do_checks thread to exit");
+                termination_sender.send(()).unwrap();
+                return;
+            }
+            _ = sigint.recv() => {
+                warn!("Received SIGINT; signaling do_checks thread to exit");
                 termination_sender.send(()).unwrap();
                 return;
             }
