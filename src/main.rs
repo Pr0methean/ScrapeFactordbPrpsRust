@@ -42,10 +42,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
-use tokio::sync::{oneshot, Mutex, OnceCell};
+use tokio::sync::oneshot::Receiver;
+use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use tokio::sync::oneshot::Receiver;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -459,7 +459,7 @@ async fn do_checks(
     http: ThrottlingHttpClient,
     factor_finder: FactorFinder,
     id_and_expr_regex: Regex,
-    mut termination_receiver: Receiver<()>
+    mut termination_receiver: Receiver<()>,
 ) {
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
@@ -1303,11 +1303,16 @@ async fn find_and_submit_factors(
                     if **subfactor_handling == AlreadySubmitted {
                         continue;
                     }
-                    if *factor == dest_factor
-                    {
+                    if *factor == dest_factor {
                         continue;
                     }
-                    match try_report_factor(http, Expression(&dest_factor.to_compact_string()), factor).await {
+                    match try_report_factor(
+                        http,
+                        Expression(&dest_factor.to_compact_string()),
+                        factor,
+                    )
+                    .await
+                    {
                         Ok(true) => {
                             **subfactor_handling = AlreadySubmitted;
                             accepted_this_iter += 1;
