@@ -1313,10 +1313,7 @@ async fn find_and_submit_factors(
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-        info!(
-            "{id}: This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors, {} new subfactors to try",
-            new_subfactors.len()
-        );
+        let new_subfactors_count = new_subfactors.len();
         if new_subfactors.is_empty() {
             if errors_this_iter == 0 {
                 return accepted_factors;
@@ -1325,6 +1322,7 @@ async fn find_and_submit_factors(
             iters_without_progress = 0;
         }
         all_factors.extend(new_subfactors);
+        let mut already_submitted_elsewhere = 0usize;
         if let Ok(already_known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false)
             .await
@@ -1334,29 +1332,27 @@ async fn find_and_submit_factors(
                 return true;
             }
             if already_known_factors.len() > 1 {
-                let mut already_submitted_elsewhere = 0usize;
                 for factor in already_known_factors.into_iter().rev() {
                     let prev_handling = all_factors.get(&factor);
-                    let prev_unknown = prev_handling.is_none();
                     if prev_handling != Some(&AlreadySubmitted) {
                         if let Factor::String(ref s) = factor {
                             dest_factors.insert(s.clone());
                             iters_without_progress = 0;
                         }
                         all_factors.insert(factor, AlreadySubmitted);
-                        if !prev_unknown {
-                            already_submitted_elsewhere += 1;
-                        }
+                        already_submitted_elsewhere += 1;
+                        accepted_factors = true; // As long as it's no longer U or C
                     }
-                }
-                if already_submitted_elsewhere > 0 {
-                    accepted_factors = true; // As long as it's no longer U or C
-                    warn!(
-                        "{id}: Not retrying {already_submitted_elsewhere} factors because someone else has submitted them or they were false failures"
-                    );
                 }
             }
         }
+        info!(
+            "{id}: This iteration: {accepted_this_iter} factors accepted, \
+            {did_not_divide_this_iter} did not divide, \
+            {errors_this_iter} submission errors, \
+            {new_subfactors_count} new subfactors to try, \
+            {already_submitted_elsewhere} submitted by someone else"
+        );
     }
     for (factor, subfactor_handling) in all_factors.into_iter() {
         if subfactor_handling == AlreadySubmitted {
