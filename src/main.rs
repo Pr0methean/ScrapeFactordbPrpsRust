@@ -1252,6 +1252,9 @@ async fn find_and_submit_factors(
                     accepted_this_iter += 1;
                     iters_without_progress = 0;
                     *subfactor_handling = AlreadySubmitted;
+                    if let Factor::String(s) = factor {
+                        dest_factors.insert(s.clone());
+                    }
                 }
                 Ok(false) => {
                     if dest_factors.is_empty() {
@@ -1268,8 +1271,10 @@ async fn find_and_submit_factors(
                             )
                             .await;
                         }
+                        *subfactor_handling = AlreadySubmitted;
+                    } else {
+                        try_with_dest_factors.push((factor, subfactor_handling));
                     }
-                    *subfactor_handling = AlreadySubmitted;
                 }
                 Err(()) => {
                     if !dest_factors.is_empty() {
@@ -1280,6 +1285,7 @@ async fn find_and_submit_factors(
         }
         if !dest_factors.is_empty() {
             let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
+            let mut new_dest_factors = Vec::new();
             for dest_factor in dest_factors.iter() {
                 for (index, (factor, subfactor_handling)) in
                     try_with_dest_factors.iter_mut().enumerate()
@@ -1287,10 +1293,16 @@ async fn find_and_submit_factors(
                     if **subfactor_handling == AlreadySubmitted {
                         continue;
                     }
+                    if let Factor::String(s) = factor && dest_factor == s {
+                        continue;
+                    }
                     match try_report_factor(http, Expression(dest_factor.as_str()), factor).await {
                         Ok(true) => {
                             **subfactor_handling = AlreadySubmitted;
                             accepted_this_iter += 1;
+                            if let Factor::String(s) = factor {
+                                new_dest_factors.push(s.clone());
+                            }
                         }
                         Ok(false) => {
                             did_not_divide[index] += 1;
@@ -1324,6 +1336,7 @@ async fn find_and_submit_factors(
                     errors_this_iter += 1;
                 }
             }
+            dest_factors.extend(new_dest_factors);
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         if new_subfactors.is_empty() && errors_this_iter == 0 {
