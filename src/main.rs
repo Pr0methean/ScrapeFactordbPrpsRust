@@ -1314,7 +1314,8 @@ async fn find_and_submit_factors(
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         info!(
-            "{id}: This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors"
+            "{id}: This iteration: {accepted_this_iter} factors accepted, {did_not_divide_this_iter} did not divide, {errors_this_iter} submission errors, {} new subfactors to try",
+            new_subfactors.len()
         );
         if new_subfactors.is_empty() {
             if errors_this_iter == 0 {
