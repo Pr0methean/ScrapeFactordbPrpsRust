@@ -1303,7 +1303,7 @@ async fn find_and_submit_factors(
                 if *subfactor_handling == AlreadySubmitted {
                     continue;
                 }
-                if did_not_divide[index] == dest_factors.len() {
+                 if did_not_divide[index] == dest_factors.len() {
                     *subfactor_handling = AlreadySubmitted;
                     did_not_divide_this_iter += 1;
                     if try_subfactors {
@@ -1324,11 +1324,10 @@ async fn find_and_submit_factors(
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-        if new_subfactors.is_empty() {
-            if errors_this_iter == 0 {
+        if new_subfactors.is_empty()
+            && errors_this_iter == 0 {
                 return accepted_factors;
             }
-        }
         let mut already_submitted_elsewhere = 0usize;
         if let Ok(already_known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false)
