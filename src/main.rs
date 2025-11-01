@@ -1093,9 +1093,8 @@ async fn try_queue_unknowns<'a>(
         )
         .await
         {
-            info!("{u_id}: Skipping PRP check because algebraic factors were found");
+            info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
-            info!("{u_id}: No algebraic factors found");
             u_filter.insert(&u_id_bytes).unwrap();
             u_permits.next().unwrap().send(CheckTask {
                 id: u_id,
