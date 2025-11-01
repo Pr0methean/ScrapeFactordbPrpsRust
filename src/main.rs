@@ -1233,7 +1233,7 @@ async fn find_and_submit_factors(
         get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors)
             .await;
     }
-    let mut dest_factors: BTreeSet<CompactString> = BTreeSet::new();
+    let mut dest_factors: BTreeSet<Factor> = BTreeSet::new();
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
@@ -1252,8 +1252,8 @@ async fn find_and_submit_factors(
                     accepted_this_iter += 1;
                     iters_without_progress = 0;
                     *subfactor_handling = AlreadySubmitted;
-                    if let Factor::String(s) = factor {
-                        dest_factors.insert(s.clone());
+                    if let Factor::String(_) = factor {
+                        dest_factors.insert(factor.clone());
                     }
                 }
                 Ok(false) => {
@@ -1293,17 +1293,16 @@ async fn find_and_submit_factors(
                     if **subfactor_handling == AlreadySubmitted {
                         continue;
                     }
-                    if let Factor::String(s) = factor
-                        && dest_factor == s
+                    if *factor == dest_factor
                     {
                         continue;
                     }
-                    match try_report_factor(http, Expression(dest_factor.as_str()), factor).await {
+                    match try_report_factor(http, Expression(&dest_factor.to_compact_string()), factor).await {
                         Ok(true) => {
                             **subfactor_handling = AlreadySubmitted;
                             accepted_this_iter += 1;
-                            if let Factor::String(s) = factor {
-                                new_dest_factors.push(s.clone());
+                            if let Factor::String(_) = factor {
+                                new_dest_factors.push((*factor).clone());
                             }
                         }
                         Ok(false) => {
@@ -1357,8 +1356,8 @@ async fn find_and_submit_factors(
                 for factor in already_known_factors.into_iter().rev() {
                     let prev_handling = all_factors.get(&factor);
                     if prev_handling != Some(&AlreadySubmitted) {
-                        if let Factor::String(ref s) = factor {
-                            dest_factors.insert(s.clone());
+                        if let Factor::String(_) = factor {
+                            dest_factors.insert(factor.clone());
                             iters_without_progress = 0;
                         }
                         all_factors.insert(factor, AlreadySubmitted);
