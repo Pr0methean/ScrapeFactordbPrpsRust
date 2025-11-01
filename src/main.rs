@@ -1092,7 +1092,7 @@ async fn try_queue_unknowns<'a>(
             false,
         )
         .await
-        {
+            {
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
             u_filter.insert(&u_id_bytes).unwrap();
@@ -1241,6 +1241,7 @@ async fn find_and_submit_factors(
         let mut did_not_divide_this_iter = 0usize;
         let mut errors_this_iter = 0usize;
         let mut new_subfactors = BTreeMap::new();
+        let mut try_with_dest_factors = Vec::new();
         for (factor, subfactor_handling) in all_factors.iter_mut().rev() {
             if *subfactor_handling == AlreadySubmitted {
                 continue;
@@ -1255,42 +1256,6 @@ async fn find_and_submit_factors(
                 Ok(false) => {
                     if dest_factors.is_empty() {
                         did_not_divide_this_iter += 1;
-                    }
-                    if try_subfactors {
-                        try_find_subfactors(
-                            http,
-                            id,
-                            factor_finder,
-                            id_and_expr_regex,
-                            &mut new_subfactors,
-                            factor,
-                            subfactor_handling,
-                        )
-                        .await;
-                    }
-                    *subfactor_handling = AlreadySubmitted;
-                }
-                Err(()) => {
-                    let mut dest_factors_do_not_divide = true;
-                    let mut submitted_to_dest_factor = false;
-                    for dest_factor in dest_factors.iter() {
-                        match try_report_factor(http, Expression(dest_factor.as_str()), factor)
-                            .await
-                        {
-                            Ok(true) => {
-                                submitted_to_dest_factor = true;
-                                break;
-                            }
-                            Ok(false) => {}
-                            Err(()) => {
-                                dest_factors_do_not_divide = false;
-                            }
-                        }
-                    }
-                    if submitted_to_dest_factor {
-                        accepted_this_iter += 1;
-                        *subfactor_handling = AlreadySubmitted;
-                    } else if dest_factors_do_not_divide && !dest_factors.is_empty() {
                         if try_subfactors {
                             try_find_subfactors(
                                 http,
@@ -1301,13 +1266,60 @@ async fn find_and_submit_factors(
                                 factor,
                                 subfactor_handling,
                             )
-                            .await;
+                                .await;
                         }
-                        *subfactor_handling = AlreadySubmitted;
-                        did_not_divide_this_iter += 1;
-                    } else {
-                        errors_this_iter += 1;
                     }
+                    *subfactor_handling = AlreadySubmitted;
+                }
+                Err(()) => {
+                    if !dest_factors.is_empty() {
+                        try_with_dest_factors.push((factor, subfactor_handling));
+                    }
+                }
+            }
+        }
+        if !dest_factors.is_empty() {
+            let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
+            for dest_factor in dest_factors.iter() {
+                for (index, (factor, subfactor_handling)) in try_with_dest_factors.iter_mut().enumerate() {
+                    if **subfactor_handling == AlreadySubmitted {
+                        continue;
+                    }
+                    match try_report_factor(http, Expression(dest_factor.as_str()), factor)
+                        .await
+                    {
+                        Ok(true) => {
+                            **subfactor_handling = AlreadySubmitted;
+                            accepted_this_iter += 1;
+                        }
+                        Ok(false) => {
+                            did_not_divide[index] += 1;
+                        }
+                        Err(()) => {}
+                    }
+                }
+            }
+            for (index, (factor, subfactor_handling)) in try_with_dest_factors.into_iter().enumerate() {
+                if *subfactor_handling == AlreadySubmitted {
+                    continue;
+                }
+                if did_not_divide[index] == dest_factors.len() {
+                    *subfactor_handling = AlreadySubmitted;
+                    did_not_divide_this_iter += 1;
+                    if try_subfactors {
+                        try_find_subfactors(
+                            http,
+                            id,
+                            factor_finder,
+                            id_and_expr_regex,
+                            &mut new_subfactors,
+                            factor,
+                            subfactor_handling,
+                        )
+                            .await;
+                    }
+                } else {
+                    errors_this_iter += 1;
                 }
             }
         }
