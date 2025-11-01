@@ -914,12 +914,11 @@ async fn main() {
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     let (termination_sender, termination_receiver) = oneshot::channel();
-    // Use PRP queue so that the first unknown number will start sooner
     while try_queue_unknowns(
         &id_and_expr_regex,
         &http,
         u_digits,
-        prp_sender
+        u_sender
             .reserve_many(PRP_RESULTS_PER_PAGE as usize)
             .await
             .unwrap(),
