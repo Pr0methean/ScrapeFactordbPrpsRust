@@ -42,9 +42,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
-use tokio::sync::{Mutex, OnceCell};
+use tokio::sync::{oneshot, Mutex, OnceCell};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use tokio::sync::oneshot::Receiver;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -458,6 +459,7 @@ async fn do_checks(
     http: ThrottlingHttpClient,
     factor_finder: FactorFinder,
     id_and_expr_regex: Regex,
+    mut termination_receiver: Receiver<()>
 ) {
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
@@ -482,6 +484,11 @@ async fn do_checks(
     let mut successful_select_end = Instant::now();
     loop {
         let task = select! {
+            biased;
+            _ = &mut termination_receiver => {
+                warn!("Received termination signal; exiting");
+                return;
+            }
             _ = sleep_until(next_unknown_attempt) => {
                 if retry.is_some() {
                     info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
@@ -906,6 +913,7 @@ async fn main() {
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
+    let (termination_sender, termination_receiver) = oneshot::channel();
     // Use PRP queue so that the first unknown number will start sooner
     while try_queue_unknowns(
         &id_and_expr_regex,
@@ -938,12 +946,23 @@ async fn main() {
         http.clone(),
         factor_finder.clone(),
         id_and_expr_regex.clone(),
+        termination_receiver,
     ));
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     loop {
         let select_start = Instant::now();
         select! {
+            biased;
+            _ = sigterm.recv() => {
+                warn!("Received SIGTERM; signaling do_checks thread to exit");
+                termination_sender.send(()).unwrap();
+                return;
+            }
+            u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+                info!("Ready to search for U's after {:?}", Instant::now() - select_start);
+                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
+            }
             c_permit = c_sender.reserve() => {
                 info!("Ready to send C's after {:?}", Instant::now() - select_start);
                 let c = waiting_c.pop_front();
@@ -1001,14 +1020,6 @@ async fn main() {
                     info!("Restarting PRP search: reached maximum starting index");
                     prp_start = 0;
                 }
-            }
-            u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
-            }
-            _ = sigterm.recv() => {
-                warn!("Received SIGTERM; exiting");
-                exit(0);
             }
         }
     }
