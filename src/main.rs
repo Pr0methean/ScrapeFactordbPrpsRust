@@ -1234,7 +1234,7 @@ async fn find_and_submit_factors(
         get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors)
             .await;
     }
-    let mut dest_subfactors: BTreeSet<CompactString> = BTreeSet::new();
+    let mut dest_factors: BTreeSet<CompactString> = BTreeSet::new();
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
@@ -1272,7 +1272,7 @@ async fn find_and_submit_factors(
                 Err(()) => {
                     let mut dest_subfactors_do_not_divide = true;
                     let mut submitted_to_subfactor = false;
-                    for dest_subfactor in dest_subfactors.iter() {
+                    for dest_subfactor in dest_factors.iter() {
                         match try_report_factor(http, Expression(dest_subfactor.as_str()), factor)
                             .await
                         {
@@ -1330,12 +1330,12 @@ async fn find_and_submit_factors(
             }
             if already_known_factors.len() > 1 {
                 let mut already_submitted_elsewhere = 0usize;
-                for factor in already_known_factors {
+                for factor in already_known_factors.into_iter().rev() {
                     let prev_handling = all_factors.get(&factor);
                     let prev_unknown = prev_handling.is_none();
                     if prev_handling != Some(&AlreadySubmitted) {
                         if let Factor::String(ref s) = factor {
-                            dest_subfactors.insert(s.clone());
+                            dest_factors.insert(s.clone());
                             iters_without_progress = 0;
                         }
                         all_factors.insert(factor, AlreadySubmitted);
