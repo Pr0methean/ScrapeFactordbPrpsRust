@@ -931,8 +931,8 @@ async fn handle_signals(
         .expect("Error signaling do_checks task to exit");
 }
 
-// One worker thread for do_checks, one for handle_signals
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+// One worker thread for do_checks(), one for handle_signals(), one for main()
+#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 async fn main() {
     let (do_checks_termination_sender, do_checks_termination_receiver) = oneshot::channel();
     let (main_termination_sender, mut main_termination_receiver) = oneshot::channel();
