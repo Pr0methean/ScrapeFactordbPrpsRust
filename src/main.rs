@@ -65,9 +65,6 @@ const C_MAX_DIGITS: u128 = 300;
 
 const U_MIN_DIGITS: u128 = 2001;
 const U_MAX_DIGITS: u128 = 199_999;
-const PRP_SEARCH_URL_BASE: &str = formatcp!(
-    "https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={PRP_RESULTS_PER_PAGE}&start="
-);
 const U_SEARCH_URL_BASE: &str =
     formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
 const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 5;
@@ -850,13 +847,13 @@ async fn queue_composites(
         ).await;
         if composites_page.is_none() {
             results_per_page >>= 1;
-            sleep(RETRY_DELAY).await;
+            sleep(SEARCH_RETRY_DELAY).await;
         }
     }
+    info!("{results_per_page} C search results retrieved");
     let Some(composites_page) = composites_page else {
         return 0;
     };
-    info!("C search results retrieved");
     let c_ids = id_and_expr_regex
         .captures_iter(&composites_page)
         .flat_map(|capture| {
@@ -1030,7 +1027,7 @@ async fn main() {
         id_and_expr_regex.clone(),
         do_checks_termination_receiver,
     ));
-    loop {
+    'queue_tasks: loop {
         let select_start = Instant::now();
         select! {
             biased;
@@ -1040,9 +1037,22 @@ async fn main() {
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
                 info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
-                let prp_search_url = format!("{PRP_SEARCH_URL_BASE}{prp_start}");
-                let results_text = http.retrying_get_and_decode(&prp_search_url, SEARCH_RETRY_DELAY).await;
-                info!("PRP search results retrieved");
+                let mut results_per_page = PRP_RESULTS_PER_PAGE;
+                let mut results_text = None;
+                while results_text.is_none() && results_per_page > 0 {
+                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}");
+                    let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
+                        sleep(SEARCH_RETRY_DELAY).await;
+                        results_per_page >>= 1;
+                        continue;
+                    };
+                    results_text = Some(text);
+                    break;
+                }
+                info!("{results_per_page} PRP search results retrieved");
+                let Some(results_text) = results_text else {
+                    continue 'queue_tasks;
+                };
                 let mut prp_permits = prp_permits.unwrap();
                 for prp_id in id_regex
                     .captures_iter(&results_text)
