@@ -1403,6 +1403,7 @@ async fn find_and_submit_factors(
                         continue;
                     }
                     if *factor == dest_factor {
+                        **subfactor_handling = AlreadySubmitted;
                         continue;
                     }
                     match try_report_factor(
