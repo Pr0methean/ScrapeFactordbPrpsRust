@@ -461,6 +461,7 @@ async fn do_checks(
     id_and_expr_regex: Regex,
     mut termination_receiver: Receiver<()>,
 ) {
+    info!("do_checks task starting");
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
@@ -828,12 +829,37 @@ async fn queue_composites(
     c_sent
 }
 
-#[tokio::main]
-async fn main() {
+async fn handle_signals(
+    do_checks_termination_sender: oneshot::Sender<()>,
+    main_termination_sender: oneshot::Sender<()>,
+    installed_sender: oneshot::Sender<()>,
+) {
     let mut sigterm =
         signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
     let mut sigint =
         signal(SignalKind::interrupt()).expect("Failed to create SIGINT signal stream");
+    info!("Signal handlers installed");
+    installed_sender.send(()).expect("Error signaling main task that signal handlers are installed");
+    select! {
+        _ = sigterm.recv() => {
+            warn!("Received SIGTERM; signaling tasks to exit");
+        },
+        _ = sigint.recv() => {
+            warn!("Received SIGINT; signaling tasks to exit");
+        }
+    }
+    main_termination_sender.send(()).expect("Error signaling main task to exit");
+    do_checks_termination_sender.send(()).expect("Error signaling do_checks task to exit");
+}
+
+// One worker thread for do_checks, one for handle_signals
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+async fn main() {
+    let (do_checks_termination_sender, do_checks_termination_receiver) = oneshot::channel();
+    let (main_termination_sender, mut main_termination_receiver) = oneshot::channel();
+    let (installed_sender, installed_receiver) = oneshot::channel();
+    task::spawn(handle_signals(do_checks_termination_sender, main_termination_sender, installed_sender));
+    installed_receiver.await.unwrap();
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -921,7 +947,6 @@ async fn main() {
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
     let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
-    let (termination_sender, termination_receiver) = oneshot::channel();
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
@@ -930,20 +955,14 @@ async fn main() {
         http.clone(),
         factor_finder.clone(),
         id_and_expr_regex.clone(),
-        termination_receiver,
+        do_checks_termination_receiver,
     ));
     loop {
         let select_start = Instant::now();
         select! {
             biased;
-            _ = sigterm.recv() => {
-                warn!("Received SIGTERM; signaling do_checks thread to exit");
-                termination_sender.send(()).unwrap();
-                return;
-            }
-            _ = sigint.recv() => {
-                warn!("Received SIGINT; signaling do_checks thread to exit");
-                termination_sender.send(()).unwrap();
+            _ = &mut main_termination_receiver => {
+                warn!("Received termination signal; exiting");
                 return;
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
