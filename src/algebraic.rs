@@ -1019,7 +1019,8 @@ impl FactorFinder {
                                         if factors.is_empty() {
                                             info!("Evaluated {expr} as {anbc}");
                                         } else {
-                                            info!("Evaluated {expr} as {}*{anbc}",
+                                            info!(
+                                                "Evaluated {expr} as {}*{anbc}",
                                                 factors.iter().join("*"),
                                             );
                                         }
