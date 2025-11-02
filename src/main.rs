@@ -9,8 +9,8 @@ mod algebraic;
 mod channel;
 mod net;
 
-use std::cmp::PartialEq;
 use crate::NumberSpecifier::{Expression, Id};
+use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById, Irreducible};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
@@ -30,6 +30,7 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::PartialEq;
 use std::collections::btree_map::Entry::Vacant;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::File;
@@ -47,7 +48,6 @@ use tokio::sync::oneshot::Receiver;
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -343,7 +343,7 @@ async fn get_prp_remaining_bases(
                             prove_by_nm1(id, http).await;
                             return Ok(U256::from(0));
                         }
-                        Accepted => {},
+                        Accepted => {}
                         _ => {
                             error!("{id}: Factor of 2 rejected for N-1 (ID {nm1_id})")
                         }
@@ -369,7 +369,7 @@ async fn get_prp_remaining_bases(
                                 return Ok(U256::from(0));
                             }
                             Accepted => nm1_divides_3 = true,
-                            _ => {},
+                            _ => {}
                         }
                     }
                 }
@@ -399,7 +399,7 @@ async fn get_prp_remaining_bases(
                             prove_by_nm1(id, http).await;
                             return Ok(U256::from(0));
                         }
-                        Accepted => {},
+                        Accepted => {}
                         _ => {
                             error!("{id}: Factor of 2 rejected for N+1 (ID {np1_id})")
                         }
@@ -407,7 +407,7 @@ async fn get_prp_remaining_bases(
                     if !nm1_divides_3 {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
                         match report_factor(http, np1_id, &Numeric(3)).await {
-                            Accepted => {},
+                            Accepted => {}
                             AlreadyFullyFactored => {
                                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                                 prove_by_np1(id, http).await;
@@ -428,7 +428,7 @@ async fn get_prp_remaining_bases(
                     {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
                         match report_factor(http, np1_id, &Numeric(3)).await {
-                            Accepted => {},
+                            Accepted => {}
                             AlreadyFullyFactored => {
                                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                                 prove_by_np1(id, http).await;
@@ -912,7 +912,9 @@ async fn handle_signals(
     let mut sigint =
         signal(SignalKind::interrupt()).expect("Failed to create SIGINT signal stream");
     info!("Signal handlers installed");
-    installed_sender.send(()).expect("Error signaling main task that signal handlers are installed");
+    installed_sender
+        .send(())
+        .expect("Error signaling main task that signal handlers are installed");
     select! {
         _ = sigterm.recv() => {
             warn!("Received SIGTERM; signaling tasks to exit");
@@ -921,8 +923,12 @@ async fn handle_signals(
             warn!("Received SIGINT; signaling tasks to exit");
         }
     }
-    main_termination_sender.send(()).expect("Error signaling main task to exit");
-    do_checks_termination_sender.send(()).expect("Error signaling do_checks task to exit");
+    main_termination_sender
+        .send(())
+        .expect("Error signaling main task to exit");
+    do_checks_termination_sender
+        .send(())
+        .expect("Error signaling do_checks task to exit");
 }
 
 // One worker thread for do_checks, one for handle_signals
@@ -931,7 +937,11 @@ async fn main() {
     let (do_checks_termination_sender, do_checks_termination_receiver) = oneshot::channel();
     let (main_termination_sender, mut main_termination_receiver) = oneshot::channel();
     let (installed_sender, installed_receiver) = oneshot::channel();
-    task::spawn(handle_signals(do_checks_termination_sender, main_termination_sender, installed_sender));
+    task::spawn(handle_signals(
+        do_checks_termination_sender,
+        main_termination_sender,
+        installed_sender,
+    ));
     installed_receiver.await.unwrap();
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
@@ -1206,7 +1216,7 @@ enum ReportFactorResult {
     Accepted,
     DoesNotDivide,
     AlreadyFullyFactored,
-    OtherError
+    OtherError,
 }
 
 async fn try_report_factor(
@@ -1256,7 +1266,11 @@ async fn try_report_factor(
     OtherError
 }
 
-async fn report_factor(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> ReportFactorResult {
+async fn report_factor(
+    http: &ThrottlingHttpClient,
+    u_id: u128,
+    factor: &Factor,
+) -> ReportFactorResult {
     for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
         let result = try_report_factor(http, Id(u_id), factor).await;
         if result != OtherError {
@@ -1426,7 +1440,9 @@ async fn find_and_submit_factors(
                     }
                 }
             }
-            remove_dest_factors.into_iter().rev().for_each(|factor| { dest_factors.remove(&factor); });
+            remove_dest_factors.into_iter().rev().for_each(|factor| {
+                dest_factors.remove(&factor);
+            });
             for (index, (factor, subfactor_handling)) in
                 try_with_dest_factors.into_iter().enumerate()
             {
