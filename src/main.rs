@@ -1371,7 +1371,7 @@ async fn find_and_submit_factors(
                     accepted_this_iter += 1;
                     iters_without_progress = 0;
                     *subfactor_handling = AlreadySubmitted;
-                    if let Factor::String(_) = factor {
+                    if let Factor::String(_) = factor && !former_dest_factors.contains(factor) {
                         dest_factors.insert(factor.clone());
                     }
                 }
@@ -1396,9 +1396,7 @@ async fn find_and_submit_factors(
                     }
                 }
                 OtherError => {
-                    if !dest_factors.is_empty() {
-                        try_with_dest_factors.push((factor, subfactor_handling));
-                    }
+                    try_with_dest_factors.push((factor, subfactor_handling));
                 }
             }
         }
@@ -1429,7 +1427,7 @@ async fn find_and_submit_factors(
                         Accepted => {
                             **subfactor_handling = AlreadySubmitted;
                             accepted_this_iter += 1;
-                            if let Factor::String(_) = factor {
+                            if let Factor::String(_) = factor && !former_dest_factors.contains(factor) {
                                 new_dest_factors.push((*factor).clone());
                             }
                         }
@@ -1468,9 +1466,10 @@ async fn find_and_submit_factors(
                     errors_this_iter += 1;
                 }
             }
+            new_dest_factors.retain(|factor| !former_dest_factors.contains(factor));
             dest_factors.extend(new_dest_factors);
         }
-        new_subfactors.retain(|key, _| !all_factors.contains_key(key) && !former_dest_factors.contains(key));
+        new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         if new_subfactors.is_empty() && errors_this_iter == 0 {
             info!(
                 "{id}: Final iteration: {accepted_this_iter} factors accepted, \
@@ -1491,7 +1490,7 @@ async fn find_and_submit_factors(
                 for factor in already_known_factors.into_iter().rev() {
                     let prev_handling = all_factors.get(&factor);
                     if prev_handling != Some(&AlreadySubmitted) {
-                        if let Factor::String(_) = factor {
+                        if let Factor::String(_) = factor && !former_dest_factors.contains(&factor) {
                             dest_factors.insert(factor.clone());
                             iters_without_progress = 0;
                         }
