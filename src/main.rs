@@ -9,6 +9,7 @@ mod algebraic;
 mod channel;
 mod net;
 
+use std::cmp::PartialEq;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById, Irreducible};
 use crate::UnknownPrpCheckResult::{
@@ -46,6 +47,7 @@ use tokio::sync::oneshot::Receiver;
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -234,7 +236,7 @@ async fn check_composite(
                         } else {
                             (id, false)
                         };
-                    factors_found |= find_and_submit_factors(
+                    if find_and_submit_factors(
                         http,
                         id_for_submission,
                         s,
@@ -244,8 +246,19 @@ async fn check_composite(
                         !may_have_separate_listed_algebraic,
                     )
                     .await
-                        || (*subfactor_handling != AlreadySubmitted
-                            && report_factor_of_u(http, id, factor).await);
+                    {
+                        factors_found = true;
+                    } else if *subfactor_handling != AlreadySubmitted {
+                        let result = report_factor(http, id, factor).await;
+                        match result {
+                            Accepted => factors_found = true,
+                            AlreadyFullyFactored => {
+                                warn!("{id}: C already fully factored");
+                                return true;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             if factors_found {
@@ -318,23 +331,47 @@ async fn get_prp_remaining_bases(
             match nm1_factors.len() {
                 0 => {
                     info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                    let _ = http
-                        .retrying_get_and_decode(
-                            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
-                            RETRY_DELAY,
-                        )
-                        .await;
+                    prove_by_nm1(id, http).await;
                     return Ok(U256::from(0));
                 }
                 1 => {
                     // no known factors, but N-1 must be even if N is PRP
-                    report_factor_of_u(http, nm1_id, &Numeric(2)).await;
-                    nm1_divides_3 = report_factor_of_u(http, nm1_id, &Numeric(3)).await;
+                    let report_2_result = report_factor(http, nm1_id, &Numeric(2)).await;
+                    match report_2_result {
+                        AlreadyFullyFactored => {
+                            info!("{id}: N-1 (ID {nm1_id}) is fully factored");
+                            prove_by_nm1(id, http).await;
+                            return Ok(U256::from(0));
+                        }
+                        Accepted => {},
+                        _ => {
+                            error!("{id}: Factor of 2 rejected for N-1 (ID {nm1_id})")
+                        }
+                    }
+                    nm1_divides_3 = match report_factor(http, nm1_id, &Numeric(3)).await {
+                        AlreadyFullyFactored => {
+                            info!("{id}: N-1 (ID {nm1_id}) is fully factored");
+                            prove_by_nm1(id, http).await;
+                            return Ok(U256::from(0));
+                        }
+                        Accepted => true,
+                        _ => false,
+                    }
                 }
                 _ => {
-                    nm1_divides_3 = nm1_factors[0] == Numeric(3)
-                        || nm1_factors[1] == Numeric(3)
-                        || report_factor_of_u(http, nm1_id, &Numeric(3)).await;
+                    if nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3) {
+                        nm1_divides_3 = true;
+                    } else {
+                        match report_factor(http, nm1_id, &Numeric(3)).await {
+                            AlreadyFullyFactored => {
+                                info!("{id}: N-1 (ID {nm1_id}) is fully factored");
+                                prove_by_nm1(id, http).await;
+                                return Ok(U256::from(0));
+                            }
+                            Accepted => nm1_divides_3 = true,
+                            _ => {},
+                        }
+                    }
                 }
             }
         }
@@ -350,25 +387,37 @@ async fn get_prp_remaining_bases(
             match np1_factors.len() {
                 0 => {
                     info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                    let _ = http
-                        .retrying_get_and_decode(
-                            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
-                            RETRY_DELAY,
-                        )
-                        .await;
+                    prove_by_np1(id, http).await;
                     return Ok(U256::from(0));
                 }
                 1 => {
                     // no known factors, but N+1 must be even if N is PRP
-                    report_factor_of_u(http, np1_id, &Numeric(2)).await;
+                    let report_2_result = report_factor(http, np1_id, &Numeric(2)).await;
+                    match report_2_result {
+                        AlreadyFullyFactored => {
+                            info!("{id}: N+1 (ID {np1_id}) is fully factored");
+                            prove_by_nm1(id, http).await;
+                            return Ok(U256::from(0));
+                        }
+                        Accepted => {},
+                        _ => {
+                            error!("{id}: Factor of 2 rejected for N+1 (ID {np1_id})")
+                        }
+                    }
                     if !nm1_divides_3 {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await
-                            && let Some(nm1_id) = nm1_id_if_available
-                        {
-                            error!(
-                                "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})"
-                            );
+                        match report_factor(http, np1_id, &Numeric(3)).await {
+                            Accepted => {},
+                            AlreadyFullyFactored => {
+                                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                                prove_by_np1(id, http).await;
+                                return Ok(U256::from(0));
+                            }
+                            _ => {
+                                error!(
+                                    "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id_if_available:?}) and N+1 (ID {np1_id})"
+                                );
+                            }
                         }
                     }
                 }
@@ -378,12 +427,18 @@ async fn get_prp_remaining_bases(
                         && np1_factors[1] != Numeric(3)
                     {
                         // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        if !report_factor_of_u(http, np1_id, &Numeric(3)).await
-                            && let Some(nm1_id) = nm1_id_if_available
-                        {
-                            error!(
-                                "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id}) and N+1 (ID {np1_id})"
-                            );
+                        match report_factor(http, np1_id, &Numeric(3)).await {
+                            Accepted => {},
+                            AlreadyFullyFactored => {
+                                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                                prove_by_np1(id, http).await;
+                                return Ok(U256::from(0));
+                            }
+                            _ => {
+                                error!(
+                                    "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id_if_available:?}) and N+1 (ID {np1_id})"
+                                );
+                            }
                         }
                     }
                 }
@@ -439,6 +494,24 @@ async fn get_prp_remaining_bases(
         info!("{id}: all bases already checked");
     }
     Ok(bases_left)
+}
+
+async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
+    let _ = http
+        .retrying_get_and_decode(
+            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
+            RETRY_DELAY,
+        )
+        .await;
+}
+
+async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
+    let _ = http
+        .retrying_get_and_decode(
+            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+            RETRY_DELAY,
+        )
+        .await;
 }
 
 const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
@@ -1128,11 +1201,19 @@ async fn try_queue_unknowns<'a>(
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum ReportFactorResult {
+    Accepted,
+    DoesNotDivide,
+    AlreadyFullyFactored,
+    OtherError
+}
+
 async fn try_report_factor(
     http: &ThrottlingHttpClient,
     u_id: NumberSpecifier<'_>,
     factor: &Factor,
-) -> Result<bool, ()> {
+) -> ReportFactorResult {
     match http
         .post("https://factordb.com/reportfactor.php")
         .form(&FactorSubmission {
@@ -1153,9 +1234,13 @@ async fn try_report_factor(
                 Ok(text) => {
                     info!("{u_id:?}: reported a factor of {factor}; response: {text}",);
                     return if text.contains("Error") {
-                        Err(())
+                        OtherError
+                    } else if text.contains("submitted") {
+                        Accepted
+                    } else if text.contains("fully factored") {
+                        AlreadyFullyFactored
                     } else {
-                        Ok(text.contains("submitted"))
+                        DoesNotDivide
                     };
                 }
                 Err(e) => {
@@ -1168,12 +1253,13 @@ async fn try_report_factor(
         }
     }
     sleep(RETRY_DELAY).await;
-    Err(())
+    OtherError
 }
 
-async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> bool {
+async fn report_factor(http: &ThrottlingHttpClient, u_id: u128, factor: &Factor) -> ReportFactorResult {
     for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-        if let Ok(result) = try_report_factor(http, Id(u_id), factor).await {
+        let result = try_report_factor(http, Id(u_id), factor).await;
+        if result != OtherError {
             return result;
         }
     }
@@ -1187,7 +1273,7 @@ async fn report_factor_of_u(http: &ThrottlingHttpClient, u_id: u128, factor: &Fa
         Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
         Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
     }
-    true // factor that we failed to submit may still have been valid
+    OtherError // factor that we failed to submit may still have been valid
 }
 
 #[derive(PartialEq, Eq)]
@@ -1264,7 +1350,8 @@ async fn find_and_submit_factors(
                 continue;
             }
             match try_report_factor(http, Id(id), factor).await {
-                Ok(true) => {
+                AlreadyFullyFactored => return true,
+                Accepted => {
                     accepted_factors = true;
                     accepted_this_iter += 1;
                     iters_without_progress = 0;
@@ -1273,7 +1360,7 @@ async fn find_and_submit_factors(
                         dest_factors.insert(factor.clone());
                     }
                 }
-                Ok(false) => {
+                DoesNotDivide => {
                     if dest_factors.is_empty() {
                         did_not_divide_this_iter += 1;
                         if try_subfactors {
@@ -1293,7 +1380,7 @@ async fn find_and_submit_factors(
                         try_with_dest_factors.push((factor, subfactor_handling));
                     }
                 }
-                Err(()) => {
+                OtherError => {
                     if !dest_factors.is_empty() {
                         try_with_dest_factors.push((factor, subfactor_handling));
                     }
@@ -1303,7 +1390,8 @@ async fn find_and_submit_factors(
         if !dest_factors.is_empty() {
             let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
             let mut new_dest_factors = Vec::new();
-            for dest_factor in dest_factors.iter() {
+            let mut remove_dest_factors = Vec::new();
+            'per_factor: for dest_factor in dest_factors.iter() {
                 for (index, (factor, subfactor_handling)) in
                     try_with_dest_factors.iter_mut().enumerate()
                 {
@@ -1320,27 +1408,32 @@ async fn find_and_submit_factors(
                     )
                     .await
                     {
-                        Ok(true) => {
+                        AlreadyFullyFactored => {
+                            remove_dest_factors.push(dest_factor.clone());
+                            break 'per_factor;
+                        }
+                        Accepted => {
                             **subfactor_handling = AlreadySubmitted;
                             accepted_this_iter += 1;
                             if let Factor::String(_) = factor {
                                 new_dest_factors.push((*factor).clone());
                             }
                         }
-                        Ok(false) => {
+                        DoesNotDivide => {
                             did_not_divide[index] += 1;
                         }
-                        Err(()) => {}
+                        OtherError => {}
                     }
                 }
             }
+            remove_dest_factors.into_iter().rev().for_each(|factor| { dest_factors.remove(&factor); });
             for (index, (factor, subfactor_handling)) in
                 try_with_dest_factors.into_iter().enumerate()
             {
                 if *subfactor_handling == AlreadySubmitted {
                     continue;
                 }
-                if did_not_divide[index] == dest_factors.len() {
+                if did_not_divide[index] >= dest_factors.len() {
                     *subfactor_handling = AlreadySubmitted;
                     did_not_divide_this_iter += 1;
                     if try_subfactors {
