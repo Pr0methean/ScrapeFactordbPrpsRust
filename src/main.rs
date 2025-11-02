@@ -1466,6 +1466,7 @@ async fn find_and_submit_factors(
                     errors_this_iter += 1;
                 }
             }
+            drop(did_not_divide);
             new_dest_factors.retain(|factor| !former_dest_factors.contains(factor));
             dest_factors.extend(new_dest_factors);
         }
