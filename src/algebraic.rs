@@ -1016,10 +1016,13 @@ impl FactorFinder {
                                         )
                                     };
                                     if let Some(anbc) = anbc_u128 {
-                                        info!(
-                                            "Evaluated {expr} as {}*{anbc}",
-                                            factors.iter().join("*")
-                                        );
+                                        if factors.is_empty() {
+                                            info!("Evaluated {expr} as {anbc}");
+                                        } else {
+                                            info!("Evaluated {expr} as {}*{anbc}",
+                                                factors.iter().join("*"),
+                                            );
+                                        }
                                         factors.extend(self.find_factors(&Numeric(anbc)));
                                         return factors;
                                     }
