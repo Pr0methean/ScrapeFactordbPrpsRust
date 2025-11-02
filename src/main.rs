@@ -320,7 +320,11 @@ async fn get_prp_remaining_bases(
         info!("{id}: No longer PRP");
     }
     let mut nm1_id_if_available = None;
-    let mut nm1_divides_3 = false;
+    let mut nm1_known_to_divide_2 = false;
+    let mut nm1_known_to_divide_3 = false;
+    let mut np1_id_if_available = None;
+    let mut np1_known_to_divide_2 = false;
+    let mut np1_known_to_divide_3 = false;
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
         nm1_id_if_available = Some(nm1_id);
@@ -336,42 +340,10 @@ async fn get_prp_remaining_bases(
                 }
                 1 => {
                     // no known factors, but N-1 must be even if N is PRP
-                    let report_2_result = report_factor(http, nm1_id, &Numeric(2)).await;
-                    match report_2_result {
-                        AlreadyFullyFactored => {
-                            info!("{id}: N-1 (ID {nm1_id}) is fully factored");
-                            prove_by_nm1(id, http).await;
-                            return Ok(U256::from(0));
-                        }
-                        Accepted => {}
-                        _ => {
-                            error!("{id}: Factor of 2 rejected for N-1 (ID {nm1_id})")
-                        }
-                    }
-                    nm1_divides_3 = match report_factor(http, nm1_id, &Numeric(3)).await {
-                        AlreadyFullyFactored => {
-                            info!("{id}: N-1 (ID {nm1_id}) is fully factored");
-                            prove_by_nm1(id, http).await;
-                            return Ok(U256::from(0));
-                        }
-                        Accepted => true,
-                        _ => false,
-                    }
                 }
                 _ => {
-                    if nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3) {
-                        nm1_divides_3 = true;
-                    } else {
-                        match report_factor(http, nm1_id, &Numeric(3)).await {
-                            AlreadyFullyFactored => {
-                                info!("{id}: N-1 (ID {nm1_id}) is fully factored");
-                                prove_by_nm1(id, http).await;
-                                return Ok(U256::from(0));
-                            }
-                            Accepted => nm1_divides_3 = true,
-                            _ => {}
-                        }
-                    }
+                    nm1_known_to_divide_2 = nm1_factors[0] == Numeric(2);
+                    nm1_known_to_divide_3 = nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3);
                 }
             }
         }
@@ -380,6 +352,7 @@ async fn get_prp_remaining_bases(
     }
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
+        np1_id_if_available = Some(np1_id);
         let np1_result = factor_finder
             .known_factors_as_digits(http, Id(np1_id), false)
             .await;
@@ -392,60 +365,72 @@ async fn get_prp_remaining_bases(
                 }
                 1 => {
                     // no known factors, but N+1 must be even if N is PRP
-                    let report_2_result = report_factor(http, np1_id, &Numeric(2)).await;
-                    match report_2_result {
-                        AlreadyFullyFactored => {
-                            info!("{id}: N+1 (ID {np1_id}) is fully factored");
-                            prove_by_nm1(id, http).await;
-                            return Ok(U256::from(0));
-                        }
-                        Accepted => {}
-                        _ => {
-                            error!("{id}: Factor of 2 rejected for N+1 (ID {np1_id})")
-                        }
-                    }
-                    if !nm1_divides_3 {
-                        // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        match report_factor(http, np1_id, &Numeric(3)).await {
-                            Accepted => {}
-                            AlreadyFullyFactored => {
-                                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                prove_by_np1(id, http).await;
-                                return Ok(U256::from(0));
-                            }
-                            _ => {
-                                error!(
-                                    "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id_if_available:?}) and N+1 (ID {np1_id})"
-                                );
-                            }
-                        }
-                    }
                 }
                 _ => {
-                    if !nm1_divides_3
-                        && np1_factors[0] != Numeric(3)
-                        && np1_factors[1] != Numeric(3)
-                    {
-                        // N wouldn't be PRP if it divided 3, so if N-1 doesn't divide 3 then N+1 does
-                        match report_factor(http, np1_id, &Numeric(3)).await {
-                            Accepted => {}
-                            AlreadyFullyFactored => {
-                                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                prove_by_np1(id, http).await;
-                                return Ok(U256::from(0));
-                            }
-                            _ => {
-                                error!(
-                                    "{id}: N is PRP, but 3 rejected as factor of both N-1 (ID {nm1_id_if_available:?}) and N+1 (ID {np1_id})"
-                                );
-                            }
-                        }
-                    }
+                    np1_known_to_divide_2 = np1_factors[0] == Numeric(2);
+                    np1_known_to_divide_3 = np1_factors[0] == Numeric(3) || np1_factors[1] == Numeric(3);
                 }
             }
         }
     } else {
         error!("{id}: N+1 ID not found: {bases_text}");
+    }
+    if let Some(nm1_id) = nm1_id_if_available {
+        if !nm1_known_to_divide_2 {
+            // N wouldn't be PRP if it was even, so N-1 must be even
+            match report_factor(http, nm1_id, &Numeric(2)).await {
+                AlreadyFullyFactored => {
+                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+                    prove_by_nm1(id, http).await;
+                    return Ok(U256::from(0));
+                }
+                Accepted => {},
+                _ => {
+                    error!("{id}: PRP, but factor of 2 was rejected for N-1 (id {nm1_id})");
+                }
+            }
+        }
+    }
+    if let Some(np1_id) = np1_id_if_available {
+        if !np1_known_to_divide_2 {
+            // N wouldn't be PRP if it was even, so N+1 must be even
+            match report_factor(http, np1_id, &Numeric(2)).await {
+                AlreadyFullyFactored => {
+                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                    prove_by_np1(id, http).await;
+                    return Ok(U256::from(0));
+                }
+                Accepted => {},
+                _ => {
+                    error!("{id}: PRP, but factor of 2 was rejected for N+1 (id {np1_id})");
+                }
+            }
+        }
+    }
+    if let Some(nm1_id) = nm1_id_if_available && let Some(np1_id) = np1_id_if_available
+            && !nm1_known_to_divide_3 && !np1_known_to_divide_3 {
+        // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
+        match report_factor(http, nm1_id, &Numeric(3)).await {
+            AlreadyFullyFactored => {
+                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+                prove_by_nm1(id, http).await;
+                return Ok(U256::from(0));
+            }
+            Accepted => {},
+            _ => {
+                match report_factor(http, np1_id, &Numeric(3)).await {
+                    AlreadyFullyFactored => {
+                        info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                        prove_by_np1(id, http).await;
+                        return Ok(U256::from(0));
+                    }
+                    Accepted => {},
+                    _ => {
+                        error!("{id}: PRP, but factor of 3 was rejected for both N-1 (id {nm1_id}) and N+1 (id {np1_id})");
+                    }
+                }
+            }
+        }
     }
     let status_text = http
         .retrying_get_and_decode(
