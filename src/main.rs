@@ -1351,6 +1351,7 @@ async fn find_and_submit_factors(
             .await;
     }
     let mut dest_factors: BTreeSet<Factor> = BTreeSet::new();
+    let mut former_dest_factors = BTreeSet::new();
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
@@ -1401,7 +1402,6 @@ async fn find_and_submit_factors(
                 }
             }
         }
-        let mut remove_dest_factors = Vec::new();
         if !dest_factors.is_empty() {
             let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
             let mut new_dest_factors = Vec::new();
@@ -1423,7 +1423,7 @@ async fn find_and_submit_factors(
                     .await
                     {
                         AlreadyFullyFactored => {
-                            remove_dest_factors.push(dest_factor.clone());
+                            former_dest_factors.insert(dest_factor.clone());
                             break 'per_factor;
                         }
                         Accepted => {
@@ -1440,7 +1440,7 @@ async fn find_and_submit_factors(
                     }
                 }
             }
-            remove_dest_factors.iter().rev().for_each(|factor| {
+            former_dest_factors.iter().rev().for_each(|factor| {
                 dest_factors.remove(&factor);
             });
             for (index, (factor, subfactor_handling)) in
@@ -1470,8 +1470,7 @@ async fn find_and_submit_factors(
             }
             dest_factors.extend(new_dest_factors);
         }
-        new_subfactors.retain(|key, _| !all_factors.contains_key(key) && !remove_dest_factors.contains(key));
-        drop(remove_dest_factors);
+        new_subfactors.retain(|key, _| !all_factors.contains_key(key) && !former_dest_factors.contains(key));
         if new_subfactors.is_empty() && errors_this_iter == 0 {
             info!(
                 "{id}: Final iteration: {accepted_this_iter} factors accepted, \
