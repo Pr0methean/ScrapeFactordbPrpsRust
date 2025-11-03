@@ -32,6 +32,10 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0 # Needed for git-restore-mtime-action
+    - name: Restore timestamps # Prevents an unnecessary rebuild
+      uses: chetan/git-restore-mtime-action@v2
     - name: Cache Cargo dependencies
       uses: actions/cache@v4
       with:
