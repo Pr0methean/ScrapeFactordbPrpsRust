@@ -36,22 +36,6 @@ jobs:
         fetch-depth: 0 # Needed for git-restore-mtime-action
     - name: Restore timestamps # Prevents an unnecessary rebuild
       uses: chetan/git-restore-mtime-action@v2
-    - name: Cache Cargo dependencies
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo
-        key: cargo-${{ hashFiles('.github/workflows/rust.yml', '**/Cargo.toml') }}
-        restore-keys: |
-          cargo-
-    - name: Cache build
-      uses: actions/cache@v4
-      with:
-        path: |
-          target
-          Cargo.lock
-        key: target-${{ hashFiles('.github/workflows/rust.yml', '**/*.rs') }}
-        restore-keys: |
-          target-
     - name: Let tar run as root
       run: sudo chown root /bin/tar && sudo chmod u+s /bin/tar
     - name: Cache apt/dpkg
@@ -64,6 +48,8 @@ jobs:
           /var/lib/dpkg/status
         key: dpkg-ecm-2025-10-13
     - run: rustup install nightly
+    - name: Cache build
+      uses: Swatinem/rust-cache@v2
     - name: Build
       run: |
         (
