@@ -60,7 +60,7 @@ const PRP_TASK_BUFFER_SIZE: usize = (4 * PRP_RESULTS_PER_PAGE) as usize;
 const U_TASK_BUFFER_SIZE: usize = 256;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 256;
-const C_MIN_DIGITS: u128 = 91;
+const C_MIN_DIGITS: u128 = 92;
 const C_MAX_DIGITS: u128 = 300;
 
 const U_MIN_DIGITS: u128 = 2001;
