@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::PartialEq;
 use std::collections::btree_map::Entry::Vacant;
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Write;
@@ -48,6 +48,7 @@ use tokio::sync::oneshot::Receiver;
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use tokio::task::JoinHandle;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -820,12 +821,11 @@ async fn throttle_if_necessary(
 }
 
 async fn queue_composites(
-    waiting_c: &mut VecDeque<CompositeCheckTask>,
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZeroU128>,
-) -> usize {
+) -> Option<JoinHandle<()>> {
     let mut c_sent = 0;
     let mut rng = rng();
     let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
@@ -851,42 +851,44 @@ async fn queue_composites(
         }
     }
     info!("{results_per_page} C search results retrieved");
-    let Some(composites_page) = composites_page else {
-        return 0;
-    };
-    let c_ids = id_and_expr_regex
-        .captures_iter(&composites_page)
+    let mut c_tasks: Box<[_]> = id_and_expr_regex
+        .captures_iter(&composites_page?)
         .flat_map(|capture| {
             Some(CompositeCheckTask {
                 id: capture[1].parse::<u128>().ok()?,
                 digits_or_expr: capture[2].into(),
             })
         })
-        .unique();
-    let mut c_buffered = 0usize;
-    for check_task in c_ids {
-        if let Err(Full(check_task)) = c_sender.try_send(check_task) {
-            waiting_c.push_back(check_task);
-            c_buffered += 1;
+        .unique()
+        .collect();
+    c_tasks.shuffle(&mut rng);
+    let mut c_buffered = Vec::with_capacity(c_tasks.len());
+    for c_task in c_tasks {
+        if let Err(Full(c_id)) = c_sender.try_send(c_task) {
+            c_buffered.push(c_id);
         } else {
             c_sent += 1;
         }
     }
-    if c_buffered > 0 {
-        let (a, b) = waiting_c.as_mut_slices();
-        a.shuffle(&mut rng);
-        b.shuffle(&mut rng);
-        info!("Shuffled C buffer");
+    if c_buffered.is_empty() {
+        info!("Sent {c_sent} C's to channel");
+        None
     } else {
-        while let Some(check_task) = waiting_c.pop_front() {
-            if let Err(Full(check_task)) = c_sender.try_send(check_task) {
-                waiting_c.push_front(check_task);
-                break;
+        info!("Sent {c_sent} C's to channel; buffering {} more", c_buffered.len());
+        let c_sender = c_sender.clone();
+        Some(task::spawn(async move {
+            let mut c_sent = 0;
+            for c_task in c_buffered {
+                let id = c_task.id;
+                if let Err(e) = c_sender.send(c_task).await {
+                    error!("{id}: Dropping C because we failed to send it to channel: {e}");
+                } else {
+                    c_sent += 1;
+                }
             }
-            c_sent += 1;
-        }
+            info!("Sent {c_sent} buffered C's to channel");
+        }))
     }
-    c_sent
 }
 
 async fn handle_signals(
@@ -979,6 +981,7 @@ async fn main() {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
+    let mut c_buffer_task = None;
     let mut config_builder = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -1016,7 +1019,6 @@ async fn main() {
         .await;
     let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
     let mut u_filter = InMemoryFilter::new(config).unwrap();
-    let mut waiting_c = VecDeque::with_capacity(C_RESULTS_PER_PAGE - 1);
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
@@ -1090,25 +1092,14 @@ async fn main() {
                 queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
             }
             c_permit = c_sender.reserve() => {
-                info!("Ready to send C's after {:?}", Instant::now() - select_start);
-                let c = waiting_c.pop_front();
-                let mut c_sent = 1usize;
-                match c {
-                    Some(c) => {
-                        c_permit.unwrap().send(c);
-                        while let Some(c) = waiting_c.pop_front() {
-                            if let Err(Full(c)) = c_sender.try_send(c) {
-                                waiting_c.push_front(c);
-                                break;
-                            }
-                            c_sent += 1;
-                        }
-                    }
-                    None => {
-                        c_sent = queue_composites(&mut waiting_c, &id_and_expr_regex, &http, &c_sender, c_digits).await;
-                    }
+                drop(c_permit);
+                if let Some(old_c_buffer_task) = c_buffer_task.take() {
+                    info!("Ready to send C's from buffer after {:?}", Instant::now() - select_start);
+                    let _ = old_c_buffer_task.await;
+                } else {
+                    info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
+                    c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
                 }
-                info!("{c_sent} C's sent to channel; {} now in buffer", waiting_c.len());
             }
         }
     }
