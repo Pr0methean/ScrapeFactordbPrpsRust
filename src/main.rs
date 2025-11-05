@@ -49,6 +49,7 @@ use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use tokio::runtime::Runtime;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -930,7 +931,8 @@ async fn main() -> anyhow::Result<()> {
     let (main_termination_sender, mut main_termination_receiver) = oneshot::channel();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
-    task::spawn(handle_signals(
+    let signal_handler_runtime = Runtime::new()?;
+    signal_handler_runtime.spawn(handle_signals(
         do_checks_termination_sender,
         main_termination_sender,
         installed_sender,
