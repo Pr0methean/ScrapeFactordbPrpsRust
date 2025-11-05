@@ -94,7 +94,7 @@ struct CheckTask {
     task_type: CheckTaskType,
 }
 
-#[derive(Clone, Eq)]
+#[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
     id: u128,
     digits_or_expr: CompactString,

@@ -1,13 +1,15 @@
+use std::fmt::Debug;
+use log::info;
 use tokio::select;
 use tokio::sync::mpsc::{OwnedPermit, Receiver, Sender, channel};
 
-pub struct PushbackReceiver<T> {
+pub struct PushbackReceiver<T: Debug> {
     receiver: Receiver<T>,
     return_sender: Sender<T>,
     return_receiver: Receiver<T>,
 }
 
-impl<T> PushbackReceiver<T> {
+impl<T: Debug> PushbackReceiver<T> {
     pub fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
         let (return_sender, return_receiver) = channel(sender.max_capacity());
         PushbackReceiver {
@@ -25,7 +27,9 @@ impl<T> PushbackReceiver<T> {
                 (result.unwrap(), return_permit)
             },
             result = self.return_receiver.recv() => {
-                (result.unwrap(), return_permit)
+                let result = result.unwrap();
+                info!("Receiving returned item: {:?}", result);
+                (result, return_permit)
             }
         }
     }
@@ -36,6 +40,7 @@ impl<T> PushbackReceiver<T> {
                 if let Ok(received) = self.receiver.try_recv() {
                     Some((received, return_permit))
                 } else if let Ok(received_return) = self.return_receiver.try_recv() {
+                    info!("Receiving returned item: {:?}", received_return);
                     Some((received_return, return_permit))
                 } else {
                     None
@@ -50,6 +55,7 @@ impl<T> PushbackReceiver<T> {
                     .clone()
                     .try_reserve_owned()
                     .expect("Failed to obtain a return permit after receiving a returned item");
+                info!("Receiving returned item: {:?}", received);
                 Some((received, return_permit))
             }
         }
