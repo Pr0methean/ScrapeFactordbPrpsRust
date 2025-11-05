@@ -11,7 +11,7 @@ pub struct PushbackReceiver<T: Debug> {
 
 impl<T: Debug> PushbackReceiver<T> {
     pub fn new(receiver: Receiver<T>, sender: &Sender<T>) -> Self {
-        let (return_sender, return_receiver) = channel(sender.max_capacity());
+        let (return_sender, return_receiver) = channel((sender.max_capacity() >> 2).max(2));
         PushbackReceiver {
             receiver,
             return_sender,
