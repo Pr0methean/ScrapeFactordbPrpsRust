@@ -20,6 +20,7 @@ use crate::algebraic::{Factor, FactorFinder};
 use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
+use cuckoofilter::CuckooFilter;
 use itertools::Itertools;
 use log::{error, info, warn};
 use net::ThrottlingHttpClient;
@@ -40,7 +41,7 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use cuckoofilter::CuckooFilter;
+use tokio::runtime::Runtime;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
@@ -49,7 +50,6 @@ use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use tokio::runtime::Runtime;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -212,8 +212,15 @@ async fn check_composite(
                 .collect();
             // Only look up listed algebraic factors once, since we only have the one ID and not the
             // IDs of any known factors
-            get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut factors, false)
-                .await;
+            get_known_algebraic_factors(
+                http,
+                id,
+                factor_finder,
+                id_and_expr_regex,
+                &mut factors,
+                false,
+            )
+            .await;
             let mut factors_found = false;
             for (factor, subfactor_handling) in factors.iter() {
                 if let Factor::String(s) = factor {
@@ -991,8 +998,7 @@ async fn main() -> anyhow::Result<()> {
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
     let mut c_buffer_task: Option<JoinHandle<()>> = None;
     if std::env::var("CI").is_ok() {
-        EXIT_TIME
-            .set(Instant::now().add(Duration::from_mins(355)))?;
+        EXIT_TIME.set(Instant::now().add(Duration::from_mins(355)))?;
         COMPOSITES_OUT
             .get_or_init(async || {
                 Mutex::new(File::options().append(true).open("composites").unwrap())
@@ -1001,8 +1007,7 @@ async fn main() -> anyhow::Result<()> {
         max_concurrent_requests = 3;
     }
     let c_filter = CuckooFilter::with_capacity(2500);
-    let id_and_expr_regex =
-        Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
+    let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
     let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests);
     FAILED_U_SUBMISSIONS_OUT
@@ -1340,8 +1345,15 @@ async fn find_and_submit_factors(
         }
     }
     if !skip_looking_up_listed_algebraic {
-        get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors, false)
-            .await;
+        get_known_algebraic_factors(
+            http,
+            id,
+            factor_finder,
+            id_and_expr_regex,
+            &mut all_factors,
+            false,
+        )
+        .await;
     }
     let mut dest_factors: BTreeSet<Factor> = BTreeSet::new();
     let mut former_dest_factors = BTreeSet::new();
@@ -1465,7 +1477,10 @@ async fn find_and_submit_factors(
             }
             dest_factors.extend(new_dest_factors);
             if !dest_factors.is_empty() {
-                info!("{id}: Currently trying {} destination factors", dest_factors.len());
+                info!(
+                    "{id}: Currently trying {} destination factors",
+                    dest_factors.len()
+                );
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
@@ -1572,7 +1587,7 @@ async fn try_find_subfactors(
                 factor_finder,
                 id_and_expr_regex,
                 new_subfactors,
-                true
+                true,
             )
             .await;
             Id(*factor_id)
@@ -1609,7 +1624,7 @@ async fn get_known_algebraic_factors(
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
     all_factors: &mut BTreeMap<Factor, SubfactorHandling>,
-    include_ff: bool
+    include_ff: bool,
 ) {
     info!("{id}: Checking for listed algebraic factors");
     // Links before the "Is factor of" header are algebraic factors; links after it aren't
