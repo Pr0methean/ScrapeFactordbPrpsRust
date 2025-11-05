@@ -1321,7 +1321,7 @@ impl FactorFinder {
                         factors.len(),
                         factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
-                    if !include_ff && status == "FF" {
+                    if !include_ff && (status == "FF" || status == "P") {
                         Ok(Box::new([]))
                     } else {
                         let factors: Vec<_> = factors
