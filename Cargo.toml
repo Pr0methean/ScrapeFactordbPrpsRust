@@ -9,14 +9,14 @@ codegen-units = 1
 
 [dependencies]
 reqwest = "0.12"
-tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time"] }
 regex = "1.12"
 primitive-types = "0.14"
 log = "0.4"
 itertools = "0.14"
 simple-log = "2.4"
 governor = "0.10"
-expiring-bloom-rs = "0.4"
+cuckoofilter = "0.5.0"
 const_format = "0.2"
 rand = "0.9"
 serde_json = "1.0"

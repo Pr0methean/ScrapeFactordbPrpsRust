@@ -20,7 +20,6 @@ use crate::algebraic::{Factor, FactorFinder};
 use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
-use expiring_bloom_rs::{ExpiringBloomFilter, FilterConfigBuilder, InMemoryFilter};
 use itertools::Itertools;
 use log::{error, info, warn};
 use net::ThrottlingHttpClient;
@@ -34,13 +33,14 @@ use std::cmp::PartialEq;
 use std::collections::btree_map::Entry::Vacant;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::hash::{Hash, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use cuckoofilter::CuckooFilter;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
@@ -132,7 +132,7 @@ async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
-    c_filter: &mut InMemoryFilter,
+    c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
 ) {
@@ -169,14 +169,14 @@ async fn composites_while_waiting(
 
 async fn check_composite(
     http: &ThrottlingHttpClient,
-    c_filter: &mut InMemoryFilter,
+    c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
     id: u128,
     digits_or_expr: CompactString,
     return_permit: OwnedPermit<CompositeCheckTask>,
 ) -> bool {
-    if c_filter.query(&id.to_ne_bytes()).unwrap() {
+    if c_filter.contains(&id) {
         info!("{id}: Skipping duplicate C");
         return true;
     }
@@ -304,7 +304,7 @@ async fn get_prp_remaining_bases(
     nm1_regex: &Regex,
     np1_regex: &Regex,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
-    c_filter: &mut InMemoryFilter,
+    c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
 ) -> Result<U256, ()> {
@@ -517,7 +517,7 @@ async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
     mut c_receiver: PushbackReceiver<CompositeCheckTask>,
-    mut c_filter: InMemoryFilter,
+    mut c_filter: CuckooFilter<DefaultHasher>,
     http: ThrottlingHttpClient,
     factor_finder: FactorFinder,
     id_and_expr_regex: Regex,
@@ -747,7 +747,7 @@ async fn throttle_if_necessary(
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut u64,
     sleep_first: bool,
-    c_filter: &mut InMemoryFilter,
+    c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
 ) -> bool {
@@ -990,12 +990,7 @@ async fn main() -> anyhow::Result<()> {
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
     let mut c_buffer_task: Option<JoinHandle<()>> = None;
-    let mut config_builder = FilterConfigBuilder::default()
-        .capacity(2500)
-        .false_positive_rate(0.001)
-        .level_duration(Duration::from_hours(24));
     if std::env::var("CI").is_ok() {
-        config_builder = config_builder.max_levels(1);
         EXIT_TIME
             .set(Instant::now().add(Duration::from_mins(355)))?;
         COMPOSITES_OUT
@@ -1004,11 +999,8 @@ async fn main() -> anyhow::Result<()> {
             })
             .await;
         max_concurrent_requests = 3;
-    } else {
-        config_builder = config_builder.max_levels(7);
     }
-    let config = config_builder.build()?;
-    let c_filter = InMemoryFilter::new(config.clone())?;
+    let c_filter = CuckooFilter::with_capacity(2500);
     let id_and_expr_regex =
         Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
@@ -1024,8 +1016,8 @@ async fn main() -> anyhow::Result<()> {
             )
         })
         .await;
-    let mut prp_filter = InMemoryFilter::new(config.clone())?;
-    let mut u_filter = InMemoryFilter::new(config)?;
+    let mut prp_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
+    let mut u_filter = CuckooFilter::with_capacity(4096);
     installed_receiver.await?;
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
@@ -1087,12 +1079,10 @@ async fn main() -> anyhow::Result<()> {
                         error!("Invalid PRP ID found");
                         continue;
                     };
-                    let prp_id_bytes = prp_id.to_ne_bytes();
-                    if prp_filter.query(&prp_id_bytes)? {
+                    if let Ok(false) = prp_filter.test_and_add(&prp_id) {
                         warn!("{prp_id}: Skipping duplicate PRP");
                         continue;
                     }
-                    prp_filter.insert(&prp_id_bytes)?;
                     let prp_task = CheckTask {
                         id: prp_id,
                         task_type: CheckTaskType::Prp,
@@ -1122,7 +1112,7 @@ async fn queue_unknowns(
     http: &ThrottlingHttpClient,
     u_digits: Option<NonZeroU128>,
     u_permits: PermitIterator<'_, CheckTask>,
-    u_filter: &mut InMemoryFilter,
+    u_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
 ) {
     let mut permits = Some(u_permits);
@@ -1148,7 +1138,7 @@ async fn try_queue_unknowns<'a>(
     http: &ThrottlingHttpClient,
     u_digits: Option<NonZeroU128>,
     mut u_permits: PermitIterator<'a, CheckTask>,
-    u_filter: &mut InMemoryFilter,
+    u_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
 ) -> Result<(), PermitIterator<'a, CheckTask>> {
     let mut rng = rng();
@@ -1180,7 +1170,7 @@ async fn try_queue_unknowns<'a>(
         };
         ids_found = true;
         let u_id_bytes = u_id.to_ne_bytes();
-        if u_filter.query(&u_id_bytes).unwrap() {
+        if u_filter.contains(&u_id_bytes) {
             warn!("{u_id}: Skipping duplicate U");
             continue;
         }
@@ -1198,7 +1188,7 @@ async fn try_queue_unknowns<'a>(
         {
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
-            u_filter.insert(&u_id_bytes).unwrap();
+            let _ = u_filter.add(&u_id_bytes);
             u_permits.next().unwrap().send(CheckTask {
                 id: u_id,
                 task_type: CheckTaskType::U,
