@@ -1497,9 +1497,9 @@ async fn find_and_submit_factors(
                         }
                         all_factors.insert(factor, AlreadySubmitted);
                         already_submitted_elsewhere += 1;
-                        accepted_factors = true; // As long as it's no longer U or C
                     }
                 }
+                accepted_factors = true; // As long as it's no longer U or C
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
