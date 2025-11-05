@@ -925,16 +925,16 @@ async fn handle_signals(
 
 // One worker thread for do_checks(), one for handle_signals(), one for main()
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let (do_checks_termination_sender, do_checks_termination_receiver) = oneshot::channel();
     let (main_termination_sender, mut main_termination_receiver) = oneshot::channel();
     let (installed_sender, installed_receiver) = oneshot::channel();
+    simple_log::console("info").unwrap();
     task::spawn(handle_signals(
         do_checks_termination_sender,
         main_termination_sender,
         installed_sender,
     ));
-    installed_receiver.await.unwrap();
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -946,21 +946,20 @@ async fn main() {
     let mut prp_start = std::env::var("PRP_START")
         .ok()
         .and_then(|s| s.parse::<u128>().ok());
-    simple_log::console("info").unwrap();
     if let Ok(run_number) = std::env::var("RUN") {
-        let run_number = run_number.parse::<u128>().unwrap();
+        let run_number = run_number.parse::<u128>()?;
         if c_digits.is_none() {
             let mut c_digits_value =
                 C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
             if c_digits_value == C_MIN_DIGITS - 1 {
                 c_digits_value = 1;
             }
-            c_digits = Some(c_digits_value.try_into().unwrap());
+            c_digits = Some(c_digits_value.try_into()?);
         }
         if u_digits.is_none() {
             let u_digits_value =
                 U_MAX_DIGITS - ((run_number * 19793) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
-            u_digits = Some(u_digits_value.try_into().unwrap());
+            u_digits = Some(u_digits_value.try_into()?);
         }
         if prp_start.is_none() {
             prp_start = Some((run_number * 9973) % (MAX_START + 1));
@@ -977,9 +976,9 @@ async fn main() {
     }
     let mut prp_start = prp_start.unwrap_or_else(|| rng().random_range(0..=MAX_START));
     info!("PRP initial start is {prp_start}");
-    let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into().unwrap();
+    let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
     let mut max_concurrent_requests = 2usize;
-    let id_regex = Regex::new("index\\.php\\?id=([0-9]+)").unwrap();
+    let id_regex = Regex::new("index\\.php\\?id=([0-9]+)")?;
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
@@ -992,8 +991,7 @@ async fn main() {
     if std::env::var("CI").is_ok() {
         config_builder = config_builder.max_levels(1);
         EXIT_TIME
-            .set(Instant::now().add(Duration::from_mins(355)))
-            .unwrap();
+            .set(Instant::now().add(Duration::from_mins(355)))?;
         COMPOSITES_OUT
             .get_or_init(async || {
                 Mutex::new(File::options().append(true).open("composites").unwrap())
@@ -1003,10 +1001,10 @@ async fn main() {
     } else {
         config_builder = config_builder.max_levels(7);
     }
-    let config = config_builder.build().unwrap();
-    let c_filter = InMemoryFilter::new(config.clone()).unwrap();
+    let config = config_builder.build()?;
+    let c_filter = InMemoryFilter::new(config.clone())?;
     let id_and_expr_regex =
-        Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>").unwrap();
+        Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
     let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests);
     FAILED_U_SUBMISSIONS_OUT
@@ -1020,8 +1018,9 @@ async fn main() {
             )
         })
         .await;
-    let mut prp_filter = InMemoryFilter::new(config.clone()).unwrap();
-    let mut u_filter = InMemoryFilter::new(config).unwrap();
+    let mut prp_filter = InMemoryFilter::new(config.clone())?;
+    let mut u_filter = InMemoryFilter::new(config)?;
+    installed_receiver.await?;
     task::spawn(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
@@ -1038,7 +1037,7 @@ async fn main() {
             biased;
             _ = &mut main_termination_receiver => {
                 warn!("Received termination signal; exiting");
-                return;
+                return Ok(());
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
                 info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
@@ -1058,7 +1057,7 @@ async fn main() {
                 let Some(results_text) = results_text else {
                     continue 'queue_tasks;
                 };
-                let mut prp_permits = prp_permits.unwrap();
+                let mut prp_permits = prp_permits?;
                 for prp_id in id_regex
                     .captures_iter(&results_text)
                     .map(|result| result[1].parse::<u128>().ok())
@@ -1069,11 +1068,11 @@ async fn main() {
                         continue;
                     };
                     let prp_id_bytes = prp_id.to_ne_bytes();
-                    if prp_filter.query(&prp_id_bytes).unwrap() {
+                    if prp_filter.query(&prp_id_bytes)? {
                         warn!("{prp_id}: Skipping duplicate PRP");
                         continue;
                     }
-                    prp_filter.insert(&prp_id_bytes).unwrap();
+                    prp_filter.insert(&prp_id_bytes)?;
                     let prp_task = CheckTask {
                         id: prp_id,
                         task_type: CheckTaskType::Prp,
@@ -1092,7 +1091,7 @@ async fn main() {
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
                 info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits.unwrap(), &mut u_filter, &factor_finder).await;
+                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits?, &mut u_filter, &factor_finder).await;
             }
             c_permit = c_sender.reserve() => {
                 drop(c_permit);
