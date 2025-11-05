@@ -42,7 +42,6 @@ use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::runtime::Runtime;
-use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::oneshot::Receiver;
@@ -50,6 +49,8 @@ use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use tokio::signal::ctrl_c;
+use tokio::signal;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -911,22 +912,26 @@ async fn handle_signals(
     main_termination_sender: oneshot::Sender<()>,
     installed_sender: oneshot::Sender<()>,
 ) {
-    let mut sigterm =
-        signal(SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
-    let mut sigint =
-        signal(SignalKind::interrupt()).expect("Failed to create SIGINT signal stream");
+    let sigint = ctrl_c();
     info!("Signal handlers installed");
     installed_sender
         .send(())
         .expect("Error signaling main task that signal handlers are installed");
-    select! {
-        _ = sigterm.recv() => {
-            warn!("Received SIGTERM; signaling tasks to exit");
-        },
-        _ = sigint.recv() => {
-            warn!("Received SIGINT; signaling tasks to exit");
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            signal::unix::signal(signal::unix::SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
+        select! {
+            _ = sigterm.recv() => {
+                warn!("Received SIGTERM; signaling tasks to exit");
+            },
+            _ = sigint => {
+                warn!("Received SIGINT; signaling tasks to exit");
+            }
         }
     }
+    #[cfg(not(unix))]
+    let _ = sigint.await;
     main_termination_sender
         .send(())
         .expect("Error signaling main task to exit");
