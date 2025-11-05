@@ -1411,10 +1411,6 @@ async fn find_and_submit_factors(
                     if **subfactor_handling == AlreadySubmitted {
                         continue;
                     }
-                    if *factor == dest_factor {
-                        **subfactor_handling = AlreadySubmitted;
-                        continue;
-                    }
                     match try_report_factor(
                         http,
                         Expression(&dest_factor.to_compact_string()),
@@ -1470,6 +1466,9 @@ async fn find_and_submit_factors(
             }
             drop(did_not_divide);
             new_dest_factors.retain(|factor| !former_dest_factors.contains(factor));
+            for dest_factor in new_dest_factors.iter() {
+                all_factors.insert(dest_factor.clone(), AlreadySubmitted);
+            }
             dest_factors.extend(new_dest_factors);
             if !dest_factors.is_empty() {
                 info!("{id}: Currently trying {} destination factors", dest_factors.len());
