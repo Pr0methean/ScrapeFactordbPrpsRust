@@ -881,6 +881,7 @@ async fn queue_composites(
         );
         let c_sender = c_sender.clone();
         Some(task::spawn(async move {
+            let count = c_buffered.len();
             let mut c_sent = 0;
             for c_task in c_buffered {
                 let id = c_task.id;
@@ -888,6 +889,9 @@ async fn queue_composites(
                     error!("{id}: Dropping C because we failed to send it to channel: {e}");
                 } else {
                     c_sent += 1;
+                }
+                if c_sent == 1 {
+                    info!("Sent first of {count} buffered C's to channel");
                 }
             }
             info!("Sent {c_sent} buffered C's to channel");
