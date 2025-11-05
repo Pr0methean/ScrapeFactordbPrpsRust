@@ -1283,6 +1283,7 @@ impl FactorFinder {
         http: &ThrottlingHttpClient,
         id: NumberSpecifier<'_>,
         include_ff: bool,
+        get_digits_as_fallback: bool
     ) -> Result<Box<[Factor]>, ()> {
         if let NumberSpecifier::Expression(expr) = id
             && let Numeric(n) = expr.into()
@@ -1292,10 +1293,14 @@ impl FactorFinder {
         let response = match id {
             NumberSpecifier::Id(id) => {
                 let url = format!("https://factordb.com/api?id={id}");
-                http.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
-                    format!("https://factordb.com/index.php?showid={id}")
-                })
-                .await
+                if get_digits_as_fallback {
+                    http.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
+                        format!("https://factordb.com/index.php?showid={id}")
+                    })
+                        .await
+                } else {
+                    Ok(http.retrying_get_and_decode(&url, RETRY_DELAY).await)
+                }
             }
             NumberSpecifier::Expression(expr) => {
                 let url = format!("https://factordb.com/api?query={}", encode(expr));

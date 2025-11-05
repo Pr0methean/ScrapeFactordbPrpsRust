@@ -191,7 +191,7 @@ async fn check_composite(
     };
     // First, convert the composite to digits
     match factor_finder
-        .known_factors_as_digits(http, Id(id), false)
+        .known_factors_as_digits(http, Id(id), false, true)
         .await
     {
         Err(()) => {
@@ -211,7 +211,7 @@ async fn check_composite(
                 .collect();
             // Only look up listed algebraic factors once, since we only have the one ID and not the
             // IDs of any known factors
-            get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut factors)
+            get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut factors, false)
                 .await;
             let mut factors_found = false;
             for (factor, subfactor_handling) in factors.iter() {
@@ -327,7 +327,7 @@ async fn get_prp_remaining_bases(
         let nm1_id = captures[1].parse::<u128>().unwrap();
         nm1_id_if_available = Some(nm1_id);
         let nm1_result = factor_finder
-            .known_factors_as_digits(http, Id(nm1_id), false)
+            .known_factors_as_digits(http, Id(nm1_id), false, false)
             .await;
         if let Ok(nm1_factors) = nm1_result {
             match nm1_factors.len() {
@@ -353,7 +353,7 @@ async fn get_prp_remaining_bases(
         let np1_id = captures[1].parse::<u128>().unwrap();
         np1_id_if_available = Some(np1_id);
         let np1_result = factor_finder
-            .known_factors_as_digits(http, Id(np1_id), false)
+            .known_factors_as_digits(http, Id(np1_id), false, false)
             .await;
         if let Ok(np1_factors) = np1_result {
             match np1_factors.len() {
@@ -1307,7 +1307,7 @@ async fn find_and_submit_factors(
         true
     } else if digits_or_expr.contains("...") {
         let Ok(known_factors) = factor_finder
-            .known_factors_as_digits(http, Id(id), true)
+            .known_factors_as_digits(http, Id(id), false, true)
             .await
         else {
             return false;
@@ -1341,7 +1341,7 @@ async fn find_and_submit_factors(
         }
     }
     if !skip_looking_up_listed_algebraic {
-        get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors)
+        get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, &mut all_factors, false)
             .await;
     }
     let mut dest_factors: BTreeSet<Factor> = BTreeSet::new();
@@ -1480,7 +1480,7 @@ async fn find_and_submit_factors(
         }
         let mut already_submitted_elsewhere = 0usize;
         if let Ok(already_known_factors) = factor_finder
-            .known_factors_as_digits(http, Id(id), false)
+            .known_factors_as_digits(http, Id(id), false, false)
             .await
         {
             if already_known_factors.is_empty() {
@@ -1574,6 +1574,7 @@ async fn try_find_subfactors(
                 factor_finder,
                 id_and_expr_regex,
                 new_subfactors,
+                true
             )
             .await;
             Id(*factor_id)
@@ -1586,7 +1587,7 @@ async fn try_find_subfactors(
         .into_iter()
         .collect();
     if let Ok(known_subfactors) = factor_finder
-        .known_factors_as_digits(http, specifier_to_get_subfactors, true)
+        .known_factors_as_digits(http, specifier_to_get_subfactors, true, false)
         .await
         && known_subfactors.len() > 1
     {
@@ -1610,6 +1611,7 @@ async fn get_known_algebraic_factors(
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
     all_factors: &mut BTreeMap<Factor, SubfactorHandling>,
+    include_ff: bool
 ) {
     info!("{id}: Checking for listed algebraic factors");
     // Links before the "Is factor of" header are algebraic factors; links after it aren't
@@ -1627,7 +1629,7 @@ async fn get_known_algebraic_factors(
                 );
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
                     if let Ok(subfactors) = factor_finder
-                        .known_factors_as_digits(http, Id(factor_id), true)
+                        .known_factors_as_digits(http, Id(factor_id), include_ff, true)
                         .await
                     {
                         for subfactor in subfactors {
