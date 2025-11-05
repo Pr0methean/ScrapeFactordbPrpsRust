@@ -838,7 +838,7 @@ async fn queue_composites(
             .try_into()
             .unwrap()
     });
-    info!("Retrieving {digits}-digit composites starting from {start}");
+    info!("Retrieving {digits}-digit C's starting from {start}");
     let mut results_per_page = C_RESULTS_PER_PAGE;
     let mut composites_page = None;
     while composites_page.is_none() && results_per_page > 0 {
@@ -1039,6 +1039,17 @@ async fn main() -> anyhow::Result<()> {
                 warn!("Received termination signal; exiting");
                 return Ok(());
             }
+            // C comes first because otherwise it gets starved
+            c_permit = c_sender.reserve() => {
+                drop(c_permit);
+                if let Some(old_c_buffer_task) = c_buffer_task.take() {
+                    info!("Ready to send C's from buffer after {:?}", Instant::now() - select_start);
+                    let _ = old_c_buffer_task.await;
+                } else {
+                    info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
+                    c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
+                }
+            }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
                 info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
@@ -1092,16 +1103,6 @@ async fn main() -> anyhow::Result<()> {
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
                 info!("Ready to search for U's after {:?}", Instant::now() - select_start);
                 queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits?, &mut u_filter, &factor_finder).await;
-            }
-            c_permit = c_sender.reserve() => {
-                drop(c_permit);
-                if let Some(old_c_buffer_task) = c_buffer_task.take() {
-                    info!("Ready to send C's from buffer after {:?}", Instant::now() - select_start);
-                    let _ = old_c_buffer_task.await;
-                } else {
-                    info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
-                    c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
-                }
             }
         }
     }
@@ -1467,6 +1468,9 @@ async fn find_and_submit_factors(
             drop(did_not_divide);
             new_dest_factors.retain(|factor| !former_dest_factors.contains(factor));
             dest_factors.extend(new_dest_factors);
+            if !dest_factors.is_empty() {
+                info!("{id}: Currently trying {} destination factors", dest_factors.len());
+            }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         if new_subfactors.is_empty() && errors_this_iter == 0 {
