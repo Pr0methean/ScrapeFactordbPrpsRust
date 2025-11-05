@@ -983,7 +983,7 @@ async fn main() -> anyhow::Result<()> {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
-    let mut c_buffer_task = None;
+    let mut c_buffer_task: Option<JoinHandle<()>> = None;
     let mut config_builder = FilterConfigBuilder::default()
         .capacity(2500)
         .false_positive_rate(0.001)
@@ -1037,6 +1037,9 @@ async fn main() -> anyhow::Result<()> {
             biased;
             _ = &mut main_termination_receiver => {
                 warn!("Received termination signal; exiting");
+                if let Some(c_buffer_task) = c_buffer_task.take() {
+                    c_buffer_task.abort();
+                }
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
