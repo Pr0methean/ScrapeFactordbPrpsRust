@@ -40,7 +40,10 @@ impl<T: Debug> PushbackReceiver<T> {
                 if let Ok(received) = self.receiver.try_recv() {
                     Some((received, return_permit))
                 } else if let Ok(received_return) = self.return_receiver.try_recv() {
-                    info!("Receiving returned item because main channel is empty: {:?}", received_return);
+                    info!(
+                        "Receiving returned item because main channel is empty: {:?}",
+                        received_return
+                    );
                     Some((received_return, return_permit))
                 } else {
                     None
@@ -55,7 +58,10 @@ impl<T: Debug> PushbackReceiver<T> {
                     .clone()
                     .try_reserve_owned()
                     .expect("Failed to obtain a return permit after receiving a returned item");
-                info!("Receiving returned item because return channel is full: {:?}", received);
+                info!(
+                    "Receiving returned item because return channel is full: {:?}",
+                    received
+                );
                 Some((received, return_permit))
             }
         }
