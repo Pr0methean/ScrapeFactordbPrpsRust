@@ -1503,7 +1503,6 @@ async fn find_and_submit_factors(
             }
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-        let new_subfactors_count = new_subfactors.len();
         if new_subfactors.is_empty() {
             if errors_this_iter == 0 {
                 info!(
@@ -1514,16 +1513,17 @@ async fn find_and_submit_factors(
                 return accepted_factors;
             }
         } else {
+            let new_subfactors_count = new_subfactors.len();
+            info!(
+                "{id}: This iteration: {accepted_this_iter} factors accepted, \
+                {did_not_divide_this_iter} did not divide, \
+                {errors_this_iter} submission errors, \
+                {new_subfactors_count} new subfactors to try, \
+                {already_submitted_elsewhere} submitted by someone else"
+            );
             iters_without_progress = 0;
             all_factors.extend(new_subfactors);
         }
-        info!(
-            "{id}: This iteration: {accepted_this_iter} factors accepted, \
-            {did_not_divide_this_iter} did not divide, \
-            {errors_this_iter} submission errors, \
-            {new_subfactors_count} new subfactors to try, \
-            {already_submitted_elsewhere} submitted by someone else"
-        );
     }
     for (factor, subfactor_handling) in all_factors.into_iter() {
         if subfactor_handling == AlreadySubmitted {
