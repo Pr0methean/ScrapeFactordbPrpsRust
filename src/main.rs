@@ -46,9 +46,9 @@ use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::oneshot::Receiver;
 use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use tokio::task::JoinHandle;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -874,7 +874,10 @@ async fn queue_composites(
         info!("Sent {c_sent} C's to channel");
         None
     } else {
-        info!("Sent {c_sent} C's to channel; buffering {} more", c_buffered.len());
+        info!(
+            "Sent {c_sent} C's to channel; buffering {} more",
+            c_buffered.len()
+        );
         let c_sender = c_sender.clone();
         Some(task::spawn(async move {
             let mut c_sent = 0;
