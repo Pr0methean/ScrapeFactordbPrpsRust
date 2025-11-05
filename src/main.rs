@@ -1399,7 +1399,7 @@ async fn find_and_submit_factors(
         if !dest_factors.is_empty() {
             let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
             let mut new_dest_factors = Vec::new();
-            'per_factor: for dest_factor in dest_factors.iter() {
+            'per_factor: for dest_factor in dest_factors.iter().rev() {
                 for (index, (factor, subfactor_handling)) in
                     try_with_dest_factors.iter_mut().enumerate()
                 {
@@ -1437,9 +1437,7 @@ async fn find_and_submit_factors(
                     }
                 }
             }
-            former_dest_factors.iter().rev().for_each(|factor| {
-                dest_factors.remove(factor);
-            });
+            dest_factors.retain(|factor| !former_dest_factors.contains(factor));
             for (index, (factor, subfactor_handling)) in
                 try_with_dest_factors.into_iter().enumerate()
             {
