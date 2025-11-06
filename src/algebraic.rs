@@ -1061,6 +1061,7 @@ impl FactorFinder {
                                             continue;
                                         }
                                         if n % subset_product == 0
+                                            && (c > 0 || !subset_product.is_multiple_of(2))
                                             && let Ok(prime_for_root) = subset_product.try_into()
                                             && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
@@ -1386,6 +1387,15 @@ mod tests {
         assert!(!factors.contains(&7.into()));
         assert!(!factors.contains(&11.into()));
         assert!(!factors.contains(&101.into()));
+    }
+
+    #[test]
+    fn test_anb_minus_c() {
+        let finder = FactorFinder::new();
+        let expr = format_compact!("{}^24-1", u128::MAX);
+        let factors = finder.find_factors(&expr.into());
+        println!("{}", factors.iter().join(", "));
+        assert!(factors.contains(&format_compact!("{}^8-1", u128::MAX).into()));
     }
 
     #[test]
