@@ -1482,13 +1482,9 @@ async fn find_and_submit_factors(
                         if all_factors.get(&factor) == Some(&AlreadySubmitted) {
                             continue;
                         }
-                        if factor == *dest_factor {
-                            continue;
-                        }
-                        if dest_factors_that_do_not_divide
-                            .contains(&(dest_factor.clone(), factor.clone()))
-                        {
-                            did_not_divide[index] += 1;
+                        if factor == *dest_factor || dest_factors_that_do_not_divide
+                            .contains(&(dest_factor.clone(), factor.clone())) {
+                            did_not_divide[index] += 1; // Needed to avoid an undercount
                             continue;
                         }
                         match try_report_factor(
