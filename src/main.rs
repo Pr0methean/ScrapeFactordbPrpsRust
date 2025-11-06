@@ -1413,7 +1413,7 @@ async fn find_and_submit_factors(
                 }
             }
         }
-        if !dest_factors.is_empty() {
+        if !dest_factors.is_empty() && !try_with_dest_factors.is_empty() {
             let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
             let mut new_dest_factors = Vec::new();
             'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
