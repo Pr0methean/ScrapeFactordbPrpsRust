@@ -1454,6 +1454,7 @@ async fn find_and_submit_factors(
                     {
                         if already_known_subfactors.is_empty() {
                             former_dest_factors.insert(factor.clone());
+                            new_dest_factors.remove(factor);
                         }
                         for subfactor in already_known_subfactors {
                             if let Factor::String(_) = subfactor
@@ -1467,11 +1468,13 @@ async fn find_and_submit_factors(
                         }
                     }
                 }
+                dest_factors.retain(|factor| !former_dest_factors.contains(factor));
                 dest_factors.extend(new_dest_factors);
             }
-            let count_to_try_with_dest_factors = try_with_dest_factors.len();
             new_subfactors.retain(|key, _| !all_factors.contains_key(key));
             if !dest_factors.is_empty() && !try_with_dest_factors.is_empty() {
+                let count_to_try_with_dest_factors = try_with_dest_factors.len();
+                info!("{id}: Retrying {count_to_try_with_dest_factors} factors using {} destination factors", dest_factors.len());
                 let mut did_not_divide = vec![0usize; count_to_try_with_dest_factors];
                 let mut new_dest_factors = Vec::new();
                 'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
