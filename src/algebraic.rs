@@ -802,8 +802,8 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             .map(Factor::from)
             .collect()
     } else if term.is_multiple_of(2) {
-        let mut factors = fibonacci_factors(term >> 1, true);
-        factors.extend(lucas_factors(term >> 1, true));
+        let mut factors = fibonacci_factors(term >> 1, subset_recursion);
+        factors.extend(lucas_factors(term >> 1, subset_recursion));
         factors
     } else if !subset_recursion {
         [format_compact!("I({})", term).into()].into()
