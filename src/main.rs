@@ -1546,8 +1546,10 @@ async fn find_and_submit_factors(
                 {new_subfactors_count} new subfactors to try, \
                 {already_submitted_elsewhere} submitted by someone else"
             );
-            iters_without_progress = 0;
-            all_factors.extend(new_subfactors);
+            if !new_subfactors.is_empty() {
+                iters_without_progress = 0;
+                all_factors.extend(new_subfactors);
+            }
         }
     }
     for (factor, subfactor_handling) in all_factors.into_iter() {
