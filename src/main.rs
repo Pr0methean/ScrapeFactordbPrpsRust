@@ -1436,7 +1436,7 @@ async fn find_and_submit_factors(
                     {
                         AlreadyFullyFactored => {
                             former_dest_factors.insert(dest_factor.clone());
-                            break 'per_dest_factor;
+                            continue 'per_dest_factor;
                         }
                         Accepted => {
                             **subfactor_handling = AlreadySubmitted;
