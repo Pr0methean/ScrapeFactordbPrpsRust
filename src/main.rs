@@ -1445,6 +1445,24 @@ async fn find_and_submit_factors(
                     }
                     accepted_factors = true; // As long as it's no longer U or C
                 }
+            } else {
+                let mut new_dest_factors = BTreeSet::new();
+                for factor in dest_factors.iter() {
+                    if let Ok(already_known_subfactors) = factor_finder
+                        .known_factors_as_digits(http, Expression(&factor.to_string()), true, true)
+                        .await {
+                        for subfactor in already_known_subfactors {
+                            if let Factor::String(_) = subfactor
+                                && !former_dest_factors.contains(&subfactor)
+                            {
+                                new_dest_factors.insert(subfactor.clone());
+                                iters_without_progress = 0;
+                            }
+                            all_factors.insert(subfactor, AlreadySubmitted);
+                            already_submitted_elsewhere += 1;
+                        }
+                    }
+                }
             }
             let count_to_try_with_dest_factors = try_with_dest_factors.len();
             new_subfactors.retain(|key, _| !all_factors.contains_key(key));

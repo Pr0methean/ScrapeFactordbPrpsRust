@@ -1309,7 +1309,7 @@ impl FactorFinder {
                     })
                     .await
                 } else {
-                    Ok(http.retrying_get_and_decode(&url, RETRY_DELAY).await)
+                    http.try_get_and_decode(&url).await.ok_or("".into())
                 }
             }
             NumberSpecifier::Expression(expr) => {
@@ -1343,6 +1343,9 @@ impl FactorFinder {
                 }
             },
             Err(fallback_response) => {
+                if fallback_response.is_empty() {
+                    return Err(());
+                }
                 let Some(digits_cell) = self
                     .digits_fallback_regex
                     .captures(&fallback_response)
