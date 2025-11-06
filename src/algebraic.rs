@@ -1055,7 +1055,7 @@ impl FactorFinder {
                                             % (subset_product as i128)
                                             == 0
                                         {
-                                            factors.push(subset_product.into());
+                                            factors.extend(self.find_factors(&Numeric(subset_product)));
                                         }
                                         if c > 0 && (n / subset_product).is_multiple_of(2) {
                                             continue;
