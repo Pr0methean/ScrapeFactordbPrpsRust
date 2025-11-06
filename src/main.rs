@@ -1464,6 +1464,7 @@ async fn find_and_submit_factors(
                         }
                     }
                 }
+                dest_factors.extend(new_dest_factors);
             }
             let count_to_try_with_dest_factors = try_with_dest_factors.len();
             new_subfactors.retain(|key, _| !all_factors.contains_key(key));
