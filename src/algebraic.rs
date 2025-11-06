@@ -763,7 +763,8 @@ fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
         swap(&mut counts1, &mut counts2);
     }
     for (item, count1) in counts1.into_iter() {
-        *counts2.entry(item).or_insert(0) += count1;
+        let union_count = counts2.entry(item).or_insert(0);
+        *union_count = (*union_count).max(count1);
     }
     counts2
         .into_iter()
@@ -846,7 +847,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             .collect::<Vec<u128>>();
         let full_set_size = factors_of_term.len();
         for subset in power_multiset(&mut factors_of_term).into_iter() {
-            if subset.len() < full_set_size {
+            if subset.len() < full_set_size && !subset.is_empty() {
                 let product = subset.into_iter().product::<u128>() << power_of_2;
                 if product > 2 {
                     factors = multiset_union(lucas_factors(product, false), factors);
@@ -895,7 +896,11 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
 
     let mut current_subset = Vec::new();
     generate_subsets(&mut current_subset, multiset, &mut result);
-
+    for subset in result.iter_mut() {
+        subset.sort_unstable();
+    }
+    result.sort_unstable();
+    result.dedup();
     result
 }
 
@@ -1346,20 +1351,19 @@ impl FactorFinder {
 
 #[cfg(test)]
 mod tests {
+    use compact_str::format_compact;
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{
-        FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
-        lucas_factors,
-    };
+    use crate::algebraic::{FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, power_multiset, multiset_union, multiset_intersection, multiset_difference};
     use itertools::Itertools;
 
     #[test]
     fn test_anbc() {
         let finder = FactorFinder::new();
-        let factors = finder.find_factors(&"2^9*3+3".into());
+        let expr = format_compact!("{}^9*3+3", u128::MAX);
+        let factors = finder.find_factors(&expr.into());
         println!("{}", factors.iter().join(", "));
         assert!(factors.contains(&3.into()));
-        assert!(factors.contains(&"2^3+1".into()));
+        assert!(factors.contains(&format_compact!("{}^3+1", u128::MAX).into()));
     }
 
     #[test]
@@ -1398,5 +1402,57 @@ mod tests {
                 assert!(factors.contains(&(*factor).into()));
             }
         }
+    }
+
+    #[test]
+    fn test_power_multiset() {
+        let mut multiset = vec![2, 2, 3, 3, 5];
+        let power_multiset = power_multiset(&mut multiset);
+        println!("{:?}", power_multiset);
+        assert_eq!(power_multiset.len(), 18);
+        assert!(power_multiset.contains(&vec![]));
+        assert!(power_multiset.contains(&vec![2]));
+        assert!(power_multiset.contains(&vec![2,2]));
+        assert!(power_multiset.contains(&vec![3]));
+        assert!(power_multiset.contains(&vec![2,3]));
+        assert!(power_multiset.contains(&vec![2,2,3]));
+        assert!(power_multiset.contains(&vec![3,3]));
+        assert!(power_multiset.contains(&vec![2,3,3]));
+        assert!(power_multiset.contains(&vec![2,2,3,3]));
+        assert!(power_multiset.contains(&vec![5]));
+        assert!(power_multiset.contains(&vec![2,5]));
+        assert!(power_multiset.contains(&vec![2,2,5]));
+        assert!(power_multiset.contains(&vec![3,5]));
+        assert!(power_multiset.contains(&vec![2,3,5]));
+        assert!(power_multiset.contains(&vec![2,2,3,5]));
+        assert!(power_multiset.contains(&vec![3,3,5]));
+        assert!(power_multiset.contains(&vec![2,3,3,5]));
+        assert!(power_multiset.contains(&vec![2,2,3,3,5]));
+    }
+
+    #[test]
+    fn test_multiset_union() {
+        let multiset_1 = vec![2, 2, 3, 5, 7];
+        let multiset_2 = vec![2, 3, 3, 5, 11];
+        let mut union = multiset_union(multiset_1, multiset_2);
+        union.sort_unstable();
+        assert_eq!(union, vec![2, 2, 3, 3, 5, 7, 11]);
+    }
+
+    #[test]
+    fn test_multiset_intersection() {
+        let multiset_1 = vec![2, 2, 3, 3, 5, 7];
+        let multiset_2 = vec![2, 3, 3, 5, 11];
+        let mut intersection = multiset_intersection(multiset_1, multiset_2);
+        intersection.sort_unstable();
+        assert_eq!(intersection, vec![2, 3, 3, 5]);
+    }
+
+    #[test]
+    fn test_multiset_difference() {
+        let multiset_1 = vec![2, 2, 3, 3, 5, 7];
+        let multiset_2 = vec![2, 3, 3, 3, 5, 11];
+        let difference = multiset_difference(multiset_1, &multiset_2);
+        assert_eq!(difference, vec![2, 7]);
     }
 }
