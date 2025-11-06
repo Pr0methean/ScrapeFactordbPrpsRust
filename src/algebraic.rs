@@ -1308,13 +1308,14 @@ impl FactorFinder {
                         format!("https://factordb.com/index.php?showid={id}")
                     })
                     .await
+                    .map_err(Some)
                 } else {
-                    http.try_get_and_decode(&url).await.ok_or("".into())
+                    http.try_get_and_decode(&url).await.ok_or(None)
                 }
             }
             NumberSpecifier::Expression(expr) => {
                 let url = format!("https://factordb.com/api?query={}", encode(expr));
-                Ok(http.retrying_get_and_decode(&url, RETRY_DELAY).await)
+                http.try_get_and_decode(&url).await.ok_or(None)
             }
         };
         match response {
@@ -1342,10 +1343,8 @@ impl FactorFinder {
                     }
                 }
             },
-            Err(fallback_response) => {
-                if fallback_response.is_empty() {
-                    return Err(());
-                }
+            Err(None) => Err(()),
+            Err(Some(fallback_response)) => {
                 let Some(digits_cell) = self
                     .digits_fallback_regex
                     .captures(&fallback_response)
