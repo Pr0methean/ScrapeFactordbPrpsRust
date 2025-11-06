@@ -42,6 +42,8 @@ use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::runtime::Runtime;
+use tokio::signal;
+use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::oneshot::Receiver;
@@ -49,8 +51,6 @@ use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use tokio::signal::ctrl_c;
-use tokio::signal;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -919,8 +919,8 @@ async fn handle_signals(
         .expect("Error signaling main task that signal handlers are installed");
     #[cfg(unix)]
     {
-        let mut sigterm =
-            signal::unix::signal(signal::unix::SignalKind::terminate()).expect("Failed to create SIGTERM signal stream");
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to create SIGTERM signal stream");
         select! {
             _ = sigterm.recv() => {
                 warn!("Received SIGTERM; signaling tasks to exit");
@@ -1402,7 +1402,7 @@ async fn find_and_submit_factors(
                             factor,
                             subfactor_handling,
                         )
-                            .await;
+                        .await;
                     }
                     try_with_dest_factors.push(factor.clone());
                 }
@@ -1412,10 +1412,10 @@ async fn find_and_submit_factors(
                 }
             }
         }
-        if errors_this_iter_without_dest_factors == 0 && did_not_divide_this_iter_without_dest_factors == 0 {
-            info!(
-                "{id}: Final iteration: {accepted_this_iter} factors accepted, 0 did not divide"
-            );
+        if errors_this_iter_without_dest_factors == 0
+            && did_not_divide_this_iter_without_dest_factors == 0
+        {
+            info!("{id}: Final iteration: {accepted_this_iter} factors accepted, 0 did not divide");
             return accepted_factors;
         }
         let mut already_submitted_elsewhere = 0usize;
@@ -1452,16 +1452,16 @@ async fn find_and_submit_factors(
                 let mut did_not_divide = vec![0usize; count_to_try_with_dest_factors];
                 let mut new_dest_factors = Vec::new();
                 'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
-                    for (index, factor) in
-                        try_with_dest_factors.iter().cloned().enumerate()
-                    {
+                    for (index, factor) in try_with_dest_factors.iter().cloned().enumerate() {
                         if all_factors.get(&factor) == Some(&AlreadySubmitted) {
                             continue;
                         }
                         if factor == *dest_factor {
                             continue;
                         }
-                        if dest_factors_that_do_not_divide.contains(&(dest_factor.clone(), factor.clone())) {
+                        if dest_factors_that_do_not_divide
+                            .contains(&(dest_factor.clone(), factor.clone()))
+                        {
                             did_not_divide[index] += 1;
                             continue;
                         }
@@ -1470,14 +1470,16 @@ async fn find_and_submit_factors(
                             Expression(&dest_factor.to_compact_string()),
                             &factor,
                         )
-                            .await
+                        .await
                         {
                             AlreadyFullyFactored => {
                                 former_dest_factors.insert(dest_factor.clone());
                                 continue 'per_dest_factor;
                             }
                             Accepted => {
-                                all_factors.entry(factor.clone()).insert_entry(AlreadySubmitted);
+                                all_factors
+                                    .entry(factor.clone())
+                                    .insert_entry(AlreadySubmitted);
                                 accepted_this_iter += 1;
                                 if let Factor::String(_) = factor
                                     && !former_dest_factors.contains(&factor)
@@ -1486,7 +1488,8 @@ async fn find_and_submit_factors(
                                 }
                             }
                             DoesNotDivide => {
-                                dest_factors_that_do_not_divide.insert((dest_factor.clone(), factor.clone()));
+                                dest_factors_that_do_not_divide
+                                    .insert((dest_factor.clone(), factor.clone()));
                                 did_not_divide[index] += 1;
                             }
                             OtherError => {}
@@ -1494,11 +1497,11 @@ async fn find_and_submit_factors(
                     }
                 }
                 dest_factors.retain(|factor| !former_dest_factors.contains(factor));
-                for (index, factor) in
-                    try_with_dest_factors.into_iter().enumerate()
-                {
+                for (index, factor) in try_with_dest_factors.into_iter().enumerate() {
                     let subfactor_handling = all_factors.entry(factor.clone());
-                    if let Occupied(ref e) = subfactor_handling && *e.get() == AlreadySubmitted {
+                    if let Occupied(ref e) = subfactor_handling
+                        && *e.get() == AlreadySubmitted
+                    {
                         continue;
                     }
                     if did_not_divide[index] >= dest_factors.len() {
@@ -1516,7 +1519,7 @@ async fn find_and_submit_factors(
                             &factor,
                             &mut temp_subfactor_handling,
                         )
-                            .await;
+                        .await;
                         subfactor_handling.insert_entry(AlreadySubmitted);
                     } else {
                         errors_this_iter += 1;

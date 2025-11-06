@@ -1192,11 +1192,7 @@ impl FactorFinder {
                         9 => {
                             // addition/subtraction; only return common factors of both sides, and 2
                             // if both are odd
-                            self.find_common_factors(
-                                &captures[1].into(),
-                                &captures[2].into(),
-                                true,
-                            )
+                            self.find_common_factors(&captures[1].into(), &captures[2].into(), true)
                         }
                         _ => unsafe { unreachable_unchecked() },
                     }
