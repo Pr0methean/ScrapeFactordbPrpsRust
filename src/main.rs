@@ -1368,6 +1368,7 @@ async fn find_and_submit_factors(
         iters_without_progress += 1;
         let mut accepted_this_iter = 0usize;
         let mut did_not_divide_this_iter = 0usize;
+        let mut did_not_divide_this_iter_without_dest_factors = 0usize;
         let mut errors_this_iter = 0usize;
         let mut errors_this_iter_without_dest_factors = 0usize;
         let mut new_subfactors = BTreeMap::new();
@@ -1390,24 +1391,20 @@ async fn find_and_submit_factors(
                     }
                 }
                 DoesNotDivide => {
-                    if dest_factors.is_empty() {
-                        did_not_divide_this_iter += 1;
-                        if try_subfactors {
-                            try_find_subfactors(
-                                http,
-                                id,
-                                factor_finder,
-                                id_and_expr_regex,
-                                &mut new_subfactors,
-                                factor,
-                                subfactor_handling,
-                            )
+                    did_not_divide_this_iter_without_dest_factors += 1;
+                    if try_subfactors {
+                        try_find_subfactors(
+                            http,
+                            id,
+                            factor_finder,
+                            id_and_expr_regex,
+                            &mut new_subfactors,
+                            factor,
+                            subfactor_handling,
+                        )
                             .await;
-                        }
-                        *subfactor_handling = AlreadySubmitted;
-                    } else {
-                        try_with_dest_factors.push(factor.clone());
                     }
+                    try_with_dest_factors.push(factor.clone());
                 }
                 OtherError => {
                     errors_this_iter_without_dest_factors += 1;
@@ -1415,7 +1412,7 @@ async fn find_and_submit_factors(
                 }
             }
         }
-        if errors_this_iter_without_dest_factors == 0 && did_not_divide_this_iter == 0 {
+        if errors_this_iter_without_dest_factors == 0 && did_not_divide_this_iter_without_dest_factors == 0 {
             info!(
                 "{id}: Final iteration: {accepted_this_iter} factors accepted, 0 did not divide"
             );
@@ -1423,7 +1420,6 @@ async fn find_and_submit_factors(
         }
         let mut already_submitted_elsewhere = 0usize;
         if !try_with_dest_factors.is_empty() {
-            let count_to_try_with_dest_factors = try_with_dest_factors.len();
             if let Ok(already_known_factors) = factor_finder
                 .known_factors_as_digits(http, Id(id), false, false)
                 .await
@@ -1433,6 +1429,7 @@ async fn find_and_submit_factors(
                     return true;
                 }
                 if already_known_factors.len() > 1 {
+                    try_with_dest_factors.retain(|factor| !already_known_factors.contains(factor));
                     for factor in already_known_factors.into_iter().rev() {
                         let prev_handling = all_factors.get(&factor).cloned();
                         if prev_handling != Some(AlreadySubmitted) {
@@ -1449,8 +1446,9 @@ async fn find_and_submit_factors(
                     accepted_factors = true; // As long as it's no longer U or C
                 }
             }
+            let count_to_try_with_dest_factors = try_with_dest_factors.len();
             new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-            if !dest_factors.is_empty() {
+            if !dest_factors.is_empty() && !try_with_dest_factors.is_empty() {
                 let mut did_not_divide = vec![0usize; count_to_try_with_dest_factors];
                 let mut new_dest_factors = Vec::new();
                 'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
@@ -1538,6 +1536,7 @@ async fn find_and_submit_factors(
             }
         } else {
             errors_this_iter = errors_this_iter_without_dest_factors;
+            did_not_divide_this_iter = did_not_divide_this_iter_without_dest_factors;
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         if new_subfactors.is_empty() && errors_this_iter == 0 {
