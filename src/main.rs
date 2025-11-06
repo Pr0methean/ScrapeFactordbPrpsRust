@@ -31,7 +31,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::PartialEq;
-use std::collections::btree_map::Entry::Vacant;
+use std::collections::btree_map::Entry::{Occupied, Vacant};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -1293,7 +1293,7 @@ async fn report_factor(
     OtherError // factor that we failed to submit may still have been valid
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum SubfactorHandling {
     Irreducible,
     ById(u128),
@@ -1369,6 +1369,7 @@ async fn find_and_submit_factors(
         let mut accepted_this_iter = 0usize;
         let mut did_not_divide_this_iter = 0usize;
         let mut errors_this_iter = 0usize;
+        let mut errors_this_iter_without_dest_factors = 0usize;
         let mut new_subfactors = BTreeMap::new();
         let mut try_with_dest_factors = Vec::new();
         for (factor, subfactor_handling) in all_factors.iter_mut().rev() {
@@ -1405,129 +1406,138 @@ async fn find_and_submit_factors(
                         }
                         *subfactor_handling = AlreadySubmitted;
                     } else {
-                        try_with_dest_factors.push((factor, subfactor_handling));
+                        try_with_dest_factors.push(factor.clone());
                     }
                 }
                 OtherError => {
-                    try_with_dest_factors.push((factor, subfactor_handling));
+                    errors_this_iter_without_dest_factors += 1;
+                    try_with_dest_factors.push(factor.clone());
                 }
             }
         }
-        if !dest_factors.is_empty() && !try_with_dest_factors.is_empty() {
-            let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
-            let mut new_dest_factors = Vec::new();
-            'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
-                for (index, (factor, subfactor_handling)) in
-                    try_with_dest_factors.iter_mut().enumerate()
-                {
-                    if **subfactor_handling == AlreadySubmitted {
-                        continue;
-                    }
-                    if dest_factors_that_do_not_divide.contains(&(dest_factor.clone(), factor.clone())) {
-                        did_not_divide[index] += 1;
-                        continue;
-                    }
-                    match try_report_factor(
-                        http,
-                        Expression(&dest_factor.to_compact_string()),
-                        factor,
-                    )
-                    .await
-                    {
-                        AlreadyFullyFactored => {
-                            former_dest_factors.insert(dest_factor.clone());
-                            continue 'per_dest_factor;
-                        }
-                        Accepted => {
-                            **subfactor_handling = AlreadySubmitted;
-                            accepted_this_iter += 1;
-                            if let Factor::String(_) = factor
-                                && !former_dest_factors.contains(factor)
-                            {
-                                new_dest_factors.push((*factor).clone());
-                            }
-                        }
-                        DoesNotDivide => {
-                            dest_factors_that_do_not_divide.insert((dest_factor.clone(), factor.clone()));
-                            did_not_divide[index] += 1;
-                        }
-                        OtherError => {}
-                    }
-                }
-            }
-            dest_factors.retain(|factor| !former_dest_factors.contains(factor));
-            for (index, (factor, subfactor_handling)) in
-                try_with_dest_factors.into_iter().enumerate()
-            {
-                if *subfactor_handling == AlreadySubmitted {
-                    continue;
-                }
-                if did_not_divide[index] >= dest_factors.len() {
-                    *subfactor_handling = AlreadySubmitted;
-                    did_not_divide_this_iter += 1;
-                    // Not conditional on try_subfactors, because the split that creates
-                    // dest_factors is separate from the split caused by a division in the main
-                    // input expression
-                    try_find_subfactors(
-                        http,
-                        id,
-                        factor_finder,
-                        id_and_expr_regex,
-                        &mut new_subfactors,
-                        factor,
-                        subfactor_handling,
-                    )
-                    .await;
-                } else {
-                    errors_this_iter += 1;
-                }
-            }
-            drop(did_not_divide);
-            new_dest_factors.retain(|factor| !former_dest_factors.contains(factor));
-            for dest_factor in new_dest_factors.iter() {
-                all_factors.insert(dest_factor.clone(), AlreadySubmitted);
-            }
-            dest_factors.extend(new_dest_factors);
-            if !dest_factors.is_empty() {
-                info!(
-                    "{id}: Currently trying {} destination factors",
-                    dest_factors.len()
-                );
-            }
-        }
-        new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-        if new_subfactors.is_empty() && errors_this_iter == 0 {
+        if errors_this_iter_without_dest_factors == 0 && did_not_divide_this_iter == 0 {
             info!(
-                "{id}: Final iteration: {accepted_this_iter} factors accepted, \
-                {did_not_divide_this_iter} did not divide"
+                "{id}: Final iteration: {accepted_this_iter} factors accepted, 0 did not divide"
             );
             return accepted_factors;
         }
         let mut already_submitted_elsewhere = 0usize;
-        if let Ok(already_known_factors) = factor_finder
-            .known_factors_as_digits(http, Id(id), false, false)
-            .await
-        {
-            if already_known_factors.is_empty() {
-                info!("{id}: Already fully factored");
-                return true;
-            }
-            if already_known_factors.len() > 1 {
-                for factor in already_known_factors.into_iter().rev() {
-                    let prev_handling = all_factors.get(&factor);
-                    if prev_handling != Some(&AlreadySubmitted) {
-                        if let Factor::String(_) = factor
-                            && !former_dest_factors.contains(&factor)
-                        {
-                            dest_factors.insert(factor.clone());
-                            iters_without_progress = 0;
+        if !try_with_dest_factors.is_empty() {
+            let count_to_try_with_dest_factors = try_with_dest_factors.len();
+            if let Ok(already_known_factors) = factor_finder
+                .known_factors_as_digits(http, Id(id), false, false)
+                .await
+            {
+                if already_known_factors.is_empty() {
+                    info!("{id}: Already fully factored");
+                    return true;
+                }
+                if already_known_factors.len() > 1 {
+                    for factor in already_known_factors.into_iter().rev() {
+                        let prev_handling = all_factors.get(&factor).cloned();
+                        if prev_handling != Some(AlreadySubmitted) {
+                            if let Factor::String(_) = factor
+                                && !former_dest_factors.contains(&factor)
+                            {
+                                dest_factors.insert(factor.clone());
+                                iters_without_progress = 0;
+                            }
+                            all_factors.insert(factor, AlreadySubmitted);
+                            already_submitted_elsewhere += 1;
                         }
-                        all_factors.insert(factor, AlreadySubmitted);
-                        already_submitted_elsewhere += 1;
+                    }
+                    accepted_factors = true; // As long as it's no longer U or C
+                }
+            }
+            new_subfactors.retain(|key, _| !all_factors.contains_key(key));
+            if !dest_factors.is_empty() {
+                let mut did_not_divide = vec![0usize; count_to_try_with_dest_factors];
+                let mut new_dest_factors = Vec::new();
+                'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
+                    for (index, factor) in
+                        try_with_dest_factors.iter().cloned().enumerate()
+                    {
+                        if all_factors.get(&factor) == Some(&AlreadySubmitted) {
+                            continue;
+                        }
+                        if factor == *dest_factor {
+                            continue;
+                        }
+                        if dest_factors_that_do_not_divide.contains(&(dest_factor.clone(), factor.clone())) {
+                            did_not_divide[index] += 1;
+                            continue;
+                        }
+                        match try_report_factor(
+                            http,
+                            Expression(&dest_factor.to_compact_string()),
+                            &factor,
+                        )
+                            .await
+                        {
+                            AlreadyFullyFactored => {
+                                former_dest_factors.insert(dest_factor.clone());
+                                continue 'per_dest_factor;
+                            }
+                            Accepted => {
+                                all_factors.entry(factor.clone()).insert_entry(AlreadySubmitted);
+                                accepted_this_iter += 1;
+                                if let Factor::String(_) = factor
+                                    && !former_dest_factors.contains(&factor)
+                                {
+                                    new_dest_factors.push(factor);
+                                }
+                            }
+                            DoesNotDivide => {
+                                dest_factors_that_do_not_divide.insert((dest_factor.clone(), factor.clone()));
+                                did_not_divide[index] += 1;
+                            }
+                            OtherError => {}
+                        }
                     }
                 }
-                accepted_factors = true; // As long as it's no longer U or C
+                dest_factors.retain(|factor| !former_dest_factors.contains(factor));
+                for (index, factor) in
+                    try_with_dest_factors.into_iter().enumerate()
+                {
+                    let subfactor_handling = all_factors.entry(factor.clone());
+                    if let Occupied(ref e) = subfactor_handling && *e.get() == AlreadySubmitted {
+                        continue;
+                    }
+                    if did_not_divide[index] >= dest_factors.len() {
+                        let mut temp_subfactor_handling = ByExpression;
+                        did_not_divide_this_iter += 1;
+                        // Not conditional on try_subfactors, because the split that creates
+                        // dest_factors is separate from the split caused by a division in the main
+                        // input expression
+                        try_find_subfactors(
+                            http,
+                            id,
+                            factor_finder,
+                            id_and_expr_regex,
+                            &mut new_subfactors,
+                            &factor,
+                            &mut temp_subfactor_handling,
+                        )
+                            .await;
+                        subfactor_handling.insert_entry(AlreadySubmitted);
+                    } else {
+                        errors_this_iter += 1;
+                    }
+                }
+                new_dest_factors.retain(|factor| !former_dest_factors.contains(factor));
+                for dest_factor in new_dest_factors.iter() {
+                    all_factors.insert(dest_factor.clone(), AlreadySubmitted);
+                }
+                dest_factors.extend(new_dest_factors);
+                if !dest_factors.is_empty() {
+                    info!(
+                        "{id}: Currently trying {} destination factors",
+                        dest_factors.len()
+                    );
+                }
             }
+        } else {
+            errors_this_iter = errors_this_iter_without_dest_factors;
         }
         new_subfactors.retain(|key, _| !all_factors.contains_key(key));
         if new_subfactors.is_empty() && errors_this_iter == 0 {
