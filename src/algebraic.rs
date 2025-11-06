@@ -640,7 +640,7 @@ fn as_u128(factors: &[Factor]) -> Option<u128> {
 }
 
 #[inline(always)]
-fn borrowed_as_u128(factors: &[&Factor]) -> Option<u128> {
+fn checked_product_u128(factors: &[&Factor]) -> Option<u128> {
     let mut product = 1u128;
     for factor in factors {
         if let Numeric(n) = *factor
@@ -1045,13 +1045,10 @@ impl FactorFinder {
                                         {
                                             continue;
                                         }
-                                        let Some(subset_product) = borrowed_as_u128(&factor_subset)
+                                        let Some(subset_product) = checked_product_u128(&factor_subset)
                                         else {
                                             continue;
                                         };
-                                        if c > 0 && (n / subset_product).is_multiple_of(2) {
-                                            continue;
-                                        }
                                         if (a.powm(n, &subset_product).mulm(b, &subset_product)
                                             as i128
                                             + c)
@@ -1060,32 +1057,42 @@ impl FactorFinder {
                                         {
                                             factors.push(subset_product.into());
                                         }
+                                        if c > 0 && (n / subset_product).is_multiple_of(2) {
+                                            continue;
+                                        }
                                         if n % subset_product == 0
                                             && let Ok(prime_for_root) = subset_product.try_into()
-                                            && (subset_product % 2 != 0 || c > 0)
                                             && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                         {
-                                            let anbc_expr = format_compact!(
-                                                "{}{}{}{}",
-                                                a,
-                                                if (n / subset_product) > 1 {
-                                                    format_compact!("^{}", n / subset_product)
-                                                } else {
-                                                    CompactString::from("")
-                                                },
-                                                if root_b > 1 {
-                                                    format_compact!("*{}", root_b)
-                                                } else {
-                                                    CompactString::from("")
-                                                },
-                                                if root_c != 0 {
-                                                    format_compact!("{:+}", root_c)
-                                                } else {
-                                                    CompactString::from("")
-                                                }
-                                            );
-                                            factors.push(anbc_expr.into());
+                                            if let Ok(subset_product_u32) = subset_product.try_into()
+                                            && let Some(factor_u128) =
+                                                a.checked_pow(subset_product_u32)
+                                                    .and_then(|an| an.checked_mul(b))
+                                                    .and_then(|anb| anb.checked_add_signed(c)) {
+                                                factors.extend(self.find_factors(&Numeric(factor_u128)));
+                                            } else {
+                                                let factor_expr = format_compact!(
+                                                    "{}{}{}{}",
+                                                    a,
+                                                    if subset_product > 1 {
+                                                        format_compact!("^{}", subset_product)
+                                                    } else {
+                                                        CompactString::from("")
+                                                    },
+                                                    if root_b > 1 {
+                                                        format_compact!("*{}", root_b)
+                                                    } else {
+                                                        CompactString::from("")
+                                                    },
+                                                    if root_c != 0 {
+                                                        format_compact!("{:+}", root_c)
+                                                    } else {
+                                                        CompactString::from("")
+                                                    }
+                                                );
+                                                factors.push(factor_expr.into());
+                                            }
                                         }
                                     }
                                 }
@@ -1364,6 +1371,22 @@ mod tests {
         println!("{}", factors.iter().join(", "));
         assert!(factors.contains(&3.into()));
         assert!(factors.contains(&format_compact!("{}^3+1", u128::MAX).into()));
+    }
+
+    #[test]
+    fn test_anbc_2() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors(&"6^200600+1".into());
+        println!("{}", factors.iter().join(", "));
+
+        // Should contain 6^8+1
+        assert!(factors.contains(&17.into()));
+        assert!(factors.contains(&98801.into()));
+
+        // Shouldn't contain 6^5+1
+        assert!(!factors.contains(&7.into()));
+        assert!(!factors.contains(&11.into()));
+        assert!(!factors.contains(&101.into()));
     }
 
     #[test]
