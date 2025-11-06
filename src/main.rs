@@ -1450,7 +1450,8 @@ async fn find_and_submit_factors(
                 for factor in dest_factors.iter() {
                     if let Ok(already_known_subfactors) = factor_finder
                         .known_factors_as_digits(http, Expression(&factor.to_string()), true, true)
-                        .await {
+                        .await
+                    {
                         for subfactor in already_known_subfactors {
                             if let Factor::String(_) = subfactor
                                 && !former_dest_factors.contains(&subfactor)
