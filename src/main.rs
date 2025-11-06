@@ -1362,6 +1362,7 @@ async fn find_and_submit_factors(
     }
     let mut dest_factors: BTreeSet<Factor> = BTreeSet::new();
     let mut former_dest_factors = BTreeSet::new();
+    let mut dest_factors_that_do_not_divide = BTreeSet::new();
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
@@ -1415,11 +1416,15 @@ async fn find_and_submit_factors(
         if !dest_factors.is_empty() {
             let mut did_not_divide = vec![0usize; try_with_dest_factors.len()];
             let mut new_dest_factors = Vec::new();
-            'per_factor: for dest_factor in dest_factors.iter().rev() {
+            'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
                 for (index, (factor, subfactor_handling)) in
                     try_with_dest_factors.iter_mut().enumerate()
                 {
                     if **subfactor_handling == AlreadySubmitted {
+                        continue;
+                    }
+                    if dest_factors_that_do_not_divide.contains(&(dest_factor.clone(), factor.clone())) {
+                        did_not_divide[index] += 1;
                         continue;
                     }
                     match try_report_factor(
@@ -1431,7 +1436,7 @@ async fn find_and_submit_factors(
                     {
                         AlreadyFullyFactored => {
                             former_dest_factors.insert(dest_factor.clone());
-                            break 'per_factor;
+                            break 'per_dest_factor;
                         }
                         Accepted => {
                             **subfactor_handling = AlreadySubmitted;
@@ -1443,6 +1448,7 @@ async fn find_and_submit_factors(
                             }
                         }
                         DoesNotDivide => {
+                            dest_factors_that_do_not_divide.insert((dest_factor.clone(), factor.clone()));
                             did_not_divide[index] += 1;
                         }
                         OtherError => {}
