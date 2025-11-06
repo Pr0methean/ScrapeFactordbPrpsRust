@@ -1065,9 +1065,8 @@ impl FactorFinder {
                                             && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                         {
-                                            if let Ok(subset_product_u32) = subset_product.try_into()
-                                            && let Some(factor_u128) =
-                                                a.checked_pow(subset_product_u32)
+                                            if let Some(factor_u128) =
+                                                a.checked_pow(prime_for_root)
                                                     .and_then(|an| an.checked_mul(b))
                                                     .and_then(|anb| anb.checked_add_signed(c)) {
                                                 factors.extend(self.find_factors(&Numeric(factor_u128)));
@@ -1075,8 +1074,8 @@ impl FactorFinder {
                                                 let factor_expr = format_compact!(
                                                     "{}{}{}{}",
                                                     a,
-                                                    if subset_product > 1 {
-                                                        format_compact!("^{}", subset_product)
+                                                    if n / subset_product > 1 {
+                                                        format_compact!("^{}", n / subset_product)
                                                     } else {
                                                         CompactString::from("")
                                                     },
