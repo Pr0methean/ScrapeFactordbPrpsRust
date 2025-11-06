@@ -1465,18 +1465,19 @@ async fn find_and_submit_factors(
                 if did_not_divide[index] >= dest_factors.len() {
                     *subfactor_handling = AlreadySubmitted;
                     did_not_divide_this_iter += 1;
-                    if try_subfactors {
-                        try_find_subfactors(
-                            http,
-                            id,
-                            factor_finder,
-                            id_and_expr_regex,
-                            &mut new_subfactors,
-                            factor,
-                            subfactor_handling,
-                        )
-                        .await;
-                    }
+                    // Not conditional on try_subfactors, because the split that creates
+                    // dest_factors is separate from the split caused by a division in the main
+                    // input expression
+                    try_find_subfactors(
+                        http,
+                        id,
+                        factor_finder,
+                        id_and_expr_regex,
+                        &mut new_subfactors,
+                        factor,
+                        subfactor_handling,
+                    )
+                    .await;
                 } else {
                     errors_this_iter += 1;
                 }
