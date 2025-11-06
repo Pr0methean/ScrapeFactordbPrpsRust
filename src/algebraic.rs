@@ -1045,7 +1045,8 @@ impl FactorFinder {
                                         {
                                             continue;
                                         }
-                                        let Some(subset_product) = checked_product_u128(&factor_subset)
+                                        let Some(subset_product) =
+                                            checked_product_u128(&factor_subset)
                                         else {
                                             continue;
                                         };
@@ -1055,7 +1056,9 @@ impl FactorFinder {
                                             % (subset_product as i128)
                                             == 0
                                         {
-                                            factors.extend(self.find_factors(&Numeric(subset_product)));
+                                            factors.extend(
+                                                self.find_factors(&Numeric(subset_product)),
+                                            );
                                         }
                                         if c > 0 && (n / subset_product).is_multiple_of(2) {
                                             continue;
@@ -1066,11 +1069,14 @@ impl FactorFinder {
                                             && let Some(root_c) = c.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                         {
-                                            if let Some(factor_u128) =
-                                                a.checked_pow(prime_for_root)
-                                                    .and_then(|an| an.checked_mul(b))
-                                                    .and_then(|anb| anb.checked_add_signed(c)) {
-                                                factors.extend(self.find_factors(&Numeric(factor_u128)));
+                                            if let Some(factor_u128) = a
+                                                .checked_pow(prime_for_root)
+                                                .and_then(|an| an.checked_mul(b))
+                                                .and_then(|anb| anb.checked_add_signed(c))
+                                            {
+                                                factors.extend(
+                                                    self.find_factors(&Numeric(factor_u128)),
+                                                );
                                             } else {
                                                 let factor_expr = format_compact!(
                                                     "{}{}{}{}",
@@ -1358,9 +1364,12 @@ impl FactorFinder {
 
 #[cfg(test)]
 mod tests {
-    use compact_str::format_compact;
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, power_multiset, multiset_union, multiset_intersection, multiset_difference};
+    use crate::algebraic::{
+        FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
+        lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset,
+    };
+    use compact_str::format_compact;
     use itertools::Itertools;
 
     #[test]
@@ -1444,22 +1453,22 @@ mod tests {
         assert_eq!(power_multiset.len(), 18);
         assert!(power_multiset.contains(&vec![]));
         assert!(power_multiset.contains(&vec![2]));
-        assert!(power_multiset.contains(&vec![2,2]));
+        assert!(power_multiset.contains(&vec![2, 2]));
         assert!(power_multiset.contains(&vec![3]));
-        assert!(power_multiset.contains(&vec![2,3]));
-        assert!(power_multiset.contains(&vec![2,2,3]));
-        assert!(power_multiset.contains(&vec![3,3]));
-        assert!(power_multiset.contains(&vec![2,3,3]));
-        assert!(power_multiset.contains(&vec![2,2,3,3]));
+        assert!(power_multiset.contains(&vec![2, 3]));
+        assert!(power_multiset.contains(&vec![2, 2, 3]));
+        assert!(power_multiset.contains(&vec![3, 3]));
+        assert!(power_multiset.contains(&vec![2, 3, 3]));
+        assert!(power_multiset.contains(&vec![2, 2, 3, 3]));
         assert!(power_multiset.contains(&vec![5]));
-        assert!(power_multiset.contains(&vec![2,5]));
-        assert!(power_multiset.contains(&vec![2,2,5]));
-        assert!(power_multiset.contains(&vec![3,5]));
-        assert!(power_multiset.contains(&vec![2,3,5]));
-        assert!(power_multiset.contains(&vec![2,2,3,5]));
-        assert!(power_multiset.contains(&vec![3,3,5]));
-        assert!(power_multiset.contains(&vec![2,3,3,5]));
-        assert!(power_multiset.contains(&vec![2,2,3,3,5]));
+        assert!(power_multiset.contains(&vec![2, 5]));
+        assert!(power_multiset.contains(&vec![2, 2, 5]));
+        assert!(power_multiset.contains(&vec![3, 5]));
+        assert!(power_multiset.contains(&vec![2, 3, 5]));
+        assert!(power_multiset.contains(&vec![2, 2, 3, 5]));
+        assert!(power_multiset.contains(&vec![3, 3, 5]));
+        assert!(power_multiset.contains(&vec![2, 3, 3, 5]));
+        assert!(power_multiset.contains(&vec![2, 2, 3, 3, 5]));
     }
 
     #[test]

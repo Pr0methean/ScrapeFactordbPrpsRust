@@ -1623,14 +1623,16 @@ async fn try_find_subfactors(
         .find_unique_factors(factor)
         .into_iter()
         .collect();
-    if let Expression(expr) = specifier_to_get_subfactors && let Numeric(_) = expr.into() {
+    if let Expression(expr) = specifier_to_get_subfactors
+        && let Numeric(_) = expr.into()
+    {
         // Compiler doesn't allow !let, so an empty then-block is needed
     } else if let Ok(known_subfactors) = factor_finder
-            .known_factors_as_digits(http, specifier_to_get_subfactors, true, false)
-            .await
-            && known_subfactors.len() > 1
-        {
-            subfactors.extend(known_subfactors);
+        .known_factors_as_digits(http, specifier_to_get_subfactors, true, false)
+        .await
+        && known_subfactors.len() > 1
+    {
+        subfactors.extend(known_subfactors);
     }
     let mut success = false;
     for subfactor in subfactors {
