@@ -1190,17 +1190,13 @@ impl FactorFinder {
                             factors
                         }
                         9 => {
-                            // addition/subtraction; only return common factors of both sides
-                            if captures[2] == *"1" {
-                                // Can't have any common factors
-                                vec![]
-                            } else {
-                                self.find_common_factors(
-                                    &captures[1].into(),
-                                    &captures[2].into(),
-                                    true,
-                                )
-                            }
+                            // addition/subtraction; only return common factors of both sides, and 2
+                            // if both are odd
+                            self.find_common_factors(
+                                &captures[1].into(),
+                                &captures[2].into(),
+                                true,
+                            )
                         }
                         _ => unsafe { unreachable_unchecked() },
                     }
