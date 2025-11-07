@@ -906,6 +906,7 @@ async fn queue_composites(
                 }
             }
             info!("Sent {c_sent} buffered C's to channel");
+            let _ = c_sender.reserve().await; // Prevent task from finishing until another C can be sent
         })
     }
 }
