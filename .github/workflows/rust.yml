@@ -73,13 +73,14 @@ jobs:
         yafu_timer_pid=$!
         ./yafu.sh <composites &
         yafu_pid=$!
-        wait "${rust_pid}" || true
         echo "Rust program exited"
         wait -n "${yafu_pid}" "${yafu_timer_pid}" || true
         echo "yafu time is up"
+        kill -TERM "${rust_pid}"
         # Prevent any more yafu processes from starting
         rm ./yafu || true
         rm composites || true
+        wait "${rust_pid}" || true
         yafus=$(ps -C yafu -o pid= || true)
         if [ "${yafus}" != "" ]; then
           echo "Canceling ${#yafus} unfinished yafu processes"
