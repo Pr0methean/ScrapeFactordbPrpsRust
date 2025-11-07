@@ -834,7 +834,7 @@ async fn queue_composites(
     http: &ThrottlingHttpClient,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZeroU128>,
-) -> Option<JoinHandle<()>> {
+) -> JoinHandle<()> {
     let mut c_sent = 0;
     let mut rng = rng();
     let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
@@ -860,8 +860,11 @@ async fn queue_composites(
         }
     }
     info!("{results_per_page} C search results retrieved");
+    let Some(composites_page) = composites_page else {
+        return task::spawn(async { () });
+    };
     let mut c_tasks: Box<[_]> = id_and_expr_regex
-        .captures_iter(&composites_page?)
+        .captures_iter(&composites_page)
         .flat_map(|capture| {
             Some(CompositeCheckTask {
                 id: capture[1].parse::<u128>().ok()?,
@@ -881,14 +884,14 @@ async fn queue_composites(
     }
     if c_buffered.is_empty() {
         info!("Sent {c_sent} C's to channel");
-        None
+        task::spawn(async { () })
     } else {
         info!(
             "Sent {c_sent} C's to channel; buffering {} more",
             c_buffered.len()
         );
         let c_sender = c_sender.clone();
-        Some(task::spawn(async move {
+        task::spawn(async move {
             let count = c_buffered.len();
             let mut c_sent = 0;
             for c_task in c_buffered {
@@ -903,7 +906,7 @@ async fn queue_composites(
                 }
             }
             info!("Sent {c_sent} buffered C's to channel");
-        }))
+        })
     }
 }
 
@@ -1015,9 +1018,7 @@ async fn main() -> anyhow::Result<()> {
     let factor_finder = FactorFinder::new();
     let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests);
     let mut c_buffer_task: JoinHandle<()> =
-        queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits)
-            .await
-            .unwrap_or_else(|| task::spawn(async {}));
+        queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1111,9 +1112,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         if new_c_buffer_task {
-            c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits)
-                .await
-                .unwrap_or_else(|| task::spawn(async {}));
+            c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
         }
     }
 }
