@@ -22,11 +22,10 @@ impl<T: Debug> PushbackReceiver<T> {
     }
 
     fn redrive_returned(&mut self) {
-        while let Ok(permit) = self.sender.try_reserve() {
-            if let Ok(item) = self.return_receiver.try_recv() {
+        while let Ok(permit) = self.sender.try_reserve()
+            && let Ok(item) = self.return_receiver.try_recv() {
                 info!("Redriving returned item {:?}", item);
                 permit.send(item);
-            }
         }
     }
 
