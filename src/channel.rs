@@ -21,7 +21,7 @@ impl<T: Debug> PushbackReceiver<T> {
         }
     }
 
-    fn refeed_returned(&mut self) {
+    fn redrive_returned(&mut self) {
         while let Ok(permit) = self.sender.try_reserve() {
             if let Ok(item) = self.return_receiver.try_recv() {
                 permit.send(item);
@@ -30,7 +30,7 @@ impl<T: Debug> PushbackReceiver<T> {
     }
 
     pub async fn recv(&mut self) -> (T, OwnedPermit<T>) {
-        self.refeed_returned();
+        self.redrive_returned();
         let return_permit = self.return_sender.clone().reserve_owned().await.unwrap();
         select! {
             biased;
@@ -46,7 +46,7 @@ impl<T: Debug> PushbackReceiver<T> {
     }
 
     pub fn try_recv(&mut self) -> Option<(T, OwnedPermit<T>)> {
-        self.refeed_returned();
+        self.redrive_returned();
         match self.return_sender.clone().try_reserve_owned().ok() {
             Some(return_permit) => {
                 if let Ok(received) = self.receiver.try_recv() {
