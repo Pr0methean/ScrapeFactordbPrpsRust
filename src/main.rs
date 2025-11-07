@@ -1001,7 +1001,6 @@ async fn main() -> anyhow::Result<()> {
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
-    let mut c_buffer_task: Option<JoinHandle<()>> = None;
     if std::env::var("CI").is_ok() {
         EXIT_TIME.set(Instant::now().add(Duration::from_mins(355)))?;
         COMPOSITES_OUT
@@ -1015,6 +1014,7 @@ async fn main() -> anyhow::Result<()> {
     let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
     let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests);
+    let mut c_buffer_task: JoinHandle<()> = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await.unwrap_or_else(|| task::spawn(async {()}));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1040,26 +1040,19 @@ async fn main() -> anyhow::Result<()> {
         do_checks_termination_receiver,
     ));
     'queue_tasks: loop {
+        let mut new_c_buffer_task = false;
         let select_start = Instant::now();
         select! {
             biased;
             _ = &mut main_termination_receiver => {
                 warn!("Received termination signal; exiting");
-                if let Some(c_buffer_task) = c_buffer_task.take() {
-                    c_buffer_task.abort();
-                }
+                c_buffer_task.abort();
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
-            c_permit = c_sender.reserve() => {
-                drop(c_permit);
-                if let Some(old_c_buffer_task) = c_buffer_task.take() {
-                    info!("Ready to send C's from buffer after {:?}", Instant::now() - select_start);
-                    let _ = old_c_buffer_task.await;
-                } else {
-                    info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
-                    c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
-                }
+            _ = &mut c_buffer_task => {
+                info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
+                new_c_buffer_task = true;
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
                 info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
@@ -1113,6 +1106,9 @@ async fn main() -> anyhow::Result<()> {
                 info!("Ready to search for U's after {:?}", Instant::now() - select_start);
                 queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits?, &mut u_filter, &factor_finder).await;
             }
+        }
+        if new_c_buffer_task {
+            c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await.unwrap_or_else(|| task::spawn(async {()}));
         }
     }
 }
