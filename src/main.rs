@@ -1014,7 +1014,10 @@ async fn main() -> anyhow::Result<()> {
     let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
     let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests);
-    let mut c_buffer_task: JoinHandle<()> = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await.unwrap_or_else(|| task::spawn(async {()}));
+    let mut c_buffer_task: JoinHandle<()> =
+        queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits)
+            .await
+            .unwrap_or_else(|| task::spawn(async {}));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1108,7 +1111,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         if new_c_buffer_task {
-            c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await.unwrap_or_else(|| task::spawn(async {()}));
+            c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits)
+                .await
+                .unwrap_or_else(|| task::spawn(async {}));
         }
     }
 }
@@ -1445,7 +1450,12 @@ async fn find_and_submit_factors(
                 let mut new_dest_factors = BTreeSet::new();
                 for factor in dest_factors.iter() {
                     if let Ok(already_known_subfactors) = factor_finder
-                        .known_factors_as_digits(http, Expression(&factor.to_string()), false, false)
+                        .known_factors_as_digits(
+                            http,
+                            Expression(&factor.to_string()),
+                            false,
+                            false,
+                        )
                         .await
                     {
                         if already_known_subfactors.is_empty() {
@@ -1470,7 +1480,10 @@ async fn find_and_submit_factors(
             new_subfactors.retain(|key, _| !all_factors.contains_key(key));
             if !dest_factors.is_empty() && !try_with_dest_factors.is_empty() {
                 let count_to_try_with_dest_factors = try_with_dest_factors.len();
-                info!("{id}: Retrying {count_to_try_with_dest_factors} factors using {} destination factors", dest_factors.len());
+                info!(
+                    "{id}: Retrying {count_to_try_with_dest_factors} factors using {} destination factors",
+                    dest_factors.len()
+                );
                 let mut did_not_divide = vec![0usize; count_to_try_with_dest_factors];
                 let mut new_dest_factors = Vec::new();
                 'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
@@ -1478,8 +1491,10 @@ async fn find_and_submit_factors(
                         if all_factors.get(&factor) == Some(&AlreadySubmitted) {
                             continue;
                         }
-                        if factor == *dest_factor || dest_factors_that_do_not_divide
-                            .contains(&(dest_factor.clone(), factor.clone())) {
+                        if factor == *dest_factor
+                            || dest_factors_that_do_not_divide
+                                .contains(&(dest_factor.clone(), factor.clone()))
+                        {
                             did_not_divide[index] += 1; // Needed to avoid an undercount
                             continue;
                         }
