@@ -12,9 +12,9 @@ use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::{watch, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 
 pub const MAX_RETRIES: usize = 40;
@@ -32,6 +32,7 @@ pub struct ThrottlingHttpClient {
     requests_per_hour: u32,
     request_semaphore: Arc<Semaphore>,
     all_threads_blocked_until: Arc<AtomicInstant>,
+    termination_receiver: watch::Receiver<Arc<AtomicBool>>
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -58,7 +59,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
 }
 
 impl ThrottlingHttpClient {
-    pub fn new(requests_per_hour: NonZeroU32, max_concurrent_requests: usize) -> Self {
+    pub fn new(requests_per_hour: NonZeroU32, max_concurrent_requests: usize, termination_receiver: watch::Receiver<Arc<AtomicBool>>) -> Self {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
@@ -90,6 +91,7 @@ impl ThrottlingHttpClient {
             requests_left_last_check: requests_left_last_check.into(),
             request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
             all_threads_blocked_until: AtomicInstant::now().into(),
+            termination_receiver
         }
     }
 
@@ -147,11 +149,16 @@ impl ThrottlingHttpClient {
             }
             sleep(retry_delay).await;
         }
-        error!("Retried {url} too many times; restarting");
-        let mut raw_args = std::env::args_os();
-        let cmd = raw_args.next().unwrap();
-        let e = Command::new(cmd).args(raw_args).exec();
-        panic!("Failed to restart: {e}");
+        if self.termination_receiver.borrow().load(Acquire) {
+            error!("Retried {url} too many times after termination was signaled; exiting");
+            exit(0);
+        } else {
+            error!("Retried {url} too many times; restarting");
+            let mut raw_args = std::env::args_os();
+            let cmd = raw_args.next().unwrap();
+            let e = Command::new(cmd).args(raw_args).exec();
+            panic!("Failed to restart: {e}");
+        }
     }
 
     pub async fn retrying_get_and_decode_or(
