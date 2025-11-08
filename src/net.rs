@@ -12,10 +12,11 @@ use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use tokio::sync::{watch, Semaphore};
+use tokio::sync::{Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
+use crate::shutdown::Shutdown;
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -32,7 +33,7 @@ pub struct ThrottlingHttpClient {
     requests_per_hour: u32,
     request_semaphore: Arc<Semaphore>,
     all_threads_blocked_until: Arc<AtomicInstant>,
-    termination_receiver: watch::Receiver<Arc<AtomicBool>>
+    shutdown_receiver: Shutdown
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -59,7 +60,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
 }
 
 impl ThrottlingHttpClient {
-    pub fn new(requests_per_hour: NonZeroU32, max_concurrent_requests: usize, termination_receiver: watch::Receiver<Arc<AtomicBool>>) -> Self {
+    pub fn new(requests_per_hour: NonZeroU32, max_concurrent_requests: usize, shutdown_receiver: Shutdown) -> Self {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
@@ -91,7 +92,7 @@ impl ThrottlingHttpClient {
             requests_left_last_check: requests_left_last_check.into(),
             request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
             all_threads_blocked_until: AtomicInstant::now().into(),
-            termination_receiver
+            shutdown_receiver
         }
     }
 
@@ -149,8 +150,8 @@ impl ThrottlingHttpClient {
             }
             sleep(retry_delay).await;
         }
-        if self.termination_receiver.borrow().load(Acquire) {
-            error!("Retried {url} too many times after termination was signaled; exiting");
+        if self.shutdown_receiver.clone().check_for_shutdown() {
+            error!("Retried {url} too many times after shutdown was signaled; exiting");
             exit(0);
         } else {
             error!("Retried {url} too many times; restarting");

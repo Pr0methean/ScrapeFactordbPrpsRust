@@ -8,6 +8,7 @@
 mod algebraic;
 mod channel;
 mod net;
+mod shutdown;
 
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -39,7 +40,6 @@ use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::process::exit;
-use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use tokio::runtime::Runtime;
@@ -47,10 +47,11 @@ use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, oneshot, watch};
+use tokio::sync::{Mutex, OnceCell, oneshot, broadcast};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use crate::shutdown::Shutdown;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -529,7 +530,7 @@ async fn do_checks(
     http: ThrottlingHttpClient,
     factor_finder: FactorFinder,
     id_and_expr_regex: Regex,
-    mut termination_receiver: watch::Receiver<Arc<AtomicBool>>,
+    mut shutdown_receiver: Shutdown,
 ) {
     info!("do_checks task starting");
     let mut next_unknown_attempt = Instant::now();
@@ -555,13 +556,9 @@ async fn do_checks(
     let mut successful_select_end = Instant::now();
     loop {
         let task = select! {
-            _ = termination_receiver.changed() => {
-                if termination_receiver.borrow().load(Acquire) {
-                    warn!("Received termination signal; exiting");
-                    return;
-                } else {
-                    None
-                }
+            _ = shutdown_receiver.recv() => {
+                warn!("Received shutdown signal; exiting");
+                return;
             }
             _ = sleep_until(next_unknown_attempt) => {
                 if retry.is_some() {
@@ -911,7 +908,7 @@ async fn queue_composites(
 }
 
 async fn handle_signals(
-    termination_sender: watch::Sender<Arc<AtomicBool>>,
+    shutdown_sender: broadcast::Sender<()>,
     installed_sender: oneshot::Sender<()>,
 ) {
     let sigint = ctrl_c();
@@ -934,21 +931,20 @@ async fn handle_signals(
     }
     #[cfg(not(unix))]
     let _ = sigint.await;
-    termination_sender.send_modify(|x| x.store(true, Release));
-    if let Err(e) = termination_sender.send(AtomicBool::new(true).into()) {
-        error!("Error sending termination signal: {e}")
+    if let Err(e) = shutdown_sender.send(()) {
+        error!("Error sending shutdown signal: {e}");
     }
 }
 
-// One worker thread for do_checks(), one for handle_signals(), one for main()
+// One worker thread for do_checks(), one for main(), one for c_buffer_task
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 async fn main() -> anyhow::Result<()> {
-    let (termination_sender, mut termination_receiver) = watch::channel(AtomicBool::new(false).into());
+    let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
     let signal_handler_runtime = Runtime::new()?;
     signal_handler_runtime.spawn(handle_signals(
-        termination_sender,
+        shutdown_sender,
         installed_sender,
     ));
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
@@ -1011,7 +1007,7 @@ async fn main() -> anyhow::Result<()> {
     let c_filter = CuckooFilter::with_capacity(2500);
     let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
-    let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests, termination_receiver.clone());
+    let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests, shutdown_receiver.clone());
     let mut c_buffer_task: JoinHandle<()> =
         queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
     FAILED_U_SUBMISSIONS_OUT
@@ -1036,19 +1032,17 @@ async fn main() -> anyhow::Result<()> {
         http.clone(),
         factor_finder.clone(),
         id_and_expr_regex.clone(),
-        termination_receiver.clone(),
+        shutdown_receiver.clone(),
     ));
     'queue_tasks: loop {
         let mut new_c_buffer_task = false;
         let select_start = Instant::now();
         select! {
             biased;
-            _ = termination_receiver.changed() => {
-                if termination_receiver.borrow().load(Acquire) {
-                    warn!("Received termination signal; exiting");
-                    c_buffer_task.abort();
-                    return Ok(());
-                }
+            _ = shutdown_receiver.recv() => {
+                warn!("Received shutdown signal; exiting");
+                c_buffer_task.abort();
+                return Ok(());
             }
             // C comes first because otherwise it gets starved
             _ = &mut c_buffer_task => {
