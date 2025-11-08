@@ -76,7 +76,7 @@ jobs:
         echo "Rust program exited"
         wait -n "${yafu_pid}" "${yafu_timer_pid}" || true
         echo "yafu time is up"
-        kill -TERM "${rust_pid}"
+        kill -TERM "${rust_pid}" || true
         # Prevent any more yafu processes from starting
         rm ./yafu || true
         rm composites || true
