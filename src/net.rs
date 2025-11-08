@@ -1,3 +1,4 @@
+use crate::shutdown::Shutdown;
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use anyhow::Error;
 use atomic_time::AtomicInstant;
@@ -14,9 +15,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use tokio::sync::{Semaphore};
+use tokio::sync::Semaphore;
 use tokio::time::{Instant, sleep, sleep_until};
-use crate::shutdown::Shutdown;
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -33,7 +33,7 @@ pub struct ThrottlingHttpClient {
     requests_per_hour: u32,
     request_semaphore: Arc<Semaphore>,
     all_threads_blocked_until: Arc<AtomicInstant>,
-    shutdown_receiver: Shutdown
+    shutdown_receiver: Shutdown,
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -60,7 +60,11 @@ impl<'a> ThrottlingRequestBuilder<'a> {
 }
 
 impl ThrottlingHttpClient {
-    pub fn new(requests_per_hour: NonZeroU32, max_concurrent_requests: usize, shutdown_receiver: Shutdown) -> Self {
+    pub fn new(
+        requests_per_hour: NonZeroU32,
+        max_concurrent_requests: usize,
+        shutdown_receiver: Shutdown,
+    ) -> Self {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
@@ -92,7 +96,7 @@ impl ThrottlingHttpClient {
             requests_left_last_check: requests_left_last_check.into(),
             request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
             all_threads_blocked_until: AtomicInstant::now().into(),
-            shutdown_receiver
+            shutdown_receiver,
         }
     }
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::sync::broadcast;
-use tokio::sync::broadcast::{channel, Sender};
+use tokio::sync::broadcast::{Sender, channel};
 
 /// Listens for the server shutdown signal.
 ///
@@ -28,10 +28,13 @@ impl Shutdown {
     /// Create a new `Shutdown` and a sender for it.
     pub(crate) fn new() -> (Sender<()>, Shutdown) {
         let (sender, notify) = channel(1);
-        (sender, Shutdown {
-            is_shutdown: Arc::new(false.into()),
-            notify,
-        })
+        (
+            sender,
+            Shutdown {
+                is_shutdown: Arc::new(false.into()),
+                notify,
+            },
+        )
     }
 
     /// Returns `true` if the shutdown signal has been received.
@@ -67,7 +70,7 @@ impl Clone for Shutdown {
     fn clone(&self) -> Self {
         Shutdown {
             is_shutdown: self.is_shutdown.clone(),
-            notify: self.notify.resubscribe()
+            notify: self.notify.resubscribe(),
         }
     }
 }

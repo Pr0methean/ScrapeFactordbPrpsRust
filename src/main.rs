@@ -18,6 +18,7 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{Factor, FactorFinder};
+use crate::shutdown::Shutdown;
 use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
@@ -47,11 +48,10 @@ use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, oneshot, broadcast};
+use tokio::sync::{Mutex, OnceCell, broadcast, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::shutdown::Shutdown;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -857,7 +857,7 @@ async fn queue_composites(
     }
     info!("{results_per_page} C search results retrieved");
     let Some(composites_page) = composites_page else {
-        return task::spawn(async {  });
+        return task::spawn(async {});
     };
     let mut c_tasks: Box<[_]> = id_and_expr_regex
         .captures_iter(&composites_page)
@@ -880,7 +880,7 @@ async fn queue_composites(
     }
     if c_buffered.is_empty() {
         info!("Sent {c_sent} C's to channel");
-        task::spawn(async {  })
+        task::spawn(async {})
     } else {
         info!(
             "Sent {c_sent} C's to channel; buffering {} more",
@@ -943,10 +943,7 @@ async fn main() -> anyhow::Result<()> {
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
     let signal_handler_runtime = Runtime::new()?;
-    signal_handler_runtime.spawn(handle_signals(
-        shutdown_sender,
-        installed_sender,
-    ));
+    signal_handler_runtime.spawn(handle_signals(shutdown_sender, installed_sender));
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -1007,7 +1004,11 @@ async fn main() -> anyhow::Result<()> {
     let c_filter = CuckooFilter::with_capacity(2500);
     let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
-    let http = ThrottlingHttpClient::new(rph_limit, max_concurrent_requests, shutdown_receiver.clone());
+    let http = ThrottlingHttpClient::new(
+        rph_limit,
+        max_concurrent_requests,
+        shutdown_receiver.clone(),
+    );
     let mut c_buffer_task: JoinHandle<()> =
         queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
     FAILED_U_SUBMISSIONS_OUT
