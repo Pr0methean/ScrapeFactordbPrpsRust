@@ -857,7 +857,7 @@ async fn queue_composites(
     }
     info!("{results_per_page} C search results retrieved");
     let Some(composites_page) = composites_page else {
-        return task::spawn(async { () });
+        return task::spawn(async {  });
     };
     let mut c_tasks: Box<[_]> = id_and_expr_regex
         .captures_iter(&composites_page)
@@ -880,7 +880,7 @@ async fn queue_composites(
     }
     if c_buffered.is_empty() {
         info!("Sent {c_sent} C's to channel");
-        task::spawn(async { () })
+        task::spawn(async {  })
     } else {
         info!(
             "Sent {c_sent} C's to channel; buffering {} more",
