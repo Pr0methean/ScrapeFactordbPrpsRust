@@ -154,13 +154,14 @@ impl ThrottlingHttpClient {
             }
             sleep(retry_delay).await;
         }
-        if self.shutdown_receiver.clone().check_for_shutdown() {
+        let mut shutdown_receiver = self.shutdown_receiver.clone();
+        let mut raw_args = std::env::args_os();
+        let cmd = raw_args.next().unwrap();
+        if shutdown_receiver.check_for_shutdown() {
             error!("Retried {url} too many times after shutdown was signaled; exiting");
             exit(0);
         } else {
             error!("Retried {url} too many times; restarting");
-            let mut raw_args = std::env::args_os();
-            let cmd = raw_args.next().unwrap();
             let e = Command::new(cmd).args(raw_args).exec();
             panic!("Failed to restart: {e}");
         }
