@@ -38,13 +38,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::mem::forget;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use tokio::runtime::Runtime;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -558,7 +556,7 @@ async fn do_checks(
     loop {
         let task = select! {
             _ = shutdown_receiver.recv() => {
-                warn!("Received shutdown signal; exiting");
+                warn!("do_checks received shutdown signal; exiting");
                 return;
             }
             _ = sleep_until(next_unknown_attempt) => {
@@ -937,14 +935,13 @@ async fn handle_signals(
     }
 }
 
-// One worker thread for do_checks(), one for main(), one for c_buffer_task
-#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
+// One worker thread for do_checks(), one for main(), one for c_buffer_task, one for handle_signals
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
-    let signal_handler_runtime = Runtime::new()?;
-    signal_handler_runtime.spawn(handle_signals(shutdown_sender, installed_sender));
+    task::spawn(handle_signals(shutdown_sender, installed_sender));
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -1042,9 +1039,8 @@ async fn main() -> anyhow::Result<()> {
         select! {
             biased;
             _ = shutdown_receiver.recv() => {
-                warn!("Received shutdown signal; exiting");
+                warn!("Main thread received shutdown signal; exiting");
                 c_buffer_task.abort();
-                forget(signal_handler_runtime); // Work around the fact a nested runtime can't be dropped
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
