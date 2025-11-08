@@ -1693,17 +1693,17 @@ async fn get_known_algebraic_factors(
                     "{id}: Algebraic factor with ID {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                 );
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
-                    if let Ok(subfactors) = factor_finder
+                    let subfactors = factor_finder
                         .known_factors_as_digits(http, Id(factor_id), include_ff, true)
-                        .await
-                    {
-                        for subfactor in subfactors {
-                            all_factors.entry(subfactor).or_insert(ByExpression);
-                        }
-                    } else {
+                        .await.unwrap_or_else(|_| {
                         error!(
-                            "{id}: Skipping ellided factor with ID {factor_id} because we failed to fetch it in full"
+                            "{id}: Not fully processing elided factor with ID {factor_id} because we failed to fetch it in full"
                         );
+                        // Can still check for factors of 2 and 5
+                        factor_finder.find_unique_factors(&Factor::String(factor_digits_or_expr.into()))
+                         });
+                    for subfactor in subfactors {
+                        all_factors.entry(subfactor).or_insert(ByExpression);
                     }
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}");
