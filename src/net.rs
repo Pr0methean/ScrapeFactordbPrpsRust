@@ -41,6 +41,11 @@ pub struct ThrottlingRequestBuilder<'a> {
     client: &'a ThrottlingHttpClient,
 }
 
+pub struct ResourceLimits {
+    pub cpu_tenths_spent: usize,
+    pub resets_at: Instant
+}
+
 impl<'a> ThrottlingRequestBuilder<'a> {
     pub fn form<T: Serialize + ?Sized>(self, payload: &T) -> Self {
         ThrottlingRequestBuilder {
@@ -102,9 +107,10 @@ impl ThrottlingHttpClient {
 
     pub async fn parse_resource_limits(
         &self,
-        bases_before_next_cpu_check: &mut u64,
+        bases_before_next_cpu_check: &mut usize,
         resources_text: &str,
-    ) -> Option<(u64, u64)> {
+    ) -> Option<ResourceLimits> {
+        let now = Instant::now();
         let Some(captures) = self.resources_regex.captures_iter(resources_text).next() else {
             *bases_before_next_cpu_check = 1;
             return None;
@@ -137,12 +143,15 @@ impl ThrottlingHttpClient {
         }
         // info!("Resources parsed: {}, {}, {}, {}",
         //     cpu_seconds, cpu_tenths_within_second, minutes_to_reset, seconds_within_minute_to_reset);
-        let cpu_tenths_spent_after = cpu_seconds.parse::<u64>().unwrap() * 10
-            + cpu_tenths_within_second.parse::<u64>().unwrap();
-        CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent_after, Release);
+        let cpu_tenths_spent = cpu_seconds.parse::<usize>().unwrap() * 10
+            + cpu_tenths_within_second.parse::<usize>().unwrap();
+        CPU_TENTHS_SPENT_LAST_CHECK.store(cpu_tenths_spent, Release);
         let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
-        Some((cpu_tenths_spent_after, seconds_to_reset))
+        let resets_at = now + Duration::from_secs(seconds_to_reset);
+        Some(ResourceLimits {
+            cpu_tenths_spent, resets_at
+        })
     }
 
     /// Executes a GET request with a large reasonable default number of retries, or else
@@ -220,20 +229,19 @@ impl ThrottlingHttpClient {
     pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
-        if let Some((_, seconds_to_reset)) =
-            self.parse_resource_limits(&mut u64::MAX, &response).await
+        if let Some(ResourceLimits {resets_at, ..}) =
+            self.parse_resource_limits(&mut usize::MAX, &response).await
         {
-            let reset_time = Instant::now() + Duration::from_secs(seconds_to_reset);
             self.all_threads_blocked_until
-                .store(reset_time.into(), Release);
+                .store(resets_at.into(), Release);
             if EXIT_TIME
                 .get()
-                .is_some_and(|exit_time| exit_time <= &reset_time)
+                .is_some_and(|exit_time| exit_time <= &resets_at)
             {
                 error!("Resource limits reached and won't reset during this process's lifespan");
                 exit(0);
-            } else {
-                warn!("Resource limits reached; throttling for {seconds_to_reset} seconds");
+            } else if let Some(throttling_duration) = resets_at.checked_duration_since(Instant::now()) {
+                warn!("Resource limits reached; throttling for {throttling_duration:?}");
             }
             return None;
         }
@@ -242,8 +250,8 @@ impl ThrottlingHttpClient {
 
     pub async fn try_get_resource_limits(
         &self,
-        bases_before_next_cpu_check: &mut u64,
-    ) -> Option<(u64, u64)> {
+        bases_before_next_cpu_check: &mut usize,
+    ) -> Option<ResourceLimits> {
         let response = self
             .try_get_and_decode_core("https://factordb.com/res.php")
             .await?;

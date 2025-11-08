@@ -42,7 +42,7 @@ use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -51,6 +51,7 @@ use tokio::sync::{Mutex, OnceCell, broadcast, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use crate::net::ResourceLimits;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -511,13 +512,13 @@ async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
         .await;
 }
 
-const MAX_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 127;
+const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 127;
 
-const MIN_BASES_BETWEEN_RESOURCE_CHECKS: u64 = 16;
+const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
 
-const MAX_CPU_BUDGET_TENTHS: u64 = 6000;
+const MAX_CPU_BUDGET_TENTHS: usize = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
-static CPU_TENTHS_SPENT_LAST_CHECK: AtomicU64 = AtomicU64::new(MAX_CPU_BUDGET_TENTHS);
+static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
@@ -748,7 +749,7 @@ async fn try_handle_unknown(
 async fn throttle_if_necessary(
     http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
-    bases_before_next_cpu_check: &mut u64,
+    bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
@@ -769,37 +770,36 @@ async fn throttle_if_necessary(
         )
         .await; // allow for delay in CPU accounting
     }
-    let cpu_check_time = Instant::now();
     // info!("Resources fetched");
-    let Some((cpu_tenths_spent_after, seconds_to_reset)) = http
+    let Some(ResourceLimits {cpu_tenths_spent, resets_at}) = http
         .try_get_resource_limits(bases_before_next_cpu_check)
         .await
     else {
         error!("Failed to parse resource limits");
         return false;
     };
-    let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent_after);
+    let seconds_to_reset = resets_at.saturating_duration_since(Instant::now()).as_secs_f64();
+    let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent);
     if !NO_RESERVE.load(Acquire) {
         tenths_remaining =
-            tenths_remaining.saturating_sub(seconds_to_reset * seconds_to_reset / 18000);
+            tenths_remaining.saturating_sub((seconds_to_reset * seconds_to_reset / 18000.0) as usize);
     }
     let mut bases_remaining = (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
     if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS {
         warn!(
             "CPU time spent this cycle: {:.1} seconds. Throttling {} seconds due to high server CPU usage",
-            cpu_tenths_spent_after as f64 * 0.1,
+            cpu_tenths_spent as f64 * 0.1,
             seconds_to_reset
         );
-        let cpu_reset_time = cpu_check_time.add(Duration::from_secs(seconds_to_reset));
         if EXIT_TIME
             .get()
-            .is_some_and(|exit_time| *exit_time <= cpu_reset_time)
+            .is_some_and(|exit_time| *exit_time <= resets_at)
         {
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
         composites_while_waiting(
-            cpu_reset_time,
+            resets_at,
             http,
             c_receiver,
             c_filter,
@@ -815,8 +815,8 @@ async fn throttle_if_necessary(
         }
         info!(
             "CPU time spent this cycle: {:.1} seconds; reset in {} seconds; checking again after {} bases",
-            cpu_tenths_spent_after as f64 * 0.1,
-            seconds_to_reset,
+            cpu_tenths_spent as f64 * 0.1,
+            seconds_to_reset as usize,
             bases_remaining
         );
         *bases_before_next_cpu_check = bases_remaining;
