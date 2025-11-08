@@ -914,6 +914,7 @@ impl FactorFinder {
             "^([0-9]+!)$",
             "^([0-9]+#)$",
             "^([0-9]+)$",
+            "^([0-9]+\\.\\.+[0-9]+)$",
             "^\\(([^()]+)\\)$",
             "^([^+-]+|\\([^()]+\\))/([^+-]+|\\([^()]+\\))$",
             "^([^+-]+|\\([^()]+\\))\\*([^+-]+|\\([^()]+\\))$",
@@ -1180,10 +1181,23 @@ impl FactorFinder {
                             factors
                         }
                         6 => {
+                            // elided number
+                            match expr.chars().last() {
+                                Some('0') => vec![Numeric(2), Numeric(5)],
+                                Some('5') => vec![Numeric(5)],
+                                Some('2' | '4' | '6' | '8') => vec![Numeric(5)],
+                                Some('1' | '3' | '7' | '9') => vec![],
+                                x => {
+                                    error!("Invalid last digit: {x:?}");
+                                    vec![]
+                                }
+                            }
+                        }
+                        7 => {
                             // parens
                             self.find_factors(&captures[1].into())
                         }
-                        7 => {
+                        8 => {
                             // division by another expression
                             let numerator = self.find_factors(&captures[1].into());
                             let denominator: Factor = captures[2].into();
@@ -1194,7 +1208,7 @@ impl FactorFinder {
                             };
                             multiset_difference(numerator, &denominator)
                         }
-                        8 => {
+                        9 => {
                             let mut factors = Vec::new();
                             // multiplication
                             for term in [captures[1].into(), captures[2].into()] {
@@ -1207,7 +1221,7 @@ impl FactorFinder {
                             }
                             factors
                         }
-                        9 => {
+                        10 => {
                             // addition/subtraction; only return common factors of both sides, and 2
                             // if both are odd
                             self.find_common_factors(&captures[1].into(), &captures[2].into(), true)
