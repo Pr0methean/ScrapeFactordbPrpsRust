@@ -38,6 +38,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
+use std::mem::forget;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::process::exit;
@@ -1043,6 +1044,7 @@ async fn main() -> anyhow::Result<()> {
             _ = shutdown_receiver.recv() => {
                 warn!("Received shutdown signal; exiting");
                 c_buffer_task.abort();
+                forget(signal_handler_runtime); // Work around the fact a nested runtime can't be dropped
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
