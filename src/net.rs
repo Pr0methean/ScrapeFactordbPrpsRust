@@ -150,7 +150,12 @@ impl ThrottlingHttpClient {
             }
             sleep(retry_delay).await;
         }
-        if self.shutdown_receiver.clone().check_for_shutdown() {
+        // Safety: exiting or restarting the program is idempotent
+        if unsafe {
+            let ptr: *const Shutdown = &self.shutdown_receiver;
+            let mut_ptr: *mut Shutdown = ptr as *mut Shutdown;
+            mut_ptr.as_mut().unwrap().check_for_shutdown()
+        } {
             error!("Retried {url} too many times after shutdown was signaled; exiting");
             exit(0);
         } else {
