@@ -1306,7 +1306,7 @@ async fn find_and_submit_factors(
     let mut accepted_factors = 0;
     let mut already_fully_factored = BTreeSet::new();
     let mut already_checked_for_algebraic = BTreeSet::new();
-    for factor_vid in digits_or_expr_full.into_iter() {
+    for factor_vid in digits_or_expr_full.into_iter().rev() {
         let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
         add_algebraic_factors_to_graph(
             http,
@@ -1423,7 +1423,7 @@ async fn find_and_submit_factors(
             if dest_factors.is_empty() {
                 continue;
             };
-            dest_factors.sort_unstable_by_key(|(_, factor)| factor.clone());
+            dest_factors.sort_by_key(|(_, factor)| factor.clone());
             let shortest_paths = ShortestPaths::on(&divisibility_graph)
                 .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
                 .run(factor_id)
@@ -1558,11 +1558,6 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
     factor: &Factor<T>,
 ) -> bool {
     let mut any_added = false;
-    let subfactors = factor_finder.find_unique_factors(factor);
-    for subfactor in subfactors {
-        let (_, added) = add_factor_node(divisibility_graph, &subfactor);
-        any_added |= added;
-    }
     if !skip_looking_up_listed_algebraic {
         let listed_algebraic_factors =
             get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, true).await;
@@ -1574,6 +1569,12 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
                 ids.insert(algebraic_factor_node_id, algebraic_factor_id);
             }
         }
+    }
+    let mut subfactors = factor_finder.find_unique_factors(factor);
+    subfactors.sort();
+    for subfactor in subfactors.into_iter().rev() {
+        let (_, added) = add_factor_node(divisibility_graph, &subfactor);
+        any_added |= added;
     }
     any_added
 }
