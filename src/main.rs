@@ -1332,7 +1332,7 @@ async fn find_and_submit_factors(
         .await;
     }
     // Simplest case: try submitting all factors as factors of the root
-    let mut any_failed = false;
+    let mut any_failed_retryably = false;
     for (factor_vid, factor) in divisibility_graph
         .vertices()
         .map(|vertex| (vertex.id, vertex.attr.clone()))
@@ -1354,8 +1354,7 @@ async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 divisibility_graph.add_edge(&factor_vid, &root_node, false);
-                any_failed = true;
-                add_algebraic_factors_to_graph(
+                any_failed_retryably |= add_algebraic_factors_to_graph(
                     http,
                     id,
                     factor_finder,
@@ -1369,11 +1368,11 @@ async fn find_and_submit_factors(
                 already_checked_for_algebraic.insert(factor_vid);
             }
             _ => {
-                any_failed = true;
+                any_failed_retryably = true;
             }
         }
     }
-    if !any_failed {
+    if !any_failed_retryably {
         info!("{id}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
     }
