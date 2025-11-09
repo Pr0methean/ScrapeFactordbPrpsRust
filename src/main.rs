@@ -1390,7 +1390,7 @@ async fn find_and_submit_factors(
                     for known_factor in known_factors {
                         let (factor_node, _) =
                             add_factor_node(&mut divisibility_graph, &Factor::String(known_factor));
-                        divisibility_graph.add_edge(&factor_node, &root_node, true);
+                        let _ = divisibility_graph.try_add_edge(&factor_node, &root_node, true);
                     }
                 }
             }
