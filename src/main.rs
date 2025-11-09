@@ -4,6 +4,8 @@
 #![feature(const_destruct)]
 #![feature(unboxed_closures)]
 #![feature(fn_traits)]
+#![feature(never_type)]
+#![feature(btree_set_entry)]
 
 mod algebraic;
 mod channel;
@@ -12,7 +14,6 @@ mod shutdown;
 
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
-use crate::SubfactorHandling::{AlreadySubmitted, ByExpression, ById, Irreducible};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
@@ -33,8 +34,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::PartialEq;
-use std::collections::btree_map::Entry::{Occupied, Vacant};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Display;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
@@ -43,6 +44,12 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use gryf::algo::ShortestPaths;
+use gryf::core::{EdgeSet, GraphAdd, GraphRef, VertexSet};
+use gryf::core::facts::complete_graph_edge_count;
+use gryf::core::id::{DefaultId, VertexId};
+use gryf::core::marker::Directed;
+use gryf::storage::AdjMatrix;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -182,7 +189,7 @@ async fn check_composite(
         info!("{id}: Skipping duplicate C");
         return true;
     }
-    let mut checks_triggered = if http
+    let checks_triggered = if http
         .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
         .await
         .is_some()
@@ -208,76 +215,27 @@ async fn check_composite(
                 return true;
             }
             let subfactors_may_have_algebraic = factors.len() > 1;
-            let mut factors: BTreeMap<Factor, SubfactorHandling> = factors
-                .into_iter()
-                .map(|factor| (factor, AlreadySubmitted))
-                .collect();
-            // Only look up listed algebraic factors once, since we only have the one ID and not the
-            // IDs of any known factors
-            get_known_algebraic_factors(
-                http,
-                id,
-                factor_finder,
-                id_and_expr_regex,
-                &mut factors,
-                false,
-            )
-            .await;
-            let mut factors_found = false;
-            for (factor, subfactor_handling) in factors.iter() {
-                if let Factor::String(s) = factor {
-                    // If we have a subfactor's ID, we can submit factors to it instead of to the
-                    // bigger factor, and it may have algebraic factors that we can find separately.
-                    let (id_for_submission, may_have_separate_listed_algebraic) =
-                        if let ById(factor_id) = subfactor_handling {
-                            if http
-                                .try_get_and_decode(&format!(
-                                    "https://factordb.com/sequences.php?check={factor_id}"
-                                ))
-                                .await
-                                .is_some()
-                            {
-                                info!("{id}: Checked C subfactor {factor_id}");
-                                checks_triggered = true;
-                            }
-                            (*factor_id, subfactors_may_have_algebraic)
-                        } else {
-                            (id, false)
-                        };
-                    if find_and_submit_factors(
-                        http,
-                        id_for_submission,
-                        s,
-                        factor_finder,
-                        id_and_expr_regex,
-                        true,
-                        !may_have_separate_listed_algebraic,
-                    )
-                    .await
-                    {
-                        factors_found = true;
-                    } else if *subfactor_handling != AlreadySubmitted {
-                        let result = report_factor(http, id, factor).await;
-                        match result {
-                            Accepted => factors_found = true,
-                            AlreadyFullyFactored => {
-                                warn!("{id}: C already fully factored");
-                                return true;
-                            }
-                            _ => {}
-                        }
+            let mut factors_submitted = false;
+            let mut factors_to_dispatch = Vec::with_capacity(factors.len());
+            for factor in factors {
+                if let Some(factor_str) = factor.as_str() {
+                    if find_and_submit_factors(http, id, factor_str, factor_finder, id_and_expr_regex,
+                                               true, !subfactors_may_have_algebraic).await {
+                        factors_submitted = true;
+                    } else {
+                        factors_to_dispatch.push(factor);
                     }
                 }
             }
-            if factors_found {
-                info!("{id}: Skipping further C checks because factors were found");
-                return true;
-            }
             let mut dispatched = false;
             if let Some(out) = COMPOSITES_OUT.get() {
+                if factors_to_dispatch.is_empty() {
+                    info!("{id}: Skipping dispatch of C because already factored");
+                    return true;
+                }
                 let mut out = out.lock().await;
-                let mut result = factors
-                    .into_keys()
+                let mut result = factors_to_dispatch
+                    .into_iter()
                     .map(|factor| out.write_fmt(format_args!("{factor}\n")))
                     .flat_map(Result::err)
                     .take(1);
@@ -289,7 +247,7 @@ async fn check_composite(
                     dispatched = true;
                 }
             }
-            if !dispatched && !checks_triggered {
+            if !dispatched && !checks_triggered && !factors_submitted {
                 return_permit.send(CompositeCheckTask { id, digits_or_expr });
                 info!("{id}: Requeued C");
                 false
@@ -350,9 +308,9 @@ async fn get_prp_remaining_bases(
                     // no known factors, but N-1 must be even if N is PRP
                 }
                 _ => {
-                    nm1_known_to_divide_2 = nm1_factors[0] == Numeric(2);
+                    nm1_known_to_divide_2 = nm1_factors[0].as_u128() == Some(2);
                     nm1_known_to_divide_3 =
-                        nm1_factors[0] == Numeric(3) || nm1_factors[1] == Numeric(3);
+                        nm1_factors[0].as_u128() == Some(3) || nm1_factors[1].as_u128() == Some(3);
                 }
             }
         }
@@ -376,9 +334,9 @@ async fn get_prp_remaining_bases(
                     // no known factors, but N+1 must be even if N is PRP
                 }
                 _ => {
-                    np1_known_to_divide_2 = np1_factors[0] == Numeric(2);
+                    np1_known_to_divide_2 = np1_factors[0].as_u128() == Some(2);
                     np1_known_to_divide_3 =
-                        np1_factors[0] == Numeric(3) || np1_factors[1] == Numeric(3);
+                        np1_factors[0].as_u128() == Some(3) || np1_factors[1].as_u128() == Some(3);
                 }
             }
         }
@@ -389,7 +347,7 @@ async fn get_prp_remaining_bases(
         && !nm1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N-1 must be even
-        match report_factor(http, nm1_id, &Numeric(2)).await {
+        match report_factor::<!>(http, nm1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
@@ -405,7 +363,7 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N+1 must be even
-        match report_factor(http, np1_id, &Numeric(2)).await {
+        match report_factor::<!>(http, np1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                 prove_by_np1(id, http).await;
@@ -423,14 +381,14 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_3
     {
         // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-        match report_factor(http, nm1_id, &Numeric(3)).await {
+        match report_factor::<!>(http, nm1_id, &Numeric(3)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
                 return Ok(U256::from(0));
             }
             Accepted => {}
-            _ => match report_factor(http, np1_id, &Numeric(3)).await {
+            _ => match report_factor::<!>(http, np1_id, &Numeric(3)).await {
                 AlreadyFullyFactored => {
                     info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                     prove_by_np1(id, http).await;
@@ -1212,15 +1170,15 @@ enum ReportFactorResult {
     OtherError,
 }
 
-async fn try_report_factor(
+async fn try_report_factor<T: Display>(
     http: &ThrottlingHttpClient,
-    u_id: NumberSpecifier<'_>,
-    factor: &Factor,
+    u_id: &NumberSpecifier<'_>,
+    factor: &Factor<T>,
 ) -> ReportFactorResult {
     match http
         .post("https://factordb.com/reportfactor.php")
         .form(&FactorSubmission {
-            id: if let Id(id) = u_id { Some(id) } else { None },
+            id: if let Id(id) = u_id { Some(*id) } else { None },
             number: if let Expression(expr) = u_id {
                 Some(expr)
             } else {
@@ -1259,13 +1217,13 @@ async fn try_report_factor(
     OtherError
 }
 
-async fn report_factor(
+async fn report_factor<T: Display>(
     http: &ThrottlingHttpClient,
     u_id: u128,
-    factor: &Factor,
+    factor: &Factor<T>,
 ) -> ReportFactorResult {
     for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-        let result = try_report_factor(http, Id(u_id), factor).await;
+        let result = try_report_factor(http, &Id(u_id), factor).await;
         if result != OtherError {
             return result;
         }
@@ -1283,14 +1241,6 @@ async fn report_factor(
     OtherError // factor that we failed to submit may still have been valid
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum SubfactorHandling {
-    Irreducible,
-    ById(u128),
-    ByExpression,
-    AlreadySubmitted,
-}
-
 async fn find_and_submit_factors(
     http: &ThrottlingHttpClient,
     id: u128,
@@ -1301,10 +1251,11 @@ async fn find_and_submit_factors(
     skip_looking_up_listed_algebraic: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
-    let digits_or_expr_full_contains_self = if skip_looking_up_known {
-        digits_or_expr_full.push(Factor::String(digits_or_expr.into()));
-        true
-    } else if digits_or_expr.contains("...") {
+    let mut divisibility_graph = AdjMatrix::new();
+    let mut ids = BTreeMap::new();
+    let (root_node, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
+        add_factor_node(&mut divisibility_graph, &Factor::String(digits_or_expr))
+    } else {
         let Ok(known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false, true)
             .await
@@ -1316,278 +1267,193 @@ async fn find_and_submit_factors(
                 warn!("{id}: Already fully factored");
                 return true;
             }
-            1 => {
-                digits_or_expr_full.extend(known_factors);
-                true
+            _ => {
+                let (root_node, _) = add_factor_node(&mut divisibility_graph,
+                                                     &Factor::String(known_factors.iter().join("*")));
+                digits_or_expr_full.push(root_node);
+                if known_factors.len() > 1 {
+                    for known_factor in known_factors {
+                        let (factor_node, _) = add_factor_node(&mut divisibility_graph, &known_factor);
+                        divisibility_graph.add_edge(&factor_node, &root_node, true);
+                    }
+                }
+                (root_node, true)
             }
-            _ => false,
         }
-    } else {
-        digits_or_expr_full.push(digits_or_expr.into());
-        true
     };
-    let mut all_factors = BTreeMap::new();
-    let mut accepted_factors = false;
-    let try_subfactors = digits_or_expr.contains('/');
-    for digits_or_expr in digits_or_expr_full.into_iter() {
-        let factors = factor_finder.find_unique_factors(&digits_or_expr);
-        if factors.is_empty() {
-            if !digits_or_expr_full_contains_self && !all_factors.contains_key(&digits_or_expr) {
-                all_factors.insert(digits_or_expr, ByExpression);
+    ids.insert(root_node, id);
+    let mut accepted_factors = 0;
+    let mut already_fully_factored = BTreeSet::new();
+    let mut already_checked_for_algebraic = BTreeSet::new();
+    for factor_vid in digits_or_expr_full.into_iter() {
+        let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
+        add_algebraic_factors_to_graph(http, id, factor_finder, id_and_expr_regex, skip_looking_up_listed_algebraic, &mut divisibility_graph, &mut ids, &factor).await;
+    }
+    // Simplest case: try submitting all factors as factors of the root
+    let mut any_failed = false;
+    for (factor_vid, factor) in divisibility_graph.vertices()
+        .map(|vertex| (vertex.id.clone(), vertex.attr.clone()))
+        .collect::<Box<[_]>>()
+        .into_iter() {
+        if factor_vid == root_node {
+            continue;
+        }
+        if get_edge(&divisibility_graph, &factor_vid, &root_node) == Some(true) {
+            continue;
+        }
+        match try_report_factor(http, &Id(id), &factor).await {
+            AlreadyFullyFactored => return true,
+            Accepted => {
+                accepted_factors += 1;
+                divisibility_graph.add_edge(&factor_vid, &root_node, true);
+            },
+            DoesNotDivide => {
+                divisibility_graph.add_edge(&factor_vid, &root_node, false);
+                any_failed = true;
+                add_algebraic_factors_to_graph(http, id, factor_finder, id_and_expr_regex, skip_looking_up_listed_algebraic, &mut divisibility_graph, &mut ids, &factor).await;
+                already_checked_for_algebraic.insert(factor_vid);
             }
-        } else {
-            all_factors.extend(factors.into_iter().map(|factor| (factor, ByExpression)));
+            _ => {
+                any_failed = true;
+            }
         }
     }
-    if !skip_looking_up_listed_algebraic {
-        get_known_algebraic_factors(
-            http,
-            id,
-            factor_finder,
-            id_and_expr_regex,
-            &mut all_factors,
-            false,
-        )
-        .await;
+    if !any_failed {
+        info!("{id}: {accepted_factors} factors accepted in a single pass");
+        return accepted_factors > 0;
     }
-    let mut dest_factors: BTreeSet<Factor> = BTreeSet::new();
-    let mut former_dest_factors = BTreeSet::new();
-    let mut dest_factors_that_do_not_divide = BTreeSet::new();
+    info!("{id}: Trying advanced solution");
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
-        iters_without_progress += 1;
-        let mut accepted_this_iter = 0usize;
-        let mut did_not_divide_this_iter = 0usize;
-        let mut did_not_divide_this_iter_without_dest_factors = 0usize;
-        let mut errors_this_iter = 0usize;
-        let mut errors_this_iter_without_dest_factors = 0usize;
-        let mut new_subfactors = BTreeMap::new();
-        let mut try_with_dest_factors = Vec::new();
-        for (factor, subfactor_handling) in all_factors.iter_mut().rev() {
-            if *subfactor_handling == AlreadySubmitted {
-                continue;
-            }
-            match try_report_factor(http, Id(id), factor).await {
-                AlreadyFullyFactored => return true,
-                Accepted => {
-                    accepted_factors = true;
-                    accepted_this_iter += 1;
-                    iters_without_progress = 0;
-                    *subfactor_handling = AlreadySubmitted;
-                    if let Factor::String(_) = factor
-                        && !former_dest_factors.contains(factor)
-                    {
-                        dest_factors.insert(factor.clone());
-                    }
-                }
-                DoesNotDivide => {
-                    did_not_divide_this_iter_without_dest_factors += 1;
-                    if try_subfactors {
-                        try_find_subfactors(
-                            http,
-                            id,
-                            factor_finder,
-                            id_and_expr_regex,
-                            &mut new_subfactors,
-                            factor,
-                            subfactor_handling,
-                        )
-                        .await;
-                    }
-                    try_with_dest_factors.push(factor.clone());
-                }
-                OtherError => {
-                    errors_this_iter_without_dest_factors += 1;
-                    try_with_dest_factors.push(factor.clone());
-                }
-            }
+        let node_count = divisibility_graph.vertex_count();
+        let edge_count = divisibility_graph.edge_count();
+        if edge_count == complete_graph_edge_count::<Directed>(node_count) {
+            info!("{id}: {accepted_factors} factors accepted, none left to submit");
+            // Graph is fully connected, meaning none are left to try
+            return accepted_factors > 0;
         }
-        if errors_this_iter_without_dest_factors == 0
-            && did_not_divide_this_iter_without_dest_factors == 0
-        {
-            info!("{id}: Final iteration: {accepted_this_iter} factors accepted, 0 did not divide");
-            return accepted_factors;
-        }
-        let mut already_submitted_elsewhere = 0usize;
-        if !try_with_dest_factors.is_empty() {
-            if let Ok(already_known_factors) = factor_finder
-                .known_factors_as_digits(http, Id(id), false, false)
-                .await
-            {
-                if already_known_factors.is_empty() {
-                    info!("{id}: Already fully factored");
+        if let Ok(known_factors) = factor_finder
+            .known_factors_as_digits(http, Id(id), false, false)
+            .await {
+            match known_factors.len() {
+                0 => {
+                    warn!("{id}: Already fully factored");
                     return true;
                 }
-                if already_known_factors.len() > 1 {
-                    try_with_dest_factors.retain(|factor| !already_known_factors.contains(factor));
-                    for factor in already_known_factors.into_iter().rev() {
-                        let prev_handling = all_factors.get(&factor).cloned();
-                        if prev_handling != Some(AlreadySubmitted) {
-                            if let Factor::String(_) = factor
-                                && !former_dest_factors.contains(&factor)
-                            {
-                                dest_factors.insert(factor.clone());
-                                iters_without_progress = 0;
-                            }
-                            all_factors.insert(factor, AlreadySubmitted);
-                            already_submitted_elsewhere += 1;
-                        }
-                    }
-                    accepted_factors = true; // As long as it's no longer U or C
-                }
-            } else {
-                let mut new_dest_factors = BTreeSet::new();
-                for factor in dest_factors.iter() {
-                    if let Ok(already_known_subfactors) = factor_finder
-                        .known_factors_as_digits(
-                            http,
-                            Expression(&factor.to_string()),
-                            false,
-                            false,
-                        )
-                        .await
-                    {
-                        if already_known_subfactors.is_empty() {
-                            former_dest_factors.insert(factor.clone());
-                            new_dest_factors.remove(factor);
-                        }
-                        for subfactor in already_known_subfactors {
-                            if let Factor::String(_) = subfactor
-                                && !former_dest_factors.contains(&subfactor)
-                            {
-                                new_dest_factors.insert(subfactor.clone());
-                                iters_without_progress = 0;
-                            }
-                            all_factors.insert(subfactor, AlreadySubmitted);
-                            already_submitted_elsewhere += 1;
-                        }
+                1 => {},
+                _ => {
+                    for known_factor in known_factors {
+                        let (factor_node, _) = add_factor_node(&mut divisibility_graph, &Factor::String(known_factor));
+                        (&mut divisibility_graph).add_edge(&factor_node, &root_node, true);
                     }
                 }
-                dest_factors.retain(|factor| !former_dest_factors.contains(factor));
-                dest_factors.extend(new_dest_factors);
             }
-            new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-            if !dest_factors.is_empty() && !try_with_dest_factors.is_empty() {
-                let count_to_try_with_dest_factors = try_with_dest_factors.len();
-                info!(
-                    "{id}: Retrying {count_to_try_with_dest_factors} factors using {} destination factors",
-                    dest_factors.len()
-                );
-                let mut did_not_divide = vec![0usize; count_to_try_with_dest_factors];
-                let mut new_dest_factors = Vec::new();
-                'per_dest_factor: for dest_factor in dest_factors.iter().rev() {
-                    for (index, factor) in try_with_dest_factors.iter().cloned().enumerate() {
-                        if all_factors.get(&factor) == Some(&AlreadySubmitted) {
-                            continue;
-                        }
-                        if factor == *dest_factor
-                            || dest_factors_that_do_not_divide
-                                .contains(&(dest_factor.clone(), factor.clone()))
-                        {
-                            did_not_divide[index] += 1; // Needed to avoid an undercount
-                            continue;
-                        }
-                        match try_report_factor(
-                            http,
-                            Expression(&dest_factor.to_compact_string()),
-                            &factor,
-                        )
-                        .await
-                        {
-                            AlreadyFullyFactored => {
-                                former_dest_factors.insert(dest_factor.clone());
-                                continue 'per_dest_factor;
-                            }
-                            Accepted => {
-                                all_factors
-                                    .entry(factor.clone())
-                                    .insert_entry(AlreadySubmitted);
-                                accepted_this_iter += 1;
-                                if let Factor::String(_) = factor
-                                    && !former_dest_factors.contains(&factor)
-                                {
-                                    new_dest_factors.push(factor);
-                                }
-                            }
-                            DoesNotDivide => {
-                                dest_factors_that_do_not_divide
-                                    .insert((dest_factor.clone(), factor.clone()));
-                                did_not_divide[index] += 1;
-                            }
-                            OtherError => {}
-                        }
-                    }
+        }
+        for (factor_id, factor) in divisibility_graph.vertices()
+            .map(|vertex| (vertex.id.clone(), vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
+            if factor_id == root_node {
+                // root node represents the number we're trying to factor, so it's not divisible by any other in the graph
+                continue;
+            }
+            let dest_factors = divisibility_graph.vertices()
+                .filter(|dest|
+                    // if factor == dest, the relation is trivial
+                    factor_id != dest.id
+                        // Numbers that fit into a u128 are fully factored already
+                        && dest.attr.as_str().is_some()
+                        // Don't try to submit to a dest for which FactorDB already has a full factorization
+                        && !already_fully_factored.contains(&dest.id)
+                        // if this edge exists, FactorDB already knows whether factor is a factor of dest
+                        && get_edge(&divisibility_graph, &factor_id, &dest.id).is_none()
+                        // dest is a proper divisor of factor, so vice-versa is impossible
+                        && get_edge(&divisibility_graph, &dest.id, &factor_id) != Some(true))
+                .map(|vertex| (vertex.id.clone(), vertex.attr.clone()))
+                .collect::<Box<[_]>>();
+            if dest_factors.is_empty() {
+                continue;
+            };
+            let shortest_paths = ShortestPaths::on(&divisibility_graph)
+                .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
+                .run(factor_id.clone())
+                .unwrap();
+            for (dest_factor_id, dest_factor) in dest_factors {
+                let edge_id = divisibility_graph.edge_id_any(&factor_id, &dest_factor_id);
+                if edge_id.is_some() {
+                    continue;
                 }
-                dest_factors.retain(|factor| !former_dest_factors.contains(factor));
-                for (index, factor) in try_with_dest_factors.into_iter().enumerate() {
-                    let subfactor_handling = all_factors.entry(factor.clone());
-                    if let Occupied(ref e) = subfactor_handling
-                        && *e.get() == AlreadySubmitted
-                    {
+                if get_edge(&divisibility_graph, &dest_factor_id, &factor_id) == Some(true) {
+                    divisibility_graph.add_edge(&factor_id, &dest_factor_id, false);
+                    continue;
+                }
+                if shortest_paths.dist(&dest_factor_id) == Some(&0) {
+                    // dest_factor is divisible by factor, and this is already known to factordb
+                    // because it follows that relation transitively
+                    divisibility_graph.add_edge(&factor_id, &dest_factor_id, true);
+                    divisibility_graph.add_edge(&dest_factor_id, &factor_id, false);
+                    continue;
+                }
+                let dest_specifier = if let Some(dest_id) = ids.get(&dest_factor_id) {
+                    Id(*dest_id)
+                } else {
+                    Expression(&dest_factor.as_str().unwrap())
+                };
+                match try_report_factor(http, &dest_specifier, &factor).await {
+                    AlreadyFullyFactored => {
+                        already_fully_factored.insert(dest_factor_id);
+                        iters_without_progress = 0;
                         continue;
                     }
-                    if did_not_divide[index] >= dest_factors.len() {
-                        let mut temp_subfactor_handling = ByExpression;
-                        did_not_divide_this_iter += 1;
-                        // Not conditional on try_subfactors, because the split that creates
-                        // dest_factors is separate from the split caused by a division in the main
-                        // input expression
-                        try_find_subfactors(
-                            http,
-                            id,
-                            factor_finder,
-                            id_and_expr_regex,
-                            &mut new_subfactors,
-                            &factor,
-                            &mut temp_subfactor_handling,
-                        )
-                        .await;
-                        subfactor_handling.insert_entry(AlreadySubmitted);
-                    } else {
-                        errors_this_iter += 1;
+                    Accepted => {
+                        accepted_factors += 1;
+                        iters_without_progress = 0;
+                        divisibility_graph.add_edge(&factor_id, &dest_factor_id, true);
+                        let _ = divisibility_graph.try_add_edge(&dest_factor_id, &factor_id, false);
+                    }
+                    DoesNotDivide => {
+                        iters_without_progress = 0;
+                        divisibility_graph.add_edge(&factor_id, &dest_factor_id, false);
+                        if already_checked_for_algebraic.insert(factor_id) {
+                            add_algebraic_factors_to_graph(http, id, factor_finder, id_and_expr_regex, skip_looking_up_listed_algebraic, &mut divisibility_graph, &mut ids, &factor).await;
+                        }
+                    }
+                    OtherError => {
+                        if let Ok(dest_subfactors) = factor_finder
+                            .known_factors_as_digits(http, dest_specifier, false, false)
+                            .await {
+                            match dest_subfactors.len() {
+                                0 => {
+                                    already_fully_factored.insert(dest_factor_id);
+                                    continue;
+                                }
+                                1 => {},
+                                _ => {
+                                    for dest_subfactor in dest_subfactors {
+                                        let (dest_node, added) = add_factor_node(&mut divisibility_graph, &dest_subfactor);
+                                        if added {
+                                            iters_without_progress = 0;
+                                        }
+                                        let _ = divisibility_graph.try_add_edge(&dest_node, &factor_id, true);
+                                        let _ = divisibility_graph.try_add_edge(&factor_id, &dest_node, true);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                new_dest_factors.retain(|factor| !former_dest_factors.contains(factor));
-                for dest_factor in new_dest_factors.iter() {
-                    all_factors.insert(dest_factor.clone(), AlreadySubmitted);
-                }
-                dest_factors.extend(new_dest_factors);
-                if !dest_factors.is_empty() {
-                    info!(
-                        "{id}: Currently trying {} destination factors",
-                        dest_factors.len()
-                    );
-                }
-            }
-        } else {
-            errors_this_iter = errors_this_iter_without_dest_factors;
-            did_not_divide_this_iter = did_not_divide_this_iter_without_dest_factors;
-        }
-        new_subfactors.retain(|key, _| !all_factors.contains_key(key));
-        if new_subfactors.is_empty() && errors_this_iter == 0 {
-            info!(
-                "{id}: Final iteration: {accepted_this_iter} factors accepted, \
-                {did_not_divide_this_iter} did not divide, \
-                {already_submitted_elsewhere} submitted by someone else"
-            );
-            return accepted_factors;
-        } else {
-            let new_subfactors_count = new_subfactors.len();
-            info!(
-                "{id}: This iteration: {accepted_this_iter} factors accepted, \
-                {did_not_divide_this_iter} did not divide, \
-                {errors_this_iter} submission errors, \
-                {new_subfactors_count} new subfactors to try, \
-                {already_submitted_elsewhere} submitted by someone else"
-            );
-            if !new_subfactors.is_empty() {
-                iters_without_progress = 0;
-                all_factors.extend(new_subfactors);
             }
         }
     }
-    for (factor, subfactor_handling) in all_factors.into_iter() {
-        if subfactor_handling == AlreadySubmitted {
+    for (factor_id, factor) in divisibility_graph.vertices().map(|vertex| (vertex.id.clone(), vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
+        if factor_id == root_node {
+            continue;
+        }
+        let reverse_dist = ShortestPaths::on(&divisibility_graph)
+            .edge_weight_fn(|edge| if *edge { 0usize } else { 1usize })
+            .goal(root_node.clone())
+            .run(factor_id)
+            .unwrap()
+            .dist(root_node.clone()).cloned();
+        if reverse_dist == Some(0) {
             continue;
         }
         match FAILED_U_SUBMISSIONS_OUT
@@ -1595,77 +1461,62 @@ async fn find_and_submit_factors(
             .unwrap()
             .lock()
             .await
-            .write_fmt(format_args!("{id},{factor}\n"))
+            .write_fmt(format_args!("{id},{}\n", factor))
         {
-            Ok(_) => warn!("{id}: wrote {factor} to failed submissions file"),
-            Err(e) => error!("{id}: failed to write {factor} to failed submissions file: {e}"),
+            Ok(_) => warn!("{id}: wrote {} to failed submissions file", factor),
+            Err(e) => error!("{id}: failed to write {} to failed submissions file: {e}", factor),
         }
     }
-    accepted_factors
+    accepted_factors > 0
 }
 
-async fn try_find_subfactors(
-    http: &ThrottlingHttpClient,
-    id: u128,
-    factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
-    new_subfactors: &mut BTreeMap<Factor, SubfactorHandling>,
-    factor: &Factor,
-    subfactor_handling: &mut SubfactorHandling,
-) -> bool {
-    if let Numeric(_) = factor {
-        let factors = factor_finder
-            .find_unique_factors(factor)
-            .into_iter()
-            .map(|factor| (factor, Irreducible));
-        let success = factors.len() > 1;
-        new_subfactors.extend(factors);
-        return success;
-    }
-    let specifier_to_get_subfactors = match subfactor_handling {
-        Irreducible => {
-            return false;
-        }
-        ById(factor_id) => {
-            get_known_algebraic_factors(
-                http,
-                *factor_id,
-                factor_finder,
-                id_and_expr_regex,
-                new_subfactors,
-                true,
-            )
-            .await;
-            Id(*factor_id)
-        }
-        ByExpression => Expression(&factor.to_compact_string()),
-        AlreadySubmitted => return false,
-    };
-    let mut subfactors: BTreeSet<_> = factor_finder
-        .find_unique_factors(factor)
-        .into_iter()
-        .collect();
-    if let Expression(expr) = specifier_to_get_subfactors
-        && let Numeric(_) = expr.into()
-    {
-        // Compiler doesn't allow !let, so an empty then-block is needed
-    } else if let Ok(known_subfactors) = factor_finder
-        .known_factors_as_digits(http, specifier_to_get_subfactors, true, false)
-        .await
-        && known_subfactors.len() > 1
-    {
-        subfactors.extend(known_subfactors);
-    }
-    let mut success = false;
+async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(http: &ThrottlingHttpClient, id: u128,
+                                                                 factor_finder: &FactorFinder,
+                                                                 id_and_expr_regex: &Regex,
+                                                                 skip_looking_up_listed_algebraic: bool,
+                                                                 divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
+                                                                 ids: &mut BTreeMap<VertexId, u128>,
+                                                                 factor: &Factor<T>) -> bool {
+    let mut any_added = false;
+    let subfactors = factor_finder.find_unique_factors(&factor);
     for subfactor in subfactors {
-        info!("{id}: Found sub-factor {subfactor} of {factor}");
-        let entry = new_subfactors.entry(subfactor);
-        if let Vacant(v) = entry {
-            v.insert(ByExpression);
-            success = true;
+        let (_, added) = add_factor_node(divisibility_graph, &subfactor);
+        any_added |= added;
+    }
+    if !skip_looking_up_listed_algebraic {
+        let listed_algebraic_factors = get_known_algebraic_factors(
+            http,
+            id,
+            factor_finder,
+            id_and_expr_regex,
+            true,
+        ).await;
+        for (algebraic_factor, algebraic_factor_id) in listed_algebraic_factors.into_iter() {
+            let (algebraic_factor_node_id, added) = add_factor_node(divisibility_graph, &algebraic_factor.into());
+            any_added |= added;
+            if let Some(algebraic_factor_id) = algebraic_factor_id {
+                ids.insert(algebraic_factor_node_id, algebraic_factor_id);
+            }
         }
     }
-    success
+    any_added
+}
+
+fn get_edge<T>(graph: &AdjMatrix<T, bool, Directed, DefaultId>,
+    source: &VertexId,
+    dest: &VertexId) -> Option<bool> {
+    Some(*graph.edge(&graph.edge_id_any(source, dest)?)?)
+}
+
+fn add_factor_node<'a, T: Display>(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, factor: &Factor<T>)
+                                         -> (VertexId, bool) {
+    let factor_as_ref = Factor::String(factor.to_compact_string());
+    match divisibility_graph.find_vertex(&factor_as_ref) {
+        Some(id) => (id, false),
+        None => {
+            (divisibility_graph.add_vertex(factor_as_ref.clone()), true)
+        }
+    }
 }
 
 async fn get_known_algebraic_factors(
@@ -1673,9 +1524,9 @@ async fn get_known_algebraic_factors(
     id: u128,
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
-    all_factors: &mut BTreeMap<Factor, SubfactorHandling>,
     include_ff: bool,
-) {
+) -> BTreeMap<CompactString, Option<u128>> {
+    let mut results = BTreeMap::new();
     info!("{id}: Checking for listed algebraic factors");
     // Links before the "Is factor of" header are algebraic factors; links after it aren't
     let url = format!("https://factordb.com/frame_moreinfo.php?id={id}");
@@ -1691,18 +1542,29 @@ async fn get_known_algebraic_factors(
                     "{id}: Algebraic factor with ID {factor_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                 );
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
-                    let subfactors = factor_finder
+                    match factor_finder
                         .known_factors_as_digits(http, Id(factor_id), include_ff, true)
-                        .await.unwrap_or_else(|_| {
-                        error!(
-                            "{id}: Not fully processing elided factor with ID {factor_id} because we failed to fetch it in full"
-                        );
-                        // Can still check for factors of 2 and 5
-                        factor_finder.find_unique_factors(&Factor::String(factor_digits_or_expr.into()))
-                         });
-                    for subfactor in subfactors {
-                        all_factors.entry(subfactor).or_insert(ByExpression);
-                    }
+                        .await {
+                        Ok(subfactors) => {
+                            for subfactor in subfactors {
+                                results.entry(subfactor.into()).or_insert(Some(factor_id));
+                            }
+                        }
+                        Err(_) => {
+                            error!(
+                                "{id}: Not fully processing elided factor with ID {factor_id} because we failed to fetch it in full"
+                            );
+                            // Can still check for factors of 2 and 5
+                            for subfactor in factor_finder.find_unique_factors(&Factor::String(factor_digits_or_expr)) {
+                                let subfactor_id = match subfactor {
+                                    Numeric(2) => 2,
+                                    Numeric(5) => 5,
+                                    _ => factor_id
+                                };
+                                results.entry(subfactor.into()).or_insert(Some(subfactor_id));
+                            }
+                        }
+                    };
                 } else {
                     error!("{id}: Invalid ID for algebraic factor: {factor_id}");
                 }
@@ -1711,13 +1573,10 @@ async fn get_known_algebraic_factors(
                     "{id}: Algebraic factor with ID {factor_id} represented in full: {factor_digits_or_expr}"
                 );
                 let factor = factor_digits_or_expr.into();
-                let subfactor_handling = if let Ok(factor_id) = factor_id.parse::<u128>() {
-                    ById(factor_id)
-                } else {
-                    ByExpression
-                };
-                all_factors.entry(factor).or_insert(subfactor_handling);
+                let factor_id = factor_id.parse::<u128>().ok();
+                results.entry(factor).or_insert(factor_id);
             }
         }
     }
+    results
 }
