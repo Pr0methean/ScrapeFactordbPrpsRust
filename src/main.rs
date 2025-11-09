@@ -1330,6 +1330,7 @@ async fn find_and_submit_factors(
             &factor,
         )
         .await;
+        already_checked_for_algebraic.insert(factor_vid);
     }
     // Simplest case: try submitting all factors as factors of the root
     let mut any_failed_retryably = false;
