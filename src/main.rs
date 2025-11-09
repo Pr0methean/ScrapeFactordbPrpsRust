@@ -1272,7 +1272,7 @@ async fn find_and_submit_factors(
     let mut divisibility_graph = AdjMatrix::new();
     let mut ids = BTreeMap::new();
     let (root_node, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
-        add_factor_node(&mut divisibility_graph, &Factor::String(digits_or_expr))
+        add_factor_node(&mut divisibility_graph, &digits_or_expr.to_compact_string().into())
     } else {
         let Ok(known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false, true)
@@ -1288,7 +1288,7 @@ async fn find_and_submit_factors(
             _ => {
                 let (root_node, _) = add_factor_node(
                     &mut divisibility_graph,
-                    &Factor::String(known_factors.iter().join("*")),
+                    &Factor::String(known_factors.iter().join("*").into()),
                 );
                 digits_or_expr_full.push(root_node);
                 if known_factors.len() > 1 {
@@ -1389,7 +1389,7 @@ async fn find_and_submit_factors(
                 _ => {
                     for known_factor in known_factors {
                         let (factor_node, _) =
-                            add_factor_node(&mut divisibility_graph, &Factor::String(known_factor));
+                            add_factor_node(&mut divisibility_graph, &known_factor);
                         let _ = divisibility_graph.try_add_edge(&factor_node, &root_node, true);
                     }
                 }
@@ -1586,14 +1586,13 @@ fn get_edge<T>(
     Some(*graph.edge(&graph.edge_id_any(source, dest)?)?)
 }
 
-fn add_factor_node<T: Display>(
+fn add_factor_node(
     divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
-    factor: &Factor<T>,
+    factor: &Factor<CompactString>,
 ) -> (VertexId, bool) {
-    let factor_as_ref = Factor::String(factor.to_compact_string());
-    match divisibility_graph.find_vertex(&factor_as_ref) {
+    match divisibility_graph.find_vertex(factor) {
         Some(id) => (id, false),
-        None => (divisibility_graph.add_vertex(factor_as_ref.clone()), true),
+        None => (divisibility_graph.add_vertex(factor.clone()), true),
     }
 }
 
@@ -1635,7 +1634,7 @@ async fn get_known_algebraic_factors(
                             );
                             // Can still check for factors of 2 and 5
                             for subfactor in factor_finder
-                                .find_unique_factors(&Factor::String(factor_digits_or_expr))
+                                .find_unique_factors::<&str>(&factor_digits_or_expr.into())
                             {
                                 let subfactor_id = match subfactor {
                                     Numeric(2) => 2,
