@@ -1,8 +1,7 @@
-use std::borrow::Borrow;
 use crate::algebraic::Factor::Numeric;
 use crate::net::ThrottlingHttpClient;
 use crate::{NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
-use compact_str::{CompactString, format_compact, ToCompactString};
+use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
 use log::{error, info, warn};
 use num_integer::Integer;
@@ -13,6 +12,7 @@ use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexBuilder, RegexSet};
 use serde_json::from_str;
+use std::borrow::Borrow;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -554,7 +554,7 @@ pub enum Factor<T> {
     String(T),
 }
 
-impl <T> From<u128> for Factor<T> {
+impl<T> From<u128> for Factor<T> {
     #[inline(always)]
     fn from(value: u128) -> Self {
         Numeric(value)
@@ -589,13 +589,16 @@ impl<'a> From<&'a str> for Factor<&'a str> {
     }
 }
 
-impl <T: Display> From<Factor<T>> for CompactString {
+impl<T: Display> From<Factor<T>> for CompactString {
     fn from(val: Factor<T>) -> Self {
         val.to_string().into()
     }
 }
 
-impl <'a, T> From<&'a Factor<T>> for Factor<&'a str> where &'a str: From<&'a T> {
+impl<'a, T> From<&'a Factor<T>> for Factor<&'a str>
+where
+    &'a str: From<&'a T>,
+{
     fn from(value: &'a Factor<T>) -> Self {
         match value {
             Numeric(n) => Numeric(*n),
@@ -604,7 +607,7 @@ impl <'a, T> From<&'a Factor<T>> for Factor<&'a str> where &'a str: From<&'a T> 
     }
 }
 
-impl <T: Display> Display for Factor<T> {
+impl<T: Display> Display for Factor<T> {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -617,23 +620,31 @@ impl <T: Display> Display for Factor<T> {
 impl<T: AsRef<str>, U: AsRef<str>> PartialEq<Factor<U>> for Factor<T> {
     fn eq(&self, other: &Factor<U>) -> bool {
         match self {
-            Numeric(n) => if let Numeric(o) = other && n == o {
-                true
-            } else {
-                false
-            },
-            Factor::String(s) => if let Factor::String(o) = other && s.as_ref() == o.as_ref() {
-                true
-            } else {
-                false
+            Numeric(n) => {
+                if let Numeric(o) = other
+                    && n == o
+                {
+                    true
+                } else {
+                    false
+                }
+            }
+            Factor::String(s) => {
+                if let Factor::String(o) = other
+                    && s.as_ref() == o.as_ref()
+                {
+                    true
+                } else {
+                    false
+                }
             }
         }
     }
 }
 
-impl <T: AsRef<str>> Eq for Factor<T> {}
+impl<T: AsRef<str>> Eq for Factor<T> {}
 
-impl <T: AsRef<str>, U: AsRef<str>> PartialOrd<Factor<U>> for Factor<T> {
+impl<T: AsRef<str>, U: AsRef<str>> PartialOrd<Factor<U>> for Factor<T> {
     #[inline(always)]
     fn partial_cmp(&self, other: &Factor<U>) -> Option<Ordering> {
         Some(match self {
@@ -643,20 +654,24 @@ impl <T: AsRef<str>, U: AsRef<str>> PartialOrd<Factor<U>> for Factor<T> {
             },
             Factor::String(s) => match other {
                 Numeric(_) => Ordering::Greater,
-                Factor::String(o) => s.as_ref().len().cmp(&o.as_ref().len()).then_with(|| s.as_ref().cmp(o.as_ref())),
+                Factor::String(o) => s
+                    .as_ref()
+                    .len()
+                    .cmp(&o.as_ref().len())
+                    .then_with(|| s.as_ref().cmp(o.as_ref())),
             },
         })
     }
 }
 
-impl <T: AsRef<str>> Ord for Factor<T> {
+impl<T: AsRef<str>> Ord for Factor<T> {
     #[inline(always)]
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
     }
 }
 
-impl <T: AsRef<str>> Factor<T> {
+impl<T: AsRef<str>> Factor<T> {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Numeric(_) => None,
@@ -665,7 +680,7 @@ impl <T: AsRef<str>> Factor<T> {
     }
 }
 
-impl <T> Factor<T> {
+impl<T> Factor<T> {
     pub fn as_u128(&self) -> Option<u128> {
         match self {
             Numeric(n) => Some(*n),
@@ -695,7 +710,7 @@ pub enum SignedFactor<T> {
     Negative(Factor<T>),
 }
 
-impl <T> SignedFactor<T> {
+impl<T> SignedFactor<T> {
     #[inline(always)]
     fn abs(&self) -> &Factor<T> {
         match self {
@@ -706,7 +721,7 @@ impl <T> SignedFactor<T> {
     }
 }
 
-impl <'a> From<&'a str> for SignedFactor<&'a str> {
+impl<'a> From<&'a str> for SignedFactor<&'a str> {
     #[inline(always)]
     fn from(value: &'a str) -> Self {
         if let Some(negated) = value.strip_prefix('-') {
@@ -785,7 +800,10 @@ fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec
 }
 
 #[inline(always)]
-fn multiset_union<T: Eq + Ord + Clone, U: Ord + From<T> + Clone>(vec1: Vec<T>, vec2: Vec<U>) -> Vec<U> {
+fn multiset_union<T: Eq + Ord + Clone, U: Ord + From<T> + Clone>(
+    vec1: Vec<T>,
+    vec2: Vec<U>,
+) -> Vec<U> {
     if vec1.is_empty() {
         return vec2;
     }
@@ -805,7 +823,10 @@ fn multiset_union<T: Eq + Ord + Clone, U: Ord + From<T> + Clone>(vec1: Vec<T>, v
 }
 
 #[inline(always)]
-fn multiset_difference<T: Eq + Ord + Clone, U: Eq + Ord + From<T>, V: From<T> + Clone>(vec1: Vec<T>, vec2: &[U]) -> Vec<V> {
+fn multiset_difference<T: Eq + Ord + Clone, U: Eq + Ord + From<T>, V: From<T> + Clone>(
+    vec1: Vec<T>,
+    vec2: &[U],
+) -> Vec<V> {
     if vec2.is_empty() {
         return vec1.into_iter().map(|item| item.into()).collect();
     }
@@ -982,11 +1003,19 @@ impl FactorFinder {
     }
 
     #[inline]
-    fn find_factors<T: Display + AsRef<str>>(&self, expr: &Factor<T>) -> Vec<Factor<CompactString>> {
+    fn find_factors<T: Display + AsRef<str>>(
+        &self,
+        expr: &Factor<T>,
+    ) -> Vec<Factor<CompactString>> {
         match expr {
             Numeric(n) => Self::find_factors_of_u128(*n),
             Factor::String(expr) => {
-                if let Some(index) = self.regexes_as_set.matches(expr.as_ref()).into_iter().next() {
+                if let Some(index) = self
+                    .regexes_as_set
+                    .matches(expr.as_ref())
+                    .into_iter()
+                    .next()
+                {
                     let captures = self.regexes[index].captures(expr.as_ref()).unwrap();
                     match index {
                         0 => {
@@ -1035,8 +1064,10 @@ impl FactorFinder {
                             if let Numeric(a) = a
                                 && let Numeric(n) = n
                             {
-                                let b_reduced: Vec<Factor<CompactString>> = multiset_difference(b, &gcd_bc);
-                                let c_reduced: Vec<Factor<CompactString>> = multiset_difference(c_abs, &gcd_bc);
+                                let b_reduced: Vec<Factor<CompactString>> =
+                                    multiset_difference(b, &gcd_bc);
+                                let c_reduced: Vec<Factor<CompactString>> =
+                                    multiset_difference(c_abs, &gcd_bc);
                                 factors.extend(multiset_union(gcd_ac, gcd_bc));
                                 if let Some(b) = checked_product_u128(b_reduced.as_slice())
                                     && let Some(abs_c) = checked_product_u128(c_reduced.as_slice())
@@ -1074,8 +1105,9 @@ impl FactorFinder {
                                     };
                                     let factors_of_n = Self::find_factors_of_u128(n);
                                     let factors_of_n_count = factors_of_n.len();
-                                    let mut factors_of_n =
-                                        factors_of_n.iter().collect::<Vec<&Factor<CompactString>>>();
+                                    let mut factors_of_n = factors_of_n
+                                        .iter()
+                                        .collect::<Vec<&Factor<CompactString>>>();
                                     for factor_subset in power_multiset(&mut factors_of_n) {
                                         if factor_subset.len() == factors_of_n_count
                                             || factor_subset.is_empty()
@@ -1093,9 +1125,8 @@ impl FactorFinder {
                                             % (subset_product as i128)
                                             == 0
                                         {
-                                            factors.extend(
-                                                Self::find_factors_of_u128(subset_product),
-                                            );
+                                            factors
+                                                .extend(Self::find_factors_of_u128(subset_product));
                                         }
                                         if c > 0 && (n / subset_product).is_multiple_of(2) {
                                             continue;
@@ -1111,9 +1142,9 @@ impl FactorFinder {
                                                 .and_then(|an| an.checked_mul(b))
                                                 .and_then(|anb| anb.checked_add_signed(c))
                                             {
-                                                factors.extend(
-                                                    Self::find_factors_of_u128(factor_u128),
-                                                );
+                                                factors.extend(Self::find_factors_of_u128(
+                                                    factor_u128,
+                                                ));
                                             } else {
                                                 let factor_expr = format_compact!(
                                                     "{}{}{}{}",
@@ -1305,7 +1336,10 @@ impl FactorFinder {
 
     /// Returns all unique, nontrivial factors we can find.
     #[inline(always)]
-    pub fn find_unique_factors<T: AsRef<str> + Display>(&self, expr: &Factor<T>) -> Box<[Factor<CompactString>]> {
+    pub fn find_unique_factors<T: AsRef<str> + Display>(
+        &self,
+        expr: &Factor<T>,
+    ) -> Box<[Factor<CompactString>]> {
         let mut factors = self.find_factors(expr);
         factors.retain(|f| match f {
             Numeric(n) => {
@@ -1425,7 +1459,7 @@ mod tests {
         FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
         lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset,
     };
-    use compact_str::{format_compact, ToCompactString};
+    use compact_str::{ToCompactString, format_compact};
     use itertools::Itertools;
 
     #[test]

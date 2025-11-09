@@ -19,11 +19,18 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{Factor, FactorFinder};
+use crate::net::ResourceLimits;
 use crate::shutdown::Shutdown;
 use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
+use gryf::algo::ShortestPaths;
+use gryf::core::facts::complete_graph_edge_count;
+use gryf::core::id::{DefaultId, VertexId};
+use gryf::core::marker::Directed;
+use gryf::core::{EdgeSet, GraphAdd, GraphRef, VertexSet};
+use gryf::storage::AdjMatrix;
 use itertools::Itertools;
 use log::{error, info, warn};
 use net::ThrottlingHttpClient;
@@ -44,12 +51,6 @@ use std::ops::Add;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use gryf::algo::ShortestPaths;
-use gryf::core::{EdgeSet, GraphAdd, GraphRef, VertexSet};
-use gryf::core::facts::complete_graph_edge_count;
-use gryf::core::id::{DefaultId, VertexId};
-use gryf::core::marker::Directed;
-use gryf::storage::AdjMatrix;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -58,7 +59,6 @@ use tokio::sync::{Mutex, OnceCell, broadcast, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::net::ResourceLimits;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -219,8 +219,17 @@ async fn check_composite(
             let mut factors_to_dispatch = Vec::with_capacity(factors.len());
             for factor in factors {
                 if let Some(factor_str) = factor.as_str() {
-                    if find_and_submit_factors(http, id, factor_str, factor_finder, id_and_expr_regex,
-                                               true, !subfactors_may_have_algebraic).await {
+                    if find_and_submit_factors(
+                        http,
+                        id,
+                        factor_str,
+                        factor_finder,
+                        id_and_expr_regex,
+                        true,
+                        !subfactors_may_have_algebraic,
+                    )
+                    .await
+                    {
                         factors_submitted = true;
                     } else {
                         factors_to_dispatch.push(factor);
@@ -729,18 +738,23 @@ async fn throttle_if_necessary(
         .await; // allow for delay in CPU accounting
     }
     // info!("Resources fetched");
-    let Some(ResourceLimits {cpu_tenths_spent, resets_at}) = http
+    let Some(ResourceLimits {
+        cpu_tenths_spent,
+        resets_at,
+    }) = http
         .try_get_resource_limits(bases_before_next_cpu_check)
         .await
     else {
         error!("Failed to parse resource limits");
         return false;
     };
-    let seconds_to_reset = resets_at.saturating_duration_since(Instant::now()).as_secs_f64();
+    let seconds_to_reset = resets_at
+        .saturating_duration_since(Instant::now())
+        .as_secs_f64();
     let mut tenths_remaining = MAX_CPU_BUDGET_TENTHS.saturating_sub(cpu_tenths_spent);
     if !NO_RESERVE.load(Acquire) {
-        tenths_remaining =
-            tenths_remaining.saturating_sub((seconds_to_reset * seconds_to_reset / 18000.0) as usize);
+        tenths_remaining = tenths_remaining
+            .saturating_sub((seconds_to_reset * seconds_to_reset / 18000.0) as usize);
     }
     let mut bases_remaining = (tenths_remaining / 10).min(MAX_BASES_BETWEEN_RESOURCE_CHECKS);
     if bases_remaining <= MIN_BASES_BETWEEN_RESOURCE_CHECKS {
@@ -1268,12 +1282,15 @@ async fn find_and_submit_factors(
                 return true;
             }
             _ => {
-                let (root_node, _) = add_factor_node(&mut divisibility_graph,
-                                                     &Factor::String(known_factors.iter().join("*")));
+                let (root_node, _) = add_factor_node(
+                    &mut divisibility_graph,
+                    &Factor::String(known_factors.iter().join("*")),
+                );
                 digits_or_expr_full.push(root_node);
                 if known_factors.len() > 1 {
                     for known_factor in known_factors {
-                        let (factor_node, _) = add_factor_node(&mut divisibility_graph, &known_factor);
+                        let (factor_node, _) =
+                            add_factor_node(&mut divisibility_graph, &known_factor);
                         divisibility_graph.add_edge(&factor_node, &root_node, true);
                     }
                 }
@@ -1287,14 +1304,26 @@ async fn find_and_submit_factors(
     let mut already_checked_for_algebraic = BTreeSet::new();
     for factor_vid in digits_or_expr_full.into_iter() {
         let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
-        add_algebraic_factors_to_graph(http, id, factor_finder, id_and_expr_regex, skip_looking_up_listed_algebraic, &mut divisibility_graph, &mut ids, &factor).await;
+        add_algebraic_factors_to_graph(
+            http,
+            id,
+            factor_finder,
+            id_and_expr_regex,
+            skip_looking_up_listed_algebraic,
+            &mut divisibility_graph,
+            &mut ids,
+            &factor,
+        )
+        .await;
     }
     // Simplest case: try submitting all factors as factors of the root
     let mut any_failed = false;
-    for (factor_vid, factor) in divisibility_graph.vertices()
+    for (factor_vid, factor) in divisibility_graph
+        .vertices()
         .map(|vertex| (vertex.id, vertex.attr.clone()))
         .collect::<Box<[_]>>()
-        .into_iter() {
+        .into_iter()
+    {
         if factor_vid == root_node {
             continue;
         }
@@ -1306,11 +1335,21 @@ async fn find_and_submit_factors(
             Accepted => {
                 accepted_factors += 1;
                 divisibility_graph.add_edge(&factor_vid, &root_node, true);
-            },
+            }
             DoesNotDivide => {
                 divisibility_graph.add_edge(&factor_vid, &root_node, false);
                 any_failed = true;
-                add_algebraic_factors_to_graph(http, id, factor_finder, id_and_expr_regex, skip_looking_up_listed_algebraic, &mut divisibility_graph, &mut ids, &factor).await;
+                add_algebraic_factors_to_graph(
+                    http,
+                    id,
+                    factor_finder,
+                    id_and_expr_regex,
+                    skip_looking_up_listed_algebraic,
+                    &mut divisibility_graph,
+                    &mut ids,
+                    &factor,
+                )
+                .await;
                 already_checked_for_algebraic.insert(factor_vid);
             }
             _ => {
@@ -1334,28 +1373,35 @@ async fn find_and_submit_factors(
         }
         if let Ok(known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false, false)
-            .await {
+            .await
+        {
             match known_factors.len() {
                 0 => {
                     warn!("{id}: Already fully factored");
                     return true;
                 }
-                1 => {},
+                1 => {}
                 _ => {
                     for known_factor in known_factors {
-                        let (factor_node, _) = add_factor_node(&mut divisibility_graph, &Factor::String(known_factor));
+                        let (factor_node, _) =
+                            add_factor_node(&mut divisibility_graph, &Factor::String(known_factor));
                         divisibility_graph.add_edge(&factor_node, &root_node, true);
                     }
                 }
             }
         }
-        for (factor_id, factor) in divisibility_graph.vertices()
-            .map(|vertex| (vertex.id, vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
+        for (factor_id, factor) in divisibility_graph
+            .vertices()
+            .map(|vertex| (vertex.id, vertex.attr.clone()))
+            .collect::<Box<[_]>>()
+            .into_iter()
+        {
             if factor_id == root_node {
                 // root node represents the number we're trying to factor, so it's not divisible by any other in the graph
                 continue;
             }
-            let dest_factors = divisibility_graph.vertices()
+            let dest_factors = divisibility_graph
+                .vertices()
                 .filter(|dest|
                     // if factor == dest, the relation is trivial
                     factor_id != dest.id
@@ -1413,27 +1459,43 @@ async fn find_and_submit_factors(
                         iters_without_progress = 0;
                         divisibility_graph.add_edge(&factor_id, &dest_factor_id, false);
                         if already_checked_for_algebraic.insert(factor_id) {
-                            add_algebraic_factors_to_graph(http, id, factor_finder, id_and_expr_regex, skip_looking_up_listed_algebraic, &mut divisibility_graph, &mut ids, &factor).await;
+                            add_algebraic_factors_to_graph(
+                                http,
+                                id,
+                                factor_finder,
+                                id_and_expr_regex,
+                                skip_looking_up_listed_algebraic,
+                                &mut divisibility_graph,
+                                &mut ids,
+                                &factor,
+                            )
+                            .await;
                         }
                     }
                     OtherError => {
                         if let Ok(dest_subfactors) = factor_finder
                             .known_factors_as_digits(http, dest_specifier, false, false)
-                            .await {
+                            .await
+                        {
                             match dest_subfactors.len() {
                                 0 => {
                                     already_fully_factored.insert(dest_factor_id);
                                     continue;
                                 }
-                                1 => {},
+                                1 => {}
                                 _ => {
                                     for dest_subfactor in dest_subfactors {
-                                        let (dest_node, added) = add_factor_node(&mut divisibility_graph, &dest_subfactor);
+                                        let (dest_node, added) = add_factor_node(
+                                            &mut divisibility_graph,
+                                            &dest_subfactor,
+                                        );
                                         if added {
                                             iters_without_progress = 0;
                                         }
-                                        let _ = divisibility_graph.try_add_edge(&dest_node, &factor_id, true);
-                                        let _ = divisibility_graph.try_add_edge(&factor_id, &dest_node, true);
+                                        let _ = divisibility_graph
+                                            .try_add_edge(&dest_node, &factor_id, true);
+                                        let _ = divisibility_graph
+                                            .try_add_edge(&factor_id, &dest_node, true);
                                     }
                                 }
                             }
@@ -1443,7 +1505,12 @@ async fn find_and_submit_factors(
             }
         }
     }
-    for (factor_id, factor) in divisibility_graph.vertices().map(|vertex| (vertex.id, vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
+    for (factor_id, factor) in divisibility_graph
+        .vertices()
+        .map(|vertex| (vertex.id, vertex.attr.clone()))
+        .collect::<Box<[_]>>()
+        .into_iter()
+    {
         if factor_id == root_node {
             continue;
         }
@@ -1452,7 +1519,8 @@ async fn find_and_submit_factors(
             .goal(root_node)
             .run(factor_id)
             .unwrap()
-            .dist(root_node).cloned();
+            .dist(root_node)
+            .cloned();
         if reverse_dist == Some(0) {
             continue;
         }
@@ -1464,19 +1532,25 @@ async fn find_and_submit_factors(
             .write_fmt(format_args!("{id},{}\n", factor))
         {
             Ok(_) => warn!("{id}: wrote {} to failed submissions file", factor),
-            Err(e) => error!("{id}: failed to write {} to failed submissions file: {e}", factor),
+            Err(e) => error!(
+                "{id}: failed to write {} to failed submissions file: {e}",
+                factor
+            ),
         }
     }
     accepted_factors > 0
 }
 
-async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(http: &ThrottlingHttpClient, id: u128,
-                                                                 factor_finder: &FactorFinder,
-                                                                 id_and_expr_regex: &Regex,
-                                                                 skip_looking_up_listed_algebraic: bool,
-                                                                 divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
-                                                                 ids: &mut BTreeMap<VertexId, u128>,
-                                                                 factor: &Factor<T>) -> bool {
+async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
+    http: &ThrottlingHttpClient,
+    id: u128,
+    factor_finder: &FactorFinder,
+    id_and_expr_regex: &Regex,
+    skip_looking_up_listed_algebraic: bool,
+    divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
+    ids: &mut BTreeMap<VertexId, u128>,
+    factor: &Factor<T>,
+) -> bool {
     let mut any_added = false;
     let subfactors = factor_finder.find_unique_factors(factor);
     for subfactor in subfactors {
@@ -1484,15 +1558,11 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(http: &Throttli
         any_added |= added;
     }
     if !skip_looking_up_listed_algebraic {
-        let listed_algebraic_factors = get_known_algebraic_factors(
-            http,
-            id,
-            factor_finder,
-            id_and_expr_regex,
-            true,
-        ).await;
+        let listed_algebraic_factors =
+            get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, true).await;
         for (algebraic_factor, algebraic_factor_id) in listed_algebraic_factors.into_iter() {
-            let (algebraic_factor_node_id, added) = add_factor_node(divisibility_graph, &algebraic_factor.into());
+            let (algebraic_factor_node_id, added) =
+                add_factor_node(divisibility_graph, &algebraic_factor.into());
             any_added |= added;
             if let Some(algebraic_factor_id) = algebraic_factor_id {
                 ids.insert(algebraic_factor_node_id, algebraic_factor_id);
@@ -1502,20 +1572,22 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(http: &Throttli
     any_added
 }
 
-fn get_edge<T>(graph: &AdjMatrix<T, bool, Directed, DefaultId>,
+fn get_edge<T>(
+    graph: &AdjMatrix<T, bool, Directed, DefaultId>,
     source: &VertexId,
-    dest: &VertexId) -> Option<bool> {
+    dest: &VertexId,
+) -> Option<bool> {
     Some(*graph.edge(&graph.edge_id_any(source, dest)?)?)
 }
 
-fn add_factor_node<T: Display>(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, factor: &Factor<T>)
-                                         -> (VertexId, bool) {
+fn add_factor_node<T: Display>(
+    divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
+    factor: &Factor<T>,
+) -> (VertexId, bool) {
     let factor_as_ref = Factor::String(factor.to_compact_string());
     match divisibility_graph.find_vertex(&factor_as_ref) {
         Some(id) => (id, false),
-        None => {
-            (divisibility_graph.add_vertex(factor_as_ref.clone()), true)
-        }
+        None => (divisibility_graph.add_vertex(factor_as_ref.clone()), true),
     }
 }
 
@@ -1544,7 +1616,8 @@ async fn get_known_algebraic_factors(
                 if let Ok(factor_id) = factor_id.parse::<u128>() {
                     match factor_finder
                         .known_factors_as_digits(http, Id(factor_id), include_ff, true)
-                        .await {
+                        .await
+                    {
                         Ok(subfactors) => {
                             for subfactor in subfactors {
                                 results.entry(subfactor.into()).or_insert(Some(factor_id));
@@ -1555,13 +1628,17 @@ async fn get_known_algebraic_factors(
                                 "{id}: Not fully processing elided factor with ID {factor_id} because we failed to fetch it in full"
                             );
                             // Can still check for factors of 2 and 5
-                            for subfactor in factor_finder.find_unique_factors(&Factor::String(factor_digits_or_expr)) {
+                            for subfactor in factor_finder
+                                .find_unique_factors(&Factor::String(factor_digits_or_expr))
+                            {
                                 let subfactor_id = match subfactor {
                                     Numeric(2) => 2,
                                     Numeric(5) => 5,
-                                    _ => factor_id
+                                    _ => factor_id,
                                 };
-                                results.entry(subfactor.into()).or_insert(Some(subfactor_id));
+                                results
+                                    .entry(subfactor.into())
+                                    .or_insert(Some(subfactor_id));
                             }
                         }
                     };

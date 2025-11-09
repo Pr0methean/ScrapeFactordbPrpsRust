@@ -43,7 +43,7 @@ pub struct ThrottlingRequestBuilder<'a> {
 
 pub struct ResourceLimits {
     pub cpu_tenths_spent: usize,
-    pub resets_at: Instant
+    pub resets_at: Instant,
 }
 
 impl<'a> ThrottlingRequestBuilder<'a> {
@@ -150,7 +150,8 @@ impl ThrottlingHttpClient {
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
         let resets_at = now + Duration::from_secs(seconds_to_reset);
         Some(ResourceLimits {
-            cpu_tenths_spent, resets_at
+            cpu_tenths_spent,
+            resets_at,
         })
     }
 
@@ -229,7 +230,7 @@ impl ThrottlingHttpClient {
     pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
-        if let Some(ResourceLimits {resets_at, ..}) =
+        if let Some(ResourceLimits { resets_at, .. }) =
             self.parse_resource_limits(&mut usize::MAX, &response).await
         {
             self.all_threads_blocked_until
@@ -240,7 +241,9 @@ impl ThrottlingHttpClient {
             {
                 error!("Resource limits reached and won't reset during this process's lifespan");
                 exit(0);
-            } else if let Some(throttling_duration) = resets_at.checked_duration_since(Instant::now()) {
+            } else if let Some(throttling_duration) =
+                resets_at.checked_duration_since(Instant::now())
+            {
                 warn!("Resource limits reached; throttling for {throttling_duration:?}");
             }
             return None;
