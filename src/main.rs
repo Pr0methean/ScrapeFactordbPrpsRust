@@ -1326,7 +1326,7 @@ async fn find_and_submit_factors(
         .vertices()
         .map(|vertex| (vertex.id, vertex.attr.clone()))
         .collect::<Box<[_]>>()
-        .into_iter()
+        .into_iter().rev()
     {
         if factor_vid == root_node {
             continue;
@@ -1404,7 +1404,7 @@ async fn find_and_submit_factors(
                 // root node represents the number we're trying to factor, so it's not divisible by any other in the graph
                 continue;
             }
-            let dest_factors = divisibility_graph
+            let mut dest_factors = divisibility_graph
                 .vertices()
                 .filter(|dest|
                     // if factor == dest, the relation is trivial
@@ -1422,11 +1422,12 @@ async fn find_and_submit_factors(
             if dest_factors.is_empty() {
                 continue;
             };
+            dest_factors.sort_unstable_by_key(|(_, factor)| factor.clone());
             let shortest_paths = ShortestPaths::on(&divisibility_graph)
                 .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
                 .run(factor_id)
                 .unwrap();
-            for (dest_factor_id, dest_factor) in dest_factors {
+            for (dest_factor_id, dest_factor) in dest_factors.into_iter().rev() {
                 let edge_id = divisibility_graph.edge_id_any(&factor_id, &dest_factor_id);
                 if edge_id.is_some() {
                     continue;
