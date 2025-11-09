@@ -584,14 +584,14 @@ impl<'a> From<&'a str> for Factor<&'a str> {
     fn from(value: &'a str) -> Self {
         match value.parse() {
             Ok(n) => Numeric(n),
-            Err(_) => Factor::String(value.into()),
+            Err(_) => Factor::String(value),
         }
     }
 }
 
-impl <T: Display> Into<CompactString> for Factor<T> {
-    fn into(self) -> CompactString {
-        self.to_string().into()
+impl <T: Display> From<Factor<T>> for CompactString {
+    fn from(val: Factor<T>) -> Self {
+        val.to_string().into()
     }
 }
 
@@ -1029,7 +1029,7 @@ impl FactorFinder {
                             };
                             let gcd_bc = self.find_common_factors(&b, c_raw.abs(), false);
                             let b = self.find_factors(&b);
-                            let c_abs = self.find_factors(&c_raw.abs());
+                            let c_abs = self.find_factors(c_raw.abs());
                             let gcd_ac = self.find_common_factors(&a, c_raw.abs(), false);
                             let n: Factor<&str> = Factor::from(&captures[2]);
                             if let Numeric(a) = a

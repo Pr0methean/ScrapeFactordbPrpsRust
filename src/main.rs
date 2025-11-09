@@ -1292,7 +1292,7 @@ async fn find_and_submit_factors(
     // Simplest case: try submitting all factors as factors of the root
     let mut any_failed = false;
     for (factor_vid, factor) in divisibility_graph.vertices()
-        .map(|vertex| (vertex.id.clone(), vertex.attr.clone()))
+        .map(|vertex| (vertex.id, vertex.attr.clone()))
         .collect::<Box<[_]>>()
         .into_iter() {
         if factor_vid == root_node {
@@ -1344,13 +1344,13 @@ async fn find_and_submit_factors(
                 _ => {
                     for known_factor in known_factors {
                         let (factor_node, _) = add_factor_node(&mut divisibility_graph, &Factor::String(known_factor));
-                        (&mut divisibility_graph).add_edge(&factor_node, &root_node, true);
+                        divisibility_graph.add_edge(&factor_node, &root_node, true);
                     }
                 }
             }
         }
         for (factor_id, factor) in divisibility_graph.vertices()
-            .map(|vertex| (vertex.id.clone(), vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
+            .map(|vertex| (vertex.id, vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
             if factor_id == root_node {
                 // root node represents the number we're trying to factor, so it's not divisible by any other in the graph
                 continue;
@@ -1367,14 +1367,14 @@ async fn find_and_submit_factors(
                         && get_edge(&divisibility_graph, &factor_id, &dest.id).is_none()
                         // dest is a proper divisor of factor, so vice-versa is impossible
                         && get_edge(&divisibility_graph, &dest.id, &factor_id) != Some(true))
-                .map(|vertex| (vertex.id.clone(), vertex.attr.clone()))
+                .map(|vertex| (vertex.id, vertex.attr.clone()))
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
                 continue;
             };
             let shortest_paths = ShortestPaths::on(&divisibility_graph)
                 .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
-                .run(factor_id.clone())
+                .run(factor_id)
                 .unwrap();
             for (dest_factor_id, dest_factor) in dest_factors {
                 let edge_id = divisibility_graph.edge_id_any(&factor_id, &dest_factor_id);
@@ -1385,7 +1385,7 @@ async fn find_and_submit_factors(
                     divisibility_graph.add_edge(&factor_id, &dest_factor_id, false);
                     continue;
                 }
-                if shortest_paths.dist(&dest_factor_id) == Some(&0) {
+                if shortest_paths.dist(dest_factor_id) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
                     divisibility_graph.add_edge(&factor_id, &dest_factor_id, true);
@@ -1395,7 +1395,7 @@ async fn find_and_submit_factors(
                 let dest_specifier = if let Some(dest_id) = ids.get(&dest_factor_id) {
                     Id(*dest_id)
                 } else {
-                    Expression(&dest_factor.as_str().unwrap())
+                    Expression(dest_factor.as_str().unwrap())
                 };
                 match try_report_factor(http, &dest_specifier, &factor).await {
                     AlreadyFullyFactored => {
@@ -1443,16 +1443,16 @@ async fn find_and_submit_factors(
             }
         }
     }
-    for (factor_id, factor) in divisibility_graph.vertices().map(|vertex| (vertex.id.clone(), vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
+    for (factor_id, factor) in divisibility_graph.vertices().map(|vertex| (vertex.id, vertex.attr.clone())).collect::<Box<[_]>>().into_iter() {
         if factor_id == root_node {
             continue;
         }
         let reverse_dist = ShortestPaths::on(&divisibility_graph)
             .edge_weight_fn(|edge| if *edge { 0usize } else { 1usize })
-            .goal(root_node.clone())
+            .goal(root_node)
             .run(factor_id)
             .unwrap()
-            .dist(root_node.clone()).cloned();
+            .dist(root_node).cloned();
         if reverse_dist == Some(0) {
             continue;
         }
@@ -1478,7 +1478,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(http: &Throttli
                                                                  ids: &mut BTreeMap<VertexId, u128>,
                                                                  factor: &Factor<T>) -> bool {
     let mut any_added = false;
-    let subfactors = factor_finder.find_unique_factors(&factor);
+    let subfactors = factor_finder.find_unique_factors(factor);
     for subfactor in subfactors {
         let (_, added) = add_factor_node(divisibility_graph, &subfactor);
         any_added |= added;
@@ -1508,7 +1508,7 @@ fn get_edge<T>(graph: &AdjMatrix<T, bool, Directed, DefaultId>,
     Some(*graph.edge(&graph.edge_id_any(source, dest)?)?)
 }
 
-fn add_factor_node<'a, T: Display>(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, factor: &Factor<T>)
+fn add_factor_node<T: Display>(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, factor: &Factor<T>)
                                          -> (VertexId, bool) {
     let factor_as_ref = Factor::String(factor.to_compact_string());
     match divisibility_graph.find_vertex(&factor_as_ref) {
