@@ -1469,6 +1469,7 @@ async fn find_and_submit_factors(
                 .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
                 .run(factor_id)
                 .unwrap();
+
             for (dest_factor_id, dest_factor) in dest_factors.into_iter().rev() {
                 let edge_id = divisibility_graph.edge_id_any(&factor_id, &dest_factor_id);
                 if edge_id.is_some() {
@@ -1489,9 +1490,8 @@ async fn find_and_submit_factors(
                     .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
                     .goal(factor_id)
                     .run(dest_factor_id)
-                    .unwrap()
-                    .dist(factor_id)
-                    .copied();
+                    .ok()
+                    .and_then(|paths| paths.dist(factor_id).copied());
                 if shortest_path_from_dest == Some(0) {
                     // dest_factor is transitively divisible by factor
                     divisibility_graph.add_edge(&dest_factor_id, &factor_id, true);
@@ -1578,9 +1578,8 @@ async fn find_and_submit_factors(
             .edge_weight_fn(|edge| if *edge { 0usize } else { 1usize })
             .goal(root_node)
             .run(factor_id)
-            .unwrap()
-            .dist(root_node)
-            .cloned();
+            .ok()
+            .and_then(|paths| paths.dist(root_node).copied());
         if reverse_dist == Some(0) {
             continue;
         }
