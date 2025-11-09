@@ -1637,13 +1637,13 @@ async fn get_known_algebraic_factors(
                                 .find_unique_factors::<&str>(&factor_digits_or_expr.into())
                             {
                                 let subfactor_id = match subfactor {
-                                    Numeric(2) => 2,
-                                    Numeric(5) => 5,
-                                    _ => factor_id,
+                                    Numeric(2) => Some(2),
+                                    Numeric(5) => Some(5),
+                                    _ => None,
                                 };
                                 results
                                     .entry(subfactor.into())
-                                    .or_insert(Some(subfactor_id));
+                                    .or_insert(subfactor_id);
                             }
                         }
                     };
