@@ -548,7 +548,7 @@ static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
     &[2, 2, 4021, 24994118449, 2686039424221, 940094299967491],
 ];
 
-#[derive(Copy, Clone, Hash)]
+#[derive(Copy, Clone, Debug, Hash)]
 pub enum Factor<T> {
     Numeric(u128),
     String(T),
