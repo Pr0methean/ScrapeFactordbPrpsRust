@@ -927,10 +927,10 @@ async fn main() -> anyhow::Result<()> {
     task::spawn(async_backtrace::location!().frame(handle_signals(shutdown_sender, installed_sender)));
     let default_panic_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
-        default_panic_hook(panic_info); // Call the original panic hook
         eprintln!("\n--- Async Backtrace ---");
         async_backtrace::taskdump_tree(true);
         eprintln!("-----------------------");
+        default_panic_hook(panic_info); // Call the original panic hook
     }));
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
