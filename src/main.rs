@@ -48,9 +48,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
+use std::panic;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use num_prime::nt_funcs::factors;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -137,6 +139,7 @@ struct FactorSubmission<'a> {
     factor: &'a str,
 }
 
+#[async_backtrace::framed]
 async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
@@ -176,6 +179,7 @@ async fn composites_while_waiting(
     }
 }
 
+#[async_backtrace::framed]
 async fn check_composite(
     http: &ThrottlingHttpClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
@@ -273,6 +277,7 @@ enum NumberSpecifier<'a> {
     Expression(&'a str),
 }
 
+#[async_backtrace::framed]
 async fn get_prp_remaining_bases(
     id: u128,
     http: &ThrottlingHttpClient,
@@ -461,6 +466,7 @@ async fn get_prp_remaining_bases(
     Ok(bases_left)
 }
 
+#[async_backtrace::framed]
 async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -470,6 +476,7 @@ async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
         .await;
 }
 
+#[async_backtrace::framed]
 async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -489,6 +496,7 @@ static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGE
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
+#[async_backtrace::framed]
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
@@ -666,6 +674,7 @@ async fn do_checks(
 }
 
 #[inline]
+#[async_backtrace::framed]
 async fn try_handle_unknown(
     http: &ThrottlingHttpClient,
     u_status_regex: &Regex,
@@ -713,6 +722,7 @@ async fn try_handle_unknown(
     }
 }
 
+#[async_backtrace::framed]
 async fn throttle_if_necessary(
     http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
@@ -796,6 +806,7 @@ async fn throttle_if_necessary(
     true
 }
 
+#[async_backtrace::framed]
 async fn queue_composites(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -858,7 +869,7 @@ async fn queue_composites(
             c_buffered.len()
         );
         let c_sender = c_sender.clone();
-        task::spawn(async move {
+        task::spawn(async_backtrace::location!().frame(async move {
             let count = c_buffered.len();
             let mut c_sent = 0;
             for c_task in c_buffered {
@@ -874,10 +885,11 @@ async fn queue_composites(
             }
             info!("Sent {c_sent} buffered C's to channel");
             let _ = c_sender.reserve().await; // Prevent task from finishing until another C can be sent
-        })
+        }))
     }
 }
 
+#[async_backtrace::framed]
 async fn handle_signals(
     shutdown_sender: broadcast::Sender<()>,
     installed_sender: oneshot::Sender<()>,
@@ -913,7 +925,14 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
-    task::spawn(handle_signals(shutdown_sender, installed_sender));
+    task::spawn(async_backtrace::location!().frame(handle_signals(shutdown_sender, installed_sender)));
+    let default_panic_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        default_panic_hook(panic_info); // Call the original panic hook
+        eprintln!("\n--- Async Backtrace ---");
+        async_backtrace::taskdump_tree(true);
+        eprintln!("-----------------------");
+    }));
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -982,7 +1001,7 @@ async fn main() -> anyhow::Result<()> {
     let id_and_expr_regex_clone = id_and_expr_regex.clone();
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
-    let mut c_buffer_task: JoinHandle<()> = task::spawn(async move {
+    let mut c_buffer_task: JoinHandle<()> = task::spawn(async_backtrace::location!().frame(async move {
         queue_composites(
             &id_and_expr_regex_clone,
             &http_clone,
@@ -992,7 +1011,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .await
         .unwrap();
-    });
+    }));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1091,6 +1110,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+#[async_backtrace::framed]
 async fn queue_unknowns(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -1117,6 +1137,7 @@ async fn queue_unknowns(
     }
 }
 
+#[async_backtrace::framed]
 async fn try_queue_unknowns<'a>(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -1196,6 +1217,7 @@ enum ReportFactorResult {
     OtherError,
 }
 
+#[async_backtrace::framed]
 async fn try_report_factor<T: Display>(
     http: &ThrottlingHttpClient,
     u_id: &NumberSpecifier<'_>,
@@ -1243,6 +1265,7 @@ async fn try_report_factor<T: Display>(
     OtherError
 }
 
+#[async_backtrace::framed]
 async fn report_factor<T: Display>(
     http: &ThrottlingHttpClient,
     u_id: u128,
@@ -1267,6 +1290,7 @@ async fn report_factor<T: Display>(
     OtherError // factor that we failed to submit may still have been valid
 }
 
+#[async_backtrace::framed]
 async fn find_and_submit_factors(
     http: &ThrottlingHttpClient,
     id: u128,
@@ -1314,12 +1338,13 @@ async fn find_and_submit_factors(
         }
     };
     ids.insert(root_node, id);
+    let mut factor_found = false;
     let mut accepted_factors = 0;
     let mut already_fully_factored = BTreeSet::new();
     let mut already_checked_for_algebraic = BTreeSet::new();
     for factor_vid in digits_or_expr_full.into_iter().rev() {
         let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
-        add_algebraic_factors_to_graph(
+        factor_found |= add_algebraic_factors_to_graph(
             http,
             id,
             factor_finder,
@@ -1331,6 +1356,10 @@ async fn find_and_submit_factors(
         )
         .await;
         already_checked_for_algebraic.insert(factor_vid);
+    }
+    if !factor_found {
+        info!("{id}: No factors to submit");
+        return false;
     }
     // Simplest case: try submitting all factors as factors of the root
     let mut any_failed_retryably = false;
@@ -1559,6 +1588,7 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
+#[async_backtrace::framed]
 async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
     http: &ThrottlingHttpClient,
     id: u128,
@@ -1609,6 +1639,7 @@ fn add_factor_node(
     }
 }
 
+#[async_backtrace::framed]
 async fn get_known_algebraic_factors(
     http: &ThrottlingHttpClient,
     id: u128,
