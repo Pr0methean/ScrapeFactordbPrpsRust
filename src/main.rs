@@ -1375,6 +1375,7 @@ async fn find_and_submit_factors(
             // Graph is fully connected, meaning none are left to try
             return accepted_factors > 0;
         }
+        info!("{id}: Divisibility graph has {node_count} vertices and {edge_count} edges");
         if let Ok(known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false, false)
             .await
