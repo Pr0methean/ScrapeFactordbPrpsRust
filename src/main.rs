@@ -52,7 +52,6 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use num_prime::nt_funcs::factors;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -1346,7 +1345,7 @@ async fn find_and_submit_factors(
         let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
         factor_found |= add_algebraic_factors_to_graph(
             http,
-            id,
+            Some(id),
             factor_finder,
             id_and_expr_regex,
             skip_looking_up_listed_algebraic,
@@ -1384,18 +1383,19 @@ async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 divisibility_graph.add_edge(&factor_vid, &root_node, false);
-                any_failed_retryably |= add_algebraic_factors_to_graph(
-                    http,
-                    id,
-                    factor_finder,
-                    id_and_expr_regex,
-                    skip_looking_up_listed_algebraic,
-                    &mut divisibility_graph,
-                    &mut ids,
-                    &factor,
-                )
-                .await;
-                already_checked_for_algebraic.insert(factor_vid);
+                if already_checked_for_algebraic.insert(factor_vid) {
+                    any_failed_retryably |= add_algebraic_factors_to_graph(
+                        http,
+                        ids.get(&factor_vid).copied(),
+                        factor_finder,
+                        id_and_expr_regex,
+                        skip_looking_up_listed_algebraic,
+                        &mut divisibility_graph,
+                        &mut ids,
+                        &factor,
+                    )
+                        .await;
+                }
             }
             _ => {
                 any_failed_retryably = true;
@@ -1508,7 +1508,7 @@ async fn find_and_submit_factors(
                         if already_checked_for_algebraic.insert(factor_id) {
                             add_algebraic_factors_to_graph(
                                 http,
-                                id,
+                                ids.get(&factor_id).copied(),
                                 factor_finder,
                                 id_and_expr_regex,
                                 skip_looking_up_listed_algebraic,
@@ -1591,7 +1591,7 @@ async fn find_and_submit_factors(
 #[async_backtrace::framed]
 async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
     http: &ThrottlingHttpClient,
-    id: u128,
+    id: Option<u128>,
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
     skip_looking_up_listed_algebraic: bool,
@@ -1600,7 +1600,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
     factor: &Factor<T>,
 ) -> bool {
     let mut any_added = false;
-    if !skip_looking_up_listed_algebraic {
+    if let Some(id) = id && factor.as_str().is_some() && !skip_looking_up_listed_algebraic {
         let listed_algebraic_factors =
             get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, true).await;
         for (algebraic_factor, algebraic_factor_id) in listed_algebraic_factors.into_iter() {
