@@ -1485,6 +1485,19 @@ async fn find_and_submit_factors(
                     divisibility_graph.add_edge(&dest_factor_id, &factor_id, false);
                     continue;
                 }
+                let shortest_path_from_dest = ShortestPaths::on(&divisibility_graph)
+                    .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
+                    .goal(factor_id)
+                    .run(dest_factor_id)
+                    .unwrap()
+                    .dist(factor_id)
+                    .copied();
+                if shortest_path_from_dest == Some(0) {
+                    // dest_factor is transitively divisible by factor
+                    divisibility_graph.add_edge(&dest_factor_id, &factor_id, true);
+                    divisibility_graph.add_edge(&factor_id, &dest_factor_id, false);
+                    continue;
+                }
                 let dest_specifier = if let Some(dest_id) = ids.get(&dest_factor_id) {
                     Id(*dest_id)
                 } else {
