@@ -1216,7 +1216,7 @@ async fn try_report_factor<T: Display>(
                         OtherError
                     } else if text.contains("submitted") {
                         Accepted
-                    } else if text.contains("fully factored") {
+                    } else if text.contains("fully factored") || text.contains("Number too small") {
                         AlreadyFullyFactored
                     } else {
                         DoesNotDivide
