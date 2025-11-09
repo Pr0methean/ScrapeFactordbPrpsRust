@@ -809,7 +809,8 @@ async fn queue_composites(
         rng().random_range(0..=MAX_START)
     };
     let digits = digits.unwrap_or_else(|| {
-        rng().random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
+        rng()
+            .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
             .try_into()
             .unwrap()
     });
@@ -981,10 +982,17 @@ async fn main() -> anyhow::Result<()> {
     let id_and_expr_regex_clone = id_and_expr_regex.clone();
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
-    let mut c_buffer_task: JoinHandle<()> =
-        task::spawn(async move {
-            queue_composites(&id_and_expr_regex_clone, &http_clone, &c_sender_clone, c_digits).await.await.unwrap();
-        });
+    let mut c_buffer_task: JoinHandle<()> = task::spawn(async move {
+        queue_composites(
+            &id_and_expr_regex_clone,
+            &http_clone,
+            &c_sender_clone,
+            c_digits,
+        )
+        .await
+        .await
+        .unwrap();
+    });
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1272,7 +1280,10 @@ async fn find_and_submit_factors(
     let mut divisibility_graph = AdjMatrix::new();
     let mut ids = BTreeMap::new();
     let (root_node, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
-        add_factor_node(&mut divisibility_graph, &digits_or_expr.to_compact_string().into())
+        add_factor_node(
+            &mut divisibility_graph,
+            &digits_or_expr.to_compact_string().into(),
+        )
     } else {
         let Ok(known_factors) = factor_finder
             .known_factors_as_digits(http, Id(id), false, true)
@@ -1326,7 +1337,8 @@ async fn find_and_submit_factors(
         .vertices()
         .map(|vertex| (vertex.id, vertex.attr.clone()))
         .collect::<Box<[_]>>()
-        .into_iter().rev()
+        .into_iter()
+        .rev()
     {
         if factor_vid == root_node {
             continue;
@@ -1642,9 +1654,7 @@ async fn get_known_algebraic_factors(
                                     Numeric(5) => Some(5),
                                     _ => None,
                                 };
-                                results
-                                    .entry(subfactor.into())
-                                    .or_insert(subfactor_id);
+                                results.entry(subfactor.into()).or_insert(subfactor_id);
                             }
                         }
                     };
