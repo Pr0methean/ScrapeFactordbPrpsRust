@@ -803,14 +803,13 @@ async fn queue_composites(
     digits: Option<NonZeroU128>,
 ) -> JoinHandle<()> {
     let mut c_sent = 0;
-    let mut rng = rng();
     let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
         0
     } else {
-        rng.random_range(0..=MAX_START)
+        rng().random_range(0..=MAX_START)
     };
     let digits = digits.unwrap_or_else(|| {
-        rng.random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
+        rng().random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
             .try_into()
             .unwrap()
     });
@@ -840,7 +839,7 @@ async fn queue_composites(
         })
         .unique()
         .collect();
-    c_tasks.shuffle(&mut rng);
+    c_tasks.shuffle(&mut rng());
     let mut c_buffered = Vec::with_capacity(c_tasks.len());
     for c_task in c_tasks {
         if let Err(Full(c_id)) = c_sender.try_send(c_task) {
@@ -979,8 +978,13 @@ async fn main() -> anyhow::Result<()> {
         max_concurrent_requests,
         shutdown_receiver.clone(),
     );
+    let id_and_expr_regex_clone = id_and_expr_regex.clone();
+    let http_clone = http.clone();
+    let c_sender_clone = c_sender.clone();
     let mut c_buffer_task: JoinHandle<()> =
-        queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
+        task::spawn(async move {
+            queue_composites(&id_and_expr_regex_clone, &http_clone, &c_sender_clone, c_digits).await.await.unwrap();
+        });
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
