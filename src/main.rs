@@ -31,7 +31,7 @@ use gryf::algo::ShortestPaths;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::core::{EdgeSet, GraphAdd, GraphRef, Neighbors, VertexSet};
+use gryf::core::{EdgeSet, GraphAdd, GraphMut, GraphRef, Neighbors, VertexSet};
 use gryf::storage::AdjMatrix;
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -1689,8 +1689,10 @@ async fn add_known_factors_to_graph<T: AsRef<str>>(
                      neighbors_with_edge_weights(divisibility_graph, &new_root_vid, Incoming)
                     )
                 };
-                copy_edges(divisibility_graph, &new_root_vid, old_out_neighbors, old_in_neighbors);
-                copy_edges(divisibility_graph, &root_vid, new_out_neighbors, new_in_neighbors);
+                upsert_edge(divisibility_graph, &root_vid, &new_root_vid, |_| true);
+                upsert_edge(divisibility_graph, &new_root_vid, &root_vid, |_| true);
+                copy_edges_true_overrides_false(divisibility_graph, &new_root_vid, old_out_neighbors, old_in_neighbors);
+                copy_edges_true_overrides_false(divisibility_graph, &root_vid, new_out_neighbors, new_in_neighbors);
                 if added {
                     vec![dest_subfactor]
                 } else {
@@ -1715,18 +1717,26 @@ async fn add_known_factors_to_graph<T: AsRef<str>>(
     ProcessedStatusApiResponse { status, factors: all_added, id }
 }
 
-fn copy_edges(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, new_vertex: &VertexId, out_edges: Box<[(VertexId, bool)]>, in_edges: Box<[(VertexId, bool)]>) {
-    for (neighbor, divisible) in out_edges {
-        if let Err(e) = divisibility_graph.try_add_edge(&new_vertex, &neighbor, divisible)
-            && e.attr != divisible {
-            error!("Contradictory divisibility relations");
+fn upsert_edge<F: FnOnce(Option<bool>) -> bool>(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, from_vid: &VertexId, to_vid: &VertexId, new_value_fn: F) {
+    match divisibility_graph.edge_id_any(from_vid, to_vid) {
+        Some(old_edge_id) => {
+            divisibility_graph.replace_edge(&old_edge_id, new_value_fn(Some(*divisibility_graph.edge(&old_edge_id).unwrap())));
+        }
+        None => {
+            divisibility_graph.add_edge(from_vid, to_vid, new_value_fn(None));
         }
     }
+}
+
+fn copy_edges_true_overrides_false(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, new_vertex: &VertexId, out_edges: Box<[(VertexId, bool)]>, in_edges: Box<[(VertexId, bool)]>) {
+    for (neighbor, divisible) in out_edges {
+        upsert_edge(divisibility_graph, new_vertex, &neighbor,
+                    |old_edge| if old_edge == Some(true) {true} else {divisible}
+        );
+    }
     for (neighbor, divisible) in in_edges {
-        if let Err(e) = divisibility_graph.try_add_edge(&neighbor, &new_vertex, divisible)
-            && e.attr != divisible {
-            error!("Contradictory divisibility relations");
-        }
+        upsert_edge(divisibility_graph, &neighbor, new_vertex,
+                    |old_edge| if old_edge == Some(true) {true} else {divisible});
     }
 }
 
