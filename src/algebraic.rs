@@ -552,6 +552,7 @@ static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
 ];
 
 #[derive(Copy, Clone, Hash)]
+#[derive(Debug)]
 pub enum Factor<T> {
     Numeric(u128),
     String(T),
@@ -1497,14 +1498,14 @@ impl FactorFinder {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
     pub factors: Box<[Factor<CompactString>]>,
     pub id: Option<u128>,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub enum NumberStatus {
     Unknown,
     FullyFactored, // includes P and PRP
