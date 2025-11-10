@@ -924,7 +924,9 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
-    task::spawn(async_backtrace::location!().frame(handle_signals(shutdown_sender, installed_sender)));
+    task::spawn(
+        async_backtrace::location!().frame(handle_signals(shutdown_sender, installed_sender)),
+    );
     let default_panic_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
         eprintln!("\n--- Async Backtrace ---");
@@ -1000,17 +1002,18 @@ async fn main() -> anyhow::Result<()> {
     let id_and_expr_regex_clone = id_and_expr_regex.clone();
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
-    let mut c_buffer_task: JoinHandle<()> = task::spawn(async_backtrace::location!().frame(async move {
-        queue_composites(
-            &id_and_expr_regex_clone,
-            &http_clone,
-            &c_sender_clone,
-            c_digits,
-        )
-        .await
-        .await
-        .unwrap();
-    }));
+    let mut c_buffer_task: JoinHandle<()> =
+        task::spawn(async_backtrace::location!().frame(async move {
+            queue_composites(
+                &id_and_expr_regex_clone,
+                &http_clone,
+                &c_sender_clone,
+                c_digits,
+            )
+            .await
+            .await
+            .unwrap();
+        }));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1394,7 +1397,7 @@ async fn find_and_submit_factors(
                         &mut ids,
                         &factor,
                     )
-                        .await;
+                    .await;
                 }
             }
             _ => {
@@ -1530,12 +1533,30 @@ async fn find_and_submit_factors(
                                 &factor,
                             )
                             .await;
-                        } else if add_known_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut already_fully_factored, dest_factor_id, dest_specifier).await {
+                        } else if add_known_factors_to_graph(
+                            http,
+                            factor_finder,
+                            &mut divisibility_graph,
+                            &mut already_fully_factored,
+                            dest_factor_id,
+                            dest_specifier,
+                        )
+                        .await
+                        {
                             iters_without_progress = 0;
                         }
                     }
                     OtherError => {
-                        if add_known_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut already_fully_factored, dest_factor_id, dest_specifier).await {
+                        if add_known_factors_to_graph(
+                            http,
+                            factor_finder,
+                            &mut divisibility_graph,
+                            &mut already_fully_factored,
+                            dest_factor_id,
+                            dest_specifier,
+                        )
+                        .await
+                        {
                             iters_without_progress = 0;
                         }
                     }
@@ -1578,7 +1599,14 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-async fn add_known_factors_to_graph(http: &ThrottlingHttpClient, factor_finder: &FactorFinder, mut divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, already_fully_factored: &mut BTreeSet<VertexId>, dest_factor_id: VertexId, dest_specifier: NumberSpecifier<'_>) -> bool {
+async fn add_known_factors_to_graph(
+    http: &ThrottlingHttpClient,
+    factor_finder: &FactorFinder,
+    mut divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
+    already_fully_factored: &mut BTreeSet<VertexId>,
+    dest_factor_id: VertexId,
+    dest_specifier: NumberSpecifier<'_>,
+) -> bool {
     let mut any_added = false;
     if let Ok(dest_subfactors) = factor_finder
         .known_factors_as_digits(http, dest_specifier, false, false)
@@ -1592,17 +1620,13 @@ async fn add_known_factors_to_graph(http: &ThrottlingHttpClient, factor_finder: 
             1 => {}
             _ => {
                 for dest_subfactor in dest_subfactors {
-                    let (subfactor_vid, added) = add_factor_node(
-                        &mut divisibility_graph,
-                        &dest_subfactor,
-                    );
+                    let (subfactor_vid, added) =
+                        add_factor_node(&mut divisibility_graph, &dest_subfactor);
                     if added {
                         any_added = true;
                     }
-                    let _ = divisibility_graph
-                        .try_add_edge(&subfactor_vid, &dest_factor_id, true);
-                    let _ = divisibility_graph
-                        .try_add_edge(&dest_factor_id, &subfactor_vid, true);
+                    let _ = divisibility_graph.try_add_edge(&subfactor_vid, &dest_factor_id, true);
+                    let _ = divisibility_graph.try_add_edge(&dest_factor_id, &subfactor_vid, true);
                 }
             }
         }
@@ -1622,7 +1646,10 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
     factor: &Factor<T>,
 ) -> bool {
     let mut any_added = false;
-    if let Some(id) = id && factor.as_str().is_some() && !skip_looking_up_listed_algebraic {
+    if let Some(id) = id
+        && factor.as_str().is_some()
+        && !skip_looking_up_listed_algebraic
+    {
         let listed_algebraic_factors =
             get_known_algebraic_factors(http, id, factor_finder, id_and_expr_regex, true).await;
         for (algebraic_factor, algebraic_factor_id) in listed_algebraic_factors.into_iter() {
