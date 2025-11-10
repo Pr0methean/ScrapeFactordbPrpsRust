@@ -1713,38 +1713,44 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
                     let factor = factor_digits_or_expr.into();
                     let (factor_vid, added) = add_factor_node(divisibility_graph, &factor);
                     any_added |= added;
-                    if factor_digits_or_expr.contains("...") && !checked_for_known_factors_since_last_submission.contains(&factor_vid) {
+                    let mut should_add_factor = true;
+                    if factor_digits_or_expr.contains("...") {
                         // Link text isn't an expression for the factor, so we need to look up its value
                         info!(
                             "{id}: Algebraic factor with ID {factor_entry_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                         );
-                        let factor_specifier =
-                            if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
-                                Id(factor_entry_id)
+                        if !checked_for_known_factors_since_last_submission.contains(&factor_vid) {
+                            let factor_specifier =
+                                if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
+                                    Id(factor_entry_id)
+                                } else {
+                                    Expression(factor_digits_or_expr)
+                                };
+                            let result = add_known_factors_to_graph(
+                                http, factor_finder, divisibility_graph, already_fully_factored, factor_vid, factor_specifier,
+                                true).await;
+                            if !result.factors.is_empty() {
+                                any_added = true;
+                            }
+                            if result.status.is_some() {
+                                checked_for_known_factors_since_last_submission.insert(factor_vid);
+                                should_add_factor = false;
+                            }
+                            if result.status == Some(FullyFactored) {
+                                already_fully_factored.insert(factor_vid);
                             } else {
-                                Expression(factor_digits_or_expr)
-                            };
-                        let result = add_known_factors_to_graph(
-                            http, factor_finder, divisibility_graph, already_fully_factored, factor_vid, factor_specifier,
-                            true).await;
-                        if !result.factors.is_empty() {
-                            any_added = true;
-                        }
-                        if result.status.is_some() {
-                            checked_for_known_factors_since_last_submission.insert(factor_vid);
-                        }
-                        if result.status == Some(FullyFactored) {
-                            already_fully_factored.insert(factor_vid);
-                        } else {
-                        parseable_factors.extend(result.factors);
-                        }
-                        if let Some(entry_id) = result.id {
-                            ids.insert(factor_vid, entry_id);
+                                parseable_factors.extend(result.factors);
+                            }
+                            if let Some(entry_id) = result.id {
+                                ids.insert(factor_vid, entry_id);
+                            }
                         }
                     } else {
                         info!(
                             "{id}: Algebraic factor with ID {factor_entry_id:?} represented in full: {factor_digits_or_expr}"
                         );
+                    }
+                    if should_add_factor {
                         parseable_factors.insert(factor);
                         any_added |= added;
                     }
