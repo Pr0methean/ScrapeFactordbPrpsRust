@@ -1,5 +1,5 @@
 #![allow(stable_features)]
-#![allow(too_many_arguments)]
+#![allow(clippy::too_many_arguments)]
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 #![feature(const_destruct)]
