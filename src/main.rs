@@ -1450,16 +1450,15 @@ async fn find_and_submit_factors(
         }
         info!("{id}: Divisibility graph has {node_count} vertices and {edge_count} edges. \
         {accepted_factors} factors accepted so far.");
-        for (factor_vid, factor) in divisibility_graph
+        let factors = divisibility_graph
             .vertices()
+            .filter(|factor| factor.id != root_node)
             .map(|vertex| (vertex.id, vertex.attr.clone()))
-            .collect::<Box<[_]>>()
-            .into_iter()
-        {
-            if factor_vid == root_node {
-                // root node represents the number we're trying to factor, so it's not divisible by any other in the graph
-                continue;
-            }
+            .collect::<Box<[_]>>();
+        if factors.is_empty() {
+            return accepted_factors > 0;
+        }
+        for factor in factors {
             let mut dest_factors = divisibility_graph
                 .vertices()
                 .filter(|dest|
