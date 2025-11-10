@@ -1474,26 +1474,25 @@ async fn find_and_submit_factors(
             if dest_factors.is_empty() {
                 continue;
             };
-            dest_factors.sort_by_key(|(_, factor)| factor.clone());
             let shortest_paths = ShortestPaths::on(&divisibility_graph)
                 .edge_weight_fn(|edge| if *edge { 0usize } else { 1usize })
                 .run(factor_vid)
                 .unwrap();
-
+            dest_factors.sort_by_key(|(_, factor)| factor.clone());
             for (dest_factor_vid, dest_factor) in dest_factors.into_iter().rev() {
+                if shortest_paths.dist(dest_factor_vid) == Some(&0) {
+                    // dest_factor is divisible by factor, and this is already known to factordb
+                    // because it follows that relation transitively
+                    divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, true);
+                    divisibility_graph.add_edge(&dest_factor_vid, &factor_vid, false);
+                    continue;
+                }
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
                     continue;
                 }
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
                     divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, false);
-                    continue;
-                }
-                if shortest_paths.dist(dest_factor_vid) == Some(&0) {
-                    // dest_factor is divisible by factor, and this is already known to factordb
-                    // because it follows that relation transitively
-                    divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, true);
-                    divisibility_graph.add_edge(&dest_factor_vid, &factor_vid, false);
                     continue;
                 }
                 let shortest_path_from_dest = ShortestPaths::on(&divisibility_graph)
