@@ -1576,7 +1576,7 @@ async fn find_and_submit_factors(
                                     warn!("{id}: Already fully factored");
                                     return true;
                                 }
-                                checked_for_known_factors_since_last_submission.insert(dest_factor_vid);
+                                checked_for_known_factors_since_last_submission.insert(factor_vid);
                             }
                             if !result.factors.is_empty() {
                                 iters_without_progress = 0;
