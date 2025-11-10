@@ -1848,13 +1848,20 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
         for subfactor in factor_finder.find_unique_factors(&parseable_factor) {
             let (subfactor_vid, added) = add_factor_node(divisibility_graph, &subfactor);
             match subfactor {
-                Numeric(2) => {
-                    ids.insert(subfactor_vid, 2);
+                Numeric(n) => {
+                    // Numeric factors found by factor_finder are prime
+                    checked_for_known_factors_since_last_submission.insert(subfactor_vid);
+                    match n {
+                        2 => {
+                            ids.insert(subfactor_vid, 2);
+                        }
+                        5 => {
+                            ids.insert(subfactor_vid, 5);
+                        }
+                        _ => {}
+                    }
                 }
-                Numeric(5) => {
-                    ids.insert(subfactor_vid, 5);
-                }
-                _ => {}
+                Factor::String(_) => {}
             }
             any_added |= added;
         }
