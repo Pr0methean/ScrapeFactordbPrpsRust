@@ -1466,7 +1466,7 @@ async fn find_and_submit_factors(
             };
             dest_factors.sort_by_key(|(_, factor)| factor.clone());
             let shortest_paths = ShortestPaths::on(&divisibility_graph)
-                .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
+                .edge_weight_fn(|edge| if *edge { 0usize } else { 1usize })
                 .run(factor_id)
                 .unwrap();
 
