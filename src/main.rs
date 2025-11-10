@@ -1603,7 +1603,7 @@ async fn find_and_submit_factors(
 async fn add_known_factors_to_graph(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
-    mut divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
     already_fully_factored: &mut BTreeSet<VertexId>,
     dest_factor_id: VertexId,
     dest_specifier: NumberSpecifier<'_>,
