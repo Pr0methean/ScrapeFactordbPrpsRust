@@ -805,6 +805,7 @@ async fn throttle_if_necessary(
     true
 }
 
+#[allow(async_yields_async)]
 #[async_backtrace::framed]
 async fn queue_composites(
     id_and_expr_regex: &Regex,
@@ -1621,7 +1622,7 @@ async fn add_known_factors_to_graph(
             _ => {
                 for dest_subfactor in dest_subfactors {
                     let (subfactor_vid, added) =
-                        add_factor_node(&mut divisibility_graph, &dest_subfactor);
+                        add_factor_node(divisibility_graph, &dest_subfactor);
                     if added {
                         any_added = true;
                     }
