@@ -1745,7 +1745,7 @@ fn copy_edges_true_overrides_false(divisibility_graph: &mut AdjMatrix<Factor<Com
 
 fn neighbors_with_edge_weights(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, root_vid: &VertexId, direction: Direction) -> Box<[(VertexId, bool)]> {
     divisibility_graph
-        .neighbors_directed(&root_vid, direction)
+        .neighbors_directed(root_vid, direction)
         .map(|neighbor_ref| (neighbor_ref.id, *divisibility_graph.edge(&neighbor_ref.edge).unwrap()))
         .collect()
 }
