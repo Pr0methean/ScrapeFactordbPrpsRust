@@ -7,6 +7,7 @@
 #![feature(fn_traits)]
 #![feature(never_type)]
 #![feature(btree_set_entry)]
+#![feature(str_as_str)]
 
 mod algebraic;
 mod channel;
@@ -1470,11 +1471,13 @@ async fn find_and_submit_factors(
                 .filter(|dest|
                     // if factor == dest, the relation is trivial
                     factor_vid != dest.id
+                        // Don't try to submit to a dest for which FactorDB already has a full factorization
+                        && !already_fully_factored.contains(&dest.id)
+                        // Ensure factor isn't larger than dest
+                        && !dest.attr.unambiguously_less_or_equal(&factor)
                         // Numbers that fit into a u128 are fully factored already
                         // and elided numbers can only be used as dests if their IDs are known
                         && dest.attr.as_str().is_some_and(|expr| ids.contains_key(&dest.id) || !expr.contains("..."))
-                        // Don't try to submit to a dest for which FactorDB already has a full factorization
-                        && !already_fully_factored.contains(&dest.id)
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
                         && get_edge(&divisibility_graph, &factor_vid, &dest.id).is_none()
                         // dest is a proper divisor of factor, so vice-versa is impossible
@@ -1862,6 +1865,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
                     }
                 }
                 Factor::String(_) => {}
+                Factor::BigNumber(_) => {}
             }
             any_added |= added;
         }

@@ -556,6 +556,7 @@ static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
 #[derive(Debug)]
 pub enum Factor<T> {
     Numeric(u128),
+    BigNumber(T),
     String(T),
 }
 
@@ -573,7 +574,11 @@ macro_rules! factor_from {
             fn from(value: $input) -> Self {
                 match value.parse() {
                     Ok(n) => Numeric(n),
-                    Err(_) => Factor::String(value.into()),
+                    Err(_) => if value.as_str().chars().all(|c| c.is_ascii_digit()) {
+                        Factor::BigNumber(value.into())
+                    } else {
+                        Factor::String(value.into())
+                    }
                 }
             }
         }
@@ -607,6 +612,7 @@ where
     fn from(value: &'a Factor<T>) -> Self {
         match value {
             Numeric(n) => Numeric(*n),
+            Factor::BigNumber(s) => Factor::BigNumber(s.into()),
             Factor::String(s) => Factor::String(s.into()),
         }
     }
@@ -617,6 +623,7 @@ impl<'a, T: Display> From<&'a Factor<T>> for Factor<CompactString> {
         match value {
             Numeric(n) => Numeric(*n),
             Factor::String(s) => Factor::String(s.to_compact_string()),
+            Factor::BigNumber(s) => Factor::BigNumber(s.to_compact_string()),
         }
     }
 }
@@ -627,6 +634,7 @@ impl<T: Display> Display for Factor<T> {
         match self {
             Numeric(n) => n.fmt(f),
             Factor::String(s) => s.fmt(f),
+            Factor::BigNumber(s) => s.fmt(f),
         }
     }
 }
@@ -652,6 +660,15 @@ impl<T: AsRef<str>, U: AsRef<str>> PartialEq<Factor<U>> for Factor<T> {
                     false
                 }
             }
+            Factor::BigNumber(s) => {
+                if let Factor::BigNumber(o) = other
+                    && s.as_ref() == o.as_ref()
+                {
+                    true
+                } else {
+                    false
+                }
+            }
         }
     }
 }
@@ -665,10 +682,21 @@ impl<T: AsRef<str>, U: AsRef<str>> PartialOrd<Factor<U>> for Factor<T> {
             Numeric(n) => match other {
                 Numeric(o) => n.cmp(o),
                 Factor::String(_) => Ordering::Less,
+                Factor::BigNumber(_) => Ordering::Less,
             },
             Factor::String(s) => match other {
                 Numeric(_) => Ordering::Greater,
+                Factor::BigNumber(_) => Ordering::Greater,
                 Factor::String(o) => s
+                    .as_ref()
+                    .len()
+                    .cmp(&o.as_ref().len())
+                    .then_with(|| s.as_ref().cmp(o.as_ref())),
+            },
+            Factor::BigNumber(s) => match other {
+                Numeric(_) => Ordering::Greater,
+                Factor::String(_) => Ordering::Less,
+                Factor::BigNumber(o) => s
                     .as_ref()
                     .len()
                     .cmp(&o.as_ref().len())
@@ -689,7 +717,18 @@ impl<T: AsRef<str>> Factor<T> {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Numeric(_) => None,
+            Factor::BigNumber(s) => Some(s.as_ref()),
             Factor::String(s) => Some(s.as_ref()),
+        }
+    }
+
+    pub fn unambiguously_less_or_equal(&self, other: &Factor<T>) -> bool {
+        if let Factor::String(_) = self {
+            self == other
+        } else if let Factor::String(_) = other {
+            self == other
+        } else {
+            self.cmp(other) != Ordering::Greater
         }
     }
 }
@@ -699,6 +738,7 @@ impl<T> Factor<T> {
         match self {
             Numeric(n) => Some(*n),
             Factor::String(_) => None,
+            Factor::BigNumber(_) => None,
         }
     }
 }
@@ -1023,6 +1063,7 @@ impl FactorFinder {
     ) -> Vec<Factor<CompactString>> {
         match expr {
             Numeric(n) => Self::find_factors_of_u128(*n),
+            Factor::BigNumber(expr) => Self::factor_big_num(expr),
             Factor::String(expr) => {
                 if let Some(index) = self
                     .regexes_as_set
@@ -1223,43 +1264,7 @@ impl FactorFinder {
                         }
                         5 => {
                             // Raw number
-                            let mut factors = Vec::new();
-                            let mut expr_short = expr.as_ref();
-                            while expr_short != "0"
-                                && let Some(stripped) = expr_short.strip_suffix('0')
-                            {
-                                factors.push(Numeric(2));
-                                factors.push(Numeric(5));
-                                expr_short = stripped;
-                            }
-                            if let Ok(num) = expr_short.parse::<u128>() {
-                                factors.extend(Self::find_factors_of_u128(num));
-                            } else {
-                                match expr_short.chars().last() {
-                                    Some('5') => factors.push(Numeric(5)),
-                                    Some('2' | '4' | '6' | '8') => factors.push(Numeric(2)),
-                                    Some('1' | '3' | '7' | '9') => {}
-                                    x => {
-                                        error!("Invalid last digit: {x:?}");
-                                    }
-                                }
-                                let sum_of_digits: u128 = expr_short
-                                    .chars()
-                                    .map(|digit| digit as u128 - '0' as u128)
-                                    .sum();
-                                match sum_of_digits % 9 {
-                                    0 => {
-                                        factors.push(Numeric(3));
-                                        factors.push(Numeric(3));
-                                    }
-                                    3 | 6 => {
-                                        factors.push(Numeric(3));
-                                    }
-                                    _ => {}
-                                }
-                                factors.push(expr_short.into());
-                            }
-                            factors
+                            Self::factor_big_num(expr)
                         }
                         6 => {
                             // elided number
@@ -1320,6 +1325,46 @@ impl FactorFinder {
         }
     }
 
+    fn factor_big_num<T: AsRef<str>>(expr: &T) -> Vec<Factor<CompactString>> {
+        let mut factors = Vec::new();
+        let mut expr_short = expr.as_ref();
+        while expr_short != "0"
+            && let Some(stripped) = expr_short.strip_suffix('0')
+        {
+            factors.push(Numeric(2));
+            factors.push(Numeric(5));
+            expr_short = stripped;
+        }
+        if let Ok(num) = expr_short.parse::<u128>() {
+            factors.extend(Self::find_factors_of_u128(num));
+        } else {
+            match expr_short.chars().last() {
+                Some('5') => factors.push(Numeric(5)),
+                Some('2' | '4' | '6' | '8') => factors.push(Numeric(2)),
+                Some('1' | '3' | '7' | '9') => {}
+                x => {
+                    error!("Invalid last digit: {x:?}");
+                }
+            }
+            let sum_of_digits: u128 = expr_short
+                .chars()
+                .map(|digit| digit as u128 - '0' as u128)
+                .sum();
+            match sum_of_digits % 9 {
+                0 => {
+                    factors.push(Numeric(3));
+                    factors.push(Numeric(3));
+                }
+                3 | 6 => {
+                    factors.push(Numeric(3));
+                }
+                _ => {}
+            }
+            factors.push(expr_short.into());
+        }
+        factors
+    }
+
     #[inline]
     fn find_common_factors<T: AsRef<str> + Display>(
         &self,
@@ -1372,6 +1417,7 @@ impl FactorFinder {
                         true
                     }
             }
+            Factor::BigNumber(_) => true
         });
         factors.sort();
         factors.dedup();
