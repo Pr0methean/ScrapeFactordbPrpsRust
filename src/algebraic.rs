@@ -21,6 +21,7 @@ use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
 use urlencoding::encode;
+use crate::algebraic::NumberStatus::{FullyFactored, PartlyFactoredComposite, UnfactoredComposite, Unknown};
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -603,6 +604,15 @@ where
         match value {
             Numeric(n) => Numeric(*n),
             Factor::String(s) => Factor::String(s.into()),
+        }
+    }
+}
+
+impl<'a, T: Display> From<&'a Factor<T>> for Factor<CompactString> {
+    fn from(value: &'a Factor<T>) -> Self {
+        match value {
+            Numeric(n) => Numeric(*n),
+            Factor::String(s) => Factor::String(s.to_compact_string()),
         }
     }
 }
@@ -1382,11 +1392,15 @@ impl FactorFinder {
         id: NumberSpecifier<'_>,
         include_ff: bool,
         get_digits_as_fallback: bool,
-    ) -> Result<Box<[Factor<CompactString>]>, ()> {
+    ) -> ProcessedStatusApiResponse {
         if let NumberSpecifier::Expression(expr) = id
             && let Numeric(n) = <&str as Into<Factor<&str>>>::into(expr)
         {
-            return Ok(self.find_unique_factors::<&'static str>(&Numeric(n)));
+            return ProcessedStatusApiResponse {
+                status: Some(FullyFactored),
+                factors: self.find_unique_factors::<&'static str>(&Numeric(n)),
+                id: None,
+            };
         }
         let response = match id {
             NumberSpecifier::Id(id) => {
@@ -1410,46 +1424,80 @@ impl FactorFinder {
             Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
                 Err(e) => {
                     error!("{id:?}: Failed to decode API response: {e}: {api_response}");
-                    Err(())
+                    ProcessedStatusApiResponse::default()
                 }
                 Ok(NumberStatusApiResponse {
-                    status, factors, ..
+                    status, factors, id: recvd_id
                 }) => {
                     info!(
                         "{id:?}: Fetched status of {status} and {} factors of sizes {}",
                         factors.len(),
                         factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
-                    if !include_ff && (status == "FF" || status == "P") {
-                        Ok(Box::new([]))
+                    let recvd_id = recvd_id.to_string().parse::<u128>().ok();
+                    let status = match status.as_str() {
+                        "FF" | "P" | "PRP" => Some(FullyFactored),
+                        "C" => Some(UnfactoredComposite),
+                        "CF" => Some(PartlyFactoredComposite),
+                        "U" => Some(Unknown),
+                        x => {
+                            error!("{recvd_id:?} ({id:?}): Unrecognized number status code: {x}");
+                            None
+                        }
+                    };
+                    let factors = if !include_ff && status == Some(FullyFactored) {
+                        Box::new([])
                     } else {
                         let factors: Vec<_> = factors
                             .into_iter()
                             .map(|(factor, _exponent)| Factor::from(factor))
                             .collect();
-                        Ok(factors.into_boxed_slice())
+                        factors.into_boxed_slice()
+                    };
+                    ProcessedStatusApiResponse {
+                        status, factors, id: recvd_id
                     }
                 }
             },
-            Err(None) => Err(()),
+            Err(None) => ProcessedStatusApiResponse {
+                status: None,
+                id: None,
+                factors: Box::new([])
+            },
             Err(Some(fallback_response)) => {
-                let Some(digits_cell) = self
+                let factors = self
                     .digits_fallback_regex
                     .captures(&fallback_response)
                     .and_then(|c| c.get(1))
-                else {
-                    return Err(());
-                };
-                Ok([digits_cell
+                    .map(|digits_cell| vec![digits_cell
                     .as_str()
                     .chars()
                     .filter(char::is_ascii_digit)
-                    .collect::<String>()
-                    .into()]
-                .into())
+                    .collect::<CompactString>().into()].into_boxed_slice())
+                    .unwrap_or_else(|| Box::new([]));
+                ProcessedStatusApiResponse {
+                    status: None,
+                    factors,
+                    id: None
+                }
             }
         }
     }
+}
+
+#[derive(Default)]
+pub struct ProcessedStatusApiResponse {
+    pub status: Option<NumberStatus>,
+    pub factors: Box<[Factor<CompactString>]>,
+    pub id: Option<u128>
+}
+
+#[derive(Eq, PartialEq)]
+pub enum NumberStatus {
+    Unknown,
+    FullyFactored, // includes P and PRP
+    PartlyFactoredComposite,
+    UnfactoredComposite,
 }
 
 #[cfg(test)]
