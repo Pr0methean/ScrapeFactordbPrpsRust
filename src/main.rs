@@ -1530,35 +1530,13 @@ async fn find_and_submit_factors(
                                 &factor,
                             )
                             .await;
+                        } else if add_known_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut already_fully_factored, dest_factor_id, dest_specifier).await {
+                            iters_without_progress = 0;
                         }
                     }
                     OtherError => {
-                        if let Ok(dest_subfactors) = factor_finder
-                            .known_factors_as_digits(http, dest_specifier, false, false)
-                            .await
-                        {
-                            match dest_subfactors.len() {
-                                0 => {
-                                    already_fully_factored.insert(dest_factor_id);
-                                    continue;
-                                }
-                                1 => {}
-                                _ => {
-                                    for dest_subfactor in dest_subfactors {
-                                        let (dest_node, added) = add_factor_node(
-                                            &mut divisibility_graph,
-                                            &dest_subfactor,
-                                        );
-                                        if added {
-                                            iters_without_progress = 0;
-                                        }
-                                        let _ = divisibility_graph
-                                            .try_add_edge(&dest_node, &factor_id, true);
-                                        let _ = divisibility_graph
-                                            .try_add_edge(&factor_id, &dest_node, true);
-                                    }
-                                }
-                            }
+                        if add_known_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut already_fully_factored, dest_factor_id, dest_specifier).await {
+                            iters_without_progress = 0;
                         }
                     }
                 }
@@ -1598,6 +1576,38 @@ async fn find_and_submit_factors(
         }
     }
     accepted_factors > 0
+}
+
+async fn add_known_factors_to_graph(http: &ThrottlingHttpClient, factor_finder: &FactorFinder, mut divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, already_fully_factored: &mut BTreeSet<VertexId>, dest_factor_id: VertexId, dest_specifier: NumberSpecifier<'_>) -> bool {
+    let mut any_added = false;
+    if let Ok(dest_subfactors) = factor_finder
+        .known_factors_as_digits(http, dest_specifier, false, false)
+        .await
+    {
+        match dest_subfactors.len() {
+            0 => {
+                already_fully_factored.insert(dest_factor_id);
+                return true;
+            }
+            1 => {}
+            _ => {
+                for dest_subfactor in dest_subfactors {
+                    let (subfactor_vid, added) = add_factor_node(
+                        &mut divisibility_graph,
+                        &dest_subfactor,
+                    );
+                    if added {
+                        any_added = true;
+                    }
+                    let _ = divisibility_graph
+                        .try_add_edge(&subfactor_vid, &dest_factor_id, true);
+                    let _ = divisibility_graph
+                        .try_add_edge(&dest_factor_id, &subfactor_vid, true);
+                }
+            }
+        }
+    }
+    any_added
 }
 
 #[async_backtrace::framed]
