@@ -1,4 +1,7 @@
 use crate::algebraic::Factor::Numeric;
+use crate::algebraic::NumberStatus::{
+    FullyFactored, PartlyFactoredComposite, UnfactoredComposite, Unknown,
+};
 use crate::net::ThrottlingHttpClient;
 use crate::{NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use compact_str::{CompactString, ToCompactString, format_compact};
@@ -21,7 +24,6 @@ use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
 use urlencoding::encode;
-use crate::algebraic::NumberStatus::{FullyFactored, PartlyFactoredComposite, UnfactoredComposite, Unknown};
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -1427,7 +1429,9 @@ impl FactorFinder {
                     ProcessedStatusApiResponse::default()
                 }
                 Ok(NumberStatusApiResponse {
-                    status, factors, id: recvd_id
+                    status,
+                    factors,
+                    id: recvd_id,
                 }) => {
                     info!(
                         "{id:?}: Fetched status of {status} and {} factors of sizes {}",
@@ -1455,30 +1459,38 @@ impl FactorFinder {
                         factors.into_boxed_slice()
                     };
                     ProcessedStatusApiResponse {
-                        status, factors, id: recvd_id
+                        status,
+                        factors,
+                        id: recvd_id,
                     }
                 }
             },
             Err(None) => ProcessedStatusApiResponse {
                 status: None,
                 id: None,
-                factors: Box::new([])
+                factors: Box::new([]),
             },
             Err(Some(fallback_response)) => {
                 let factors = self
                     .digits_fallback_regex
                     .captures(&fallback_response)
                     .and_then(|c| c.get(1))
-                    .map(|digits_cell| vec![digits_cell
-                    .as_str()
-                    .chars()
-                    .filter(char::is_ascii_digit)
-                    .collect::<CompactString>().into()].into_boxed_slice())
+                    .map(|digits_cell| {
+                        vec![
+                            digits_cell
+                                .as_str()
+                                .chars()
+                                .filter(char::is_ascii_digit)
+                                .collect::<CompactString>()
+                                .into(),
+                        ]
+                        .into_boxed_slice()
+                    })
                     .unwrap_or_else(|| Box::new([]));
                 ProcessedStatusApiResponse {
                     status: None,
                     factors,
-                    id: None
+                    id: None,
                 }
             }
         }
@@ -1489,7 +1501,7 @@ impl FactorFinder {
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
     pub factors: Box<[Factor<CompactString>]>,
-    pub id: Option<u128>
+    pub id: Option<u128>,
 }
 
 #[derive(Eq, PartialEq)]

@@ -19,6 +19,7 @@ use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
 use crate::algebraic::Factor::Numeric;
+use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::net::ResourceLimits;
 use crate::shutdown::Shutdown;
@@ -61,7 +62,6 @@ use tokio::sync::{Mutex, OnceCell, broadcast, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::algebraic::NumberStatus::FullyFactored;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -205,7 +205,9 @@ async fn check_composite(
         false
     };
     // First, convert the composite to digits
-    let ProcessedStatusApiResponse { factors, status, .. } = factor_finder
+    let ProcessedStatusApiResponse {
+        factors, status, ..
+    } = factor_finder
         .known_factors_as_digits(http, Id(id), false, true)
         .await;
     if factors.is_empty() {
@@ -307,7 +309,11 @@ async fn get_prp_remaining_bases(
     if let Some(captures) = nm1_regex.captures(&bases_text) {
         let nm1_id = captures[1].parse::<u128>().unwrap();
         nm1_id_if_available = Some(nm1_id);
-        let ProcessedStatusApiResponse { status, factors: nm1_factors, .. } = factor_finder
+        let ProcessedStatusApiResponse {
+            status,
+            factors: nm1_factors,
+            ..
+        } = factor_finder
             .known_factors_as_digits(http, Id(nm1_id), false, false)
             .await;
         match nm1_factors.len() {
@@ -320,8 +326,8 @@ async fn get_prp_remaining_bases(
             }
             _ => {
                 nm1_known_to_divide_2 = nm1_factors[0].as_u128() == Some(2);
-                nm1_known_to_divide_3 =
-                    nm1_factors[0].as_u128() == Some(3) || nm1_factors.get(1).and_then(Factor::as_u128) == Some(3);
+                nm1_known_to_divide_3 = nm1_factors[0].as_u128() == Some(3)
+                    || nm1_factors.get(1).and_then(Factor::as_u128) == Some(3);
             }
         }
     } else {
@@ -330,7 +336,11 @@ async fn get_prp_remaining_bases(
     if let Some(captures) = np1_regex.captures(&bases_text) {
         let np1_id = captures[1].parse::<u128>().unwrap();
         np1_id_if_available = Some(np1_id);
-        let ProcessedStatusApiResponse { status, factors: np1_factors, .. } = factor_finder
+        let ProcessedStatusApiResponse {
+            status,
+            factors: np1_factors,
+            ..
+        } = factor_finder
             .known_factors_as_digits(http, Id(np1_id), false, false)
             .await;
         match np1_factors.len() {
@@ -343,8 +353,8 @@ async fn get_prp_remaining_bases(
             }
             _ => {
                 np1_known_to_divide_2 = np1_factors[0].as_u128() == Some(2);
-                np1_known_to_divide_3 =
-                    np1_factors[0].as_u128() == Some(3) || np1_factors.get(1).and_then(Factor::as_u128) == Some(3);
+                np1_known_to_divide_3 = np1_factors[0].as_u128() == Some(3)
+                    || np1_factors.get(1).and_then(Factor::as_u128) == Some(3);
             }
         }
     } else {
@@ -1306,7 +1316,11 @@ async fn find_and_submit_factors(
             &digits_or_expr.to_compact_string().into(),
         )
     } else {
-        let ProcessedStatusApiResponse {factors: known_factors, status, ..} = factor_finder
+        let ProcessedStatusApiResponse {
+            factors: known_factors,
+            status,
+            ..
+        } = factor_finder
             .known_factors_as_digits(http, Id(id), false, true)
             .await;
         match known_factors.len() {
@@ -1355,7 +1369,7 @@ async fn find_and_submit_factors(
             &mut ids,
             &factor,
             &mut already_fully_factored,
-            factor_vid
+            factor_vid,
         )
         .await;
         already_checked_for_algebraic.insert(factor_vid);
@@ -1398,7 +1412,7 @@ async fn find_and_submit_factors(
                         &mut ids,
                         &factor,
                         &mut already_fully_factored,
-                        factor_vid
+                        factor_vid,
                     )
                     .await;
                 }
@@ -1423,7 +1437,11 @@ async fn find_and_submit_factors(
             return accepted_factors > 0;
         }
         info!("{id}: Divisibility graph has {node_count} vertices and {edge_count} edges");
-        let ProcessedStatusApiResponse { factors: known_factors, status, .. } = factor_finder
+        let ProcessedStatusApiResponse {
+            factors: known_factors,
+            status,
+            ..
+        } = factor_finder
             .known_factors_as_digits(http, Id(id), false, false)
             .await;
         match known_factors.len() {
@@ -1436,8 +1454,7 @@ async fn find_and_submit_factors(
             1 => {}
             _ => {
                 for known_factor in known_factors {
-                    let (factor_node, _) =
-                        add_factor_node(&mut divisibility_graph, &known_factor);
+                    let (factor_node, _) = add_factor_node(&mut divisibility_graph, &known_factor);
                     let _ = divisibility_graph.try_add_edge(&factor_node, &root_node, true);
                 }
             }
@@ -1519,7 +1536,8 @@ async fn find_and_submit_factors(
                         accepted_factors += 1;
                         iters_without_progress = 0;
                         divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, true);
-                        let _ = divisibility_graph.try_add_edge(&dest_factor_vid, &factor_vid, false);
+                        let _ =
+                            divisibility_graph.try_add_edge(&dest_factor_vid, &factor_vid, false);
                     }
                     DoesNotDivide => {
                         iters_without_progress = 0;
@@ -1535,7 +1553,7 @@ async fn find_and_submit_factors(
                                 &mut ids,
                                 &factor,
                                 &mut already_fully_factored,
-                                factor_vid
+                                factor_vid,
                             )
                             .await;
                         } else {
@@ -1546,7 +1564,8 @@ async fn find_and_submit_factors(
                                 &mut already_fully_factored,
                                 dest_factor_vid,
                                 dest_specifier,
-                            ).await;
+                            )
+                            .await;
                             if added {
                                 iters_without_progress = 0;
                             }
@@ -1563,7 +1582,8 @@ async fn find_and_submit_factors(
                             &mut already_fully_factored,
                             dest_factor_vid,
                             dest_specifier,
-                        ).await;
+                        )
+                        .await;
                         if added {
                             iters_without_progress = 0;
                         }
@@ -1618,33 +1638,40 @@ async fn add_known_factors_to_graph(
     dest_factor_id: VertexId,
     dest_specifier: NumberSpecifier<'_>,
 ) -> (bool, Option<u128>) {
-    let ProcessedStatusApiResponse {status, factors: dest_subfactors, id} = factor_finder
+    let ProcessedStatusApiResponse {
+        status,
+        factors: dest_subfactors,
+        id,
+    } = factor_finder
         .known_factors_as_digits(http, dest_specifier, false, false)
         .await;
-    (match dest_subfactors.len() {
-        0 => {
-            if status == Some(FullyFactored) {
-                already_fully_factored.insert(dest_factor_id);
-                true
-            } else {
-                false
-            }
-        }
-        1 => false,
-        _ => {
-            let mut any_added = false;
-            for dest_subfactor in dest_subfactors {
-                let (subfactor_vid, added) =
-                    add_factor_node(divisibility_graph, &dest_subfactor);
-                if added {
-                    any_added = true;
+    (
+        match dest_subfactors.len() {
+            0 => {
+                if status == Some(FullyFactored) {
+                    already_fully_factored.insert(dest_factor_id);
+                    true
+                } else {
+                    false
                 }
-                let _ = divisibility_graph.try_add_edge(&subfactor_vid, &dest_factor_id, true);
-                let _ = divisibility_graph.try_add_edge(&dest_factor_id, &subfactor_vid, true);
             }
-            any_added
-        }
-    }, id)
+            1 => false,
+            _ => {
+                let mut any_added = false;
+                for dest_subfactor in dest_subfactors {
+                    let (subfactor_vid, added) =
+                        add_factor_node(divisibility_graph, &dest_subfactor);
+                    if added {
+                        any_added = true;
+                    }
+                    let _ = divisibility_graph.try_add_edge(&subfactor_vid, &dest_factor_id, true);
+                    let _ = divisibility_graph.try_add_edge(&dest_factor_id, &subfactor_vid, true);
+                }
+                any_added
+            }
+        },
+        id,
+    )
 }
 
 #[async_backtrace::framed]
@@ -1658,12 +1685,14 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
     ids: &mut BTreeMap<VertexId, u128>,
     root: &Factor<T>,
     already_fully_factored: &mut BTreeSet<VertexId>,
-    root_vid: VertexId
+    root_vid: VertexId,
 ) -> bool {
     let mut any_added = false;
     let mut parseable_factors: BTreeSet<Factor<CompactString>> = BTreeSet::new();
     parseable_factors.insert(Factor::from(root));
-    if !skip_looking_up_listed_algebraic && root.as_str().is_some() && let Some(id) = id
+    if !skip_looking_up_listed_algebraic
+        && root.as_str().is_some()
+        && let Some(id) = id
     {
         info!("{id}: Checking for listed algebraic factors");
         // Links before the "Is factor of" header are algebraic factors; links after it aren't
@@ -1682,12 +1711,17 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
                     info!(
                         "{id}: Algebraic factor with ID {factor_entry_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                     );
-                    let factor_specifier = if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
-                        Id(factor_entry_id)
-                    } else {
-                        Expression(factor_digits_or_expr)
-                    };
-                    let ProcessedStatusApiResponse { status, factors: known_subfactors, .. } = factor_finder
+                    let factor_specifier =
+                        if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
+                            Id(factor_entry_id)
+                        } else {
+                            Expression(factor_digits_or_expr)
+                        };
+                    let ProcessedStatusApiResponse {
+                        status,
+                        factors: known_subfactors,
+                        ..
+                    } = factor_finder
                         .known_factors_as_digits(http, factor_specifier, true, true)
                         .await;
                     if status == Some(FullyFactored) {
@@ -1704,7 +1738,8 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
                     }
                 } else {
                     info!(
-                        "{id}: Algebraic factor with ID {factor_entry_id:?} represented in full: {factor_digits_or_expr}");
+                        "{id}: Algebraic factor with ID {factor_entry_id:?} represented in full: {factor_digits_or_expr}"
+                    );
                     parseable_factors.insert(factor);
                     any_added |= added;
                 }
@@ -1712,9 +1747,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
         }
     }
     for parseable_factor in parseable_factors {
-        for subfactor in factor_finder
-            .find_unique_factors(&parseable_factor)
-        {
+        for subfactor in factor_finder.find_unique_factors(&parseable_factor) {
             let (subfactor_vid, added) = add_factor_node(divisibility_graph, &subfactor);
             match subfactor {
                 Numeric(2) => {
