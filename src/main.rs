@@ -1450,15 +1450,15 @@ async fn find_and_submit_factors(
         }
         info!("{id}: Divisibility graph has {node_count} vertices and {edge_count} edges. \
         {accepted_factors} factors accepted so far.");
-        let factors = divisibility_graph
+        let factors_to_submit = divisibility_graph
             .vertices()
             .filter(|factor| factor.id != root_node)
             .map(|vertex| (vertex.id, vertex.attr.clone()))
             .collect::<Box<[_]>>();
-        if factors.is_empty() {
+        if factors_to_submit.is_empty() {
             return accepted_factors > 0;
         }
-        for factor in factors {
+        for (factor_vid, factor) in factors_to_submit {
             let mut dest_factors = divisibility_graph
                 .vertices()
                 .filter(|dest|
@@ -1548,14 +1548,19 @@ async fn find_and_submit_factors(
                                 &mut checked_for_known_factors_since_last_submission
                             )
                             .await;
-                        } else if !checked_for_known_factors_since_last_submission.contains(&dest_factor_vid) {
+                        } else if !checked_for_known_factors_since_last_submission.contains(&factor_vid) {
+                            let factor_specifier = if let Some(factor_entry_id) = ids.get(&factor_vid) {
+                                Id(*factor_entry_id)
+                            } else {
+                                Expression(&factor.to_compact_string())
+                            };
                             let result = add_known_factors_to_graph(
                                 http,
                                 factor_finder,
                                 &mut divisibility_graph,
                                 &mut already_fully_factored,
-                                dest_factor_vid,
-                                dest_specifier,
+                                factor_vid,
+                                factor_specifier,
                                 false,
                             )
                             .await;
