@@ -1435,7 +1435,6 @@ async fn find_and_submit_factors(
         info!("{id}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
     }
-    info!("{id}: Trying advanced solution");
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         let node_count = divisibility_graph.vertex_count();
@@ -1445,32 +1444,8 @@ async fn find_and_submit_factors(
             // Graph is fully connected, meaning none are left to try
             return accepted_factors > 0;
         }
-        info!("{id}: Divisibility graph has {node_count} vertices and {edge_count} edges");
-        let ProcessedStatusApiResponse {
-            factors: known_factors,
-            status,
-            ..
-        } = factor_finder
-            .known_factors_as_digits(http, Id(id), false, false)
-            .await;
-        if status.is_some() {
-            checked_for_known_factors_since_last_submission.insert(root_node);
-        }
-        match known_factors.len() {
-            0 => {
-                if status == Some(FullyFactored) {
-                    warn!("{id}: Already fully factored");
-                    return true;
-                }
-            }
-            1 => {}
-            _ => {
-                for known_factor in known_factors {
-                    let (factor_node, _) = add_factor_node(&mut divisibility_graph, &known_factor);
-                    let _ = divisibility_graph.try_add_edge(&factor_node, &root_node, true);
-                }
-            }
-        }
+        info!("{id}: Divisibility graph has {node_count} vertices and {edge_count} edges. \
+        {accepted_factors} factors accepted so far.");
         for (factor_vid, factor) in divisibility_graph
             .vertices()
             .map(|vertex| (vertex.id, vertex.attr.clone()))
@@ -1582,6 +1557,10 @@ async fn find_and_submit_factors(
                             )
                             .await;
                             if result.status.is_some() {
+                                if result.status == Some(FullyFactored) && dest_factor_vid == root_node {
+                                    warn!("{id}: Already fully factored");
+                                    return true;
+                                }
                                 checked_for_known_factors_since_last_submission.insert(dest_factor_vid);
                             }
                             if !result.factors.is_empty() {
