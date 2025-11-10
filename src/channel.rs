@@ -1,5 +1,6 @@
 use log::info;
 use std::fmt::Debug;
+use async_backtrace::framed;
 use tokio::select;
 use tokio::sync::mpsc::{OwnedPermit, Receiver, Sender, channel};
 
@@ -30,6 +31,7 @@ impl<T: Debug> PushbackReceiver<T> {
         }
     }
 
+    #[framed]
     pub async fn recv(&mut self) -> (T, OwnedPermit<T>) {
         self.redrive_returned();
         let return_permit = self.return_sender.clone().reserve_owned().await.unwrap();

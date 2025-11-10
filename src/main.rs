@@ -54,6 +54,7 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use async_backtrace::framed;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -140,7 +141,7 @@ struct FactorSubmission<'a> {
     factor: &'a str,
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
@@ -180,7 +181,7 @@ async fn composites_while_waiting(
     }
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn check_composite(
     http: &ThrottlingHttpClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
@@ -278,7 +279,7 @@ enum NumberSpecifier<'a> {
     Expression(&'a str),
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn get_prp_remaining_bases(
     id: u128,
     http: &ThrottlingHttpClient,
@@ -469,7 +470,7 @@ async fn get_prp_remaining_bases(
     Ok(bases_left)
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -479,7 +480,7 @@ async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
         .await;
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -499,7 +500,7 @@ static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGE
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
-#[async_backtrace::framed]
+#[framed]
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
@@ -677,7 +678,7 @@ async fn do_checks(
 }
 
 #[inline]
-#[async_backtrace::framed]
+#[framed]
 async fn try_handle_unknown(
     http: &ThrottlingHttpClient,
     u_status_regex: &Regex,
@@ -725,7 +726,7 @@ async fn try_handle_unknown(
     }
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn throttle_if_necessary(
     http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
@@ -810,7 +811,7 @@ async fn throttle_if_necessary(
 }
 
 #[allow(clippy::async_yields_async)]
-#[async_backtrace::framed]
+#[framed]
 async fn queue_composites(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -893,7 +894,7 @@ async fn queue_composites(
     }
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn handle_signals(
     shutdown_sender: broadcast::Sender<()>,
     installed_sender: oneshot::Sender<()>,
@@ -925,6 +926,7 @@ async fn handle_signals(
 
 // One worker thread for do_checks(), one for main(), one for c_buffer_task, one for handle_signals
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[framed]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
@@ -1117,7 +1119,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn queue_unknowns(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -1144,7 +1146,7 @@ async fn queue_unknowns(
     }
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn try_queue_unknowns<'a>(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -1224,7 +1226,7 @@ enum ReportFactorResult {
     OtherError,
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn try_report_factor<T: Display>(
     http: &ThrottlingHttpClient,
     u_id: &NumberSpecifier<'_>,
@@ -1272,7 +1274,7 @@ async fn try_report_factor<T: Display>(
     OtherError
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn report_factor<T: Display>(
     http: &ThrottlingHttpClient,
     u_id: u128,
@@ -1297,7 +1299,7 @@ async fn report_factor<T: Display>(
     OtherError // factor that we failed to submit may still have been valid
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn find_and_submit_factors(
     http: &ThrottlingHttpClient,
     id: u128,
@@ -1346,9 +1348,13 @@ async fn find_and_submit_factors(
                 digits_or_expr_full.push(root_node);
                 if known_factors.len() > 1 {
                     for known_factor in known_factors {
-                        let (factor_node, _) =
+                        let (factor_vid, added) =
                             add_factor_node(&mut divisibility_graph, &known_factor);
-                        divisibility_graph.add_edge(&factor_node, &root_node, true);
+                        if added {
+                            divisibility_graph.add_edge(&factor_vid, &root_node, true);
+                        } else {
+                            warn!("{id}: Tried to add a duplicate node: {known_factor}");
+                        }
                     }
                 }
                 (root_node, true)
@@ -1642,6 +1648,7 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
+#[framed]
 async fn add_known_factors_to_graph<T: AsRef<str>>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
@@ -1730,7 +1737,7 @@ fn neighbors_with_edge_weights(divisibility_graph: &mut AdjMatrix<Factor<Compact
         .collect()
 }
 
-#[async_backtrace::framed]
+#[framed]
 async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
     http: &ThrottlingHttpClient,
     id: Option<u128>,

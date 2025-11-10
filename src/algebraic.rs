@@ -23,6 +23,7 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
+use async_backtrace::framed;
 use urlencoding::encode;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
@@ -1388,6 +1389,7 @@ impl FactorFinder {
     // FIXME: This uses Web requests to find factors that FactorDB already knows of and/or convert
     // them to digit form. That would be out of scope for this struct if we had anywhere else to put
     // this method.
+    #[framed]
     #[inline]
     pub async fn known_factors_as_digits(
         &self,
@@ -1453,10 +1455,12 @@ impl FactorFinder {
                     let factors = if !include_ff && status == Some(FullyFactored) {
                         Box::new([])
                     } else {
-                        let factors: Vec<_> = factors
+                        let mut factors: Vec<_> = factors
                             .into_iter()
                             .map(|(factor, _exponent)| Factor::from(factor))
                             .collect();
+                        factors.sort();
+                        factors.dedup();
                         factors.into_boxed_slice()
                     };
                     ProcessedStatusApiResponse {
