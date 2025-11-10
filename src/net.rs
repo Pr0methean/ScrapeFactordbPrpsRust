@@ -1,6 +1,7 @@
 use crate::shutdown::Shutdown;
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use anyhow::Error;
+use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
@@ -15,7 +16,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use async_backtrace::framed;
 use tokio::sync::Semaphore;
 use tokio::time::{Instant, sleep, sleep_until};
 

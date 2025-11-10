@@ -4,6 +4,7 @@ use crate::algebraic::NumberStatus::{
 };
 use crate::net::ThrottlingHttpClient;
 use crate::{NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
+use async_backtrace::framed;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -23,7 +24,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
-use async_backtrace::framed;
 use urlencoding::encode;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
@@ -552,8 +552,7 @@ static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
     &[2, 2, 4021, 24994118449, 2686039424221, 940094299967491],
 ];
 
-#[derive(Copy, Clone, Hash)]
-#[derive(Debug)]
+#[derive(Copy, Clone, Hash, Debug)]
 pub enum Factor<T> {
     Numeric(u128),
     BigNumber(T),
@@ -574,10 +573,12 @@ macro_rules! factor_from {
             fn from(value: $input) -> Self {
                 match value.parse() {
                     Ok(n) => Numeric(n),
-                    Err(_) => if value.as_str().chars().all(|c| c.is_ascii_digit()) {
-                        Factor::BigNumber(value.into())
-                    } else {
-                        Factor::String(value.into())
+                    Err(_) => {
+                        if value.as_str().chars().all(|c| c.is_ascii_digit()) {
+                            Factor::BigNumber(value.into())
+                        } else {
+                            Factor::String(value.into())
+                        }
                     }
                 }
             }
@@ -1417,7 +1418,7 @@ impl FactorFinder {
                         true
                     }
             }
-            Factor::BigNumber(_) => true
+            Factor::BigNumber(_) => true,
         });
         factors.sort();
         factors.dedup();
