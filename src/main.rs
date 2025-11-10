@@ -1,4 +1,5 @@
 #![allow(stable_features)]
+#![allow(too_many_arguments)]
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 #![feature(const_destruct)]
@@ -805,7 +806,7 @@ async fn throttle_if_necessary(
     true
 }
 
-#[allow(async_yields_async)]
+#[allow(clippy::async_yields_async)]
 #[async_backtrace::framed]
 async fn queue_composites(
     id_and_expr_regex: &Regex,
