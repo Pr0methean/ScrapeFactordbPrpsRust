@@ -1397,6 +1397,9 @@ async fn find_and_submit_factors(
         if factor_vid == root_node {
             continue;
         }
+        if let Some(expr) = factor.as_str() && expr.contains("...")       {
+            continue;
+        }
         if get_edge(&divisibility_graph, &factor_vid, &root_node) == Some(true) {
             continue;
         }
@@ -1462,7 +1465,8 @@ async fn find_and_submit_factors(
                     // if factor == dest, the relation is trivial
                     factor_vid != dest.id
                         // Numbers that fit into a u128 are fully factored already
-                        && dest.attr.as_str().is_some()
+                        // and elided numbers can only be used as dests if their IDs are known
+                        && dest.attr.as_str().is_some_and(|expr| ids.contains_key(&dest.id) || !expr.contains("..."))
                         // Don't try to submit to a dest for which FactorDB already has a full factorization
                         && !already_fully_factored.contains(&dest.id)
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
@@ -1599,6 +1603,9 @@ async fn find_and_submit_factors(
         .into_iter()
     {
         if factor_id == root_node {
+            continue;
+        }
+        if let Some(expr) = factor.as_str() && expr.contains("...")       {
             continue;
         }
         let reverse_dist = ShortestPaths::on(&divisibility_graph)
