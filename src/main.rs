@@ -30,8 +30,8 @@ use cuckoofilter::CuckooFilter;
 use gryf::algo::ShortestPaths;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
-use gryf::core::marker::Directed;
-use gryf::core::{EdgeSet, GraphAdd, GraphRef, VertexSet};
+use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
+use gryf::core::{EdgeSet, GraphAdd, GraphRef, Neighbors, VertexSet};
 use gryf::storage::AdjMatrix;
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -1562,6 +1562,7 @@ async fn find_and_submit_factors(
                                 factor_vid,
                                 factor_specifier,
                                 false,
+                                &factor,
                             )
                             .await;
                             if result.status.is_some() {
@@ -1580,6 +1581,7 @@ async fn find_and_submit_factors(
                         }
                     }
                     OtherError => {
+                        // See if dest has some already-known factors we can submit to instead
                         let result = add_known_factors_to_graph(
                             http,
                             factor_finder,
@@ -1588,6 +1590,7 @@ async fn find_and_submit_factors(
                             dest_factor_vid,
                             dest_specifier,
                             false,
+                            &dest_factor,
                         )
                         .await;
                         if !result.factors.is_empty() {
@@ -1639,41 +1642,92 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-async fn add_known_factors_to_graph(
+async fn add_known_factors_to_graph<T: AsRef<str>>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>,
     already_fully_factored: &mut BTreeSet<VertexId>,
-    dest_factor_id: VertexId,
-    dest_specifier: NumberSpecifier<'_>,
+    root_vid: VertexId,
+    root_specifier: NumberSpecifier<'_>,
     include_ff: bool,
+    root: &Factor<T>,
 ) -> ProcessedStatusApiResponse {
     let ProcessedStatusApiResponse {
         status,
         factors: dest_subfactors,
         id,
     } = factor_finder
-        .known_factors_as_digits(http, dest_specifier, include_ff, false)
+        .known_factors_as_digits(http, root_specifier, include_ff, false)
         .await;
     if status == Some(FullyFactored) {
-        already_fully_factored.insert(dest_factor_id);
+        already_fully_factored.insert(root_vid);
     }
-    let all_added = if dest_subfactors.len() <= 1 {
-        Box::new([])
-    } else {
-        let mut all_added = Vec::new();
-        for dest_subfactor in dest_subfactors {
-            let (subfactor_vid, added) =
-                add_factor_node(divisibility_graph, &dest_subfactor);
-            if added {
-                all_added.push(dest_subfactor);
+    let len = dest_subfactors.len();
+    let all_added = match len {
+        0 => Box::new([]),
+        1 => {
+            let dest_subfactor = dest_subfactors.into_iter().next().unwrap();
+            if dest_subfactor.as_str() == root.as_str() {
+                Box::new([])
+            } else {
+                // These expressions are different but equivalent; merge their edges
+                let (new_root_vid, added) = add_factor_node(divisibility_graph, &dest_subfactor);
+                let old_out_neighbors = neighbors_with_edge_weights(divisibility_graph, &root_vid, Outgoing);
+                let old_in_neighbors = neighbors_with_edge_weights(divisibility_graph, &root_vid, Incoming);
+                let (new_out_neighbors, new_in_neighbors) = if added {
+                    // new root is truly new, so there are no edges to copy *from* it
+                    (Box::default(), Box::default())
+                } else {
+                    (neighbors_with_edge_weights(divisibility_graph, &new_root_vid, Outgoing),
+                     neighbors_with_edge_weights(divisibility_graph, &new_root_vid, Incoming)
+                    )
+                };
+                copy_edges(divisibility_graph, &new_root_vid, old_out_neighbors, old_in_neighbors);
+                copy_edges(divisibility_graph, &root_vid, new_out_neighbors, new_in_neighbors);
+                if added {
+                    vec![dest_subfactor]
+                } else {
+                    vec![]
+                }.into_boxed_slice()
             }
-            let _ = divisibility_graph.try_add_edge(&subfactor_vid, &dest_factor_id, true);
-            let _ = divisibility_graph.try_add_edge(&dest_factor_id, &subfactor_vid, true);
+        },
+        _ => {
+            let mut all_added = Vec::new();
+            for dest_subfactor in dest_subfactors {
+                let (subfactor_vid, added) =
+                    add_factor_node(divisibility_graph, &dest_subfactor);
+                if added {
+                    all_added.push(dest_subfactor);
+                }
+                let _ = divisibility_graph.try_add_edge(&subfactor_vid, &root_vid, true);
+                let _ = divisibility_graph.try_add_edge(&root_vid, &subfactor_vid, false);
+            }
+            all_added.into_boxed_slice()
         }
-        all_added.into_boxed_slice()
     };
     ProcessedStatusApiResponse { status, factors: all_added, id }
+}
+
+fn copy_edges(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, new_vertex: &VertexId, out_edges: Box<[(VertexId, bool)]>, in_edges: Box<[(VertexId, bool)]>) {
+    for (neighbor, divisible) in out_edges {
+        if let Err(e) = divisibility_graph.try_add_edge(&new_vertex, &neighbor, divisible)
+            && e.attr != divisible {
+            error!("Contradictory divisibility relations");
+        }
+    }
+    for (neighbor, divisible) in in_edges {
+        if let Err(e) = divisibility_graph.try_add_edge(&neighbor, &new_vertex, divisible)
+            && e.attr != divisible {
+            error!("Contradictory divisibility relations");
+        }
+    }
+}
+
+fn neighbors_with_edge_weights(divisibility_graph: &mut AdjMatrix<Factor<CompactString>, bool, Directed, DefaultId>, root_vid: &VertexId, direction: Direction) -> Box<[(VertexId, bool)]> {
+    divisibility_graph
+        .neighbors_directed(&root_vid, direction)
+        .map(|neighbor_ref| (neighbor_ref.id, *divisibility_graph.edge(&neighbor_ref.edge).unwrap()))
+        .collect()
 }
 
 #[async_backtrace::framed]
@@ -1701,7 +1755,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
                 Some(id)
             },
             None => {
-                let result = add_known_factors_to_graph(http, factor_finder, divisibility_graph, already_fully_factored, root_vid, Expression(root_expr), true).await;
+                let result = add_known_factors_to_graph(http, factor_finder, divisibility_graph, already_fully_factored, root_vid, Expression(root_expr), true, root).await;
                 if result.status.is_some() {
                     checked_for_known_factors_since_last_submission.insert(root_vid);
                 }
@@ -1740,7 +1794,8 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display>(
                                 };
                             let result = add_known_factors_to_graph(
                                 http, factor_finder, divisibility_graph, already_fully_factored, factor_vid, factor_specifier,
-                                true).await;
+                                true, &factor
+                            ).await;
                             if !result.factors.is_empty() {
                                 any_added = true;
                             }
