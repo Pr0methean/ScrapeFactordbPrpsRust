@@ -21,6 +21,7 @@ use std::borrow::Cow::{Borrowed, Owned};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::marker::Destruct;
@@ -554,11 +555,21 @@ static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
     &[2, 2, 4021, 24994118449, 2686039424221, 940094299967491],
 ];
 
-#[derive(Copy, Clone, Hash, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum Factor<T, U> {
     Numeric(u128),
     BigNumber(T),
     Expression(U),
+}
+
+impl <T: AsRef<str>, U: AsRef<str>> Hash for Factor<T,U> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Numeric(n) => n.hash(state),
+            Factor::BigNumber(n) => n.as_ref().hash(state),
+            Factor::Expression(e) => e.as_ref().hash(state),
+        }
+    }
 }
 
 impl<T, U> From<u128> for Factor<T, U> {
