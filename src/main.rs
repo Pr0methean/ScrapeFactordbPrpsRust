@@ -1019,7 +1019,7 @@ async fn main() -> anyhow::Result<()> {
         max_concurrent_requests = 3;
     }
     let c_filter = CuckooFilter::with_capacity(2500);
-    let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+).*?<font[^>]*>([^<]+)</font>")?;
+    let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
     let http = ThrottlingHttpClient::new(
         rph_limit,
@@ -1385,6 +1385,7 @@ async fn find_and_submit_factors(
                             add_factor_node(&mut divisibility_graph, &known_factor);
                         if added {
                             add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, true);
+                            digits_or_expr_full.push(factor_vid);
                         } else {
                             warn!("{id}: Tried to add a duplicate node: {known_factor}");
                         }
@@ -1946,11 +1947,9 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     let mut any_added = false;
     let mut parseable_factors: BTreeSet<Factor<Arc<str>, CompactString>> = BTreeSet::new();
     if !skip_looking_up_listed_algebraic && root.as_str_non_u128().is_some() {
+        parseable_factors.insert(Factor::from(root));
         let id = match id {
-            Some(id) => {
-                parseable_factors.insert(Factor::from(root));
-                Some(id)
-            }
+            Some(id) => Some(id),
             None => {
                 let result = add_known_factors_to_graph(
                     http,
