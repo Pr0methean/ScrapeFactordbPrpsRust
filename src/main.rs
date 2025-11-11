@@ -1479,8 +1479,6 @@ async fn find_and_submit_factors(
                     factor_vid != dest.id
                         // Don't try to submit to a dest for which FactorDB already has a full factorization
                         && !already_fully_factored.contains(&dest.id)
-                        // Ensure factor isn't larger than dest
-                        && !dest.attr.unambiguously_less_or_equal(&factor)
                         // Numbers that fit into a u128 are fully factored already
                         // and elided numbers can only be used as dests if their IDs are known
                         && dest.attr.as_str().is_some_and(|expr| ids.contains_key(&dest.id) || !expr.contains("..."))
@@ -1508,6 +1506,10 @@ async fn find_and_submit_factors(
                 }
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
+                    continue;
+                }
+                if dest_factor.unambiguously_less_or_equal(&factor) {
+                    divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, false);
                     continue;
                 }
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
