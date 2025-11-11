@@ -597,9 +597,9 @@ impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
         match value.parse() {
             Ok(n) => Numeric(n),
             Err(_) => if value.as_str().chars().all(|c| c.is_ascii_digit()) {
-                Factor::BigNumber(value.into())
+                Factor::BigNumber(value)
             } else {
-                Factor::Expression(value.into())
+                Factor::Expression(value)
             }
         }
     }
