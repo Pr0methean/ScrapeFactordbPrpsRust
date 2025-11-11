@@ -36,7 +36,7 @@ use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphAdd, GraphMut, GraphRef, Neighbors, VertexSet};
 use gryf::storage::AdjMatrix;
 use itertools::Itertools;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use net::ThrottlingHttpClient;
 use primitive_types::U256;
 use rand::seq::SliceRandom;
@@ -952,7 +952,7 @@ async fn handle_signals(
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
-    simple_log::console("info").unwrap();
+    simple_log::console("debug").unwrap();
     task::spawn(
         async_backtrace::location!().frame(handle_signals(shutdown_sender, installed_sender)),
     );
@@ -1520,6 +1520,7 @@ async fn find_and_submit_factors(
                 .map(|vertex| (vertex.id, vertex.attr.clone()))
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
+                debug!("{id}: No destinations to submit {factor} to");
                 continue;
             };
             let shortest_paths = ShortestPaths::on(&divisibility_graph)
@@ -1531,10 +1532,12 @@ async fn find_and_submit_factors(
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
+                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because divisibility edge already exists");
                     continue;
                 }
 
                 // dest_factor can't be divisible by factor because factor is divisible by dest_factor
+                debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is divisible by {factor}");
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
                     add_edge_or_log(
                         &mut divisibility_graph,
@@ -1548,6 +1551,7 @@ async fn find_and_submit_factors(
                 if shortest_paths.dist(dest_factor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
+                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because it's already transitively known");
                     add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
                     add_edge_or_log(
                         &mut divisibility_graph,
@@ -1559,6 +1563,7 @@ async fn find_and_submit_factors(
                 }
 
                 if dest_factor.unambiguously_less_or_equal(&factor) {
+                    debug!("Skipping submission of {factor} to {dest_factor} because {dest_factor} is smaller or equal");
                     add_edge_or_log(
                         &mut divisibility_graph,
                         &factor_vid,
@@ -1570,6 +1575,7 @@ async fn find_and_submit_factors(
 
                 // u128s are already fully factored
                 if let Numeric(dest) = dest_factor {
+                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because the number is too small");
                     let divisible = if let Numeric(f) = factor {
                         dest.is_multiple_of(f)
                     } else {
@@ -1597,6 +1603,7 @@ async fn find_and_submit_factors(
                     .ok()
                     .and_then(|paths| paths.dist(factor_vid).copied());
                 if shortest_path_from_dest == Some(0) {
+                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is transitively divisible by {factor}");
                     // dest_factor is transitively divisible by factor
                     add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, true);
                     add_edge_or_log(
@@ -1615,6 +1622,7 @@ async fn find_and_submit_factors(
                     .is_some_and(|expr| expr.contains("..."))
                     && !ids.contains_key(&dest_factor_vid)
                 {
+                    debug!("{id}: Can't submit to {dest_factor} right now because we don't know its full specifier");
                     continue;
                 }
                 let dest_specifier = as_specifier(&ids, &dest_factor_vid, &dest_factor);
@@ -1638,7 +1646,6 @@ async fn find_and_submit_factors(
                             divisibility_graph.try_add_edge(&dest_factor_vid, &factor_vid, false);
                     }
                     DoesNotDivide => {
-                        iters_without_progress = 0;
                         add_edge_or_log(
                             &mut divisibility_graph,
                             &factor_vid,
@@ -1646,6 +1653,7 @@ async fn find_and_submit_factors(
                             false,
                         );
                         if already_checked_for_algebraic.insert(factor_vid) {
+                            debug!("{id}: Searching for algebraic factors of {factor}");
                             add_algebraic_factors_to_graph(
                                 http,
                                 ids.get(&factor_vid).copied(),
@@ -1663,6 +1671,7 @@ async fn find_and_submit_factors(
                         } else if !checked_for_known_factors_since_last_submission
                             .contains(&factor_vid)
                         {
+                            debug!("{id}: Searching for algebraic factors of {factor}");
                             let factor_specifier = as_specifier(&ids, &factor_vid, &factor);
                             let result = add_known_factors_to_graph(
                                 http,
@@ -1693,50 +1702,61 @@ async fn find_and_submit_factors(
                         }
                     }
                     OtherError => {
-                        // See if dest has some already-known factors we can submit to instead
-                        let result = add_known_factors_to_graph(
-                            http,
-                            factor_finder,
-                            &mut divisibility_graph,
-                            &mut already_fully_factored,
-                            dest_factor_vid,
-                            dest_specifier,
-                            false,
-                            &dest_factor,
-                        )
-                        .await;
-                        if !result.factors.is_empty() {
-                            iters_without_progress = 0;
-                        }
-                        if let Some(dest_entry_id) = result.id {
-                            ids.insert(dest_factor_vid, dest_entry_id);
+                        if !checked_for_known_factors_since_last_submission.contains(&dest_factor_vid) {
+                            debug!("{id}: Searching for known factors of {dest_factor}");
+                            // See if dest has some already-known factors we can submit to instead
+                            let result = add_known_factors_to_graph(
+                                http,
+                                factor_finder,
+                                &mut divisibility_graph,
+                                &mut already_fully_factored,
+                                dest_factor_vid,
+                                dest_specifier,
+                                false,
+                                &dest_factor,
+                            )
+                                .await;
+                            if let Some(status) = result.status {
+                                checked_for_known_factors_since_last_submission.insert(dest_factor_vid);
+                                if status == FullyFactored {
+                                    already_fully_factored.insert(dest_factor_vid);
+                                }
+                            }
+                            if !result.factors.is_empty() {
+                                iters_without_progress = 0;
+                            }
+                            if let Some(dest_entry_id) = result.id {
+                                ids.insert(dest_factor_vid, dest_entry_id);
+                            }
                         }
                     }
                 }
             }
         }
     }
-    for (factor_id, factor) in divisibility_graph
+    for (factor_vid, factor) in divisibility_graph
         .vertices()
         .map(|vertex| (vertex.id, vertex.attr.clone()))
         .collect::<Box<[_]>>()
         .into_iter()
     {
-        if factor_id == root_node {
+        if factor_vid == root_node {
             continue;
         }
         if let Some(expr) = factor.as_str_non_u128()
             && expr.contains("...")
         {
+            debug!("{id}: Skipping writing {factor} to failed-submission file because we don't know its specifier");
             continue;
         }
         let reverse_dist = ShortestPaths::on(&divisibility_graph)
             .edge_weight_fn(|edge| if *edge { 0usize } else { 1usize })
             .goal(root_node)
-            .run(factor_id)
+            .run(factor_vid)
             .ok()
             .and_then(|paths| paths.dist(root_node).copied());
         if reverse_dist == Some(0) {
+            debug!("{id}: {factor} was successfully submitted");
             continue;
         }
         match FAILED_U_SUBMISSIONS_OUT
