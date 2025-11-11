@@ -768,13 +768,13 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         }
     }
 
-    pub fn unambiguously_less_or_equal(&self, other: &Factor<T, U>) -> bool {
+    pub fn unambiguously_less_or_equal<V: AsRef<str>, W: AsRef<str>>(&self, other: &Factor<V, W>) -> bool {
         if let Factor::Expression(_) = self {
             self == other
         } else if let Factor::Expression(_) = other {
             self == other
         } else {
-            self.cmp(other) != Ordering::Greater
+            self.partial_cmp(other) != Some(Ordering::Greater)
         }
     }
 }
@@ -1471,14 +1471,14 @@ impl FactorFinder {
                     }
             }
             Factor::Expression(s) => {
-                f != expr
+                !expr.unambiguously_less_or_equal(f)
                     && if let Factor::Expression(expr) = &expr {
                         !expr.as_ref().starts_with(&format!("{s}/"))
                     } else {
                         true
                     }
             }
-            Factor::BigNumber(_) => true,
+            Factor::BigNumber(_) => !expr.unambiguously_less_or_equal(f),
         });
         factors.sort();
         factors.dedup();
