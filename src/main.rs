@@ -46,13 +46,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::cmp::PartialEq;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
-use std::panic;
+use std::{fmt, panic};
+use std::borrow::Cow;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
@@ -139,8 +140,8 @@ struct NumberStatusApiResponse {
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
     id: Option<u128>,
-    number: Option<&'a str>,
-    factor: &'a str,
+    number: Option<Cow<'a, str>>,
+    factor: Cow<'a, str>,
 }
 
 #[framed]
@@ -211,7 +212,7 @@ async fn check_composite(
     let ProcessedStatusApiResponse {
         factors, status, ..
     } = factor_finder
-        .known_factors_as_digits(http, Id(id), false, true)
+        .known_factors_as_digits::<&str,&str>(http, Id(id), false, true)
         .await;
     if factors.is_empty() {
         if status == Some(FullyFactored) {
@@ -227,7 +228,7 @@ async fn check_composite(
         let mut factors_submitted = false;
         let mut factors_to_dispatch = Vec::with_capacity(factors.len());
         for factor in factors {
-            if let Some(factor_str) = factor.as_str() {
+            if let Some(factor_str) = factor.as_str_non_u128() {
                 if find_and_submit_factors(
                     http,
                     id,
@@ -275,10 +276,27 @@ async fn check_composite(
     }
 }
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
-enum NumberSpecifier<'a> {
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
+enum NumberSpecifier<T: AsRef<str>, U: AsRef<str>> {
     Id(u128),
-    Expression(&'a str),
+    Expression(Factor<T, U>),
+}
+
+impl <T: AsRef<str>,U: AsRef<str>> Display for NumberSpecifier<T,U> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Id(id) => write!(f, "ID {}", id),
+            Expression(e) => write_bignum(f, &e.as_str()),
+        }
+    }
+}
+
+pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
+    if e.len() < 300 {
+        f.write_str(e)
+    } else {
+        write!(f, "{}...{}", &e[..20], &e[(e.len() - 5)..])
+    }
 }
 
 #[framed]
@@ -317,7 +335,7 @@ async fn get_prp_remaining_bases(
             factors: nm1_factors,
             ..
         } = factor_finder
-            .known_factors_as_digits(http, Id(nm1_id), false, false)
+            .known_factors_as_digits::<&str,&str>(http, Id(nm1_id), false, false)
             .await;
         match nm1_factors.len() {
             0 => {
@@ -344,7 +362,7 @@ async fn get_prp_remaining_bases(
             factors: np1_factors,
             ..
         } = factor_finder
-            .known_factors_as_digits(http, Id(np1_id), false, false)
+            .known_factors_as_digits::<&str,&str>(http, Id(np1_id), false, false)
             .await;
         match np1_factors.len() {
             0 => {
@@ -367,7 +385,7 @@ async fn get_prp_remaining_bases(
         && !nm1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N-1 must be even
-        match report_factor::<!, !>(http, nm1_id, &Numeric(2)).await {
+        match report_factor::<&str,&str>(http, nm1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
@@ -383,7 +401,7 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N+1 must be even
-        match report_factor::<!, !>(http, np1_id, &Numeric(2)).await {
+        match report_factor::<&str,&str>(http, np1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                 prove_by_np1(id, http).await;
@@ -401,14 +419,14 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_3
     {
         // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-        match report_factor::<!, !>(http, nm1_id, &Numeric(3)).await {
+        match report_factor::<&str,&str>(http, nm1_id, &Numeric(3)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
                 return Ok(U256::from(0));
             }
             Accepted => {}
-            _ => match report_factor::<!, !>(http, np1_id, &Numeric(3)).await {
+            _ => match report_factor::<&str,&str>(http, np1_id, &Numeric(3)).await {
                 AlreadyFullyFactored => {
                     info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                     prove_by_np1(id, http).await;
@@ -1229,21 +1247,22 @@ enum ReportFactorResult {
 }
 
 #[framed]
-async fn try_report_factor<T: Display, U: Display>(
+async fn try_report_factor<T: AsRef<str>, U: AsRef<str> + Display, V: AsRef<str>, W: AsRef<str> + Display>(
     http: &ThrottlingHttpClient,
-    u_id: &NumberSpecifier<'_>,
-    factor: &Factor<T, U>,
+    u_id: &NumberSpecifier<T,U>,
+    factor: &Factor<V, W>,
 ) -> ReportFactorResult {
+    let number = if let Expression(expr) = u_id {
+        Some(expr.as_str())
+    } else {
+        None
+    };
     match http
         .post("https://factordb.com/reportfactor.php")
         .form(&FactorSubmission {
             id: if let Id(id) = u_id { Some(*id) } else { None },
-            number: if let Expression(expr) = u_id {
-                Some(expr)
-            } else {
-                None
-            },
-            factor: &factor.to_compact_string(),
+            number,
+            factor: factor.as_str(),
         })
         .send()
         .await
@@ -1252,7 +1271,7 @@ async fn try_report_factor<T: Display, U: Display>(
             let response = response.text().await;
             match response {
                 Ok(text) => {
-                    info!("{u_id:?}: reported a factor of {factor}; response: {text}",);
+                    info!("{u_id}: reported a factor of {factor}; response: {text}",);
                     return if text.contains("Error") {
                         OtherError
                     } else if text.contains("submitted") {
@@ -1264,12 +1283,12 @@ async fn try_report_factor<T: Display, U: Display>(
                     };
                 }
                 Err(e) => {
-                    error!("{u_id:?}: Failed to get response: {e}");
+                    error!("{u_id}: Failed to get response: {e}");
                 }
             }
         }
         Err(e) => {
-            error!("{u_id:?}: failed to submit factor {factor}: {e}")
+            error!("{u_id}: failed to submit factor {factor}: {e}")
         }
     }
     sleep(RETRY_DELAY).await;
@@ -1277,13 +1296,13 @@ async fn try_report_factor<T: Display, U: Display>(
 }
 
 #[framed]
-async fn report_factor<T: Display, U: Display>(
+async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
     http: &ThrottlingHttpClient,
     u_id: u128,
     factor: &Factor<T, U>,
 ) -> ReportFactorResult {
     for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-        let result = try_report_factor(http, &Id(u_id), factor).await;
+        let result = try_report_factor::<&str,&str,T,U>(http, &Id(u_id), factor).await;
         if result != OtherError {
             return result;
         }
@@ -1293,7 +1312,7 @@ async fn report_factor<T: Display, U: Display>(
         .unwrap()
         .lock()
         .await
-        .write_fmt(format_args!("{u_id},{factor}\n"))
+        .write_fmt(format_args!("{u_id},{}\n",factor.as_str()))
     {
         Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
         Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
@@ -1329,7 +1348,7 @@ async fn find_and_submit_factors(
             status,
             ..
         } = factor_finder
-            .known_factors_as_digits(http, Id(id), false, true)
+            .known_factors_as_digits::<&str,&str>(http, Id(id), false, true)
             .await;
         root_status = status;
         match known_factors.len() {
@@ -1407,7 +1426,7 @@ async fn find_and_submit_factors(
         if factor_vid == root_node {
             continue;
         }
-        if let Some(expr) = factor.as_str()
+        if let Some(expr) = factor.as_str_non_u128()
             && expr.contains("...")
         {
             continue;
@@ -1415,7 +1434,7 @@ async fn find_and_submit_factors(
         if get_edge(&divisibility_graph, &factor_vid, &root_node) == Some(true) {
             continue;
         }
-        match try_report_factor(http, &Id(id), &factor).await {
+        match try_report_factor::<&str,&str,_,_>(http, &Id(id), &factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
                 checked_for_known_factors_since_last_submission.remove(&root_node);
@@ -1482,7 +1501,7 @@ async fn find_and_submit_factors(
                         && !already_fully_factored.contains(&dest.id)
                         // Numbers that fit into a u128 are fully factored already
                         // and elided numbers can only be used as dests if their IDs are known
-                        && dest.attr.as_str().is_some_and(|expr| ids.contains_key(&dest.id) || !expr.contains("..."))
+                        && dest.attr.as_str_non_u128().is_some_and(|expr| ids.contains_key(&dest.id) || !expr.contains("..."))
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
                         && get_edge(&divisibility_graph, &factor_vid, &dest.id).is_none()
                         // dest is a proper divisor of factor, so vice-versa is impossible
@@ -1529,11 +1548,7 @@ async fn find_and_submit_factors(
                     add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
                     continue;
                 }
-                let dest_specifier = if let Some(dest_id) = ids.get(&dest_factor_vid) {
-                    Id(*dest_id)
-                } else {
-                    Expression(dest_factor.as_str().unwrap())
-                };
+                let dest_specifier = as_specifier(&ids, &dest_factor_vid, &dest_factor);
                 match try_report_factor(http, &dest_specifier, &factor).await {
                     AlreadyFullyFactored => {
                         already_fully_factored.insert(dest_factor_vid);
@@ -1569,20 +1584,8 @@ async fn find_and_submit_factors(
                         } else if !checked_for_known_factors_since_last_submission
                             .contains(&factor_vid)
                         {
-                            let mut temp_expr_holder = CompactString::new("");
                             let factor_specifier =
-                                if let Some(factor_entry_id) = ids.get(&factor_vid) {
-                                    Id(*factor_entry_id)
-                                } else if let Numeric(n) = factor {
-                                    if n <= MAX_ID_EQUAL_TO_VALUE {
-                                        Id(n)
-                                    } else {
-                                        temp_expr_holder = n.to_compact_string();
-                                        Expression(&temp_expr_holder)
-                                    }
-                                } else {
-                                    Expression(factor.as_str().unwrap())
-                                };
+                                as_specifier(&ids, &factor_vid, &factor);
                             let result = add_known_factors_to_graph(
                                 http,
                                 factor_finder,
@@ -1594,7 +1597,6 @@ async fn find_and_submit_factors(
                                 &factor,
                             )
                             .await;
-                            drop(temp_expr_holder);
                             if result.status.is_some() {
                                 if result.status == Some(FullyFactored)
                                     && dest_factor_vid == root_node
@@ -1645,7 +1647,7 @@ async fn find_and_submit_factors(
         if factor_id == root_node {
             continue;
         }
-        if let Some(expr) = factor.as_str()
+        if let Some(expr) = factor.as_str_non_u128()
             && expr.contains("...")
         {
             continue;
@@ -1676,16 +1678,26 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
+fn as_specifier<'a>(ids: &BTreeMap<VertexId, u128>, factor_vid: &VertexId, factor: &'a Factor<Arc<str>, CompactString>) -> NumberSpecifier<&'a str,&'a str> {
+    if let Some(factor_entry_id) = ids.get(&factor_vid) {
+        Id(*factor_entry_id)
+    } else if let Numeric(n) = factor && *n <= MAX_ID_EQUAL_TO_VALUE {
+        Id(*n)
+    } else {
+        Expression(factor.as_ref())
+    }
+}
+
 #[framed]
-async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>>(
+async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str>>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     already_fully_factored: &mut BTreeSet<VertexId>,
     root_vid: VertexId,
-    root_specifier: NumberSpecifier<'_>,
+    root_specifier: NumberSpecifier<T,U>,
     include_ff: bool,
-    root: &Factor<T, U>,
+    root: &Factor<V, W>,
 ) -> ProcessedStatusApiResponse {
     let ProcessedStatusApiResponse {
         status,
@@ -1834,7 +1846,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
 ) -> bool {
     let mut any_added = false;
     let mut parseable_factors: BTreeSet<Factor<Arc<str>, CompactString>> = BTreeSet::new();
-    if !skip_looking_up_listed_algebraic && let Some(root_expr) = root.as_str() {
+    if !skip_looking_up_listed_algebraic && root.as_str_non_u128().is_some() {
         let id = match id {
             Some(id) => {
                 parseable_factors.insert(Factor::from(root));
@@ -1847,7 +1859,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                     divisibility_graph,
                     already_fully_factored,
                     root_vid,
-                    Expression(root_expr),
+                    Expression(root.as_ref()),
                     true,
                     root,
                 )
@@ -1886,7 +1898,8 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                 if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
                                     Id(factor_entry_id)
                                 } else {
-                                    Expression(factor_digits_or_expr)
+                                    let (factor_vid, _) = add_factor_node(divisibility_graph, &factor);
+                                    as_specifier(ids, &factor_vid, &factor)
                                 };
                             let result = add_known_factors_to_graph(
                                 http,

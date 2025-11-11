@@ -3,7 +3,7 @@ use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, UnfactoredComposite, Unknown,
 };
 use crate::net::ThrottlingHttpClient;
-use crate::{NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
+use crate::{write_bignum, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use async_backtrace::framed;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
@@ -16,7 +16,8 @@ use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexBuilder, RegexSet};
 use serde_json::from_str;
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
+use std::borrow::Cow::{Borrowed, Owned};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -609,7 +610,11 @@ impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
 
 impl<T: Display, U: Display> From<Factor<T, U>> for CompactString {
     fn from(val: Factor<T, U>) -> Self {
-        val.to_string().into()
+        match val {
+            Numeric(n) => n.to_compact_string(),
+            Factor::BigNumber(n) => n.to_compact_string(),
+            Factor::Expression(e) => e.to_compact_string()
+        }
     }
 }
 
@@ -636,13 +641,13 @@ impl<'a, T: Display, U: Display> From<&'a Factor<T, U>> for Factor<Arc<str>, Com
     }
 }
 
-impl<T: Display, U: Display> Display for Factor<T, U> {
+impl<T: AsRef<str>, U: Display> Display for Factor<T, U> {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Numeric(n) => n.fmt(f),
             Factor::Expression(s) => s.fmt(f),
-            Factor::BigNumber(s) => s.fmt(f),
+            Factor::BigNumber(s) => write_bignum(f, s.as_ref()),
         }
     }
 }
@@ -726,11 +731,27 @@ impl<T: AsRef<str>, U: AsRef<str>> Ord for Factor<T, U> {
 }
 
 impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
-    pub fn as_str(&self) -> Option<&str> {
+    pub fn as_str(&self) -> Cow<'_, str> {
+        match self {
+            Numeric(n) => Owned(n.to_string()),
+            Factor::BigNumber(s) => Borrowed(s.as_ref()),
+            Factor::Expression(s) => Borrowed(s.as_ref()),
+        }
+    }
+
+    pub fn as_str_non_u128(&self) -> Option<&str> {
         match self {
             Numeric(_) => None,
-            Factor::BigNumber(s) => Some(s.as_ref()),
+            Factor::BigNumber(n) => Some(n.as_ref()),
             Factor::Expression(s) => Some(s.as_ref()),
+        }
+    }
+
+    pub fn as_ref(&self) -> Factor<&str, &str> {
+        match self {
+            Numeric(n) => Numeric(*n),
+            Factor::BigNumber(s) => Factor::BigNumber(s.as_ref()),
+            Factor::Expression(s) => Factor::Expression(s.as_ref())
         }
     }
 
@@ -1464,15 +1485,14 @@ impl FactorFinder {
     // this method.
     #[framed]
     #[inline]
-    pub async fn known_factors_as_digits(
+    pub async fn known_factors_as_digits<T: AsRef<str>, U: AsRef<str>>(
         &self,
         http: &ThrottlingHttpClient,
-        id: NumberSpecifier<'_>,
+        id: NumberSpecifier<T, U>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
-        if let NumberSpecifier::Expression(expr) = id
-            && let Numeric(n) = <&str as Into<Factor<&str, &str>>>::into(expr)
+        if let NumberSpecifier::Expression(Numeric(n)) = id
         {
             return ProcessedStatusApiResponse {
                 status: Some(FullyFactored),
@@ -1493,15 +1513,15 @@ impl FactorFinder {
                     http.try_get_and_decode(&url).await.ok_or(None)
                 }
             }
-            NumberSpecifier::Expression(expr) => {
-                let url = format!("https://factordb.com/api?query={}", encode(expr));
+            NumberSpecifier::Expression(ref expr) => {
+                let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str()));
                 http.try_get_and_decode(&url).await.ok_or(None)
             }
         };
         match response {
             Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
                 Err(e) => {
-                    error!("{id:?}: Failed to decode API response: {e}: {api_response}");
+                    error!("{id}: Failed to decode API response: {e}: {api_response}");
                     ProcessedStatusApiResponse::default()
                 }
                 Ok(NumberStatusApiResponse {
@@ -1510,7 +1530,7 @@ impl FactorFinder {
                     id: recvd_id,
                 }) => {
                     info!(
-                        "{id:?}: Fetched status of {status} and {} factors of sizes {}",
+                        "{id}: Fetched status of {status} and {} factors of sizes {}",
                         factors.len(),
                         factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
@@ -1521,7 +1541,7 @@ impl FactorFinder {
                         "CF" => Some(PartlyFactoredComposite),
                         "U" => Some(Unknown),
                         x => {
-                            error!("{recvd_id:?} ({id:?}): Unrecognized number status code: {x}");
+                            error!("{recvd_id:?} ({id}): Unrecognized number status code: {x}");
                             None
                         }
                     };
