@@ -1287,12 +1287,12 @@ async fn try_report_factor<
                     };
                 }
                 Err(e) => {
-                    error!("{u_id}: Failed to get response: {e}");
+                    error!("{u_id}: Failed to get response when submitting {factor}: {}", e.without_url());
                 }
             }
         }
         Err(e) => {
-            error!("{u_id}: failed to submit factor {factor}: {e}")
+            error!("{u_id}: failed to submit factor {factor}: {}", e)
         }
     }
     sleep(RETRY_DELAY).await;
