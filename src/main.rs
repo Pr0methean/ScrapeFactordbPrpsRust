@@ -367,7 +367,7 @@ async fn get_prp_remaining_bases(
         && !nm1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N-1 must be even
-        match report_factor::<!,!>(http, nm1_id, &Numeric(2)).await {
+        match report_factor::<!, !>(http, nm1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
@@ -383,7 +383,7 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N+1 must be even
-        match report_factor::<!,!>(http, np1_id, &Numeric(2)).await {
+        match report_factor::<!, !>(http, np1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                 prove_by_np1(id, http).await;
@@ -401,14 +401,14 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_3
     {
         // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-        match report_factor::<!,!>(http, nm1_id, &Numeric(3)).await {
+        match report_factor::<!, !>(http, nm1_id, &Numeric(3)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
                 return Ok(U256::from(0));
             }
             Accepted => {}
-            _ => match report_factor::<!,!>(http, np1_id, &Numeric(3)).await {
+            _ => match report_factor::<!, !>(http, np1_id, &Numeric(3)).await {
                 AlreadyFullyFactored => {
                     info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                     prove_by_np1(id, http).await;
@@ -1680,7 +1680,7 @@ async fn find_and_submit_factors(
 async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>,CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     already_fully_factored: &mut BTreeSet<VertexId>,
     root_vid: VertexId,
     root_specifier: NumberSpecifier<'_>,
@@ -1758,7 +1758,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>>(
 }
 
 fn upsert_edge<F: FnOnce(Option<bool>) -> bool>(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>,CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     from_vid: &VertexId,
     to_vid: &VertexId,
     new_value_fn: F,
@@ -1777,7 +1777,7 @@ fn upsert_edge<F: FnOnce(Option<bool>) -> bool>(
 }
 
 fn copy_edges_true_overrides_false(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>,CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     new_vertex: &VertexId,
     out_edges: Box<[(VertexId, bool)]>,
     in_edges: Box<[(VertexId, bool)]>,
@@ -1803,7 +1803,7 @@ fn copy_edges_true_overrides_false(
 }
 
 fn neighbors_with_edge_weights(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>,CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     root_vid: &VertexId,
     direction: Direction,
 ) -> Box<[(VertexId, bool)]> {
@@ -1825,7 +1825,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
     skip_looking_up_listed_algebraic: bool,
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>,CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     ids: &mut BTreeMap<VertexId, u128>,
     root: &Factor<T, U>,
     already_fully_factored: &mut BTreeSet<VertexId>,
@@ -1833,7 +1833,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     checked_for_known_factors_since_last_submission: &mut BTreeSet<VertexId>,
 ) -> bool {
     let mut any_added = false;
-    let mut parseable_factors: BTreeSet<Factor<Arc<str>,CompactString>> = BTreeSet::new();
+    let mut parseable_factors: BTreeSet<Factor<Arc<str>, CompactString>> = BTreeSet::new();
     if !skip_looking_up_listed_algebraic && let Some(root_expr) = root.as_str() {
         let id = match id {
             Some(id) => {
@@ -1965,8 +1965,8 @@ fn get_edge<T>(
 }
 
 fn add_factor_node(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>,CompactString>, bool, Directed, DefaultId>,
-    factor: &Factor<Arc<str>,CompactString>,
+    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    factor: &Factor<Arc<str>, CompactString>,
 ) -> (VertexId, bool) {
     match divisibility_graph.find_vertex(factor) {
         Some(id) => (id, false),
