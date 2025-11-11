@@ -212,12 +212,12 @@ impl ThrottlingHttpClient {
         drop(permit);
         match result {
             Err(http_error) => {
-                error!("Error reading {url}: {http_error}");
+                error!("Error reading {url}: {}", http_error.without_url());
                 None
             }
             Ok(response) => match response.text().await {
                 Err(decoding_error) => {
-                    error!("Error reading {url}: {decoding_error}");
+                    error!("Error reading {url}: {}", decoding_error.without_url());
                     None
                 }
                 Ok(text) => {
