@@ -1506,7 +1506,7 @@ async fn find_and_submit_factors(
         if factors_to_submit.is_empty() {
             return accepted_factors > 0;
         }
-        'per_factor: for (factor_vid, factor) in factors_to_submit {
+        for (factor_vid, factor) in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
             let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, false);
             let mut dest_factors = divisibility_graph
@@ -1636,7 +1636,7 @@ async fn find_and_submit_factors(
                             return true;
                         }
                         already_fully_factored.insert(dest_factor_vid);
-                        continue 'per_factor;
+                        continue;
                     }
                     Accepted => {
                         checked_for_known_factors_since_last_submission.remove(&dest_factor_vid);
