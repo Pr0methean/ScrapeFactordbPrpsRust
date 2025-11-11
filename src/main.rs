@@ -1402,11 +1402,12 @@ async fn find_and_submit_factors(
     let mut accepted_factors = 0;
     let mut already_fully_factored = BTreeSet::new();
     let mut already_checked_for_algebraic = BTreeSet::new();
+    let multiple_starting_entries = digits_or_expr_full.len() > 1;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
         let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
         factor_found |= add_algebraic_factors_to_graph(
             http,
-            Some(id),
+            if multiple_starting_entries { None } else { Some(id) },
             factor_finder,
             id_and_expr_regex,
             skip_looking_up_listed_algebraic,
