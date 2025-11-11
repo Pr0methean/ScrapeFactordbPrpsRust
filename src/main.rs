@@ -1300,6 +1300,8 @@ async fn report_factor<T: Display>(
     OtherError // factor that we failed to submit may still have been valid
 }
 
+const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
+
 #[framed]
 async fn find_and_submit_factors(
     http: &ThrottlingHttpClient,
@@ -1564,11 +1566,19 @@ async fn find_and_submit_factors(
                         } else if !checked_for_known_factors_since_last_submission
                             .contains(&factor_vid)
                         {
+                            let mut temp_expr_holder = CompactString::new("");
                             let factor_specifier =
                                 if let Some(factor_entry_id) = ids.get(&factor_vid) {
                                     Id(*factor_entry_id)
+                                } else if let Numeric(n) = factor {
+                                    if n <= MAX_ID_EQUAL_TO_VALUE {
+                                        Id(n)
+                                    } else {
+                                        temp_expr_holder = n.to_compact_string();
+                                        Expression(&temp_expr_holder)
+                                    }
                                 } else {
-                                    Expression(&factor.to_compact_string())
+                                    Expression(factor.as_str().unwrap())
                                 };
                             let result = add_known_factors_to_graph(
                                 http,
@@ -1581,6 +1591,7 @@ async fn find_and_submit_factors(
                                 &factor,
                             )
                             .await;
+                            drop(temp_expr_holder);
                             if result.status.is_some() {
                                 if result.status == Some(FullyFactored)
                                     && dest_factor_vid == root_node
