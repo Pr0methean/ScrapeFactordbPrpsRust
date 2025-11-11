@@ -58,6 +58,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::{fmt, panic};
+use std::backtrace::Backtrace;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -1502,6 +1503,7 @@ async fn find_and_submit_factors(
             return accepted_factors > 0;
         }
         for (factor_vid, factor) in factors_to_submit {
+            let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, false);
             let mut dest_factors = divisibility_graph
                 .vertices()
                 .filter(|dest|
@@ -1522,18 +1524,6 @@ async fn find_and_submit_factors(
                 .unwrap();
             dest_factors.sort_by_key(|(_, factor)| factor.clone());
             for (dest_factor_vid, dest_factor) in dest_factors.into_iter().rev() {
-                if shortest_paths.dist(dest_factor_vid) == Some(&0) {
-                    // dest_factor is divisible by factor, and this is already known to factordb
-                    // because it follows that relation transitively
-                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
-                    add_edge_or_log(
-                        &mut divisibility_graph,
-                        &dest_factor_vid,
-                        &factor_vid,
-                        false,
-                    );
-                    continue;
-                }
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
                     continue;
@@ -1546,6 +1536,18 @@ async fn find_and_submit_factors(
                         &mut divisibility_graph,
                         &factor_vid,
                         &dest_factor_vid,
+                        false,
+                    );
+                    continue;
+                }
+                if shortest_paths.dist(dest_factor_vid) == Some(&0) {
+                    // dest_factor is divisible by factor, and this is already known to factordb
+                    // because it follows that relation transitively
+                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &dest_factor_vid,
+                        &factor_vid,
                         false,
                     );
                     continue;
@@ -2083,8 +2085,12 @@ fn add_edge_or_log(
 ) {
     if let Err(e) = graph.try_add_edge(from_vid, to_vid, value) {
         error!(
-            "Error adding edge: {e}\n{}",
-            async_backtrace::taskdump_tree(false)
+            "Error adding edge {}-({})->{} {e}\n{}\n{}\n",
+            graph.vertex(&from_vid).unwrap(),
+            value,
+            graph.vertex(&to_vid).unwrap(),
+            async_backtrace::taskdump_tree(false),
+            Backtrace::force_capture()
         );
     }
 }
