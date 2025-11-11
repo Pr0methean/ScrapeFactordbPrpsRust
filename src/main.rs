@@ -1547,8 +1547,18 @@ async fn find_and_submit_factors(
                     } else {
                         false
                     };
-                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, divisible);
-                    add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, false);
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &dest_factor_vid,
+                        divisible,
+                    );
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &dest_factor_vid,
+                        &factor_vid,
+                        false,
+                    );
                     continue;
                 }
                 // dest_factor can't be divisible by factor because factor is divisible by dest_factor
@@ -1581,7 +1591,10 @@ async fn find_and_submit_factors(
                 // elided numbers can only be used as dests if their IDs are known
                 // however, this doesn't affect the divisibility graph because the ID may be found
                 // later
-                if dest_factor.as_str_non_u128().is_some_and(|expr| expr.contains("...")) {
+                if dest_factor
+                    .as_str_non_u128()
+                    .is_some_and(|expr| expr.contains("..."))
+                {
                     continue;
                 }
                 let dest_specifier = as_specifier(&ids, &dest_factor_vid, &dest_factor);
