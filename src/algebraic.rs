@@ -3,7 +3,9 @@ use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, UnfactoredComposite, Unknown,
 };
 use crate::net::ThrottlingHttpClient;
-use crate::{NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY, write_bignum, MAX_ID_EQUAL_TO_VALUE};
+use crate::{
+    MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY, write_bignum,
+};
 use async_backtrace::framed;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
@@ -1514,7 +1516,9 @@ impl FactorFinder {
                 },
             };
         }
-        if let NumberSpecifier::Id(id) = id && id <= MAX_ID_EQUAL_TO_VALUE {
+        if let NumberSpecifier::Id(id) = id
+            && id <= MAX_ID_EQUAL_TO_VALUE
+        {
             return ProcessedStatusApiResponse {
                 status: Some(FullyFactored),
                 factors: Self::find_factors_of_u128(id).into_boxed_slice(),
