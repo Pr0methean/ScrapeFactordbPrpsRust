@@ -956,9 +956,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let default_panic_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
-        eprintln!("\n--- Async Backtrace ---");
-        async_backtrace::taskdump_tree(true);
-        eprintln!("-----------------------");
+        error!("\n{}\n", async_backtrace::taskdump_tree(true));
         default_panic_hook(panic_info); // Call the original panic hook
     }));
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
