@@ -1353,7 +1353,7 @@ impl FactorFinder {
                 .sum();
             match sum_of_digits % 9 {
                 0 => {
-                    factors.extend([Numeric(3), Numeric(3)].into_iter());
+                    factors.extend([Numeric(3), Numeric(3)]);
                 }
                 3 | 6 => {
                     factors.push(Numeric(3));
@@ -1372,7 +1372,7 @@ impl FactorFinder {
                         factors.push(Numeric(7));
                     }
                     "8" => {
-                        factors.extend([Numeric(2), Numeric(2)].into_iter());
+                        factors.extend([Numeric(2), Numeric(2)]);
                     }
                     _ => {}
                 }
