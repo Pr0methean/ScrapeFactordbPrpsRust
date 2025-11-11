@@ -1256,6 +1256,12 @@ async fn try_report_factor<
     u_id: &NumberSpecifier<T, U>,
     factor: &Factor<V, W>,
 ) -> ReportFactorResult {
+    if let Expression(Numeric(_)) = u_id {
+        return AlreadyFullyFactored;
+    }
+    if let Id(n) = u_id && *n <= MAX_ID_EQUAL_TO_VALUE {
+        return AlreadyFullyFactored;
+    }
     let number = if let Expression(expr) = u_id {
         Some(expr.as_str())
     } else {
