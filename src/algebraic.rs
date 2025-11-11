@@ -621,16 +621,6 @@ impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
     }
 }
 
-impl<T: Display, U: Display> From<Factor<T, U>> for CompactString {
-    fn from(val: Factor<T, U>) -> Self {
-        match val {
-            Numeric(n) => n.to_compact_string(),
-            Factor::BigNumber(n) => n.to_compact_string(),
-            Factor::Expression(e) => e.to_compact_string(),
-        }
-    }
-}
-
 impl<'a, T, U> From<&'a Factor<T, U>> for Factor<&'a str, &'a str>
 where
     &'a str: From<&'a T> + From<&'a U>,

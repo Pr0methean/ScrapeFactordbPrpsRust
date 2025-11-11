@@ -1370,7 +1370,7 @@ async fn find_and_submit_factors(
             _ => {
                 let (root_node, _) = add_factor_node(
                     &mut divisibility_graph,
-                    &Factor::Expression(known_factors.iter().join("*").into()),
+                    &known_factors.iter().join("*").into(),
                 );
                 digits_or_expr_full.push(root_node);
                 if known_factors.len() > 1 {
@@ -2023,24 +2023,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     }
     for parseable_factor in parseable_factors {
         for subfactor in factor_finder.find_unique_factors(&parseable_factor) {
-            let (subfactor_vid, added) = add_factor_node(divisibility_graph, &subfactor);
-            match subfactor {
-                Numeric(n) => {
-                    // Numeric factors found by factor_finder are prime
-                    checked_for_known_factors_since_last_submission.insert(subfactor_vid);
-                    match n {
-                        2 => {
-                            ids.insert(subfactor_vid, 2);
-                        }
-                        5 => {
-                            ids.insert(subfactor_vid, 5);
-                        }
-                        _ => {}
-                    }
-                }
-                Factor::Expression(_) => {}
-                Factor::BigNumber(_) => {}
-            }
+            let (_, added) = add_factor_node(divisibility_graph, &subfactor);
             any_added |= added;
         }
     }
