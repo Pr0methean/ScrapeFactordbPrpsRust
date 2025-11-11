@@ -1353,15 +1353,30 @@ impl FactorFinder {
                 .sum();
             match sum_of_digits % 9 {
                 0 => {
-                    factors.push(Numeric(3));
-                    factors.push(Numeric(3));
+                    factors.extend([Numeric(3), Numeric(3)].into_iter());
                 }
                 3 | 6 => {
                     factors.push(Numeric(3));
                 }
                 _ => {}
             }
-            factors.push(expr_short.into());
+            if expr_short.len() >= 2 {
+                factors.push(expr_short.into());
+            } else {
+                // All other single-digit numbers are handled by the 2, 5, 3 and 9 cases
+                match expr_short {
+                    "4" => {
+                        factors.push(Numeric(2));
+                    }
+                    "7" => {
+                        factors.push(Numeric(7));
+                    }
+                    "8" => {
+                        factors.extend([Numeric(2), Numeric(2)].into_iter());
+                    }
+                    _ => {}
+                }
+            }
         }
         factors
     }
