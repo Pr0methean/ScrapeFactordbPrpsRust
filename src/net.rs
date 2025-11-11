@@ -22,8 +22,8 @@ use tokio::time::{Instant, sleep, sleep_until};
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const E2E_TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct ThrottlingHttpClient {
