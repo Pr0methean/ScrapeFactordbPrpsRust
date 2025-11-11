@@ -292,10 +292,11 @@ impl<T: AsRef<str>, U: AsRef<str>> Display for NumberSpecifier<T, U> {
 }
 
 pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
-    if e.len() < 300 {
+    let len = e.len();
+    if len < 300 {
         f.write_str(e)
     } else {
-        write!(f, "{}...{}", &e[..20], &e[(e.len() - 5)..])
+        write!(f, "{}...{}<{}>", &e[..20], &e[(len - 5)..], len)
     }
 }
 
