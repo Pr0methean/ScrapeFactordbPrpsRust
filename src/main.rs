@@ -1454,6 +1454,8 @@ async fn find_and_submit_factors(
                 add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, true);
             }
             DoesNotDivide => {
+                // The root isn't divisible by this "factor", so try to split it up into smaller
+                // factors and then we'll submit those instead.
                 add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, false);
                 if already_checked_for_algebraic.insert(factor_vid) {
                     any_failed_retryably |= add_algebraic_factors_to_graph(
@@ -1504,6 +1506,7 @@ async fn find_and_submit_factors(
             return accepted_factors > 0;
         }
         for (factor_vid, factor) in factors_to_submit {
+            // root can't be a factor of any other number we'll encounter
             let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, false);
             let mut dest_factors = divisibility_graph
                 .vertices()
@@ -1525,14 +1528,14 @@ async fn find_and_submit_factors(
                 .unwrap();
             dest_factors.sort_by_key(|(_, factor)| factor.clone());
             for (dest_factor_vid, dest_factor) in dest_factors.into_iter().rev() {
+                // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
                     continue;
                 }
-                let reverse_edge_id = divisibility_graph.edge_id_any(&dest_factor_vid, &factor_vid);
-                if let Some(reverse_edge_id) = reverse_edge_id
-                    && divisibility_graph.edge(&reverse_edge_id) == Some(&true) {
-                    // dest can't be divisible by factor, because factor is divisible by dest
+
+                // dest_factor can't be divisible by factor because factor is divisible by dest_factor
+                if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
                     add_edge_or_log(
                         &mut divisibility_graph,
                         &factor_vid,
@@ -1541,6 +1544,7 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
+
                 if shortest_paths.dist(dest_factor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
@@ -1553,6 +1557,7 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
+
                 if dest_factor.unambiguously_less_or_equal(&factor) {
                     add_edge_or_log(
                         &mut divisibility_graph,
@@ -1562,6 +1567,7 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
+
                 // u128s are already fully factored
                 if let Numeric(dest) = dest_factor {
                     let divisible = if let Numeric(f) = factor {
@@ -1583,16 +1589,7 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
-                // dest_factor can't be divisible by factor because factor is divisible by dest_factor
-                if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
-                    add_edge_or_log(
-                        &mut divisibility_graph,
-                        &factor_vid,
-                        &dest_factor_vid,
-                        false,
-                    );
-                    continue;
-                }
+
                 let shortest_path_from_dest = ShortestPaths::on(&divisibility_graph)
                     .edge_weight_fn(|edge| if *edge { 0 } else { 1 })
                     .goal(factor_vid)
@@ -1616,6 +1613,7 @@ async fn find_and_submit_factors(
                 if dest_factor
                     .as_str_non_u128()
                     .is_some_and(|expr| expr.contains("..."))
+                    && !ids.contains_key(&dest_factor_vid)
                 {
                     continue;
                 }
@@ -1653,7 +1651,7 @@ async fn find_and_submit_factors(
                                 ids.get(&factor_vid).copied(),
                                 factor_finder,
                                 id_and_expr_regex,
-                                skip_looking_up_listed_algebraic,
+                                false,
                                 &mut divisibility_graph,
                                 &mut ids,
                                 &factor,
