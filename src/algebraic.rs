@@ -768,7 +768,10 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         }
     }
 
-    pub fn unambiguously_less_or_equal<V: AsRef<str>, W: AsRef<str>>(&self, other: &Factor<V, W>) -> bool {
+    pub fn unambiguously_less_or_equal<V: AsRef<str>, W: AsRef<str>>(
+        &self,
+        other: &Factor<V, W>,
+    ) -> bool {
         if let Factor::Expression(_) = self {
             self == other
         } else if let Factor::Expression(_) = other {
