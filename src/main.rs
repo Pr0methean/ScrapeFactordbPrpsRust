@@ -1360,18 +1360,17 @@ async fn find_and_submit_factors(
         } = factor_finder
             .known_factors_as_digits::<&str, &str>(http, Id(id), false, true)
             .await;
+        if status == Some(FullyFactored) {
+            warn!("{id}: Already fully factored");
+            return true;
+        }
         root_status = status;
         match known_factors.len() {
             0 => {
-                if status == Some(FullyFactored) {
-                    warn!("{id}: Already fully factored");
-                    return true;
-                } else {
-                    add_factor_node(
-                        &mut divisibility_graph,
-                        &digits_or_expr.to_compact_string().into(),
-                    )
-                }
+                add_factor_node(
+                    &mut divisibility_graph,
+                    &digits_or_expr.to_compact_string().into(),
+                )
             }
             _ => {
                 let (root_node, _) = add_factor_node(
