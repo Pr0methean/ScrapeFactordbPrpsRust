@@ -1506,7 +1506,7 @@ async fn find_and_submit_factors(
         if factors_to_submit.is_empty() {
             return accepted_factors > 0;
         }
-        for (factor_vid, factor) in factors_to_submit {
+        'per_factor: for (factor_vid, factor) in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
             let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, false);
             let mut dest_factors = divisibility_graph
@@ -1631,8 +1631,12 @@ async fn find_and_submit_factors(
                 let dest_specifier = as_specifier(&ids, &dest_factor_vid, &dest_factor);
                 match try_report_factor(http, &dest_specifier, &factor).await {
                     AlreadyFullyFactored => {
+                        if dest_factor_vid == root_node {
+                            warn!("{id}: Already fully factored");
+                            return true;
+                        }
                         already_fully_factored.insert(dest_factor_vid);
-                        continue;
+                        continue 'per_factor;
                     }
                     Accepted => {
                         checked_for_known_factors_since_last_submission.remove(&dest_factor_vid);
@@ -1688,12 +1692,6 @@ async fn find_and_submit_factors(
                             )
                             .await;
                             if result.status.is_some() {
-                                if result.status == Some(FullyFactored)
-                                    && dest_factor_vid == root_node
-                                {
-                                    warn!("{id}: Already fully factored");
-                                    return true;
-                                }
                                 checked_for_known_factors_since_last_submission.insert(factor_vid);
                             }
                             if !result.factors.is_empty() {
