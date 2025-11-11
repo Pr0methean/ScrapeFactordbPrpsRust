@@ -1536,9 +1536,9 @@ async fn find_and_submit_factors(
                     continue;
                 }
 
-                // dest_factor can't be divisible by factor because factor is divisible by dest_factor
-                debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is divisible by {factor}");
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
+                    // dest_factor can't be divisible by factor because factor is divisible by dest_factor
+                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is a factor of {factor}");
                     add_edge_or_log(
                         &mut divisibility_graph,
                         &factor_vid,
