@@ -1532,6 +1532,18 @@ async fn find_and_submit_factors(
                 if edge_id.is_some() {
                     continue;
                 }
+                let reverse_edge_id = divisibility_graph.edge_id_any(&dest_factor_vid, &factor_vid);
+                if let Some(reverse_edge_id) = reverse_edge_id
+                    && divisibility_graph.edge(&reverse_edge_id) == Some(&true) {
+                    // dest can't be divisible by factor, because factor is divisible by dest
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &dest_factor_vid,
+                        false,
+                    );
+                    continue;
+                }
                 if dest_factor.unambiguously_less_or_equal(&factor) {
                     add_edge_or_log(
                         &mut divisibility_graph,
