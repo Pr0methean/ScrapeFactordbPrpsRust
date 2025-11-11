@@ -2074,6 +2074,7 @@ fn add_factor_node(
     }
 }
 
+#[framed]
 fn add_edge_or_log(
     graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     from_vid: &VertexId,
