@@ -1502,13 +1502,8 @@ async fn find_and_submit_factors(
                     factor_vid != dest.id
                         // Don't try to submit to a dest for which FactorDB already has a full factorization
                         && !already_fully_factored.contains(&dest.id)
-                        // Numbers that fit into a u128 are fully factored already
-                        // and elided numbers can only be used as dests if their IDs are known
-                        && dest.attr.as_str_non_u128().is_some_and(|expr| ids.contains_key(&dest.id) || !expr.contains("..."))
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                        && get_edge(&divisibility_graph, &factor_vid, &dest.id).is_none()
-                        // dest is a proper divisor of factor, so vice-versa is impossible
-                        && get_edge(&divisibility_graph, &dest.id, &factor_vid) != Some(true))
+                        && get_edge(&divisibility_graph, &factor_vid, &dest.id).is_none())
                 .map(|vertex| (vertex.id, vertex.attr.clone()))
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
@@ -1545,6 +1540,18 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
+                // u128s are already fully factored
+                if let Numeric(dest) = dest_factor {
+                    let divisible = if let Numeric(f) = factor {
+                        dest.is_multiple_of(f)
+                    } else {
+                        false
+                    };
+                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, divisible);
+                    add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, false);
+                    continue;
+                }
+                // dest_factor can't be divisible by factor because factor is divisible by dest_factor
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
                     add_edge_or_log(
                         &mut divisibility_graph,
@@ -1569,6 +1576,12 @@ async fn find_and_submit_factors(
                         &dest_factor_vid,
                         false,
                     );
+                    continue;
+                }
+                // elided numbers can only be used as dests if their IDs are known
+                // however, this doesn't affect the divisibility graph because the ID may be found
+                // later
+                if dest_factor.as_str_non_u128().is_some_and(|expr| expr.contains("...")) {
                     continue;
                 }
                 let dest_specifier = as_specifier(&ids, &dest_factor_vid, &dest_factor);
