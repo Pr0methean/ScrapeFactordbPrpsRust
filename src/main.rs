@@ -1355,7 +1355,7 @@ async fn find_and_submit_factors(
                         let (factor_vid, added) =
                             add_factor_node(&mut divisibility_graph, &known_factor);
                         if added {
-                            divisibility_graph.add_edge(&factor_vid, &root_node, true);
+                            add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, true);
                         } else {
                             warn!("{id}: Tried to add a duplicate node: {known_factor}");
                         }
@@ -1420,10 +1420,10 @@ async fn find_and_submit_factors(
             Accepted => {
                 checked_for_known_factors_since_last_submission.remove(&root_node);
                 accepted_factors += 1;
-                divisibility_graph.add_edge(&factor_vid, &root_node, true);
+                add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, true);
             }
             DoesNotDivide => {
-                divisibility_graph.add_edge(&factor_vid, &root_node, false);
+                add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, false);
                 if already_checked_for_algebraic.insert(factor_vid) {
                     any_failed_retryably |= add_algebraic_factors_to_graph(
                         http,
@@ -1501,8 +1501,8 @@ async fn find_and_submit_factors(
                 if shortest_paths.dist(dest_factor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
-                    divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, true);
-                    divisibility_graph.add_edge(&dest_factor_vid, &factor_vid, false);
+                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
+                    add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, false);
                     continue;
                 }
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
@@ -1510,11 +1510,11 @@ async fn find_and_submit_factors(
                     continue;
                 }
                 if dest_factor.unambiguously_less_or_equal(&factor) {
-                    divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, false);
+                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
                     continue;
                 }
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
-                    divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, false);
+                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
                     continue;
                 }
                 let shortest_path_from_dest = ShortestPaths::on(&divisibility_graph)
@@ -1525,8 +1525,8 @@ async fn find_and_submit_factors(
                     .and_then(|paths| paths.dist(factor_vid).copied());
                 if shortest_path_from_dest == Some(0) {
                     // dest_factor is transitively divisible by factor
-                    divisibility_graph.add_edge(&dest_factor_vid, &factor_vid, true);
-                    divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, false);
+                    add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, true);
+                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
                     continue;
                 }
                 let dest_specifier = if let Some(dest_id) = ids.get(&dest_factor_vid) {
@@ -1544,13 +1544,13 @@ async fn find_and_submit_factors(
                         checked_for_known_factors_since_last_submission.remove(&root_node);
                         accepted_factors += 1;
                         iters_without_progress = 0;
-                        divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, true);
+                        add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
                         let _ =
                             divisibility_graph.try_add_edge(&dest_factor_vid, &factor_vid, false);
                     }
                     DoesNotDivide => {
                         iters_without_progress = 0;
-                        divisibility_graph.add_edge(&factor_vid, &dest_factor_vid, false);
+                        add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
                         if already_checked_for_algebraic.insert(factor_vid) {
                             add_algebraic_factors_to_graph(
                                 http,
@@ -1771,7 +1771,7 @@ fn upsert_edge<F: FnOnce(Option<bool>) -> bool>(
             );
         }
         None => {
-            divisibility_graph.add_edge(from_vid, to_vid, new_value_fn(None));
+            add_edge_or_log(divisibility_graph, from_vid, to_vid, new_value_fn(None));
         }
     }
 }
@@ -1971,5 +1971,13 @@ fn add_factor_node(
     match divisibility_graph.find_vertex(factor) {
         Some(id) => (id, false),
         None => (divisibility_graph.add_vertex(factor.clone()), true),
+    }
+}
+
+fn add_edge_or_log(graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    from_vid: &VertexId, to_vid: &VertexId, value: bool) {
+    if let Err(e) = graph.try_add_edge(&from_vid, &to_vid, value) {
+        error!("Error adding edge: {e}");
+        async_backtrace::taskdump_tree(false);
     }
 }
