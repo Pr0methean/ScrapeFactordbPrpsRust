@@ -1785,6 +1785,20 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
         .await;
     if status == Some(FullyFactored) {
         already_fully_factored.insert(root_vid);
+        let mut dest_subfactors_set = BTreeSet::new();
+        dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
+        let vertices = divisibility_graph.vertices()
+            .map(|vertex| (vertex.id, dest_subfactors_set.contains(&vertex.attr.as_ref())))
+            .collect::<Box<[_]>>();
+        for (vertex_id, divisible) in vertices {
+            if vertex_id == root_vid {
+                continue;
+            }
+            let _ = divisibility_graph.try_add_edge(&vertex_id, &root_vid, divisible);
+            if divisible {
+                let _ = divisibility_graph.try_add_edge(&root_vid, &vertex_id, false);
+            }
+        }
     }
     let len = dest_subfactors.len();
     let all_added = match len {
