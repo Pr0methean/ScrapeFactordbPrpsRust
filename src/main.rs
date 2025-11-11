@@ -1679,7 +1679,7 @@ async fn find_and_submit_factors(
 }
 
 fn as_specifier<'a>(ids: &BTreeMap<VertexId, u128>, factor_vid: &VertexId, factor: &'a Factor<Arc<str>, CompactString>) -> NumberSpecifier<&'a str,&'a str> {
-    if let Some(factor_entry_id) = ids.get(&factor_vid) {
+    if let Some(factor_entry_id) = ids.get(factor_vid) {
         Id(*factor_entry_id)
     } else if let Numeric(n) = factor && *n <= MAX_ID_EQUAL_TO_VALUE {
         Id(*n)
@@ -1989,8 +1989,8 @@ fn add_factor_node(
 
 fn add_edge_or_log(graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     from_vid: &VertexId, to_vid: &VertexId, value: bool) {
-    if let Err(e) = graph.try_add_edge(&from_vid, &to_vid, value) {
-        error!("Error adding edge: {e}");
-        async_backtrace::taskdump_tree(false);
+    if let Err(e) = graph.try_add_edge(from_vid, to_vid, value) {
+        error!("Error adding edge: {e}\n{}",
+          async_backtrace::taskdump_tree(false));
     }
 }
