@@ -1458,6 +1458,7 @@ async fn find_and_submit_factors(
                 // factors and then we'll submit those instead.
                 add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, false);
                 if already_checked_for_algebraic.insert(factor_vid) {
+                    debug!("{id}: Searching for algebraic factors of {factor}");
                     any_failed_retryably |= add_algebraic_factors_to_graph(
                         http,
                         ids.get(&factor_vid).copied(),
@@ -1587,12 +1588,14 @@ async fn find_and_submit_factors(
                         &dest_factor_vid,
                         divisible,
                     );
-                    add_edge_or_log(
-                        &mut divisibility_graph,
-                        &dest_factor_vid,
-                        &factor_vid,
-                        false,
-                    );
+                    if divisible {
+                        add_edge_or_log(
+                            &mut divisibility_graph,
+                            &dest_factor_vid,
+                            &factor_vid,
+                            false,
+                        );
+                    }
                     continue;
                 }
 
@@ -1603,7 +1606,7 @@ async fn find_and_submit_factors(
                     .ok()
                     .and_then(|paths| paths.dist(factor_vid).copied());
                 if shortest_path_from_dest == Some(0) {
-                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is transitively divisible by {factor}");
+                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is transitively a factor of {factor}");
                     // dest_factor is transitively divisible by factor
                     add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, true);
                     add_edge_or_log(
