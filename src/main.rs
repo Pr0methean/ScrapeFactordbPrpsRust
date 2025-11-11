@@ -44,6 +44,7 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::cmp::PartialEq;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
@@ -52,12 +53,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
-use std::{fmt, panic};
-use std::borrow::Cow;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::{fmt, panic};
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -212,7 +212,7 @@ async fn check_composite(
     let ProcessedStatusApiResponse {
         factors, status, ..
     } = factor_finder
-        .known_factors_as_digits::<&str,&str>(http, Id(id), false, true)
+        .known_factors_as_digits::<&str, &str>(http, Id(id), false, true)
         .await;
     if factors.is_empty() {
         if status == Some(FullyFactored) {
@@ -282,7 +282,7 @@ enum NumberSpecifier<T: AsRef<str>, U: AsRef<str>> {
     Expression(Factor<T, U>),
 }
 
-impl <T: AsRef<str>,U: AsRef<str>> Display for NumberSpecifier<T,U> {
+impl<T: AsRef<str>, U: AsRef<str>> Display for NumberSpecifier<T, U> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Id(id) => write!(f, "ID {}", id),
@@ -335,7 +335,7 @@ async fn get_prp_remaining_bases(
             factors: nm1_factors,
             ..
         } = factor_finder
-            .known_factors_as_digits::<&str,&str>(http, Id(nm1_id), false, false)
+            .known_factors_as_digits::<&str, &str>(http, Id(nm1_id), false, false)
             .await;
         match nm1_factors.len() {
             0 => {
@@ -362,7 +362,7 @@ async fn get_prp_remaining_bases(
             factors: np1_factors,
             ..
         } = factor_finder
-            .known_factors_as_digits::<&str,&str>(http, Id(np1_id), false, false)
+            .known_factors_as_digits::<&str, &str>(http, Id(np1_id), false, false)
             .await;
         match np1_factors.len() {
             0 => {
@@ -385,7 +385,7 @@ async fn get_prp_remaining_bases(
         && !nm1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N-1 must be even
-        match report_factor::<&str,&str>(http, nm1_id, &Numeric(2)).await {
+        match report_factor::<&str, &str>(http, nm1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
@@ -401,7 +401,7 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N+1 must be even
-        match report_factor::<&str,&str>(http, np1_id, &Numeric(2)).await {
+        match report_factor::<&str, &str>(http, np1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                 prove_by_np1(id, http).await;
@@ -419,14 +419,14 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_3
     {
         // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-        match report_factor::<&str,&str>(http, nm1_id, &Numeric(3)).await {
+        match report_factor::<&str, &str>(http, nm1_id, &Numeric(3)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
                 return Ok(U256::from(0));
             }
             Accepted => {}
-            _ => match report_factor::<&str,&str>(http, np1_id, &Numeric(3)).await {
+            _ => match report_factor::<&str, &str>(http, np1_id, &Numeric(3)).await {
                 AlreadyFullyFactored => {
                     info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                     prove_by_np1(id, http).await;
@@ -1247,9 +1247,14 @@ enum ReportFactorResult {
 }
 
 #[framed]
-async fn try_report_factor<T: AsRef<str>, U: AsRef<str> + Display, V: AsRef<str>, W: AsRef<str> + Display>(
+async fn try_report_factor<
+    T: AsRef<str>,
+    U: AsRef<str> + Display,
+    V: AsRef<str>,
+    W: AsRef<str> + Display,
+>(
     http: &ThrottlingHttpClient,
-    u_id: &NumberSpecifier<T,U>,
+    u_id: &NumberSpecifier<T, U>,
     factor: &Factor<V, W>,
 ) -> ReportFactorResult {
     let number = if let Expression(expr) = u_id {
@@ -1302,7 +1307,7 @@ async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
     factor: &Factor<T, U>,
 ) -> ReportFactorResult {
     for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-        let result = try_report_factor::<&str,&str,T,U>(http, &Id(u_id), factor).await;
+        let result = try_report_factor::<&str, &str, T, U>(http, &Id(u_id), factor).await;
         if result != OtherError {
             return result;
         }
@@ -1312,7 +1317,7 @@ async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
         .unwrap()
         .lock()
         .await
-        .write_fmt(format_args!("{u_id},{}\n",factor.as_str()))
+        .write_fmt(format_args!("{u_id},{}\n", factor.as_str()))
     {
         Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
         Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
@@ -1348,7 +1353,7 @@ async fn find_and_submit_factors(
             status,
             ..
         } = factor_finder
-            .known_factors_as_digits::<&str,&str>(http, Id(id), false, true)
+            .known_factors_as_digits::<&str, &str>(http, Id(id), false, true)
             .await;
         root_status = status;
         match known_factors.len() {
@@ -1434,7 +1439,7 @@ async fn find_and_submit_factors(
         if get_edge(&divisibility_graph, &factor_vid, &root_node) == Some(true) {
             continue;
         }
-        match try_report_factor::<&str,&str,_,_>(http, &Id(id), &factor).await {
+        match try_report_factor::<&str, &str, _, _>(http, &Id(id), &factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
                 checked_for_known_factors_since_last_submission.remove(&root_node);
@@ -1521,7 +1526,12 @@ async fn find_and_submit_factors(
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
                     add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
-                    add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, false);
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &dest_factor_vid,
+                        &factor_vid,
+                        false,
+                    );
                     continue;
                 }
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
@@ -1529,11 +1539,21 @@ async fn find_and_submit_factors(
                     continue;
                 }
                 if dest_factor.unambiguously_less_or_equal(&factor) {
-                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &dest_factor_vid,
+                        false,
+                    );
                     continue;
                 }
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
-                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &dest_factor_vid,
+                        false,
+                    );
                     continue;
                 }
                 let shortest_path_from_dest = ShortestPaths::on(&divisibility_graph)
@@ -1545,7 +1565,12 @@ async fn find_and_submit_factors(
                 if shortest_path_from_dest == Some(0) {
                     // dest_factor is transitively divisible by factor
                     add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, true);
-                    add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
+                    add_edge_or_log(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &dest_factor_vid,
+                        false,
+                    );
                     continue;
                 }
                 let dest_specifier = as_specifier(&ids, &dest_factor_vid, &dest_factor);
@@ -1559,13 +1584,23 @@ async fn find_and_submit_factors(
                         checked_for_known_factors_since_last_submission.remove(&root_node);
                         accepted_factors += 1;
                         iters_without_progress = 0;
-                        add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
+                        add_edge_or_log(
+                            &mut divisibility_graph,
+                            &factor_vid,
+                            &dest_factor_vid,
+                            true,
+                        );
                         let _ =
                             divisibility_graph.try_add_edge(&dest_factor_vid, &factor_vid, false);
                     }
                     DoesNotDivide => {
                         iters_without_progress = 0;
-                        add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, false);
+                        add_edge_or_log(
+                            &mut divisibility_graph,
+                            &factor_vid,
+                            &dest_factor_vid,
+                            false,
+                        );
                         if already_checked_for_algebraic.insert(factor_vid) {
                             add_algebraic_factors_to_graph(
                                 http,
@@ -1584,8 +1619,7 @@ async fn find_and_submit_factors(
                         } else if !checked_for_known_factors_since_last_submission
                             .contains(&factor_vid)
                         {
-                            let factor_specifier =
-                                as_specifier(&ids, &factor_vid, &factor);
+                            let factor_specifier = as_specifier(&ids, &factor_vid, &factor);
                             let result = add_known_factors_to_graph(
                                 http,
                                 factor_finder,
@@ -1678,10 +1712,16 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn as_specifier<'a>(ids: &BTreeMap<VertexId, u128>, factor_vid: &VertexId, factor: &'a Factor<Arc<str>, CompactString>) -> NumberSpecifier<&'a str,&'a str> {
+fn as_specifier<'a>(
+    ids: &BTreeMap<VertexId, u128>,
+    factor_vid: &VertexId,
+    factor: &'a Factor<Arc<str>, CompactString>,
+) -> NumberSpecifier<&'a str, &'a str> {
     if let Some(factor_entry_id) = ids.get(factor_vid) {
         Id(*factor_entry_id)
-    } else if let Numeric(n) = factor && *n <= MAX_ID_EQUAL_TO_VALUE {
+    } else if let Numeric(n) = factor
+        && *n <= MAX_ID_EQUAL_TO_VALUE
+    {
         Id(*n)
     } else {
         Expression(factor.as_ref())
@@ -1695,7 +1735,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
     divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
     already_fully_factored: &mut BTreeSet<VertexId>,
     root_vid: VertexId,
-    root_specifier: NumberSpecifier<T,U>,
+    root_specifier: NumberSpecifier<T, U>,
     include_ff: bool,
     root: &Factor<V, W>,
 ) -> ProcessedStatusApiResponse {
@@ -1894,13 +1934,14 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                             "{id}: Algebraic factor with ID {factor_entry_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                         );
                         if !checked_for_known_factors_since_last_submission.contains(&factor_vid) {
-                            let factor_specifier =
-                                if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
-                                    Id(factor_entry_id)
-                                } else {
-                                    let (factor_vid, _) = add_factor_node(divisibility_graph, &factor);
-                                    as_specifier(ids, &factor_vid, &factor)
-                                };
+                            let factor_specifier = if let Ok(factor_entry_id) =
+                                factor_entry_id.parse::<u128>()
+                            {
+                                Id(factor_entry_id)
+                            } else {
+                                let (factor_vid, _) = add_factor_node(divisibility_graph, &factor);
+                                as_specifier(ids, &factor_vid, &factor)
+                            };
                             let result = add_known_factors_to_graph(
                                 http,
                                 factor_finder,
@@ -1987,10 +2028,16 @@ fn add_factor_node(
     }
 }
 
-fn add_edge_or_log(graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
-    from_vid: &VertexId, to_vid: &VertexId, value: bool) {
+fn add_edge_or_log(
+    graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    from_vid: &VertexId,
+    to_vid: &VertexId,
+    value: bool,
+) {
     if let Err(e) = graph.try_add_edge(from_vid, to_vid, value) {
-        error!("Error adding edge: {e}\n{}",
-          async_backtrace::taskdump_tree(false));
+        error!(
+            "Error adding edge: {e}\n{}",
+            async_backtrace::taskdump_tree(false)
+        );
     }
 }

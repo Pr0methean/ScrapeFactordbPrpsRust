@@ -3,7 +3,7 @@ use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, UnfactoredComposite, Unknown,
 };
 use crate::net::ThrottlingHttpClient;
-use crate::{write_bignum, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
+use crate::{NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY, write_bignum};
 use async_backtrace::framed;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
@@ -16,8 +16,8 @@ use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexBuilder, RegexSet};
 use serde_json::from_str;
-use std::borrow::{Borrow, Cow};
 use std::borrow::Cow::{Borrowed, Owned};
+use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -562,7 +562,7 @@ pub enum Factor<T, U> {
     Expression(U),
 }
 
-impl <T: AsRef<str>, U: AsRef<str>> Hash for Factor<T,U> {
+impl<T: AsRef<str>, U: AsRef<str>> Hash for Factor<T, U> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
             Numeric(n) => n.hash(state),
@@ -624,7 +624,7 @@ impl<T: Display, U: Display> From<Factor<T, U>> for CompactString {
         match val {
             Numeric(n) => n.to_compact_string(),
             Factor::BigNumber(n) => n.to_compact_string(),
-            Factor::Expression(e) => e.to_compact_string()
+            Factor::Expression(e) => e.to_compact_string(),
         }
     }
 }
@@ -762,7 +762,7 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         match self {
             Numeric(n) => Numeric(*n),
             Factor::BigNumber(s) => Factor::BigNumber(s.as_ref()),
-            Factor::Expression(s) => Factor::Expression(s.as_ref())
+            Factor::Expression(s) => Factor::Expression(s.as_ref()),
         }
     }
 
@@ -1503,8 +1503,7 @@ impl FactorFinder {
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
-        if let NumberSpecifier::Expression(Numeric(n)) = id
-        {
+        if let NumberSpecifier::Expression(Numeric(n)) = id {
             return ProcessedStatusApiResponse {
                 status: Some(FullyFactored),
                 factors: Self::find_factors_of_u128(n).into_boxed_slice(),
