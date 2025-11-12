@@ -1423,7 +1423,7 @@ async fn find_and_submit_factors(
     {
         if let Some(expr) = factor.as_str_non_u128()
             && (expr.len() > MAX_EXPR_LEN || expr.contains("..."))
-            && !(ids.contains_key(&factor_vid))
+            && !ids.contains_key(&factor_vid)
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
@@ -1558,8 +1558,10 @@ async fn find_and_submit_factors(
                         "{id}: Skipping submission of {factor} to {dest_factor} because it's already transitively known"
                     );
                     add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
-                    add_edge_or_log(
-                        &mut divisibility_graph,
+
+                    // This reverse edge may already exist, because we only checked for a *true* one
+                    // above
+                    let _ = divisibility_graph.try_add_edge(
                         &dest_factor_vid,
                         &factor_vid,
                         false,
