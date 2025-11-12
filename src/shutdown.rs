@@ -1,13 +1,13 @@
 // Adapted from: https://github.com/tokio-rs/mini-redis/blob/e186482ca00f8d884ddcbe20417f3654d03315a4/src/shutdown.rs
 
+use async_backtrace::framed;
+use log::{error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use tokio::sync::{broadcast, oneshot};
-use tokio::sync::broadcast::{channel, Sender};
-use async_backtrace::framed;
 use tokio::signal::ctrl_c;
-use log::{error, info, warn};
+use tokio::sync::broadcast::{Sender, channel};
+use tokio::sync::{broadcast, oneshot};
 use tokio::{select, signal};
 
 /// Listens for the server shutdown signal.
@@ -80,10 +80,7 @@ impl Clone for Shutdown {
 }
 
 #[framed]
-pub async fn handle_signals(
-    shutdown_sender: Sender<()>,
-    installed_sender: oneshot::Sender<()>,
-) {
+pub async fn handle_signals(shutdown_sender: Sender<()>, installed_sender: oneshot::Sender<()>) {
     let sigint = ctrl_c();
     info!("Signal handlers installed");
     installed_sender
