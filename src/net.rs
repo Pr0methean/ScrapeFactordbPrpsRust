@@ -1,3 +1,4 @@
+use std::mem::swap;
 use crate::shutdown::Shutdown;
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use anyhow::Error;
@@ -16,7 +17,9 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use arcstr::{literal, ArcStr};
+use curl::easy::{Easy2, Handler, WriteError};
+use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 
 pub const MAX_RETRIES: usize = 40;
@@ -24,6 +27,25 @@ const MAX_RETRIES_WITH_FALLBACK: usize = 10;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const E2E_TIMEOUT: Duration = Duration::from_secs(60);
+
+const REQWEST_MAX_URL_LEN: usize = (u16::MAX - 1) as usize;
+
+struct Collector(Vec<u8>);
+
+impl Handler for Collector {
+    fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
+        self.0.extend_from_slice(data);
+        Ok(data.len())
+    }
+}
+
+impl Collector {
+    fn take_all(&mut self) -> Vec<u8> {
+        let mut out = Vec::new();
+        swap(&mut self.0, &mut out);
+        out
+    }
+}
 
 #[derive(Clone)]
 pub struct ThrottlingHttpClient {
@@ -35,6 +57,7 @@ pub struct ThrottlingHttpClient {
     request_semaphore: Arc<Semaphore>,
     all_threads_blocked_until: Arc<AtomicInstant>,
     shutdown_receiver: Shutdown,
+    curl_client: Arc<Mutex<Easy2<Collector>>>,
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -108,6 +131,7 @@ impl ThrottlingHttpClient {
             request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
             all_threads_blocked_until: AtomicInstant::now().into(),
             shutdown_receiver,
+            curl_client: Mutex::new(Easy2::new(Collector(Vec::new()))).into()
         }
     }
 
@@ -165,9 +189,9 @@ impl ThrottlingHttpClient {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     #[framed]
-    pub async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
+    pub async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str> {
         for _ in 0..MAX_RETRIES {
-            if let Some(value) = self.try_get_and_decode(url).await {
+            if let Some(value) = self.try_get_and_decode(url.clone()).await {
                 return value;
             }
             sleep(retry_delay).await;
@@ -188,56 +212,74 @@ impl ThrottlingHttpClient {
     #[framed]
     pub async fn retrying_get_and_decode_or(
         &self,
-        url: &str,
+        url: ArcStr,
         retry_delay: Duration,
-        alt_url_supplier: impl FnOnce() -> String,
+        alt_url_supplier: impl FnOnce() -> ArcStr,
     ) -> Result<Box<str>, Box<str>> {
         for _ in 0..MAX_RETRIES_WITH_FALLBACK {
-            if let Some(value) = self.try_get_and_decode(url).await {
+            if let Some(value) = self.try_get_and_decode(url.clone()).await {
                 return Ok(value);
             }
             sleep(retry_delay).await;
         }
         let alt_url = alt_url_supplier.call_once(());
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
-        Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
+        Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
     }
 
     #[framed]
-    async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
+    async fn try_get_and_decode_core(&self, url: ArcStr) -> Option<Box<str>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
-        let result = self
-            .http
-            .get(url)
-            .header("Referer", "https://factordb.com")
-            .send()
-            .await;
+        let result = if url.len() > REQWEST_MAX_URL_LEN {
+            // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
+            // spawn_blocking
+            let mut curl = self.curl_client.lock().await;
+            let url = url.clone();
+            let response_text = curl.get(true)
+                .and_then(|_| curl.url(&url))
+                .and_then(|_| curl.perform())
+                .map_err(anyhow::Error::from)
+                .and_then(|_| {
+                    let response_code = curl.response_code()?;
+                    if response_code != 200 {
+                        error!("Error reading {url}: HTTP response code {response_code}")
+                    }
+                    Ok(String::from_utf8(curl.get_mut().take_all())?)
+                }).map_err(anyhow::Error::from);
+            drop(curl);
+            response_text
+        } else {
+            let result = self
+                    .http
+                    .get(url.as_str())
+                    .header("Referer", "https://factordb.com")
+                    .send()
+                    .await;
+            match result {
+                Ok(response) => response.text().await,
+                Err(e) => Err(e)
+            }.map_err(|e| anyhow::Error::from(e.without_url()))
+        };
         drop(permit);
         match result {
-            Err(http_error) => {
-                error!("Error reading {url}: {}", http_error.without_url());
+            Err(e) => {
+                error!("Error reading {url}: {e}");
                 None
             }
-            Ok(response) => match response.text().await {
-                Err(decoding_error) => {
-                    error!("Error reading {url}: {}", decoding_error.without_url());
+            Ok(text) => {
+                if text.contains("502 Proxy Error") {
+                    error!("502 error from {url}");
                     None
+                } else {
+                    Some(text.into_boxed_str())
                 }
-                Ok(text) => {
-                    if text.contains("502 Proxy Error") {
-                        error!("502 error from {url}");
-                        None
-                    } else {
-                        Some(text.into_boxed_str())
-                    }
-                }
-            },
+            }
         }
     }
 
     #[framed]
-    pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
+    pub async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
         let mut temp_bases = usize::MAX;
@@ -268,7 +310,7 @@ impl ThrottlingHttpClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits> {
         let response = self
-            .try_get_and_decode_core("https://factordb.com/res.php")
+            .try_get_and_decode_core(literal!("https://factordb.com/res.php"))
             .await?;
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
             .await

@@ -26,7 +26,7 @@ use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use async_backtrace::framed;
 use channel::PushbackReceiver;
-use compact_str::{CompactString, ToCompactString};
+use compact_str::{CompactString};
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
 use gryf::algo::ShortestPaths;
@@ -55,9 +55,9 @@ use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
-use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use arcstr::ArcStr;
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -65,7 +65,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
-type DivisibilityGraph = AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>;
+type DivisibilityGraph = AdjMatrix<Factor<ArcStr, CompactString>, bool, Directed, DefaultId>;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -133,8 +133,8 @@ impl Hash for CompositeCheckTask {
 #[derive(Debug, Deserialize, Serialize)]
 struct NumberStatusApiResponse {
     id: Value,
-    status: CompactString,
-    factors: Box<[(CompactString, u128)]>,
+    status: Box<str>,
+    factors: Box<[(Box<str>, u128)]>,
 }
 
 #[derive(Serialize)]
@@ -199,7 +199,7 @@ async fn check_composite(
         return true;
     }
     let checks_triggered = if http
-        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}"))
+        .try_get_and_decode(format!("https://factordb.com/sequences.php?check={id}").into())
         .await
         .is_some()
     {
@@ -315,7 +315,7 @@ async fn get_prp_remaining_bases(
     let mut bases_left = U256::MAX - 3;
     let bases_text = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/frame_prime.php?id={id}"),
+            format!("https://factordb.com/frame_prime.php?id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -444,7 +444,7 @@ async fn get_prp_remaining_bases(
     }
     let status_text = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}"),
+            format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -495,7 +495,7 @@ async fn get_prp_remaining_bases(
 async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
+            format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -505,7 +505,7 @@ async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
 async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+            format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -606,11 +606,9 @@ async fn do_checks(
                     if bases_left == U256::from(0) {
                         continue;
                     }
-                    let url_base =
-                        format!("https://factordb.com/index.php?id={id}&open=prime&basetocheck=");
                     for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                        let url = format!("{url_base}{base}");
-                        let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                        let url = ArcStr::from(format!("https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"));
+                        let text = http.retrying_get_and_decode(url.clone(), RETRY_DELAY).await;
                         if !text.contains(">number<") {
                             error!("Failed to decode result from {url}: {text}");
                             task_return_permit.send(CheckTask { id, task_type });
@@ -707,8 +705,8 @@ async fn try_handle_unknown(
     id: u128,
     next_attempt: &mut Instant,
 ) -> UnknownPrpCheckResult {
-    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+    let url = ArcStr::from(format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker"));
+    let result = http.retrying_get_and_decode(url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
         match status.get(1) {
             None => {
@@ -860,7 +858,7 @@ async fn queue_composites(
     let mut composites_page = None;
     while composites_page.is_none() && results_per_page > 0 {
         composites_page = http.try_get_and_decode(
-            &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}")
+            format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}").into()
         ).await;
         if composites_page.is_none() {
             results_per_page >>= 1;
@@ -1058,8 +1056,8 @@ async fn main() -> anyhow::Result<()> {
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
                 let mut results_text = None;
                 while results_text.is_none() && results_per_page > 0 {
-                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}");
-                    let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
+                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}").into();
+                    let Some(text) = http.try_get_and_decode(prp_search_url).await else {
                         sleep(SEARCH_RETRY_DELAY).await;
                         results_per_page >>= 1;
                         continue;
@@ -1155,8 +1153,8 @@ async fn try_queue_unknowns<'a>(
             .unwrap()
     });
     let u_start = rng.random_range(0..=MAX_START);
-    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get());
-    let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
+    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
+    let Some(results_text) = http.try_get_and_decode(u_search_url).await else {
         return Err(u_permits);
     };
     info!("U search results retrieved");
@@ -1321,8 +1319,6 @@ async fn find_and_submit_factors(
     skip_looking_up_known: bool,
     skip_looking_up_listed_algebraic: bool,
 ) -> bool {
-    // Factors must fit inside a URL, and hyper limits URLs to 65534 bytes
-    const MAX_EXPR_LEN: usize = 65500;
     let mut digits_or_expr_full = Vec::new();
     let mut divisibility_graph = AdjMatrix::new();
     let mut ids = BTreeMap::new();
@@ -1331,7 +1327,7 @@ async fn find_and_submit_factors(
     let (root_node, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
         add_factor_node(
             &mut divisibility_graph,
-            &digits_or_expr.to_compact_string().into(),
+            &digits_or_expr.into(),
         )
     } else {
         let ProcessedStatusApiResponse {
@@ -1349,7 +1345,7 @@ async fn find_and_submit_factors(
         match known_factors.len() {
             0 => add_factor_node(
                 &mut divisibility_graph,
-                &digits_or_expr.to_compact_string().into(),
+                &digits_or_expr.into(),
             ),
             _ => {
                 let (root_node, _) = add_factor_node(
@@ -1421,8 +1417,7 @@ async fn find_and_submit_factors(
         .into_iter()
         .rev()
     {
-        if let Some(expr) = factor.as_str_non_u128()
-            && (expr.len() > MAX_EXPR_LEN || expr.contains("..."))
+        if factor.as_str_non_u128().is_some_and(|expr| expr.contains("..."))
             && !ids.contains_key(&factor_vid)
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
@@ -1502,8 +1497,7 @@ async fn find_and_submit_factors(
             // be submitted as factors, even if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
             // later
-            if let Some(expr) = factor.as_str_non_u128()
-                && (expr.len() > MAX_EXPR_LEN || expr.contains("...")) {
+            if factor.as_str_non_u128().is_some_and(|expr| expr.contains("...")) {
                 continue;
             }
 
@@ -1635,7 +1629,7 @@ async fn find_and_submit_factors(
                 // later
                 if dest_factor
                     .as_str_non_u128()
-                    .is_some_and(|expr| expr.contains("...") || expr.len() > MAX_EXPR_LEN)
+                    .is_some_and(|expr| expr.contains("..."))
                     && !ids.contains_key(&dest_factor_vid)
                 {
                     debug!(
@@ -1771,8 +1765,7 @@ async fn find_and_submit_factors(
         if factor_vid == root_node {
             continue;
         }
-        if let Some(expr) = factor.as_str_non_u128()
-            && expr.contains("...")
+        if factor.as_str_non_u128().is_some_and(|expr| expr.contains("..."))
         {
             debug!(
                 "{id}: Skipping writing {factor} to failed-submission file because we don't know its specifier"
@@ -1809,7 +1802,7 @@ async fn find_and_submit_factors(
 fn as_specifier<'a>(
     ids: &BTreeMap<VertexId, u128>,
     factor_vid: &VertexId,
-    factor: &'a Factor<Arc<str>, CompactString>,
+    factor: &'a Factor<ArcStr, CompactString>,
 ) -> NumberSpecifier<&'a str, &'a str> {
     if let Some(factor_entry_id) = ids.get(factor_vid) {
         Id(*factor_entry_id)
@@ -1997,7 +1990,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     checked_for_known_factors_since_last_submission: &mut BTreeSet<VertexId>,
 ) -> bool {
     let mut any_added = false;
-    let mut parseable_factors: BTreeSet<Factor<Arc<str>, CompactString>> = BTreeSet::new();
+    let mut parseable_factors: BTreeSet<Factor<ArcStr, CompactString>> = BTreeSet::new();
     if !skip_looking_up_listed_algebraic && root.as_str_non_u128().is_some() {
         parseable_factors.insert(Factor::from(root));
         let id = match id {
@@ -2032,8 +2025,8 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
             } else {
                 info!("{id}: Checking for listed algebraic factors");
                 // Links before the "Is factor of" header are algebraic factors; links after it aren't
-                let url = format!("https://factordb.com/frame_moreinfo.php?id={id}");
-                let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into();
+                let result = http.retrying_get_and_decode(url, RETRY_DELAY).await;
                 if let Some(listed_algebraic) = result.split("Is factor of").next() {
                     let algebraic_factors = id_and_expr_regex.captures_iter(listed_algebraic);
                     for factor_captures in algebraic_factors {
@@ -2128,7 +2121,7 @@ fn get_edge<T>(
 
 fn add_factor_node(
     divisibility_graph: &mut DivisibilityGraph,
-    factor: &Factor<Arc<str>, CompactString>,
+    factor: &Factor<ArcStr, CompactString>,
 ) -> (VertexId, bool) {
     match divisibility_graph.find_vertex(factor) {
         Some(id) => (id, false),
