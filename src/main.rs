@@ -1666,7 +1666,6 @@ async fn find_and_submit_factors(
                     }
                     Accepted => {
                         checked_for_known_factors_since_last_submission.remove(&dest_factor_vid);
-                        checked_for_known_factors_since_last_submission.remove(&root_node);
                         accepted_factors += 1;
                         iters_without_progress = 0;
                         add_edge_or_log(
@@ -1677,6 +1676,7 @@ async fn find_and_submit_factors(
                         );
                         let _ =
                             divisibility_graph.try_add_edge(&dest_factor_vid, &factor_vid, NotFactor);
+                        propagate_divisibility(&mut divisibility_graph, &factor_vid, &dest_factor_vid);
                     }
                     DoesNotDivide => {
                         rule_out_divisibility(&mut divisibility_graph, &factor_vid, &dest_factor_vid);
@@ -1832,6 +1832,29 @@ fn rule_out_divisibility(divisibility_graph: &mut DivisibilityGraph, nonfactor: 
         }
     }
 }
+
+fn propagate_divisibility(divisibility_graph: &mut DivisibilityGraph, factor: &VertexId, dest: &VertexId) {
+    for (neighbor, edge) in divisibility_graph
+        .neighbors_directed(dest, Outgoing)
+        .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
+        .collect::<Box<[_]>>()
+        .into_iter() {
+        match divisibility_graph.edge(&edge) {
+            Some(TransitiveFactor) | Some(DirectFactor) => {
+                let _ = divisibility_graph.try_add_edge(&neighbor, factor, NotFactor);
+                // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
+                if divisibility_graph.try_add_edge(factor, &neighbor, TransitiveFactor).is_ok() {
+                    debug!("Adding {} as a transitive factor of {}",
+                        divisibility_graph.vertex(factor).unwrap(),
+                        divisibility_graph.vertex(&neighbor).unwrap());
+                    propagate_divisibility(divisibility_graph, factor, &neighbor);
+                };
+            }
+            _ => {}
+        }
+    }
+}
+
 
 fn as_specifier<'a>(
     ids: &BTreeMap<VertexId, u128>,
