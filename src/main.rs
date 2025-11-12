@@ -67,6 +67,8 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
+type DivisibilityGraph = AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>;
+
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
@@ -1827,7 +1829,7 @@ fn as_specifier<'a>(
 async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str>>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut DivisibilityGraph,
     root_vid: VertexId,
     root_specifier: NumberSpecifier<T, U>,
     include_ff: bool,
@@ -1923,7 +1925,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
 }
 
 fn upsert_edge<F: FnOnce(Option<bool>) -> bool>(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut DivisibilityGraph,
     from_vid: &VertexId,
     to_vid: &VertexId,
     new_value_fn: F,
@@ -1942,7 +1944,7 @@ fn upsert_edge<F: FnOnce(Option<bool>) -> bool>(
 }
 
 fn copy_edges_true_overrides_false(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut DivisibilityGraph,
     new_vertex: &VertexId,
     out_edges: Box<[(VertexId, bool)]>,
     in_edges: Box<[(VertexId, bool)]>,
@@ -1968,7 +1970,7 @@ fn copy_edges_true_overrides_false(
 }
 
 fn neighbors_with_edge_weights(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut DivisibilityGraph,
     root_vid: &VertexId,
     direction: Direction,
 ) -> Box<[(VertexId, bool)]> {
@@ -1990,7 +1992,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     factor_finder: &FactorFinder,
     id_and_expr_regex: &Regex,
     skip_looking_up_listed_algebraic: bool,
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut DivisibilityGraph,
     ids: &mut BTreeMap<VertexId, u128>,
     root: &Factor<T, U>,
     already_fully_factored: &mut BTreeSet<VertexId>,
@@ -2124,7 +2126,7 @@ fn get_edge<T>(
 }
 
 fn add_factor_node(
-    divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    divisibility_graph: &mut DivisibilityGraph,
     factor: &Factor<Arc<str>, CompactString>,
 ) -> (VertexId, bool) {
     match divisibility_graph.find_vertex(factor) {
@@ -2135,7 +2137,7 @@ fn add_factor_node(
 
 #[framed]
 fn add_edge_or_log(
-    graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
+    graph: &mut DivisibilityGraph,
     from_vid: &VertexId,
     to_vid: &VertexId,
     value: bool,
