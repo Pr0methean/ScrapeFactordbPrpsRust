@@ -831,6 +831,10 @@ async fn throttle_if_necessary(
     true
 }
 
+// The reason this method returns a JoinHandle (and thus needs .await.await at the start of the
+// program) is that even once the C search has completed, it may have returned more results than cam
+// fit into the channel at once. In that case, we want the remaining results to wait to be pushed
+// into the channel, without blocking PRP or U searches on the main thread.
 #[allow(clippy::async_yields_async)]
 #[framed]
 async fn queue_composites(
