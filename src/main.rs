@@ -1376,6 +1376,7 @@ async fn find_and_submit_factors(
     if root_status.is_some() {
         checked_for_known_factors_since_last_submission.insert(root_node);
     }
+    debug!("{id}: Root node for {digits_or_expr} is {}", divisibility_graph.vertex(&root_node).unwrap());
     ids.insert(root_node, id);
     let mut factor_found = false;
     let mut accepted_factors = 0;
@@ -1429,6 +1430,8 @@ async fn find_and_submit_factors(
             continue;
         }
         if get_edge(&divisibility_graph, &factor_vid, &root_node) == Some(true) {
+            // This has been submitted directly to the root already, so it's probably already been
+            // factored out of all other divisors.
             continue;
         }
         match try_report_factor::<&str, &str, _, _>(http, &Id(id), &factor).await {
@@ -1710,6 +1713,7 @@ async fn find_and_submit_factors(
                                 iters_without_progress = 0;
                             }
                             if let Some(dest_entry_id) = result.id {
+                                debug!("{id}: {dest_factor} has entry ID {dest_entry_id}");
                                 if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
                                         && old_id != dest_entry_id {
                                     error!("{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}");
@@ -1744,6 +1748,7 @@ async fn find_and_submit_factors(
                                 iters_without_progress = 0;
                             }
                             if let Some(dest_entry_id) = result.id {
+                                debug!("{id}: {dest_factor} has entry ID {dest_entry_id}");
                                 if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
                                     && old_id != dest_entry_id {
                                     error!("{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}");
@@ -2079,6 +2084,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     parseable_factors.extend(result.factors);
                                 }
                                 if let Some(entry_id) = result.id {
+                                    debug!("{id}: {factor} has entry ID {entry_id}");
                                     if let Some(old_id) = ids.insert(factor_vid, entry_id)
                                         && old_id != entry_id {
                                         error!("{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}");
