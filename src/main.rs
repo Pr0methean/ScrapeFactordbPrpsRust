@@ -1684,7 +1684,9 @@ async fn find_and_submit_factors(
                              match divisibility_graph.edge(edge) {
                                  Some(TransitiveFactor) | Some(DirectFactor) => {
                                      // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
-                                     let _ = divisibility_graph.try_add_edge(factor_vid, neighbor, NotFactor);
+                                     if divisibility_graph.try_add_edge(factor_vid, neighbor, NotFactor).is_ok() {
+                                         debug!("{id}: Ruled out that {factor} could be a factor of {}", divisibility_graph.vertex(neighbor).unwrap());
+                                     };
                                  }
                                  _ => {}
                              }
