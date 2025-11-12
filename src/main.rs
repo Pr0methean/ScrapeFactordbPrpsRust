@@ -23,7 +23,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::net::ResourceLimits;
-use crate::shutdown::Shutdown;
+use crate::shutdown::{handle_signals, Shutdown};
 use async_backtrace::framed;
 use channel::PushbackReceiver;
 use compact_str::{CompactString, ToCompactString};
@@ -40,7 +40,7 @@ use log::{debug, error, info, warn};
 use net::ThrottlingHttpClient;
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -51,20 +51,18 @@ use std::fmt::{self, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU32, NonZeroU128};
+use std::num::{NonZeroU128, NonZeroU32};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use tokio::signal;
-use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
-use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, broadcast, oneshot};
+use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
+use tokio::sync::{oneshot, Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
 use tokio::{select, task};
 
 type DivisibilityGraph = AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>;
@@ -918,36 +916,6 @@ async fn queue_composites(
             info!("Sent {c_sent} buffered C's to channel");
             let _ = c_sender.reserve().await; // Prevent task from finishing until another C can be sent
         }))
-    }
-}
-
-#[framed]
-async fn handle_signals(
-    shutdown_sender: broadcast::Sender<()>,
-    installed_sender: oneshot::Sender<()>,
-) {
-    let sigint = ctrl_c();
-    info!("Signal handlers installed");
-    installed_sender
-        .send(())
-        .expect("Error signaling main task that signal handlers are installed");
-    #[cfg(unix)]
-    {
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to create SIGTERM signal stream");
-        select! {
-            _ = sigterm.recv() => {
-                warn!("Received SIGTERM; signaling tasks to exit");
-            },
-            _ = sigint => {
-                warn!("Received SIGINT; signaling tasks to exit");
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = sigint.await;
-    if let Err(e) = shutdown_sender.send(()) {
-        error!("Error sending shutdown signal: {e}");
     }
 }
 

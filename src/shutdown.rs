@@ -3,8 +3,12 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use tokio::sync::broadcast;
-use tokio::sync::broadcast::{Sender, channel};
+use tokio::sync::{broadcast, oneshot};
+use tokio::sync::broadcast::{channel, Sender};
+use async_backtrace::framed;
+use tokio::signal::ctrl_c;
+use log::{error, info, warn};
+use tokio::{select, signal};
 
 /// Listens for the server shutdown signal.
 ///
@@ -20,7 +24,7 @@ pub(crate) struct Shutdown {
     /// `true` if the shutdown signal has been received
     is_shutdown: Arc<AtomicBool>,
 
-    /// The receive half of the channel used to listen for shutdown.
+    /// The receiving half of the channel used to listen for shutdown.
     notify: broadcast::Receiver<()>,
 }
 
@@ -72,5 +76,35 @@ impl Clone for Shutdown {
             is_shutdown: self.is_shutdown.clone(),
             notify: self.notify.resubscribe(),
         }
+    }
+}
+
+#[framed]
+pub async fn handle_signals(
+    shutdown_sender: Sender<()>,
+    installed_sender: oneshot::Sender<()>,
+) {
+    let sigint = ctrl_c();
+    info!("Signal handlers installed");
+    installed_sender
+        .send(())
+        .expect("Error signaling main task that signal handlers are installed");
+    #[cfg(unix)]
+    {
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("Failed to create SIGTERM signal stream");
+        select! {
+            _ = sigterm.recv() => {
+                warn!("Received SIGTERM; signaling tasks to exit");
+            },
+            _ = sigint => {
+                warn!("Received SIGINT; signaling tasks to exit");
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = sigint.await;
+    if let Err(e) = shutdown_sender.send(()) {
+        error!("Error sending shutdown signal: {e}");
     }
 }
