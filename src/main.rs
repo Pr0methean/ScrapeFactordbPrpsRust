@@ -33,8 +33,8 @@ use gryf::algo::ShortestPaths;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::core::{EdgeSet, GraphAdd, GraphMut, GraphRef, Neighbors, VertexSet};
-use gryf::storage::AdjMatrix;
+use gryf::core::{EdgeSet, GraphRef, Neighbors};
+use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use net::ThrottlingHttpClient;
@@ -66,7 +66,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
-type DivisibilityGraph = Graph<Factor<ArcStr, CompactString>, bool, Directed, AdjMatrix<Factor<ArcStr, CompactString>, bool, Directed, DefaultId>>;
+type DivisibilityGraph = Graph<Factor<ArcStr, CompactString>, bool, Directed, Stable<AdjMatrix<Factor<ArcStr, CompactString>, bool, Directed, DefaultId>>>;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -1316,7 +1316,7 @@ async fn find_and_submit_factors(
     skip_looking_up_listed_algebraic: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
-    let mut divisibility_graph = DivisibilityGraph::new_directed_in(AdjMatrix::new()).stabilize();
+    let mut divisibility_graph: DivisibilityGraph = Graph::new_directed_in(AdjMatrix::new()).stabilize();
     let mut ids = BTreeMap::new();
     let mut checked_for_known_factors_since_last_submission = BTreeSet::new();
     let mut root_status = None;
@@ -2108,7 +2108,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     any_added
 }
 
-fn get_edge<T>(
+fn get_edge(
     graph: &DivisibilityGraph,
     source: &VertexId,
     dest: &VertexId,
