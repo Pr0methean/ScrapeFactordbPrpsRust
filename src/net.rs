@@ -97,7 +97,8 @@ impl<'a> ThrottlingRequestBuilder<'a> {
             Ok(_permit) => match self.inner {
                 Ok(request_builder) => request_builder
                     .send()
-                    .await?
+                    .await
+                    .map_err(|e| Error::from(e.without_url()))?
                     .text()
                     .await
                     .map_err(|e| Error::from(e.without_url())),
