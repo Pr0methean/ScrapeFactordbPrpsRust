@@ -1694,7 +1694,10 @@ async fn find_and_submit_factors(
                                 iters_without_progress = 0;
                             }
                             if let Some(dest_entry_id) = result.id {
-                                ids.insert(dest_factor_vid, dest_entry_id);
+                                if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
+                                        && old_id != dest_entry_id {
+                                    error!("{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}");
+                                };
                             }
                         }
                     }
@@ -1725,7 +1728,10 @@ async fn find_and_submit_factors(
                                 iters_without_progress = 0;
                             }
                             if let Some(dest_entry_id) = result.id {
-                                ids.insert(dest_factor_vid, dest_entry_id);
+                                if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
+                                    && old_id != dest_entry_id {
+                                    error!("{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}");
+                                };
                             }
                         }
                     }
@@ -2057,7 +2063,10 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     parseable_factors.extend(result.factors);
                                 }
                                 if let Some(entry_id) = result.id {
-                                    ids.insert(factor_vid, entry_id);
+                                    if let Some(old_id) = ids.insert(factor_vid, entry_id)
+                                        && old_id != entry_id {
+                                        error!("{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}");
+                                    };
                                 }
                             }
                         } else {
