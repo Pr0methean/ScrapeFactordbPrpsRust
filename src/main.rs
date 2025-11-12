@@ -1321,6 +1321,8 @@ async fn find_and_submit_factors(
     skip_looking_up_known: bool,
     skip_looking_up_listed_algebraic: bool,
 ) -> bool {
+    // Factors must fit inside a URL, and hyper limits URLs to 65534 bytes
+    const MAX_EXPR_LEN: usize = 65500;
     let mut digits_or_expr_full = Vec::new();
     let mut divisibility_graph = AdjMatrix::new();
     let mut ids = BTreeMap::new();
@@ -1419,8 +1421,11 @@ async fn find_and_submit_factors(
         .rev()
     {
         if let Some(expr) = factor.as_str_non_u128()
-            && expr.contains("...")
+            && (expr.len() > MAX_EXPR_LEN || expr.contains("..."))
+            && !(ids.contains_key(&factor_vid))
         {
+            // Can't submit a factor that we can't fit into a URL, but can save it in case we find
+            // out the ID later
             continue;
         }
         if get_edge(&divisibility_graph, &factor_vid, &root_node) == Some(true) {
@@ -1489,6 +1494,17 @@ async fn find_and_submit_factors(
         for (factor_vid, factor) in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
             let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, false);
+
+            // elided numbers and numbers over 65500 digits without an expression form can only
+            // be submitted as factors if their IDs are known
+            // however, this doesn't affect the divisibility graph because the ID may be found
+            // later
+            if let Some(expr) = factor.as_str_non_u128()
+                && (expr.len() > MAX_EXPR_LEN || expr.contains("..."))
+                && !(ids.contains_key(&factor_vid)) {
+                continue;
+            }
+
             let mut dest_factors = divisibility_graph
                 .vertices()
                 .filter(|dest|
@@ -1609,12 +1625,13 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
-                // elided numbers can only be used as dests if their IDs are known
+                // elided numbers and numbers over 65500 digits without an expression form can only
+                // be used as dests if their IDs are known
                 // however, this doesn't affect the divisibility graph because the ID may be found
                 // later
                 if dest_factor
                     .as_str_non_u128()
-                    .is_some_and(|expr| expr.contains("..."))
+                    .is_some_and(|expr| expr.contains("...") || expr.len() > MAX_EXPR_LEN)
                     && !ids.contains_key(&dest_factor_vid)
                 {
                     debug!(
