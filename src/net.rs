@@ -60,7 +60,11 @@ impl<'a> ThrottlingRequestBuilder<'a> {
         sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
         self.client.rate_limiter.until_ready().await;
         match self.client.request_semaphore.acquire().await {
-            Ok(_permit) => self.inner.send().await.map_err(|e| Error::from(e.without_url())),
+            Ok(_permit) => self
+                .inner
+                .send()
+                .await
+                .map_err(|e| Error::from(e.without_url())),
             Err(e) => Err(e.into()),
         }
     }

@@ -44,6 +44,7 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::backtrace::Backtrace;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Display, Formatter};
@@ -52,12 +53,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
+use std::panic;
 use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::panic;
-use std::backtrace::Backtrace;
 use tokio::signal;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::Full;
@@ -1259,7 +1259,9 @@ async fn try_report_factor<
     if let Expression(Numeric(_)) = u_id {
         return AlreadyFullyFactored;
     }
-    if let Id(n) = u_id && *n <= MAX_ID_EQUAL_TO_VALUE {
+    if let Id(n) = u_id
+        && *n <= MAX_ID_EQUAL_TO_VALUE
+    {
         return AlreadyFullyFactored;
     }
     let number = if let Expression(expr) = u_id {
@@ -1293,7 +1295,10 @@ async fn try_report_factor<
                     };
                 }
                 Err(e) => {
-                    error!("{u_id}: Failed to get response when submitting {factor}: {}", e.without_url());
+                    error!(
+                        "{u_id}: Failed to get response when submitting {factor}: {}",
+                        e.without_url()
+                    );
                 }
             }
         }
@@ -1366,12 +1371,10 @@ async fn find_and_submit_factors(
         }
         root_status = status;
         match known_factors.len() {
-            0 => {
-                add_factor_node(
-                    &mut divisibility_graph,
-                    &digits_or_expr.to_compact_string().into(),
-                )
-            }
+            0 => add_factor_node(
+                &mut divisibility_graph,
+                &digits_or_expr.to_compact_string().into(),
+            ),
             _ => {
                 let (root_node, _) = add_factor_node(
                     &mut divisibility_graph,
@@ -1407,7 +1410,11 @@ async fn find_and_submit_factors(
         let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
         factor_found |= add_algebraic_factors_to_graph(
             http,
-            if multiple_starting_entries { None } else { Some(id) },
+            if multiple_starting_entries {
+                None
+            } else {
+                Some(id)
+            },
             factor_finder,
             id_and_expr_regex,
             skip_looking_up_listed_algebraic,
@@ -1532,13 +1539,17 @@ async fn find_and_submit_factors(
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
-                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because divisibility edge already exists");
+                    debug!(
+                        "{id}: Skipping submission of {factor} to {dest_factor} because divisibility edge already exists"
+                    );
                     continue;
                 }
 
                 if get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid) == Some(true) {
                     // dest_factor can't be divisible by factor because factor is divisible by dest_factor
-                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is a factor of {factor}");
+                    debug!(
+                        "{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is a factor of {factor}"
+                    );
                     add_edge_or_log(
                         &mut divisibility_graph,
                         &factor_vid,
@@ -1551,7 +1562,9 @@ async fn find_and_submit_factors(
                 if shortest_paths.dist(dest_factor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
-                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because it's already transitively known");
+                    debug!(
+                        "{id}: Skipping submission of {factor} to {dest_factor} because it's already transitively known"
+                    );
                     add_edge_or_log(&mut divisibility_graph, &factor_vid, &dest_factor_vid, true);
                     add_edge_or_log(
                         &mut divisibility_graph,
@@ -1563,7 +1576,9 @@ async fn find_and_submit_factors(
                 }
 
                 if dest_factor.unambiguously_less_or_equal(&factor) {
-                    debug!("Skipping submission of {factor} to {dest_factor} because {dest_factor} is smaller or equal");
+                    debug!(
+                        "Skipping submission of {factor} to {dest_factor} because {dest_factor} is smaller or equal"
+                    );
                     add_edge_or_log(
                         &mut divisibility_graph,
                         &factor_vid,
@@ -1575,7 +1590,9 @@ async fn find_and_submit_factors(
 
                 // u128s are already fully factored
                 if let Numeric(dest) = dest_factor {
-                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because the number is too small");
+                    debug!(
+                        "{id}: Skipping submission of {factor} to {dest_factor} because the number is too small"
+                    );
                     let divisible = if let Numeric(f) = factor {
                         dest.is_multiple_of(f)
                     } else {
@@ -1605,7 +1622,9 @@ async fn find_and_submit_factors(
                     .ok()
                     .and_then(|paths| paths.dist(factor_vid).copied());
                 if shortest_path_from_dest == Some(0) {
-                    debug!("{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is transitively a factor of {factor}");
+                    debug!(
+                        "{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is transitively a factor of {factor}"
+                    );
                     // dest_factor is transitively divisible by factor
                     add_edge_or_log(&mut divisibility_graph, &dest_factor_vid, &factor_vid, true);
                     add_edge_or_log(
@@ -1624,7 +1643,9 @@ async fn find_and_submit_factors(
                     .is_some_and(|expr| expr.contains("..."))
                     && !ids.contains_key(&dest_factor_vid)
                 {
-                    debug!("{id}: Can't submit to {dest_factor} right now because we don't know its full specifier");
+                    debug!(
+                        "{id}: Can't submit to {dest_factor} right now because we don't know its full specifier"
+                    );
                     continue;
                 }
                 let dest_specifier = as_specifier(&ids, &dest_factor_vid, &dest_factor);
@@ -1704,7 +1725,9 @@ async fn find_and_submit_factors(
                         }
                     }
                     OtherError => {
-                        if !checked_for_known_factors_since_last_submission.contains(&dest_factor_vid) {
+                        if !checked_for_known_factors_since_last_submission
+                            .contains(&dest_factor_vid)
+                        {
                             debug!("{id}: Searching for known factors of {dest_factor}");
                             // See if dest has some already-known factors we can submit to instead
                             let result = add_known_factors_to_graph(
@@ -1716,9 +1739,10 @@ async fn find_and_submit_factors(
                                 false,
                                 &dest_factor,
                             )
-                                .await;
+                            .await;
                             if let Some(status) = result.status {
-                                checked_for_known_factors_since_last_submission.insert(dest_factor_vid);
+                                checked_for_known_factors_since_last_submission
+                                    .insert(dest_factor_vid);
                                 if status == FullyFactored {
                                     already_fully_factored.insert(dest_factor_vid);
                                 }
@@ -1747,7 +1771,9 @@ async fn find_and_submit_factors(
         if let Some(expr) = factor.as_str_non_u128()
             && expr.contains("...")
         {
-            debug!("{id}: Skipping writing {factor} to failed-submission file because we don't know its specifier");
+            debug!(
+                "{id}: Skipping writing {factor} to failed-submission file because we don't know its specifier"
+            );
             continue;
         }
         let reverse_dist = ShortestPaths::on(&divisibility_graph)
@@ -1813,8 +1839,14 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
     if status == Some(FullyFactored) {
         let mut dest_subfactors_set = BTreeSet::new();
         dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
-        let vertices = divisibility_graph.vertices()
-            .map(|vertex| (vertex.id, dest_subfactors_set.contains(&vertex.attr.as_ref())))
+        let vertices = divisibility_graph
+            .vertices()
+            .map(|vertex| {
+                (
+                    vertex.id,
+                    dest_subfactors_set.contains(&vertex.attr.as_ref()),
+                )
+            })
             .collect::<Box<[_]>>();
         for (vertex_id, divisible) in vertices {
             if vertex_id == root_vid {
@@ -2013,15 +2045,17 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                             info!(
                                 "{id}: Algebraic factor with ID {factor_entry_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                             );
-                            if !checked_for_known_factors_since_last_submission.contains(&factor_vid) {
-                                let factor_specifier = if let Ok(factor_entry_id) =
-                                    factor_entry_id.parse::<u128>()
-                                {
-                                    Id(factor_entry_id)
-                                } else {
-                                    let (factor_vid, _) = add_factor_node(divisibility_graph, &factor);
-                                    as_specifier(ids, &factor_vid, &factor)
-                                };
+                            if !checked_for_known_factors_since_last_submission
+                                .contains(&factor_vid)
+                            {
+                                let factor_specifier =
+                                    if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
+                                        Id(factor_entry_id)
+                                    } else {
+                                        let (factor_vid, _) =
+                                            add_factor_node(divisibility_graph, &factor);
+                                        as_specifier(ids, &factor_vid, &factor)
+                                    };
                                 let result = add_known_factors_to_graph(
                                     http,
                                     factor_finder,
@@ -2031,7 +2065,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     true,
                                     &factor,
                                 )
-                                    .await;
+                                .await;
                                 if !result.factors.is_empty() {
                                     any_added = true;
                                 }
@@ -2039,7 +2073,8 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     if result.status == Some(FullyFactored) {
                                         already_fully_factored.insert(factor_vid);
                                     }
-                                    checked_for_known_factors_since_last_submission.insert(factor_vid);
+                                    checked_for_known_factors_since_last_submission
+                                        .insert(factor_vid);
                                     should_add_factor = false;
                                 }
                                 if result.status == Some(FullyFactored) {
