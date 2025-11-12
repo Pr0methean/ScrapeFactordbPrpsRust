@@ -2104,9 +2104,9 @@ fn add_edge_or_log(
     if let Err(e) = graph.try_add_edge(from_vid, to_vid, value) {
         error!(
             "Error adding edge {}-({})->{} {e}\n{}\n{}\n",
-            graph.vertex(&from_vid).unwrap(),
+            graph.vertex(from_vid).unwrap(),
             value,
-            graph.vertex(&to_vid).unwrap(),
+            graph.vertex(to_vid).unwrap(),
             async_backtrace::taskdump_tree(false),
             Backtrace::force_capture()
         );
