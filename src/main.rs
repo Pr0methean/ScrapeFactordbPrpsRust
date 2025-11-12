@@ -1676,6 +1676,19 @@ async fn find_and_submit_factors(
                             &dest_factor_vid,
                             NotFactor,
                         );
+                        for (neighbor, edge) in divisibility_graph
+                            .neighbors_directed(dest_factor_vid, Incoming)
+                            .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
+                            .collect::<Box<[_]>>()
+                            .into_iter() {
+                             match divisibility_graph.edge(edge) {
+                                 Some(TransitiveFactor) | Some(DirectFactor) => {
+                                     // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
+                                     let _ = divisibility_graph.try_add_edge(factor_vid, neighbor, NotFactor);
+                                 }
+                                 _ => {}
+                             }
+                        }
                         if already_checked_for_algebraic.insert(factor_vid) {
                             debug!("{id}: Searching for algebraic factors of {factor}");
                             add_algebraic_factors_to_graph(
