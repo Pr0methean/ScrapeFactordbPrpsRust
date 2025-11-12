@@ -1408,16 +1408,16 @@ async fn find_and_submit_factors(
     }
     // Simplest case: try submitting all factors as factors of the root
     let mut any_failed_retryably = false;
-    for (factor_vid, factor) in divisibility_graph
+    let mut known_factors = divisibility_graph
         .vertices()
         .map(|vertex| (vertex.id, vertex.attr.clone()))
-        .collect::<Box<[_]>>()
+        .filter(|(factor_vid, _)| *factor_vid != root_node)
+        .collect::<Box<[_]>>();
+    known_factors.sort_by(|(_, factor1), (_, factor2)| factor1.cmp(factor2));
+    for (factor_vid, factor) in known_factors
         .into_iter()
         .rev()
     {
-        if factor_vid == root_node {
-            continue;
-        }
         if let Some(expr) = factor.as_str_non_u128()
             && expr.contains("...")
         {
