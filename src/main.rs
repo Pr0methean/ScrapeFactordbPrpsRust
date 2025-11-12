@@ -1684,7 +1684,6 @@ async fn find_and_submit_factors(
                                 http,
                                 factor_finder,
                                 &mut divisibility_graph,
-                                &mut already_fully_factored,
                                 factor_vid,
                                 factor_specifier,
                                 false,
@@ -1692,6 +1691,9 @@ async fn find_and_submit_factors(
                             )
                             .await;
                             if result.status.is_some() {
+                                if result.status == Some(FullyFactored) {
+                                    already_fully_factored.insert(factor_vid);
+                                }
                                 checked_for_known_factors_since_last_submission.insert(factor_vid);
                             }
                             if !result.factors.is_empty() {
@@ -1710,7 +1712,6 @@ async fn find_and_submit_factors(
                                 http,
                                 factor_finder,
                                 &mut divisibility_graph,
-                                &mut already_fully_factored,
                                 dest_factor_vid,
                                 dest_specifier,
                                 false,
@@ -1798,7 +1799,6 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut AdjMatrix<Factor<Arc<str>, CompactString>, bool, Directed, DefaultId>,
-    already_fully_factored: &mut BTreeSet<VertexId>,
     root_vid: VertexId,
     root_specifier: NumberSpecifier<T, U>,
     include_ff: bool,
@@ -1812,7 +1812,6 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
         .known_factors_as_digits(http, root_specifier, include_ff, false)
         .await;
     if status == Some(FullyFactored) {
-        already_fully_factored.insert(root_vid);
         let mut dest_subfactors_set = BTreeSet::new();
         dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
         let vertices = divisibility_graph.vertices()
@@ -1974,7 +1973,6 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                     http,
                     factor_finder,
                     divisibility_graph,
-                    already_fully_factored,
                     root_vid,
                     Expression(root.as_ref()),
                     true,
@@ -1985,6 +1983,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                     checked_for_known_factors_since_last_submission.insert(root_vid);
                 }
                 if result.status == Some(FullyFactored) {
+                    already_fully_factored.insert(root_vid);
                     return true;
                 }
                 parseable_factors.extend(result.factors);
@@ -2028,7 +2027,6 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     http,
                                     factor_finder,
                                     divisibility_graph,
-                                    already_fully_factored,
                                     factor_vid,
                                     factor_specifier,
                                     true,
@@ -2039,6 +2037,9 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     any_added = true;
                                 }
                                 if result.status.is_some() {
+                                    if result.status == Some(FullyFactored) {
+                                        already_fully_factored.insert(factor_vid);
+                                    }
                                     checked_for_known_factors_since_last_submission.insert(factor_vid);
                                     should_add_factor = false;
                                 }
