@@ -85,7 +85,7 @@ impl ThrottlingHttpClient {
                 .build()
                 .unwrap();
         let http = Client::builder()
-            .pool_max_idle_per_host(2)
+            .pool_max_idle_per_host(max_concurrent_requests)
             .timeout(E2E_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
