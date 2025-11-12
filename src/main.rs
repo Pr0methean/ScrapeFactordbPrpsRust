@@ -1496,12 +1496,11 @@ async fn find_and_submit_factors(
             let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, false);
 
             // elided numbers and numbers over 65500 digits without an expression form can only
-            // be submitted as factors if their IDs are known
+            // be submitted as factors, even if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
             // later
             if let Some(expr) = factor.as_str_non_u128()
-                && (expr.len() > MAX_EXPR_LEN || expr.contains("..."))
-                && !(ids.contains_key(&factor_vid)) {
+                && (expr.len() > MAX_EXPR_LEN || expr.contains("...")) {
                 continue;
             }
 
