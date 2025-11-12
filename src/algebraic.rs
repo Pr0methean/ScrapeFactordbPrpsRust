@@ -9,7 +9,7 @@ use crate::{
 use async_backtrace::framed;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use num_integer::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
@@ -1536,6 +1536,7 @@ impl FactorFinder {
                 http.try_get_and_decode(&url).await.ok_or(None)
             }
         };
+        debug!("{id}: Got API response:\n{response:?}");
         match response {
             Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
                 Err(e) => {
@@ -1548,7 +1549,7 @@ impl FactorFinder {
                     id: recvd_id,
                 }) => {
                     info!(
-                        "{id}: Fetched status of {status} and {} factors of sizes {}",
+                        "{recvd_id} ({id}): Fetched status of {status} and {} factors of sizes {}",
                         factors.len(),
                         factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
