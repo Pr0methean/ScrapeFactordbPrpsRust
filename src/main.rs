@@ -33,7 +33,7 @@ use gryf::algo::ShortestPaths;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::core::{EdgeSet, GraphRef, Neighbors};
+use gryf::core::{EdgeSet, GraphAdd, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -1446,7 +1446,7 @@ async fn find_and_submit_factors(
             DoesNotDivide => {
                 // The root isn't divisible by this "factor", so try to split it up into smaller
                 // factors and then we'll submit those instead.
-                add_edge_or_log(&mut divisibility_graph, &factor_vid, &root_node, NotFactor);
+                rule_out_divisibility(&mut divisibility_graph, &factor_vid, &root_node);
                 if already_checked_for_algebraic.insert(factor_vid) {
                     debug!("{id}: Searching for algebraic factors of {factor}");
                     any_failed_retryably |= add_algebraic_factors_to_graph(
@@ -1670,27 +1670,7 @@ async fn find_and_submit_factors(
                             divisibility_graph.try_add_edge(&dest_factor_vid, &factor_vid, NotFactor);
                     }
                     DoesNotDivide => {
-                        add_edge_or_log(
-                            &mut divisibility_graph,
-                            &factor_vid,
-                            &dest_factor_vid,
-                            NotFactor,
-                        );
-                        for (neighbor, edge) in divisibility_graph
-                            .neighbors_directed(dest_factor_vid, Incoming)
-                            .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
-                            .collect::<Box<[_]>>()
-                            .into_iter() {
-                             match divisibility_graph.edge(edge) {
-                                 Some(TransitiveFactor) | Some(DirectFactor) => {
-                                     // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
-                                     if divisibility_graph.try_add_edge(factor_vid, neighbor, NotFactor).is_ok() {
-                                         debug!("{id}: Ruled out that {factor} could be a factor of {}", divisibility_graph.vertex(neighbor).unwrap());
-                                     };
-                                 }
-                                 _ => {}
-                             }
-                        }
+                        rule_out_divisibility(&mut divisibility_graph, &factor_vid, &dest_factor_vid);
                         if already_checked_for_algebraic.insert(factor_vid) {
                             debug!("{id}: Searching for algebraic factors of {factor}");
                             add_algebraic_factors_to_graph(
@@ -1820,6 +1800,28 @@ async fn find_and_submit_factors(
         }
     }
     accepted_factors > 0
+}
+
+fn rule_out_divisibility(mut divisibility_graph: &mut DivisibilityGraph, nonfactor: &VertexId, dest: &VertexId) {
+    let _ = divisibility_graph.try_add_edge(&nonfactor, &dest, NotFactor);
+    for (neighbor, edge) in divisibility_graph
+        .neighbors_directed(dest, Incoming)
+        .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
+        .collect::<Box<[_]>>()
+        .into_iter() {
+        match divisibility_graph.edge(&edge) {
+            Some(TransitiveFactor) | Some(DirectFactor) => {
+                // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
+                if divisibility_graph.try_add_edge(dest, &neighbor, NotFactor).is_ok() {
+                    debug!("Ruled out that {} could be a factor of {}",
+                        divisibility_graph.vertex(nonfactor).unwrap(),
+                        divisibility_graph.vertex(&neighbor).unwrap());
+                    rule_out_divisibility(divisibility_graph, nonfactor, &neighbor);
+                };
+            }
+            _ => {}
+        }
+    }
 }
 
 fn as_specifier<'a>(
