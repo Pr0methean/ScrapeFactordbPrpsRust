@@ -8,7 +8,7 @@ use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use log::{error, warn};
 use regex::{Regex, RegexBuilder};
-use reqwest::{Client, RequestBuilder, Response};
+use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
@@ -61,8 +61,9 @@ pub struct ThrottlingHttpClient {
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
-    inner: RequestBuilder,
+    inner: Result<RequestBuilder, ArcStr>,
     client: &'a ThrottlingHttpClient,
+    form: Option<Box<str>>
 }
 
 pub struct ResourceLimits {
@@ -71,23 +72,55 @@ pub struct ResourceLimits {
 }
 
 impl<'a> ThrottlingRequestBuilder<'a> {
-    pub fn form<T: Serialize + ?Sized>(self, payload: &T) -> Self {
-        ThrottlingRequestBuilder {
-            inner: self.inner.form(payload),
-            client: self.client,
+    pub fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error> {
+        match self.inner {
+            Ok(request_builder) => Ok(ThrottlingRequestBuilder {
+                inner: Ok(request_builder.form(payload)),
+                client: self.client,
+                form: None,
+            }),
+            Err(_) => {
+                Ok(ThrottlingRequestBuilder {
+                    inner: self.inner,
+                    client: self.client,
+                    form: Some(serde_urlencoded::to_string(payload)?.into_boxed_str())
+                })
+            }
         }
     }
 
     #[framed]
-    pub async fn send(self) -> Result<Response, Error> {
+    pub async fn send(self) -> Result<String, Error> {
         sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
         self.client.rate_limiter.until_ready().await;
         match self.client.request_semaphore.acquire().await {
-            Ok(_permit) => self
-                .inner
-                .send()
-                .await
-                .map_err(|e| Error::from(e.without_url())),
+            Ok(_permit) => match self.inner {
+                Ok(request_builder) => request_builder
+                    .send()
+                    .await?
+                    .text()
+                    .await
+                    .map_err(|e| Error::from(e.without_url())),
+                Err(url) => {
+                    let mut curl = self.client.curl_client.lock().await;
+                    let url = url.clone();
+                    if let Some(form) = self.form {
+                        curl.post_fields_copy(form.as_bytes())?;
+                    }
+                    let response_text = curl.post(true)
+                        .and_then(|_| curl.url(&url))
+                        .and_then(|_| curl.perform())
+                        .map_err(anyhow::Error::from)
+                        .and_then(|_| {
+                            let response_code = curl.response_code()?;
+                            if response_code != 200 {
+                                error!("Error reading {url}: HTTP response code {response_code}")
+                            }
+                            Ok(String::from_utf8(curl.get_mut().take_all())?)
+                        }).map_err(anyhow::Error::from);
+                    Ok(response_text?)
+                },
+            },
             Err(e) => Err(e.into()),
         }
     }
@@ -316,10 +349,15 @@ impl ThrottlingHttpClient {
             .await
     }
 
-    pub fn post(&'_ self, url: &str) -> ThrottlingRequestBuilder<'_> {
+    pub fn post(&'_ self, url: ArcStr) -> ThrottlingRequestBuilder<'_> {
         ThrottlingRequestBuilder {
-            inner: self.http.post(url),
+            inner: if url.len() <= REQWEST_MAX_URL_LEN {
+                Ok(self.http.post(url.as_str()))
+            } else {
+                Err(url.into())
+            },
             client: self,
+            form: None
         }
     }
 }

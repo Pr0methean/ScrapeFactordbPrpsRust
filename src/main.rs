@@ -57,7 +57,7 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use arcstr::ArcStr;
+use arcstr::{literal, ArcStr};
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -1241,45 +1241,40 @@ async fn try_report_factor<
     } else {
         None
     };
-    match http
-        .post("https://factordb.com/reportfactor.php")
+    let request_builder = match http
+        .post(literal!("https://factordb.com/reportfactor.php"))
         .form(&FactorSubmission {
             id: if let Id(id) = u_id { Some(*id) } else { None },
             number,
-            factor: factor.as_str(),
-        })
-        .send()
-        .await
+            factor: factor.as_str()
+        }) {
+        Ok(builder) => builder,
+        Err(e) => {
+            error!("Error building request: {e}");
+            return OtherError;
+        }
+    };
+    match request_builder.send().await
     {
-        Ok(response) => {
-            let response = response.text().await;
-            match response {
-                Ok(text) => {
-                    info!("{u_id}: reported a factor of {factor}; response: {text}",);
-                    return if text.contains("Error") {
-                        OtherError
-                    } else if text.contains("submitted") {
-                        Accepted
-                    } else if text.contains("fully factored") || text.contains("Number too small") {
-                        AlreadyFullyFactored
-                    } else {
-                        DoesNotDivide
-                    };
-                }
-                Err(e) => {
-                    error!(
-                        "{u_id}: Failed to get response when submitting {factor}: {}",
-                        e.without_url()
-                    );
-                }
-            }
+        Ok(text) => {
+            info!("{u_id}: reported a factor of {factor}; response: {text}",);
+            return if text.contains("Error") {
+                OtherError
+            } else if text.contains("submitted") {
+                Accepted
+            } else if text.contains("fully factored") || text.contains("Number too small") {
+                AlreadyFullyFactored
+            } else {
+                DoesNotDivide
+            };
         }
         Err(e) => {
-            error!("{u_id}: failed to submit factor {factor}: {}", e)
+            error!(
+                "{u_id}: Failed to get response when submitting {factor}: {e}");
+            sleep(RETRY_DELAY).await;
+            OtherError
         }
     }
-    sleep(RETRY_DELAY).await;
-    OtherError
 }
 
 #[framed]
