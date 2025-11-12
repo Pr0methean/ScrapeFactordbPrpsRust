@@ -58,6 +58,7 @@ use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use arcstr::{literal, ArcStr};
+use gryf::Graph;
 use tokio::sync::mpsc::error::TrySendError::Full;
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -65,7 +66,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
-type DivisibilityGraph = AdjMatrix<Factor<ArcStr, CompactString>, bool, Directed, DefaultId>;
+type DivisibilityGraph = Graph<Factor<ArcStr, CompactString>, bool, Directed, AdjMatrix<Factor<ArcStr, CompactString>, bool, Directed, DefaultId>>;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -1315,7 +1316,7 @@ async fn find_and_submit_factors(
     skip_looking_up_listed_algebraic: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
-    let mut divisibility_graph = AdjMatrix::new();
+    let mut divisibility_graph = DivisibilityGraph::new_directed_in(AdjMatrix::new()).stabilize();
     let mut ids = BTreeMap::new();
     let mut checked_for_known_factors_since_last_submission = BTreeSet::new();
     let mut root_status = None;
@@ -1811,7 +1812,7 @@ fn as_specifier<'a>(
 }
 
 #[framed]
-async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str>>(
+async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str> + std::fmt::Display>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
@@ -1827,6 +1828,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
     } = factor_finder
         .known_factors_as_digits(http, root_specifier, include_ff, false)
         .await;
+    debug!("Got entry ID of {id:?} for {root}");
     if status == Some(FullyFactored) {
         let mut dest_subfactors_set = BTreeSet::new();
         dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
@@ -2039,13 +2041,13 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                             if !checked_for_known_factors_since_last_submission
                                 .contains(&factor_vid)
                             {
-                                let factor_specifier =
+                                let (factor_specifier, factor_entry_id) =
                                     if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
-                                        Id(factor_entry_id)
+                                        (Id(factor_entry_id), Some(factor_entry_id))
                                     } else {
                                         let (factor_vid, _) =
                                             add_factor_node(divisibility_graph, &factor);
-                                        as_specifier(ids, &factor_vid, &factor)
+                                        (as_specifier(ids, &factor_vid, &factor), None)
                                     };
                                 let result = add_known_factors_to_graph(
                                     http,
@@ -2063,21 +2065,21 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                 if result.status.is_some() {
                                     if result.status == Some(FullyFactored) {
                                         already_fully_factored.insert(factor_vid);
+                                    } else {
+                                        parseable_factors.extend(result.factors);
                                     }
                                     checked_for_known_factors_since_last_submission
                                         .insert(factor_vid);
                                     should_add_factor = false;
                                 }
-                                if result.status == Some(FullyFactored) {
-                                    already_fully_factored.insert(factor_vid);
-                                } else {
-                                    parseable_factors.extend(result.factors);
-                                }
-                                if let Some(entry_id) = result.id {
-                                    debug!("{id}: {factor} has entry ID {entry_id}");
-                                    if let Some(old_id) = ids.insert(factor_vid, entry_id)
-                                        && old_id != entry_id {
-                                        error!("{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}");
+                                if let Some(recvd_entry_id) = result.id{
+                                    debug!("{id}: Entry ID of {factor} from add_known_factors_to_graph is {recvd_entry_id}");
+                                };
+                                if let Some(factor_entry_id) = factor_entry_id {
+                                    debug!("{id}: Entry ID of {factor} from algebraic-factor scrape is {factor_entry_id}");
+                                    if let Some(old_id) = ids.insert(factor_vid, factor_entry_id)
+                                        && old_id != factor_entry_id {
+                                        error!("{id}: Detected that {factor}'s entry ID is {factor_entry_id}, but it was stored as {old_id}");
                                     };
                                 }
                             }
@@ -2107,7 +2109,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
 }
 
 fn get_edge<T>(
-    graph: &AdjMatrix<T, bool, Directed, DefaultId>,
+    graph: &DivisibilityGraph,
     source: &VertexId,
     dest: &VertexId,
 ) -> Option<bool> {

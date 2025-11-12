@@ -1499,6 +1499,7 @@ impl FactorFinder {
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
         if let NumberSpecifier::Expression(Numeric(n)) = id {
+            debug!("Specially handling numeric expression {n}");
             return ProcessedStatusApiResponse {
                 status: Some(FullyFactored),
                 factors: Self::find_factors_of_u128(n).into_boxed_slice(),
@@ -1512,6 +1513,7 @@ impl FactorFinder {
         if let NumberSpecifier::Id(id) = id
             && id <= MAX_ID_EQUAL_TO_VALUE
         {
+            debug!("Specially handling small ID {id}");
             return ProcessedStatusApiResponse {
                 status: Some(FullyFactored),
                 factors: Self::find_factors_of_u128(id).into_boxed_slice(),
@@ -1548,12 +1550,13 @@ impl FactorFinder {
                     factors,
                     id: recvd_id,
                 }) => {
+                    let recvd_id_parsed = recvd_id.to_string().parse::<u128>().ok();
+                    debug!("Parsed received ID {recvd_id} as {recvd_id_parsed:?}");
                     info!(
-                        "{recvd_id} ({id}): Fetched status of {status} and {} factors of sizes {}",
+                        "{recvd_id_parsed:?} ({id}): Fetched status of {status} and {} factors of sizes {}",
                         factors.len(),
                         factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
-                    let recvd_id = recvd_id.to_string().parse::<u128>().ok();
                     let status = match status.as_str() {
                         "FF" | "P" | "PRP" => Some(FullyFactored),
                         "C" => Some(UnfactoredComposite),
@@ -1578,7 +1581,7 @@ impl FactorFinder {
                     ProcessedStatusApiResponse {
                         status,
                         factors,
-                        id: recvd_id,
+                        id: recvd_id_parsed,
                     }
                 }
             },
