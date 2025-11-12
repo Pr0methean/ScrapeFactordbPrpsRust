@@ -33,7 +33,7 @@ use gryf::algo::ShortestPaths;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::core::{EdgeSet, GraphAdd, GraphRef, Neighbors};
+use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -1416,10 +1416,12 @@ async fn find_and_submit_factors(
         .map(|vertex| (vertex.id, vertex.attr.clone()))
         .filter(|(factor_vid, _)| *factor_vid != root_node)
         .collect::<Box<[_]>>();
-    known_factors.sort_by(|(_, factor1), (_, factor2)| factor1.cmp(factor2));
+
+    // Try to submit largest factors first
+    known_factors.sort_by(|(_, factor1), (_, factor2)| factor2.cmp(factor1));
+
     for (factor_vid, factor) in known_factors
         .into_iter()
-        .rev()
     {
         if factor.as_str_non_u128().is_some_and(|expr| expr.contains("..."))
             && !ids.contains_key(&factor_vid)
@@ -1488,7 +1490,7 @@ async fn find_and_submit_factors(
             "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges. \
         {accepted_factors} factors accepted so far."
         );
-        let factors_to_submit = divisibility_graph
+        let mut factors_to_submit = divisibility_graph
             .vertices()
             .filter(|factor| factor.id != root_node)
             .map(|vertex| (vertex.id, vertex.attr.clone()))
@@ -1496,6 +1498,10 @@ async fn find_and_submit_factors(
         if factors_to_submit.is_empty() {
             return accepted_factors > 0;
         }
+
+        // Try to submit largest factors first
+        factors_to_submit.sort_by(|(_, factor1), (_, factor2)| factor2.cmp(factor1));
+
         for (factor_vid, factor) in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
             let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, NotFactor);
@@ -1527,8 +1533,11 @@ async fn find_and_submit_factors(
                 .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                 .run(factor_vid)
                 .unwrap();
-            dest_factors.sort_by_key(|(_, factor)| factor.clone());
-            for (dest_factor_vid, dest_factor) in dest_factors.into_iter().rev() {
+
+            // Try submitting to the smallest destinations first
+            dest_factors.sort_by(|(_, factor1), (_, factor2)| factor1.cmp(factor2));
+
+            for (dest_factor_vid, dest_factor) in dest_factors.into_iter() {
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
@@ -1802,8 +1811,8 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn rule_out_divisibility(mut divisibility_graph: &mut DivisibilityGraph, nonfactor: &VertexId, dest: &VertexId) {
-    let _ = divisibility_graph.try_add_edge(&nonfactor, &dest, NotFactor);
+fn rule_out_divisibility(divisibility_graph: &mut DivisibilityGraph, nonfactor: &VertexId, dest: &VertexId) {
+    let _ = divisibility_graph.try_add_edge(nonfactor, dest, NotFactor);
     for (neighbor, edge) in divisibility_graph
         .neighbors_directed(dest, Incoming)
         .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
