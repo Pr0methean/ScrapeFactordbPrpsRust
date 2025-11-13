@@ -1884,7 +1884,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
     debug!("Got entry ID of {id:?} for {root}");
     if let Some(status) = status {
         if !handle_if_fully_factored(divisibility_graph, already_fully_factored, root_vid, status)
-            || include_ff {
+            || status == Prime || include_ff {
             let mut dest_subfactors_set = BTreeSet::new();
             dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
             let vertices = divisibility_graph
