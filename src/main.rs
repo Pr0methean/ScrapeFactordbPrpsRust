@@ -1361,6 +1361,7 @@ async fn find_and_submit_factors(
                     for known_factor in known_factors {
                         let (factor_vid, added) =
                             add_factor_node(&mut divisibility_graph, &known_factor);
+                        debug!("{id}: Factor {known_factor} has vertex ID {factor_vid:?}");
                         if added {
                             propagate_divisibility(&mut divisibility_graph, &factor_vid, &root_node, false);
                             digits_or_expr_full.push(factor_vid);
@@ -1376,7 +1377,7 @@ async fn find_and_submit_factors(
     if root_status.is_some() {
         checked_for_known_factors_since_last_submission.insert(root_node);
     }
-    debug!("{id}: Root node for {digits_or_expr} is {}", divisibility_graph.vertex(&root_node).unwrap());
+    debug!("{id}: Root node for {digits_or_expr} is {} with vertex ID {root_node:?}", divisibility_graph.vertex(&root_node).unwrap());
     ids.insert(root_node, id);
     let mut factor_found = false;
     let mut accepted_factors = 0;
@@ -1423,6 +1424,7 @@ async fn find_and_submit_factors(
     for (factor_vid, factor) in known_factors
         .into_iter()
     {
+        debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         if factor.as_str_non_u128().is_some_and(|expr| expr.contains("..."))
             && !ids.contains_key(&factor_vid)
         {
@@ -1503,6 +1505,7 @@ async fn find_and_submit_factors(
         factors_to_submit.sort_by(|(_, factor1), (_, factor2)| factor2.cmp(factor1));
 
         for (factor_vid, factor) in factors_to_submit {
+            debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
             // root can't be a factor of any other number we'll encounter
             rule_out_divisibility(&mut divisibility_graph, &root_node, &factor_vid);
 
@@ -1538,6 +1541,7 @@ async fn find_and_submit_factors(
             dest_factors.sort_by(|(_, factor1), (_, factor2)| factor1.cmp(factor2));
 
             for (dest_factor_vid, dest_factor) in dest_factors.into_iter() {
+                debug!("{id}: Factor {dest_factor} has vertex ID {dest_factor_vid:?}");
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
                 if edge_id.is_some() {
@@ -1678,7 +1682,7 @@ async fn find_and_submit_factors(
                                 iters_without_progress = 0;
                             }
                             if let Some(dest_entry_id) = result.id {
-                                debug!("{id}: {dest_factor} has entry ID {dest_entry_id}");
+                                debug!("{id}: {dest_factor} (vertex ID {dest_factor_vid:?}) has entry ID {dest_entry_id}");
                                 if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
                                         && old_id != dest_entry_id {
                                     error!("{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}");
@@ -1713,7 +1717,7 @@ async fn find_and_submit_factors(
                                 iters_without_progress = 0;
                             }
                             if let Some(dest_entry_id) = result.id {
-                                debug!("{id}: {dest_factor} has entry ID {dest_entry_id}");
+                                debug!("{id}: {dest_factor} (vertex ID {dest_factor_vid:?}) has entry ID {dest_entry_id}");
                                 if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
                                     && old_id != dest_entry_id {
                                     error!("{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}");
@@ -1891,6 +1895,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
             } else {
                 // These expressions are different but equivalent; merge their edges
                 let (new_root_vid, added) = add_factor_node(divisibility_graph, &dest_subfactor);
+                debug!("{id:?}: Factor {dest_subfactor} has vertex ID {new_root_vid:?}");
                 let old_out_neighbors =
                     neighbors_with_edge_weights(divisibility_graph, &root_vid, Outgoing);
                 let old_in_neighbors =
@@ -1925,6 +1930,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
             let mut all_added = Vec::new();
             for dest_subfactor in dest_subfactors {
                 let (subfactor_vid, added) = add_factor_node(divisibility_graph, &dest_subfactor);
+                debug!("{id:?}: Factor {dest_subfactor} has vertex ID {subfactor_vid:?}");
                 if added {
                     all_added.push(dest_subfactor);
                 }
@@ -2060,6 +2066,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                         let factor_digits_or_expr = &factor_captures[2];
                         let factor = factor_digits_or_expr.into();
                         let (factor_vid, added) = add_factor_node(divisibility_graph, &factor);
+                        debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
                         any_added |= added;
                         let mut should_add_factor = true;
                         if factor_digits_or_expr.contains("...") {
@@ -2076,6 +2083,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     } else {
                                         let (factor_vid, _) =
                                             add_factor_node(divisibility_graph, &factor);
+                                        debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
                                         (as_specifier(ids, &factor_vid, &factor), None)
                                     };
                                 let result = add_known_factors_to_graph(
@@ -2102,10 +2110,10 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     should_add_factor = false;
                                 }
                                 if let Some(recvd_entry_id) = result.id{
-                                    debug!("{id}: Entry ID of {factor} from add_known_factors_to_graph is {recvd_entry_id}");
+                                    debug!("{id}: Entry ID of {factor} (vertex {factor_vid:?}) from add_known_factors_to_graph is {recvd_entry_id}");
                                 };
                                 if let Some(factor_entry_id) = factor_entry_id {
-                                    debug!("{id}: Entry ID of {factor} from algebraic-factor scrape is {factor_entry_id}");
+                                    debug!("{id}: Entry ID of {factor} (vertex {factor_vid:?}) from algebraic-factor scrape is {factor_entry_id}");
                                     if let Some(old_id) = ids.insert(factor_vid, factor_entry_id)
                                         && old_id != factor_entry_id {
                                         error!("{id}: Detected that {factor}'s entry ID is {factor_entry_id}, but it was stored as {old_id}");
@@ -2130,7 +2138,8 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     }
     for parseable_factor in parseable_factors {
         for subfactor in factor_finder.find_unique_factors(&parseable_factor) {
-            let (_, added) = add_factor_node(divisibility_graph, &subfactor);
+            let (subfactor_vid, added) = add_factor_node(divisibility_graph, &subfactor);
+            debug!("{id:?}: Factor {subfactor} has vertex ID {subfactor_vid:?}");
             any_added |= added;
         }
     }
