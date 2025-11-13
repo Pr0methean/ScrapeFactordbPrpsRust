@@ -1507,13 +1507,14 @@ impl FactorFinder {
     // this method.
     #[framed]
     #[inline]
-    pub async fn known_factors_as_digits<T: AsRef<str>, U: AsRef<str>>(
+    pub async fn known_factors_as_digits<T: AsRef<str> + std::fmt::Debug, U: AsRef<str> + std::fmt::Debug>(
         &self,
         http: &ThrottlingHttpClient,
         id: NumberSpecifier<T, U>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
+        debug!("known_factors_as_digits: id={id:?}");
         if let NumberSpecifier::Expression(Numeric(n)) = id {
             debug!("Specially handling numeric expression {n}");
             let factors = Self::find_factors_of_u128(n).into_boxed_slice();

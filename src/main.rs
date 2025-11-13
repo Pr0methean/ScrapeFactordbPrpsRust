@@ -285,7 +285,7 @@ async fn check_composite(
     }
 }
 
-#[derive(Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier<T: AsRef<str>, U: AsRef<str>> {
     Id(u128),
     Expression(Factor<T, U>),
@@ -1854,6 +1854,7 @@ fn as_specifier<'a>(
     factor: &'a Factor<ArcStr, CompactString>,
 ) -> NumberSpecifier<&'a str, &'a str> {
     if let Some(factor_entry_id) = ids.get(factor_vid) {
+        debug!("as_specifier: got entry ID {factor_entry_id} for factor {factor} with vertex ID {factor_vid:?}");
         Id(*factor_entry_id)
     } else if let Numeric(n) = factor
         && *n <= MAX_ID_EQUAL_TO_VALUE
@@ -1865,7 +1866,7 @@ fn as_specifier<'a>(
 }
 
 #[framed]
-async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str> + Display>(
+async fn add_known_factors_to_graph<T: AsRef<str> + std::fmt::Debug, U: AsRef<str> + std::fmt::Debug, V: AsRef<str>, W: AsRef<str> + Display>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
@@ -1875,6 +1876,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
     root: &Factor<V, W>,
     already_fully_factored: &mut BTreeSet<VertexId>,
 ) -> ProcessedStatusApiResponse {
+    debug!("add_known_factors_to_graph: root_vid={root_vid:?}, root_specifier={root_specifier}, root={root}");
     let ProcessedStatusApiResponse {
         status,
         factors: dest_subfactors,
@@ -2046,6 +2048,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
     root_vid: VertexId,
     checked_for_known_factors_since_last_submission: &mut BTreeSet<VertexId>,
 ) -> bool {
+    debug!("add_algebraic_factors_to_graph: id={id:?}, root_vid={root_vid:?}, root={root}");
     let mut any_added = false;
     let mut parseable_factors: BTreeSet<Factor<ArcStr, CompactString>> = BTreeSet::new();
     if !skip_looking_up_listed_algebraic && root.as_str_non_u128().is_some() {
@@ -2091,7 +2094,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                         let factor_digits_or_expr = &factor_captures[2];
                         let factor = factor_digits_or_expr.into();
                         let (factor_vid, added) = add_factor_node(divisibility_graph, &factor);
-                        debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
+                        debug!("{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}");
                         any_added |= added;
                         let mut should_add_factor = true;
                         if factor_digits_or_expr.contains("...") {
@@ -2104,6 +2107,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                             {
                                 let (factor_specifier, factor_entry_id) =
                                     if let Ok(factor_entry_id) = factor_entry_id.parse::<u128>() {
+                                        debug!("{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}");
                                         (Id(factor_entry_id), Some(factor_entry_id))
                                     } else {
                                         let (factor_vid, _) =
