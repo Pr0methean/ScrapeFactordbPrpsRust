@@ -769,6 +769,9 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         &self,
         other: &Factor<V, W>,
     ) -> bool {
+        if let Numeric(n) = self && let Numeric(o) = other {
+            return o > n && o.is_multiple_of(n);
+        };
         let Some(last_digit) = self.last_digit() else {
             return self != other
         };
