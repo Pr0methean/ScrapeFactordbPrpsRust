@@ -221,7 +221,6 @@ impl ThrottlingHttpClient {
 
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-
     pub async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str> {
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url.clone()).await {

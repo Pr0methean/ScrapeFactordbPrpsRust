@@ -63,12 +63,12 @@ use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::Divisibility::{DirectFactor, NotFactor, TransitiveFactor};
+use crate::Divisibility::{Direct, NotFactor, Transitive};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 enum Divisibility {
-    DirectFactor,
-    TransitiveFactor,
+    Direct,
+    Transitive,
     NotFactor
 }
 
@@ -528,7 +528,6 @@ static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGE
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
-
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
@@ -704,7 +703,6 @@ async fn do_checks(
 }
 
 #[inline]
-
 async fn try_handle_unknown(
     http: &ThrottlingHttpClient,
     u_status_regex: &Regex,
@@ -841,7 +839,6 @@ async fn throttle_if_necessary(
 // fit into the channel at once. In that case, we want the remaining results to wait to be pushed
 // into the channel, without blocking PRP or U searches on the main thread.
 #[allow(clippy::async_yields_async)]
-
 async fn queue_composites(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -1427,7 +1424,7 @@ async fn find_and_submit_factors(
             continue;
         }
         match get_edge(&divisibility_graph, &factor_vid, &root_node) {
-            Some(DirectFactor) | Some(NotFactor) => {
+            Some(Direct) | Some(NotFactor) => {
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
                 continue;
@@ -1547,7 +1544,7 @@ async fn find_and_submit_factors(
                     continue;
                 }
                 let reverse_edge = get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid);
-                if reverse_edge == Some(DirectFactor) || reverse_edge == Some(TransitiveFactor) {
+                if reverse_edge == Some(Direct) || reverse_edge == Some(Transitive) {
                     // dest_factor can't be divisible by factor because factor is divisible by dest_factor
                     debug!(
                         "{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is a factor of {factor}"
@@ -1767,7 +1764,7 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn handle_if_fully_factored(mut divisibility_graph: &mut DivisibilityGraph, already_fully_factored: &mut BTreeSet<VertexId>, factor_vid: VertexId, status: NumberStatus) -> bool {
+fn handle_if_fully_factored(divisibility_graph: &mut DivisibilityGraph, already_fully_factored: &mut BTreeSet<VertexId>, factor_vid: VertexId, status: NumberStatus) -> bool {
     if status == FullyFactored {
         already_fully_factored.insert(factor_vid);
         true
@@ -1793,7 +1790,7 @@ fn rule_out_divisibility(divisibility_graph: &mut DivisibilityGraph, nonfactor: 
         .collect::<Box<[_]>>()
         .into_iter() {
         match divisibility_graph.edge(&edge) {
-            Some(TransitiveFactor) | Some(DirectFactor) => {
+            Some(Transitive) | Some(Direct) => {
                 // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
                 if divisibility_graph.try_add_edge(dest, &neighbor, NotFactor).is_ok() {
                     debug!("Ruled out that {} could be a factor of {}",
@@ -1809,9 +1806,9 @@ fn rule_out_divisibility(divisibility_graph: &mut DivisibilityGraph, nonfactor: 
 
 fn propagate_divisibility(divisibility_graph: &mut DivisibilityGraph, factor: &VertexId, dest: &VertexId, transitive: bool) {
     if transitive {
-        let _ = divisibility_graph.try_add_edge(factor, dest, TransitiveFactor);
+        let _ = divisibility_graph.try_add_edge(factor, dest, Transitive);
     } else {
-        upsert_edge(divisibility_graph, factor, dest, override_transitive_with_direct(DirectFactor));
+        upsert_edge(divisibility_graph, factor, dest, override_transitive_with_direct(Direct));
     }
     rule_out_divisibility(divisibility_graph, dest, factor);
     for (neighbor, edge) in divisibility_graph
@@ -1820,9 +1817,9 @@ fn propagate_divisibility(divisibility_graph: &mut DivisibilityGraph, factor: &V
         .collect::<Box<[_]>>()
         .into_iter() {
         match divisibility_graph.edge(&edge) {
-            Some(TransitiveFactor) | Some(DirectFactor) => {
+            Some(Transitive) | Some(Direct) => {
                 // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
-                if divisibility_graph.try_add_edge(factor, &neighbor, TransitiveFactor).is_ok() {
+                if divisibility_graph.try_add_edge(factor, &neighbor, Transitive).is_ok() {
                     debug!("Added {} as a transitive factor of {}",
                         divisibility_graph.vertex(factor).unwrap(),
                         divisibility_graph.vertex(&neighbor).unwrap());
@@ -1928,8 +1925,8 @@ async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug
                         neighbors_with_edge_weights(divisibility_graph, &new_root_vid, Incoming),
                     )
                 };
-                upsert_edge(divisibility_graph, &root_vid, &new_root_vid, |_| DirectFactor);
-                upsert_edge(divisibility_graph, &new_root_vid, &root_vid, |_| DirectFactor);
+                upsert_edge(divisibility_graph, &root_vid, &new_root_vid, |_| Direct);
+                upsert_edge(divisibility_graph, &new_root_vid, &root_vid, |_| Direct);
                 copy_edges_true_overrides_false(
                     divisibility_graph,
                     &new_root_vid,
@@ -2000,10 +1997,10 @@ fn copy_edges_true_overrides_false(
 
 fn override_transitive_with_direct(divisible: Divisibility) -> impl FnOnce(Option<Divisibility>) -> Divisibility {
     move |old_edge| {
-        if old_edge == Some(DirectFactor) || divisible == DirectFactor {
-            DirectFactor
-        } else if old_edge == Some(TransitiveFactor) || divisible == TransitiveFactor {
-            TransitiveFactor
+        if old_edge == Some(Direct) || divisible == Direct {
+            Direct
+        } else if old_edge == Some(Transitive) || divisible == Transitive {
+            Transitive
         } else {
             NotFactor
         }
