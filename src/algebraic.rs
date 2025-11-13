@@ -1117,6 +1117,63 @@ impl FactorFinder {
             .collect()
     }
 
+    fn estimate_log10(&self, expr: &Factor<T, U>) -> (u128, u128) {
+        match expr {
+            Numeric(n) => (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1),
+            Factor::BigNumber(expr) => {
+                let len = expr.as_ref().len();
+                (len - 1, len)
+            },
+            Factor::Expression(expr) => {
+                if let Some(index) = self
+                    .regexes_as_set
+                    .matches(expr.as_ref())
+                    .into_iter()
+                    .next()
+                {
+                    let captures = self.regexes[index].captures(expr.as_ref()).unwrap();
+                    match index {
+                        0 | 1 => { // Fibonacci or Lucas number
+                            let Ok(term_number) = captures[1].parse::<u128>() else {
+                                warn!(
+                                    "Could not parse term number of a Lucas number: {}",
+                                    &captures[1]
+                                );
+                                return (0, u128::MAX);
+                            };
+                            let est_log = term_number as f64 * 0.20898;
+                            (est_log.floor() as u128, est_log.ceil() as u128 + 1)
+                        },
+                        2 => { // a^n*b+c
+                            let (Ok(a), Ok(n), Ok(b), Ok(c)) = (
+                                captures[1].parse::<u128>(),
+                                captures[2].parse::<u128>(),
+                                captures.get(3).map(|b| b.as_str().parse::<u128>()).unwrap_or(Ok(1)),
+                                captures.get(3).map(|c| c.as_str().parse::<i128>()).unwrap_or(Ok(0)),
+                            ) else {
+                                warn!(
+                                    "Could not parse a^n*b+c expression: {expr}",
+                                );
+                                return (0, u128::MAX);
+                            };
+                            let log_anb_lower_bound = (a as f64).log10().next_down().mul_add((n as f64).next_down(), (b as f64).next_down());
+                            let log_anb_upper_bound = (a as f64).log10().next_up().mul_add((n as f64).next_up(), (b as f64).next_up());
+                            if c == 0 {
+                                return (log_anb_lower_bound.floor() as u128, log_anb_upper_bound.ceil() as u128);
+                            }
+                            let abs_c_over_anb_upper_bound = (a as f64).log10().next_up() / (n as f64).log10().next_down() - (c as f64).abs().log10().next_down();
+                            if c < 0 {
+                                ((log_anb_lower_bound - abs_c_over_anb_upper_bound).floor() as u128, log_anb_upper_bound.ceil() as u128)
+                            } else {
+                                (log_anb_lower_bound.floor() as u128, (log_anb_upper_bound + abs_c_over_anb_upper_bound).ceil() as u128)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[inline]
     fn find_factors<T: AsRef<str>, U: AsRef<str> + Display>(
         &self,
