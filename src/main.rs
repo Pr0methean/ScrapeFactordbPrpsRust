@@ -520,7 +520,7 @@ async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
         .await;
 }
 
-const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 127;
+const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 254;
 
 const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
 
