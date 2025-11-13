@@ -1490,7 +1490,9 @@ async fn find_and_submit_factors(
         }
         info!(
             "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges. \
-        {accepted_factors} factors accepted so far."
+        {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
+            already_fully_factored.len(),
+            ids.len()
         );
         let mut factors_to_submit = divisibility_graph
             .vertices()
@@ -1572,7 +1574,8 @@ async fn find_and_submit_factors(
 
                 if !dest_factor.may_be_proper_divisor_of(&factor) {
                     debug!(
-                        "Skipping submission of {factor} to {dest_factor} because {dest_factor} is smaller or equal"
+                        "Skipping submission of {factor} to {dest_factor} because {dest_factor} is \
+                        smaller or equal or fails last-digit test"
                     );
                     rule_out_divisibility(
                         &mut divisibility_graph,
