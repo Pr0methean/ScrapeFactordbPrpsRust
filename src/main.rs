@@ -20,8 +20,8 @@ use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::FullyFactored;
-use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
+use crate::algebraic::NumberStatus::{FullyFactored, Prime};
+use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use async_backtrace::framed;
@@ -224,7 +224,7 @@ async fn check_composite(
         .known_factors_as_digits::<&str, &str>(http, Id(id), false, true)
         .await;
     if factors.is_empty() {
-        if status == Some(FullyFactored) {
+        if status == Some(FullyFactored) || status == Some(Prime) {
             warn!("{id}: Already fully factored");
             return true;
         } else {
@@ -1341,7 +1341,7 @@ async fn find_and_submit_factors(
         } = factor_finder
             .known_factors_as_digits::<&str, &str>(http, Id(id), false, true)
             .await;
-        if status == Some(FullyFactored) {
+        if status == Some(FullyFactored) || status == Some(Prime) {
             warn!("{id}: Already fully factored");
             return true;
         }
@@ -1673,12 +1673,11 @@ async fn find_and_submit_factors(
                                 factor_specifier,
                                 false,
                                 &factor,
+                                &mut already_fully_factored
                             )
                             .await;
-                            if result.status.is_some() {
-                                if result.status == Some(FullyFactored) {
-                                    already_fully_factored.insert(factor_vid);
-                                }
+                            if let Some(status) = result.status {
+                                handle_if_fully_factored(&mut divisibility_graph, &mut already_fully_factored, factor_vid, status);
                                 checked_for_known_factors_since_last_submission.insert(factor_vid);
                             }
                             if !result.factors.is_empty() {
@@ -1707,14 +1706,13 @@ async fn find_and_submit_factors(
                                 dest_specifier,
                                 false,
                                 &dest_factor,
+                                &mut already_fully_factored
                             )
                             .await;
                             if let Some(status) = result.status {
                                 checked_for_known_factors_since_last_submission
                                     .insert(dest_factor_vid);
-                                if status == FullyFactored {
-                                    already_fully_factored.insert(dest_factor_vid);
-                                }
+                                handle_if_fully_factored(&mut divisibility_graph, &mut already_fully_factored, dest_factor_vid, status);
                             }
                             if !result.factors.is_empty() {
                                 iters_without_progress = 0;
@@ -1773,6 +1771,24 @@ async fn find_and_submit_factors(
         }
     }
     accepted_factors > 0
+}
+
+fn handle_if_fully_factored(mut divisibility_graph: &mut DivisibilityGraph, already_fully_factored: &mut BTreeSet<VertexId>, factor_vid: VertexId, status: NumberStatus) -> bool {
+    if status == FullyFactored {
+        already_fully_factored.insert(factor_vid);
+        true
+    } else if status == Prime {
+        already_fully_factored.insert(factor_vid);
+        for other_vertex in divisibility_graph.vertices_by_id()
+            .filter(|other_vid| *other_vid != factor_vid)
+            .collect::<Box<[_]>>()
+            .into_iter() {
+            rule_out_divisibility(&mut divisibility_graph, &other_vertex, &factor_vid);
+        }
+        true
+    } else {
+        false
+    }
 }
 
 fn rule_out_divisibility(divisibility_graph: &mut DivisibilityGraph, nonfactor: &VertexId, dest: &VertexId) {
@@ -1856,6 +1872,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
     root_specifier: NumberSpecifier<T, U>,
     include_ff: bool,
     root: &Factor<V, W>,
+    already_fully_factored: &mut BTreeSet<VertexId>,
 ) -> ProcessedStatusApiResponse {
     let ProcessedStatusApiResponse {
         status,
@@ -1865,26 +1882,29 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
         .known_factors_as_digits(http, root_specifier, include_ff, false)
         .await;
     debug!("Got entry ID of {id:?} for {root}");
-    if status == Some(FullyFactored) {
-        let mut dest_subfactors_set = BTreeSet::new();
-        dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
-        let vertices = divisibility_graph
-            .vertices()
-            .map(|vertex| {
-                (
-                    vertex.id,
-                    dest_subfactors_set.contains(&vertex.attr.as_ref()),
-                )
-            })
-            .collect::<Box<[_]>>();
-        for (vertex_id, divisible) in vertices {
-            if vertex_id == root_vid {
-                continue;
-            }
-            if divisible {
-                propagate_divisibility(divisibility_graph, &vertex_id, &root_vid, false);
-            } else {
-                rule_out_divisibility(divisibility_graph, &vertex_id, &root_vid);
+    if let Some(status) = status {
+        if !handle_if_fully_factored(divisibility_graph, already_fully_factored, root_vid, status)
+            || include_ff {
+            let mut dest_subfactors_set = BTreeSet::new();
+            dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
+            let vertices = divisibility_graph
+                .vertices()
+                .map(|vertex| {
+                    (
+                        vertex.id,
+                        dest_subfactors_set.contains(&vertex.attr.as_ref()),
+                    )
+                })
+                .collect::<Box<[_]>>();
+            for (vertex_id, divisible) in vertices {
+                if vertex_id == root_vid {
+                    continue;
+                }
+                if divisible {
+                    propagate_divisibility(divisibility_graph, &vertex_id, &root_vid, false);
+                } else {
+                    rule_out_divisibility(divisibility_graph, &vertex_id, &root_vid);
+                }
             }
         }
     }
@@ -2040,14 +2060,14 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                     Expression(root.as_ref()),
                     true,
                     root,
+                    already_fully_factored
                 )
                 .await;
-                if result.status.is_some() {
+                if let Some(status) = result.status {
                     checked_for_known_factors_since_last_submission.insert(root_vid);
-                }
-                if result.status == Some(FullyFactored) {
-                    already_fully_factored.insert(root_vid);
-                    return true;
+                    if handle_if_fully_factored(divisibility_graph, already_fully_factored, root_vid, status) {
+                        return true;
+                    }
                 }
                 parseable_factors.extend(result.factors);
                 result.id
@@ -2098,17 +2118,14 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                                     factor_specifier,
                                     true,
                                     &factor,
+                                    already_fully_factored
                                 )
                                 .await;
                                 if !result.factors.is_empty() {
                                     any_added = true;
                                 }
-                                if result.status.is_some() {
-                                    if result.status == Some(FullyFactored) {
-                                        already_fully_factored.insert(factor_vid);
-                                    } else {
-                                        parseable_factors.extend(result.factors);
-                                    }
+                                if let Some(status) = result.status {
+                                    handle_if_fully_factored(divisibility_graph, already_fully_factored, factor_vid, status);
                                     checked_for_known_factors_since_last_submission
                                         .insert(factor_vid);
                                     should_add_factor = false;

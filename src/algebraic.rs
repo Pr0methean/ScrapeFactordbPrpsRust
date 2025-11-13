@@ -1,7 +1,5 @@
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{
-    FullyFactored, PartlyFactoredComposite, UnfactoredComposite, Unknown,
-};
+use crate::algebraic::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
 use crate::net::ThrottlingHttpClient;
 use crate::{
     MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY, write_bignum,
@@ -762,8 +760,8 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
     fn last_digit(&self) -> Option<u8> {
         match self {
             Factor::Expression(_) => None,
-            Factor::BigNumber(n) => Some(n.as_ref().chars().last().parse().unwrap()),
-            Factor::Numeric(n) => Some((n % 10).into()),
+            Factor::BigNumber(n) => Some(n.as_ref().chars().last().unwrap().to_digit(10).unwrap() as u8),
+            Factor::Numeric(n) => Some((n % 10) as u8),
         }
     }
 
@@ -1515,24 +1513,19 @@ impl FactorFinder {
     ) -> ProcessedStatusApiResponse {
         if let NumberSpecifier::Expression(Numeric(n)) = id {
             debug!("Specially handling numeric expression {n}");
+            let factors = Self::find_factors_of_u128(n).into_boxed_slice();
             return ProcessedStatusApiResponse {
-                status: Some(FullyFactored),
-                factors: Self::find_factors_of_u128(n).into_boxed_slice(),
+                status: Some(if factors.len() > 1 {
+                    Prime
+                } else {
+                    FullyFactored
+                }),
+                factors,
                 id: if n <= MAX_ID_EQUAL_TO_VALUE {
                     Some(n)
                 } else {
                     None
                 },
-            };
-        }
-        if let NumberSpecifier::Id(id) = id
-            && id <= MAX_ID_EQUAL_TO_VALUE
-        {
-            debug!("Specially handling small ID {id}");
-            return ProcessedStatusApiResponse {
-                status: Some(FullyFactored),
-                factors: Self::find_factors_of_u128(id).into_boxed_slice(),
-                id: Some(id),
             };
         }
         let response = match id {
@@ -1573,7 +1566,8 @@ impl FactorFinder {
                         factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
                     let status = match status.as_str() {
-                        "FF" | "P" | "PRP" => Some(FullyFactored),
+                        "FF" => Some(FullyFactored),
+                        "P" | "PRP" => Some(Prime),
                         "C" => Some(UnfactoredComposite),
                         "CF" => Some(PartlyFactoredComposite),
                         "U" => Some(Unknown),
@@ -1582,7 +1576,8 @@ impl FactorFinder {
                             None
                         }
                     };
-                    let factors = if !include_ff && status == Some(FullyFactored) {
+                    let factors = if !include_ff
+                        && status == Some(FullyFactored) || status == Some(Prime) {
                         Box::new([])
                     } else {
                         let mut factors: Vec<_> = factors
@@ -1642,7 +1637,8 @@ pub struct ProcessedStatusApiResponse {
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 pub enum NumberStatus {
     Unknown,
-    FullyFactored, // includes P and PRP
+    FullyFactored,
+    Prime, // includes PRP
     PartlyFactoredComposite,
     UnfactoredComposite,
 }
