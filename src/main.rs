@@ -1386,6 +1386,7 @@ async fn find_and_submit_factors(
     let multiple_starting_entries = digits_or_expr_full.len() > 1;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
         let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
+        debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         factor_found |= add_algebraic_factors_to_graph(
             http,
             if multiple_starting_entries {
