@@ -22,6 +22,7 @@ use std::borrow::Cow::{Borrowed, Owned};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::BTreeMap;
+use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
@@ -763,7 +764,7 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
             Factor::BigNumber(n) => {
                 Some(n.as_ref().chars().last().unwrap().to_digit(10).unwrap() as u8)
             }
-            Factor::Numeric(n) => Some((n % 10) as u8),
+            Numeric(n) => Some((n % 10) as u8),
         }
     }
 
@@ -1079,14 +1080,14 @@ impl FactorFinder {
             "^lucas\\(([0-9]+)\\)$",
             "^I\\(([0-9]+)\\)$",
             "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
-            "^([0-9]+!)$",
-            "^([0-9]+#)$",
+            "^([0-9]+)!$",
+            "^([0-9]+)#$",
             "^([0-9]+)$",
             "^([0-9]+\\.\\.+[0-9]+)$",
             "^\\(([^()]+)\\)$",
             "^([^+-]+|\\([^()]+\\))/([^+-]+|\\([^()]+\\))$",
             "^([^+-]+|\\([^()]+\\))\\*([^+-]+|\\([^()]+\\))$",
-            "^([^()]+|\\([^()]+\\))[+-]([^()]+|\\([^()]+\\))$",
+            "^([^()]+|\\([^()]+\\))([+-])([^()]+|\\([^()]+\\))$",
         ])
         .unwrap();
         let regexes = regexes_as_set
@@ -1117,12 +1118,12 @@ impl FactorFinder {
             .collect()
     }
 
-    fn estimate_log10(&self, expr: &Factor<T, U>) -> (u128, u128) {
+    fn estimate_log10<T: AsRef<str>, U: AsRef<str> + Display>(&self, expr: &Factor<T, U>) -> (u128, u128) {
         match expr {
             Numeric(n) => (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1),
             Factor::BigNumber(expr) => {
                 let len = expr.as_ref().len();
-                (len - 1, len)
+                ((len - 1) as u128, len as u128)
             },
             Factor::Expression(expr) => {
                 if let Some(index) = self
@@ -1148,27 +1149,120 @@ impl FactorFinder {
                             let (Ok(a), Ok(n), Ok(b), Ok(c)) = (
                                 captures[1].parse::<u128>(),
                                 captures[2].parse::<u128>(),
-                                captures.get(3).map(|b| b.as_str().parse::<u128>()).unwrap_or(Ok(1)),
-                                captures.get(3).map(|c| c.as_str().parse::<i128>()).unwrap_or(Ok(0)),
+                                captures.get(3).map(|b| b.as_str()[1..].parse::<u128>()).unwrap_or(Ok(1)),
+                                captures.get(4).map(|c| c.as_str().parse::<i128>()).unwrap_or(Ok(0)),
                             ) else {
                                 warn!(
                                     "Could not parse a^n*b+c expression: {expr}",
                                 );
                                 return (0, u128::MAX);
                             };
-                            let log_anb_lower_bound = (a as f64).log10().next_down().mul_add((n as f64).next_down(), (b as f64).next_down());
-                            let log_anb_upper_bound = (a as f64).log10().next_up().mul_add((n as f64).next_up(), (b as f64).next_up());
+                            let log_anb_lower_bound = (a as f64).log10().next_down().mul_add((n as f64).next_down(), (b as f64).log10().next_down());
+                            let log_anb_upper_bound = (a as f64).log10().next_up().mul_add((n as f64).next_up(), (b as f64).log10().next_up());
                             if c == 0 {
                                 return (log_anb_lower_bound.floor() as u128, log_anb_upper_bound.ceil() as u128);
                             }
-                            let abs_c_over_anb_upper_bound = (a as f64).log10().next_up() / (n as f64).log10().next_down() - (c as f64).abs().log10().next_down();
+                            let log_abs_c_upper_bound = (c as f64).abs().log10().next_up();
                             if c < 0 {
-                                ((log_anb_lower_bound - abs_c_over_anb_upper_bound).floor() as u128, log_anb_upper_bound.ceil() as u128)
+                                ((log_anb_lower_bound - log_abs_c_upper_bound).floor() as u128, log_anb_upper_bound.ceil() as u128)
                             } else {
-                                (log_anb_lower_bound.floor() as u128, (log_anb_upper_bound + abs_c_over_anb_upper_bound).ceil() as u128)
+                                (log_anb_lower_bound.floor() as u128, (log_anb_upper_bound + log_abs_c_upper_bound).ceil() as u128)
                             }
                         }
+                        3 => { // factorial
+                            let Ok(input) = captures[1].parse::<u128>() else {
+                                warn!(
+                                    "Could not parse input to a factorial: {}",
+                                    &captures[1]
+                                );
+                                return (0, u128::MAX);
+                            };
+                            let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
+
+                            // LN_10 is already rounded up
+                            let log_factorial_lower_bound = ln_factorial.next_down() / LN_10;
+                            let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
+
+                            (log_factorial_lower_bound.floor() as u128, log_factorial_upper_bound.ceil() as u128)
+                        }
+                        4 => { // primorial
+                            let Ok(input) = captures[1].parse::<u128>() else {
+                                warn!(
+                                    "Could not parse input to a factorial: {}",
+                                    &captures[1]
+                                );
+                                return (0, u128::MAX);
+                            };
+                            if input < 2 {
+                                return (0, 0);
+                            }
+
+                            // Lower bound is from
+                            // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
+                            // "Approximate formulas for some functions of prime numbers".
+                            // Illinois Journal of Mathematics 6 (1), p. 70
+                            // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
+                            // (p. 7 of PDF)
+                            let lower_bound = if input >= 563 {
+                                (input as f64 * (1.0/(2.0*(input as f64).ln())) / LN_10).ceil() as u128
+                            }  else if input >= 41 {
+                                (input as f64 * (1.0/(input as f64).ln()) / LN_10.next_down()).ceil() as u128
+                            } else {
+                                0
+                            };
+                            let upper_bound = (1.01624/LN_10 * input as f64).floor();
+                            (lower_bound, upper_bound as u128)
+                        }
+                        5 => { // Raw number
+                            (expr.as_ref().len() as u128 - 1, expr.as_ref().len() as u128)
+                        }
+                        6 => { // Elided numbers from factordb are always at least 51 digits
+                            (50, u128::MAX)
+                        }
+                        7 => { // parens
+                            self.estimate_log10(&Factor::<&str,&str>::from(&captures[1]))
+                        }
+                        8 => { // division
+                            let (numerator_lower, numerator_upper)
+                                = self.estimate_log10(&Factor::<&str,&str>::from(&captures[1]));
+                            let (denominator_lower, denominator_upper)
+                                = self.estimate_log10(&Factor::<&str,&str>::from(&captures[2]));
+                            (numerator_lower.saturating_sub(denominator_upper).saturating_sub(1),
+                            numerator_upper.saturating_sub(denominator_lower).saturating_add(1))
+                        }
+                        9 => { // multiplication
+                            let (left_lower, left_upper)
+                                = self.estimate_log10(&Factor::<&str,&str>::from(&captures[1]));
+                            let (right_lower, right_upper)
+                                = self.estimate_log10(&Factor::<&str,&str>::from(&captures[2]));
+                            (left_lower.saturating_add(right_lower),
+                            left_upper.saturating_add(right_upper).saturating_add(1))
+                        }
+                        10 => { // addition/subtraction
+                            let (left_lower, left_upper)
+                                = self.estimate_log10(&Factor::<&str,&str>::from(&captures[1]));
+                            let (right_lower, right_upper)
+                                = self.estimate_log10(&Factor::<&str,&str>::from(&captures[3]));
+                            let combined_lower = if &captures[2] == "-" {
+                                if left_lower.saturating_sub(right_upper) > 1 {
+                                    left_lower.saturating_sub(1)
+                                } else {
+                                    0
+                                }
+                            } else {
+                                left_lower.max(right_lower)
+                            };
+                            let combined_upper = if &captures[2] == "-" {
+                                left_upper
+                            } else {
+                                left_upper.max(right_upper).saturating_add(1)
+                            };
+                            (combined_lower, combined_upper)
+                        }
+                        _ => unsafe { unreachable_unchecked() }
                     }
+                } else {
+                    (0, u128::MAX)
                 }
             }
         }
@@ -1399,12 +1493,11 @@ impl FactorFinder {
                         }
                         7 => {
                             // parens
-                            let inner_expr: Factor<&str, &str> = captures[1].into();
-                            self.find_factors(&inner_expr)
+                            self.find_factors(&Factor::<&str, &str>::from(&captures[1]))
                         }
                         8 => {
                             // division by another expression
-                            let numerator: Factor<&str, &str> = captures[1].into();
+                            let numerator: Factor<&str, &str> = Factor::from(&captures[1]);
                             let numerator = self.find_factors(&numerator);
                             let denominator: Factor<ArcStr, CompactString> = captures[2].into();
                             let denominator = if numerator.contains(&denominator) {
@@ -1431,7 +1524,7 @@ impl FactorFinder {
                             // addition/subtraction; only return common factors of both sides, and 2
                             // if both are odd
                             let left_expr: Factor<&str, &str> = captures[1].into();
-                            let right_expr: Factor<&str, &str> = captures[2].into();
+                            let right_expr: Factor<&str, &str> = captures[3].into();
                             self.find_common_factors(&left_expr, &right_expr, true)
                         }
                         _ => unsafe { unreachable_unchecked() },
@@ -1715,11 +1808,9 @@ pub enum NumberStatus {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::repeat_n;
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{
-        FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
-        lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset,
-    };
+    use crate::algebraic::{FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset, Factor};
     use itertools::Itertools;
 
     #[test]
@@ -1845,5 +1936,52 @@ mod tests {
         let multiset_2 = vec![2, 3, 3, 3, 5, 11];
         let difference: Vec<i32> = multiset_difference(multiset_1, &multiset_2);
         assert_eq!(difference, vec![2, 7]);
+    }
+
+    #[test]
+    fn test_estimate_log10() {
+        let finder = FactorFinder::new();
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Numeric(99));
+        assert_eq!(lower, 1);
+        assert_eq!(upper, 2);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Numeric(100));
+        assert_eq!(lower, 2);
+        assert_eq!(upper, 2);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Numeric(101));
+        assert_eq!(lower, 2);
+        assert_eq!(upper, 3);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(
+            &Factor::BigNumber(&("1".to_string() + &*repeat_n('0', 50).collect::<String>())));
+        assert_eq!(lower, 50);
+        assert!(upper == 50 || upper == 51);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(
+            &Factor::BigNumber(&(repeat_n('9', 50).collect::<String>())));
+        assert_eq!(lower, 49);
+        assert!(upper == 49 || upper == 50);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("2^607-1"));
+        assert_eq!(lower, 182);
+        assert_eq!(upper, 183);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("10^200*2-1"));
+        assert_eq!(lower, 200);
+        assert_eq!(upper, 201);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("100!"));
+        assert_eq!(lower, 157);
+        assert_eq!(upper, 158);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("100#"));
+        assert!(lower <= 36);
+        assert!(upper >= 37);
+        assert!(upper <= 50);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("20+30"));
+        assert_eq!(lower, 1);
+        assert!(upper == 2 || upper == 3);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("30-19"));
+        assert!(lower <= 1);
+        assert_eq!(upper, 2);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("11*11"));
+        assert_eq!(lower, 2);
+        assert!(upper >= 3);
+        let (lower, upper) = finder.estimate_log10::<&str,&str>(&Factor::Expression("(2^769-1)/1591805393"));
+        assert!(lower <= 222);
+        assert!(upper >= 223);
     }
 }
