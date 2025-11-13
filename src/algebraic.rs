@@ -1480,14 +1480,14 @@ impl FactorFinder {
                     }
             }
             Factor::Expression(s) => {
-                expr.may_be_proper_divisor_of(f)
+                f.may_be_proper_divisor_of(expr)
                     && if let Factor::Expression(expr) = &expr {
                         !expr.as_ref().starts_with(&format!("{s}/"))
                     } else {
                         true
                     }
             }
-            Factor::BigNumber(_) => expr.may_be_proper_divisor_of(f),
+            Factor::BigNumber(_) => f.may_be_proper_divisor_of(expr),
         });
         factors.sort();
         factors.dedup();
