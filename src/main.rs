@@ -1570,7 +1570,7 @@ async fn find_and_submit_factors(
                     continue;
                 }
 
-                if dest_factor.unambiguously_less_or_equal(&factor) {
+                if !dest_factor.may_be_proper_divisor_of(&factor) {
                     debug!(
                         "Skipping submission of {factor} to {dest_factor} because {dest_factor} is smaller or equal"
                     );

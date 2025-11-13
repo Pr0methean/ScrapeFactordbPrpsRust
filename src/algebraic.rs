@@ -621,6 +621,7 @@ impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
     }
 }
 
+
 impl<'a, T, U> From<&'a Factor<T, U>> for Factor<&'a str, &'a str>
 where
     &'a str: From<&'a T> + From<&'a U>,
@@ -758,17 +759,31 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         }
     }
 
-    pub fn unambiguously_less_or_equal<V: AsRef<str>, W: AsRef<str>>(
+    fn last_digit(&self) -> Option<u8> {
+        match self {
+            Factor::Expression(_) => None,
+            Factor::BigNumber(n) => Some(n.as_ref().chars().last().parse().unwrap()),
+            Factor::Numeric(n) => Some((n % 10).into()),
+        }
+    }
+
+    pub fn may_be_proper_divisor_of<V: AsRef<str>, W: AsRef<str>>(
         &self,
         other: &Factor<V, W>,
     ) -> bool {
-        if let Factor::Expression(_) = self {
-            self == other
-        } else if let Factor::Expression(_) = other {
-            self == other
-        } else {
-            self.partial_cmp(other) != Some(Ordering::Greater)
-        }
+        let Some(last_digit) = self.last_digit() else {
+            return self != other
+        };
+        let Some(other_last_digit) = other.last_digit() else {
+            return self != other
+        };
+        self.partial_cmp(other) != Some(Ordering::Greater) && match last_digit {
+            0 => vec![0],
+            2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
+            5 => vec![0, 5],
+            1 | 3 | 7 | 9 => vec![0,1,2,3,4,5,6,7,8,9],
+            _ => unsafe {unreachable_unchecked()}
+        }.contains(&other_last_digit)
     }
 }
 
@@ -1464,14 +1479,14 @@ impl FactorFinder {
                     }
             }
             Factor::Expression(s) => {
-                !expr.unambiguously_less_or_equal(f)
+                expr.may_be_proper_divisor_of(f)
                     && if let Factor::Expression(expr) = &expr {
                         !expr.as_ref().starts_with(&format!("{s}/"))
                     } else {
                         true
                     }
             }
-            Factor::BigNumber(_) => !expr.unambiguously_less_or_equal(f),
+            Factor::BigNumber(_) => expr.may_be_proper_divisor_of(f),
         });
         factors.sort();
         factors.dedup();
