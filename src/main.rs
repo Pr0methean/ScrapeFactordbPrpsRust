@@ -1894,6 +1894,7 @@ async fn add_known_factors_to_graph<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>,
                 Box::new([])
             } else {
                 // These expressions are different but equivalent; merge their edges
+                info!("{id:?}: Detected that {dest_subfactor} and {root} are equivalent");
                 let (new_root_vid, added) = add_factor_node(divisibility_graph, &dest_subfactor);
                 debug!("{id:?}: Factor {dest_subfactor} has vertex ID {new_root_vid:?}");
                 let old_out_neighbors =
