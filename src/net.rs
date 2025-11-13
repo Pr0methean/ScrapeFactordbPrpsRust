@@ -117,7 +117,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                                 error!("Error reading {url}: HTTP response code {response_code}")
                             }
                             Ok(String::from_utf8(curl.get_mut().take_all())?)
-                        }).map_err(anyhow::Error::from);
+                        });
                     Ok(response_text?)
                 },
             },
@@ -279,7 +279,7 @@ impl ThrottlingHttpClient {
                         error!("Error reading {url}: HTTP response code {response_code}")
                     }
                     Ok(String::from_utf8(curl.get_mut().take_all())?)
-                }).map_err(anyhow::Error::from);
+                });
             drop(curl);
             response_text
         } else {
@@ -354,7 +354,7 @@ impl ThrottlingHttpClient {
             inner: if url.len() <= REQWEST_MAX_URL_LEN {
                 Ok(self.http.post(url.as_str()))
             } else {
-                Err(url.into())
+                Err(url)
             },
             client: self,
             form: None

@@ -1370,7 +1370,7 @@ async fn find_and_submit_factors(
     if root_status.is_some() {
         checked_for_known_factors_since_last_submission.insert(root_node);
     }
-    debug!("{id}: Root node for {digits_or_expr} is {} with vertex ID {root_node:?}", divisibility_graph.vertex(&root_node).unwrap());
+    debug!("{id}: Root node for {digits_or_expr} is {} with vertex ID {root_node:?}", divisibility_graph.vertex(root_node).unwrap());
     ids.insert(root_node, id);
     let mut factor_found = false;
     let mut accepted_factors = 0;
@@ -1378,7 +1378,7 @@ async fn find_and_submit_factors(
     let mut already_checked_for_algebraic = BTreeSet::new();
     let multiple_starting_entries = digits_or_expr_full.len() > 1;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
-        let factor = divisibility_graph.vertex(&factor_vid).unwrap().clone();
+        let factor = divisibility_graph.vertex(factor_vid).unwrap().clone();
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         factor_found |= add_algebraic_factors_to_graph(
             http,
@@ -1777,7 +1777,7 @@ fn handle_if_fully_factored(mut divisibility_graph: &mut DivisibilityGraph, alre
             .filter(|other_vid| *other_vid != factor_vid)
             .collect::<Box<[_]>>()
             .into_iter() {
-            rule_out_divisibility(&mut divisibility_graph, &other_vertex, &factor_vid);
+            rule_out_divisibility(divisibility_graph, &other_vertex, &factor_vid);
         }
         true
     } else {
@@ -1831,7 +1831,7 @@ fn propagate_divisibility(divisibility_graph: &mut DivisibilityGraph, factor: &V
                 if divisibility_graph.try_add_edge(&neighbor, factor, NotFactor).is_ok() {
                     debug!("Ruled out that {} could be a factor of {}",
                         divisibility_graph.vertex(&neighbor).unwrap(),
-                        divisibility_graph.vertex(&factor).unwrap());
+                        divisibility_graph.vertex(factor).unwrap());
                     rule_out_divisibility(divisibility_graph, &neighbor, factor);
                 }
             }
@@ -1878,9 +1878,9 @@ async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug
         .known_factors_as_digits(http, root_specifier, include_ff, false)
         .await;
     debug!("Got entry ID of {id:?} for {root}");
-    if let Some(status) = status {
-        if !handle_if_fully_factored(divisibility_graph, already_fully_factored, root_vid, status)
-            || status == Prime || include_ff {
+    if let Some(status) = status
+        && (!handle_if_fully_factored(divisibility_graph, already_fully_factored, root_vid, status)
+            || status == Prime || include_ff) {
             let mut dest_subfactors_set = BTreeSet::new();
             dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
             let vertices = divisibility_graph
@@ -1903,7 +1903,6 @@ async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug
                 }
             }
         }
-    }
     let len = dest_subfactors.len();
     let all_added = match len {
         0 => Box::new([]),
@@ -1975,7 +1974,7 @@ fn upsert_edge<F: FnOnce(Option<Divisibility>) -> Divisibility>(
     match divisibility_graph.edge_id_any(from_vid, to_vid) {
         Some(old_edge_id) => {
             divisibility_graph.replace_edge(
-                &old_edge_id,
+                old_edge_id,
                 new_value_fn(Some(*divisibility_graph.edge(&old_edge_id).unwrap())),
             );
         }
@@ -2169,7 +2168,7 @@ fn get_edge(
     source: &VertexId,
     dest: &VertexId,
 ) -> Option<Divisibility> {
-    Some(*graph.edge(&graph.edge_id_any(source, dest)?)?)
+    Some(*graph.edge(graph.edge_id_any(source, dest)?)?)
 }
 
 fn add_factor_node(
