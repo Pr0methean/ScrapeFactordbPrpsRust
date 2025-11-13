@@ -1,9 +1,12 @@
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
+use crate::algebraic::NumberStatus::{
+    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
+};
 use crate::net::ThrottlingHttpClient;
 use crate::{
     MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY, write_bignum,
 };
+use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -25,7 +28,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
-use arcstr::ArcStr;
 use urlencoding::encode;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
@@ -618,7 +620,6 @@ impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
     }
 }
 
-
 impl<'a, T, U> From<&'a Factor<T, U>> for Factor<&'a str, &'a str>
 where
     &'a str: From<&'a T> + From<&'a U>,
@@ -759,7 +760,9 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
     fn last_digit(&self) -> Option<u8> {
         match self {
             Factor::Expression(_) => None,
-            Factor::BigNumber(n) => Some(n.as_ref().chars().last().unwrap().to_digit(10).unwrap() as u8),
+            Factor::BigNumber(n) => {
+                Some(n.as_ref().chars().last().unwrap().to_digit(10).unwrap() as u8)
+            }
             Factor::Numeric(n) => Some((n % 10) as u8),
         }
     }
@@ -768,22 +771,26 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         &self,
         other: &Factor<V, W>,
     ) -> bool {
-        if let Numeric(n) = self && let Numeric(o) = other {
+        if let Numeric(n) = self
+            && let Numeric(o) = other
+        {
             return o > n && o.is_multiple_of(n);
         };
         let Some(last_digit) = self.last_digit() else {
-            return self != other
+            return self != other;
         };
         let Some(other_last_digit) = other.last_digit() else {
-            return self != other
+            return self != other;
         };
-        self.partial_cmp(other) != Some(Ordering::Greater) && match last_digit {
-            0 => vec![0],
-            2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
-            5 => vec![0, 5],
-            1 | 3 | 7 | 9 => vec![0,1,2,3,4,5,6,7,8,9],
-            _ => unsafe {unreachable_unchecked()}
-        }.contains(&other_last_digit)
+        self.partial_cmp(other) != Some(Ordering::Greater)
+            && match last_digit {
+                0 => vec![0],
+                2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
+                5 => vec![0, 5],
+                1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                _ => unsafe { unreachable_unchecked() },
+            }
+            .contains(&other_last_digit)
     }
 }
 
@@ -1506,7 +1513,10 @@ impl FactorFinder {
     // this method.
 
     #[inline]
-    pub async fn known_factors_as_digits<T: AsRef<str> + std::fmt::Debug, U: AsRef<str> + std::fmt::Debug>(
+    pub async fn known_factors_as_digits<
+        T: AsRef<str> + std::fmt::Debug,
+        U: AsRef<str> + std::fmt::Debug,
+    >(
         &self,
         http: &ThrottlingHttpClient,
         id: NumberSpecifier<T, U>,
@@ -1579,18 +1589,18 @@ impl FactorFinder {
                             None
                         }
                     };
-                    let factors = if !include_ff
-                        && status == Some(FullyFactored) || status == Some(Prime) {
-                        Box::new([])
-                    } else {
-                        let mut factors: Vec<_> = factors
-                            .into_iter()
-                            .map(|(factor, _exponent)| Factor::from(factor))
-                            .collect();
-                        factors.sort();
-                        factors.dedup();
-                        factors.into_boxed_slice()
-                    };
+                    let factors =
+                        if !include_ff && status == Some(FullyFactored) || status == Some(Prime) {
+                            Box::new([])
+                        } else {
+                            let mut factors: Vec<_> = factors
+                                .into_iter()
+                                .map(|(factor, _exponent)| Factor::from(factor))
+                                .collect();
+                            factors.sort();
+                            factors.dedup();
+                            factors.into_boxed_slice()
+                        };
                     ProcessedStatusApiResponse {
                         status,
                         factors,
@@ -1649,7 +1659,10 @@ pub enum NumberStatus {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset};
+    use crate::algebraic::{
+        FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
+        lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset,
+    };
     use itertools::Itertools;
 
     #[test]
@@ -1665,7 +1678,7 @@ mod tests {
     #[test]
     fn test_anbc_2() {
         let finder = FactorFinder::new();
-        let factors = finder.find_factors::<&str,&str>(&"6^200600+1".into());
+        let factors = finder.find_factors::<&str, &str>(&"6^200600+1".into());
         println!("{}", factors.iter().join(", "));
 
         // Should contain 6^8+1

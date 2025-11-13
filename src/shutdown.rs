@@ -78,7 +78,6 @@ impl Clone for Shutdown {
     }
 }
 
-
 pub async fn handle_signals(shutdown_sender: Sender<()>, installed_sender: oneshot::Sender<()>) {
     let sigint = ctrl_c();
     info!("Signal handlers installed");

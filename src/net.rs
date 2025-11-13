@@ -1,14 +1,16 @@
-use std::mem::swap;
 use crate::shutdown::Shutdown;
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use anyhow::Error;
+use arcstr::{ArcStr, literal};
 use atomic_time::AtomicInstant;
+use curl::easy::{Easy2, Handler, WriteError};
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use log::{error, warn};
 use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
+use std::mem::swap;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
@@ -16,8 +18,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
-use arcstr::{literal, ArcStr};
-use curl::easy::{Easy2, Handler, WriteError};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 
@@ -62,7 +62,7 @@ pub struct ThrottlingHttpClient {
 pub struct ThrottlingRequestBuilder<'a> {
     inner: Result<RequestBuilder, ArcStr>,
     client: &'a ThrottlingHttpClient,
-    form: Option<Box<str>>
+    form: Option<Box<str>>,
 }
 
 pub struct ResourceLimits {
@@ -78,16 +78,13 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                 client: self.client,
                 form: None,
             }),
-            Err(_) => {
-                Ok(ThrottlingRequestBuilder {
-                    inner: self.inner,
-                    client: self.client,
-                    form: Some(serde_urlencoded::to_string(payload)?.into_boxed_str())
-                })
-            }
+            Err(_) => Ok(ThrottlingRequestBuilder {
+                inner: self.inner,
+                client: self.client,
+                form: Some(serde_urlencoded::to_string(payload)?.into_boxed_str()),
+            }),
         }
     }
-
 
     pub async fn send(self) -> Result<String, Error> {
         sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
@@ -107,7 +104,8 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                     if let Some(form) = self.form {
                         curl.post_fields_copy(form.as_bytes())?;
                     }
-                    let response_text = curl.post(true)
+                    let response_text = curl
+                        .post(true)
                         .and_then(|_| curl.url(&url))
                         .and_then(|_| curl.perform())
                         .map_err(anyhow::Error::from)
@@ -119,7 +117,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                             Ok(String::from_utf8(curl.get_mut().take_all())?)
                         });
                     Ok(response_text?)
-                },
+                }
             },
             Err(e) => Err(e.into()),
         }
@@ -164,10 +162,9 @@ impl ThrottlingHttpClient {
             request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
             all_threads_blocked_until: AtomicInstant::now().into(),
             shutdown_receiver,
-            curl_client: Mutex::new(Easy2::new(Collector(Vec::new()))).into()
+            curl_client: Mutex::new(Easy2::new(Collector(Vec::new()))).into(),
         }
     }
-
 
     pub async fn parse_resource_limits(
         &self,
@@ -241,7 +238,6 @@ impl ThrottlingHttpClient {
         }
     }
 
-
     pub async fn retrying_get_and_decode_or(
         &self,
         url: ArcStr,
@@ -259,7 +255,6 @@ impl ThrottlingHttpClient {
         Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
     }
 
-
     async fn try_get_and_decode_core(&self, url: ArcStr) -> Option<Box<str>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
@@ -268,7 +263,8 @@ impl ThrottlingHttpClient {
             // spawn_blocking
             let mut curl = self.curl_client.lock().await;
             let url = url.clone();
-            let response_text = curl.get(true)
+            let response_text = curl
+                .get(true)
                 .and_then(|_| curl.url(&url))
                 .and_then(|_| curl.perform())
                 .map_err(anyhow::Error::from)
@@ -283,15 +279,16 @@ impl ThrottlingHttpClient {
             response_text
         } else {
             let result = self
-                    .http
-                    .get(url.as_str())
-                    .header("Referer", "https://factordb.com")
-                    .send()
-                    .await;
+                .http
+                .get(url.as_str())
+                .header("Referer", "https://factordb.com")
+                .send()
+                .await;
             match result {
                 Ok(response) => response.text().await,
-                Err(e) => Err(e)
-            }.map_err(|e| anyhow::Error::from(e.without_url()))
+                Err(e) => Err(e),
+            }
+            .map_err(|e| anyhow::Error::from(e.without_url()))
         };
         drop(permit);
         match result {
@@ -309,7 +306,6 @@ impl ThrottlingHttpClient {
             }
         }
     }
-
 
     pub async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
@@ -336,7 +332,6 @@ impl ThrottlingHttpClient {
         Some(response)
     }
 
-
     pub async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
@@ -356,7 +351,7 @@ impl ThrottlingHttpClient {
                 Err(url)
             },
             client: self,
-            form: None
+            form: None,
         }
     }
 }

@@ -30,7 +30,6 @@ impl<T: Debug> PushbackReceiver<T> {
         }
     }
 
-
     pub async fn recv(&mut self) -> (T, OwnedPermit<T>) {
         self.redrive_returned();
         let return_permit = self.return_sender.clone().reserve_owned().await.unwrap();
