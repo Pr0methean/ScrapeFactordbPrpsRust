@@ -2,7 +2,6 @@ use std::mem::swap;
 use crate::shutdown::Shutdown;
 use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
 use anyhow::Error;
-use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
@@ -89,7 +88,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
         }
     }
 
-    #[framed]
+
     pub async fn send(self) -> Result<String, Error> {
         sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
         self.client.rate_limiter.until_ready().await;
@@ -169,7 +168,7 @@ impl ThrottlingHttpClient {
         }
     }
 
-    #[framed]
+
     pub async fn parse_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
@@ -222,7 +221,7 @@ impl ThrottlingHttpClient {
 
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    #[framed]
+
     pub async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str> {
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url.clone()).await {
@@ -243,7 +242,7 @@ impl ThrottlingHttpClient {
         }
     }
 
-    #[framed]
+
     pub async fn retrying_get_and_decode_or(
         &self,
         url: ArcStr,
@@ -261,7 +260,7 @@ impl ThrottlingHttpClient {
         Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
     }
 
-    #[framed]
+
     async fn try_get_and_decode_core(&self, url: ArcStr) -> Option<Box<str>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
@@ -312,7 +311,7 @@ impl ThrottlingHttpClient {
         }
     }
 
-    #[framed]
+
     pub async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
@@ -338,7 +337,7 @@ impl ThrottlingHttpClient {
         Some(response)
     }
 
-    #[framed]
+
     pub async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,

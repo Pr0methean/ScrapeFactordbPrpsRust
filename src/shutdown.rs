@@ -1,6 +1,5 @@
 // Adapted from: https://github.com/tokio-rs/mini-redis/blob/e186482ca00f8d884ddcbe20417f3654d03315a4/src/shutdown.rs
 
-use async_backtrace::framed;
 use log::{error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -79,7 +78,7 @@ impl Clone for Shutdown {
     }
 }
 
-#[framed]
+
 pub async fn handle_signals(shutdown_sender: Sender<()>, installed_sender: oneshot::Sender<()>) {
     let sigint = ctrl_c();
     info!("Signal handlers installed");

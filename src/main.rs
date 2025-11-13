@@ -24,7 +24,6 @@ use crate::algebraic::NumberStatus::{FullyFactored, Prime};
 use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
-use async_backtrace::framed;
 use channel::PushbackReceiver;
 use compact_str::{CompactString};
 use const_format::formatcp;
@@ -44,10 +43,9 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::backtrace::Backtrace;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
@@ -153,7 +151,7 @@ struct FactorSubmission<'a> {
     factor: Cow<'a, str>,
 }
 
-#[framed]
+
 async fn composites_while_waiting(
     end: Instant,
     http: &ThrottlingHttpClient,
@@ -193,7 +191,7 @@ async fn composites_while_waiting(
     }
 }
 
-#[framed]
+
 async fn check_composite(
     http: &ThrottlingHttpClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
@@ -226,7 +224,7 @@ async fn check_composite(
     if factors.is_empty() {
         if status == Some(FullyFactored) || status == Some(Prime) {
             warn!("{id}: Already fully factored");
-            return true;
+            true
         } else {
             return_permit.send(CompositeCheckTask { id, digits_or_expr });
             info!("{id}: Requeued C");
@@ -309,7 +307,7 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
     }
 }
 
-#[framed]
+
 async fn get_prp_remaining_bases(
     id: u128,
     http: &ThrottlingHttpClient,
@@ -500,7 +498,7 @@ async fn get_prp_remaining_bases(
     Ok(bases_left)
 }
 
-#[framed]
+
 async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -510,7 +508,7 @@ async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
         .await;
 }
 
-#[framed]
+
 async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -530,7 +528,7 @@ static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGE
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
-#[framed]
+
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<CheckTask>,
     mut u_receiver: PushbackReceiver<CheckTask>,
@@ -706,7 +704,7 @@ async fn do_checks(
 }
 
 #[inline]
-#[framed]
+
 async fn try_handle_unknown(
     http: &ThrottlingHttpClient,
     u_status_regex: &Regex,
@@ -754,7 +752,7 @@ async fn try_handle_unknown(
     }
 }
 
-#[framed]
+
 async fn throttle_if_necessary(
     http: &ThrottlingHttpClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
@@ -843,7 +841,7 @@ async fn throttle_if_necessary(
 // fit into the channel at once. In that case, we want the remaining results to wait to be pushed
 // into the channel, without blocking PRP or U searches on the main thread.
 #[allow(clippy::async_yields_async)]
-#[framed]
+
 async fn queue_composites(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -906,7 +904,7 @@ async fn queue_composites(
             c_buffered.len()
         );
         let c_sender = c_sender.clone();
-        task::spawn(async_backtrace::location!().frame(async move {
+        task::spawn(async move {
             let count = c_buffered.len();
             let mut c_sent = 0;
             for c_task in c_buffered {
@@ -922,25 +920,20 @@ async fn queue_composites(
             }
             info!("Sent {c_sent} buffered C's to channel");
             let _ = c_sender.reserve().await; // Prevent task from finishing until another C can be sent
-        }))
+        })
     }
 }
 
 // One worker thread for do_checks(), one for main(), one for c_buffer_task, one for handle_signals
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-#[framed]
+
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
-    simple_log::console("debug").unwrap();
+    simple_log::console("info").unwrap();
     task::spawn(
-        async_backtrace::location!().frame(handle_signals(shutdown_sender, installed_sender)),
+        handle_signals(shutdown_sender, installed_sender),
     );
-    let default_panic_hook = panic::take_hook();
-    panic::set_hook(Box::new(move |panic_info| {
-        error!("\n{}\n", async_backtrace::taskdump_tree(true));
-        default_panic_hook(panic_info); // Call the original panic hook
-    }));
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -1010,7 +1003,7 @@ async fn main() -> anyhow::Result<()> {
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_buffer_task: JoinHandle<()> =
-        task::spawn(async_backtrace::location!().frame(async move {
+        task::spawn(async move {
             queue_composites(
                 &id_and_expr_regex_clone,
                 &http_clone,
@@ -1020,7 +1013,7 @@ async fn main() -> anyhow::Result<()> {
             .await
             .await
             .unwrap();
-        }));
+        });
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1119,7 +1112,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-#[framed]
+
 async fn queue_unknowns(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -1146,7 +1139,7 @@ async fn queue_unknowns(
     }
 }
 
-#[framed]
+
 async fn try_queue_unknowns<'a>(
     id_and_expr_regex: &Regex,
     http: &ThrottlingHttpClient,
@@ -1226,7 +1219,7 @@ enum ReportFactorResult {
     OtherError,
 }
 
-#[framed]
+
 async fn try_report_factor<
     T: AsRef<str>,
     U: AsRef<str> + Display,
@@ -1267,7 +1260,7 @@ async fn try_report_factor<
     {
         Ok(text) => {
             info!("{u_id}: reported a factor of {factor}; response: {text}",);
-            return if text.contains("Error") {
+            if text.contains("Error") {
                 OtherError
             } else if text.contains("submitted") {
                 Accepted
@@ -1275,7 +1268,7 @@ async fn try_report_factor<
                 AlreadyFullyFactored
             } else {
                 DoesNotDivide
-            };
+            }
         }
         Err(e) => {
             error!(
@@ -1286,7 +1279,7 @@ async fn try_report_factor<
     }
 }
 
-#[framed]
+
 async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
     http: &ThrottlingHttpClient,
     u_id: u128,
@@ -1313,7 +1306,7 @@ async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
 
 const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
 
-#[framed]
+
 async fn find_and_submit_factors(
     http: &ThrottlingHttpClient,
     id: u128,
@@ -1865,8 +1858,8 @@ fn as_specifier<'a>(
     }
 }
 
-#[framed]
-async fn add_known_factors_to_graph<T: AsRef<str> + std::fmt::Debug, U: AsRef<str> + std::fmt::Debug, V: AsRef<str>, W: AsRef<str> + Display>(
+
+async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug, V: AsRef<str>, W: AsRef<str> + Display>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
@@ -2034,7 +2027,7 @@ fn neighbors_with_edge_weights(
         .collect()
 }
 
-#[framed]
+
 async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> + Display>(
     http: &ThrottlingHttpClient,
     id: Option<u128>,
@@ -2080,7 +2073,6 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
         if let Some(id) = id {
             if id <= MAX_ID_EQUAL_TO_VALUE {
                 error!("Tried to look up {root} using a smaller number's id {id}");
-                error!("\n{}\n", async_backtrace::taskdump_tree(false));
                 parseable_factors.insert(Factor::from(root));
             } else {
                 info!("{id}: Checking for listed algebraic factors");
@@ -2190,7 +2182,7 @@ fn add_factor_node(
     }
 }
 
-#[framed]
+
 fn add_edge_or_log(
     graph: &mut DivisibilityGraph,
     from_vid: &VertexId,
@@ -2199,12 +2191,10 @@ fn add_edge_or_log(
 ) {
     if let Err(e) = graph.try_add_edge(from_vid, to_vid, value) {
         error!(
-            "Error adding edge {}-({:?})->{} {e}\n{}\n{}\n",
+            "Error adding edge {}-({:?})->{} {e}",
             graph.vertex(from_vid).unwrap(),
             value,
-            graph.vertex(to_vid).unwrap(),
-            async_backtrace::taskdump_tree(false),
-            Backtrace::force_capture()
+            graph.vertex(to_vid).unwrap()
         );
     }
 }

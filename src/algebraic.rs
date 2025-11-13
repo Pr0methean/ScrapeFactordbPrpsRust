@@ -4,7 +4,6 @@ use crate::net::ThrottlingHttpClient;
 use crate::{
     MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY, write_bignum,
 };
-use async_backtrace::framed;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -1505,7 +1504,7 @@ impl FactorFinder {
     // FIXME: This uses Web requests to find factors that FactorDB already knows of and/or convert
     // them to digit form. That would be out of scope for this struct if we had anywhere else to put
     // this method.
-    #[framed]
+
     #[inline]
     pub async fn known_factors_as_digits<T: AsRef<str> + std::fmt::Debug, U: AsRef<str> + std::fmt::Debug>(
         &self,
