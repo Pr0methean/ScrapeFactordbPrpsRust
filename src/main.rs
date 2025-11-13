@@ -1684,11 +1684,11 @@ async fn find_and_submit_factors(
                             if !result.factors.is_empty() {
                                 iters_without_progress = 0;
                             }
-                            if let Some(dest_entry_id) = result.id {
-                                debug!("{id}: {dest_factor} (vertex ID {dest_factor_vid:?}) has entry ID {dest_entry_id}");
-                                if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
-                                        && old_id != dest_entry_id {
-                                    error!("{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}");
+                            if let Some(entry_id) = result.id {
+                                debug!("{id}: {factor} (vertex ID {factor_vid:?}) has entry ID {entry_id}");
+                                if let Some(old_id) = ids.insert(factor_vid, entry_id)
+                                        && old_id != entry_id {
+                                    error!("{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}");
                                 };
                             }
                         }
