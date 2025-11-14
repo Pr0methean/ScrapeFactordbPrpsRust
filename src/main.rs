@@ -1613,61 +1613,67 @@ async fn find_and_submit_factors(
             // Try submitting to the smallest destinations first
             dest_factors.sort_by(|(_, factor1), (_, factor2)| factor1.cmp(factor2));
 
-            for (dest_factor_vid, dest_factor) in dest_factors.into_iter() {
-                debug!("{id}: Factor {dest_factor} has vertex ID {dest_factor_vid:?}");
+            for (cofactor_vid, cofactor) in dest_factors.into_iter() {
+                debug!("{id}: Factor {cofactor} has vertex ID {cofactor_vid:?}");
                 // Check if an edge has been added since dest_factors was built
-                let edge_id = divisibility_graph.edge_id_any(&factor_vid, &dest_factor_vid);
+                let edge_id = divisibility_graph.edge_id_any(&factor_vid, &cofactor_vid);
                 if edge_id.is_some() {
                     debug!(
-                        "{id}: Skipping submission of {factor} to {dest_factor} because divisibility edge already exists"
+                        "{id}: Skipping submission of {factor} to {cofactor} because divisibility edge already exists"
                     );
                     continue;
                 }
-                let reverse_edge = get_edge(&divisibility_graph, &dest_factor_vid, &factor_vid);
+                let reverse_edge = get_edge(&divisibility_graph, &cofactor_vid, &factor_vid);
                 if reverse_edge == Some(Direct) || reverse_edge == Some(Transitive) {
                     // dest_factor can't be divisible by factor because factor is divisible by dest_factor
                     debug!(
-                        "{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is a factor of {factor}"
+                        "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is a factor of {factor}"
                     );
-                    rule_out_divisibility(&mut divisibility_graph, &factor_vid, &dest_factor_vid);
+                    rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
                 }
 
-                if shortest_paths.dist(dest_factor_vid) == Some(&0) {
+                if shortest_paths.dist(cofactor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
                     debug!(
-                        "{id}: Skipping submission of {factor} to {dest_factor} because it's already transitively known"
+                        "{id}: Skipping submission of {factor} to {cofactor} because it's already transitively known"
                     );
                     propagate_divisibility(
                         &mut divisibility_graph,
                         &factor_vid,
-                        &dest_factor_vid,
+                        &cofactor_vid,
                         true,
                     );
                     continue;
                 }
 
-                if !factor.may_be_proper_divisor_of(&dest_factor) {
+                if !factor.may_be_proper_divisor_of(&cofactor) {
                     debug!(
-                        "Skipping submission of {factor} to {dest_factor} because {dest_factor} is \
+                        "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller or equal or fails last-digit test"
                     );
-                    rule_out_divisibility(&mut divisibility_graph, &factor_vid, &dest_factor_vid);
+                    rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
                 }
                 let facts = number_facts_map.get(&factor_vid).unwrap();
+                if facts.is_known_fully_factored() {
+                    debug!("Skipping submission of {factor} to {cofactor} because {cofactor} is \
+                    already fully factored");
+                    rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
+                    continue;
+                }
                 if facts.lower_bound_log10
                     > number_facts_map
-                        .get(&dest_factor_vid)
+                        .get(&cofactor_vid)
                         .unwrap()
                         .upper_bound_log10
                 {
-                    debug!(
-                        "Skipping submission of {factor} to {dest_factor} because {dest_factor} is \
+                    info!(
+                        "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller based on log10 bounds"
                     );
-                    rule_out_divisibility(&mut divisibility_graph, &factor_vid, &dest_factor_vid);
+                    rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
                 }
                 match facts.factors_known_to_factordb {
@@ -1675,12 +1681,12 @@ async fn find_and_submit_factors(
                     | NotUpToDate(ref already_known_factors) => {
                         if already_known_factors.contains(&factor_vid) {
                             debug!(
-                                "{id}: Propagating divisbility of {factor} into {dest_factor} because it's already known to FactorDB"
+                                "{id}: Propagating divisbility of {factor} into {cofactor} because it's already known to FactorDB"
                             );
                             propagate_divisibility(
                                 &mut divisibility_graph,
                                 &factor_vid,
-                                &dest_factor_vid,
+                                &cofactor_vid,
                                 false,
                             );
                             continue;
@@ -1689,9 +1695,9 @@ async fn find_and_submit_factors(
                     FactorsKnownToFactorDb::NotQueried => {}
                 }
                 // u128s are already fully factored
-                if let Numeric(dest) = dest_factor {
+                if let Numeric(dest) = cofactor {
                     debug!(
-                        "{id}: Skipping submission of {factor} to {dest_factor} because the number is too small"
+                        "{id}: Skipping submission of {factor} to {cofactor} because the number is too small"
                     );
                     if let Numeric(f) = factor
                         && dest.is_multiple_of(f)
@@ -1699,14 +1705,14 @@ async fn find_and_submit_factors(
                         propagate_divisibility(
                             &mut divisibility_graph,
                             &factor_vid,
-                            &dest_factor_vid,
+                            &cofactor_vid,
                             false,
                         );
                     } else {
                         rule_out_divisibility(
                             &mut divisibility_graph,
                             &factor_vid,
-                            &dest_factor_vid,
+                            &cofactor_vid,
                         );
                     }
                     continue;
@@ -1715,17 +1721,17 @@ async fn find_and_submit_factors(
                 let shortest_path_from_dest = ShortestPaths::on(&divisibility_graph)
                     .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                     .goal(factor_vid)
-                    .run(dest_factor_vid)
+                    .run(cofactor_vid)
                     .ok()
                     .and_then(|paths| paths.dist(factor_vid).copied());
                 if shortest_path_from_dest == Some(0) {
                     debug!(
-                        "{id}: Skipping submission of {factor} to {dest_factor} because {dest_factor} is transitively a factor of {factor}"
+                        "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is transitively a factor of {factor}"
                     );
                     // factor is transitively divisible by dest_factor
                     propagate_divisibility(
                         &mut divisibility_graph,
-                        &dest_factor_vid,
+                        &cofactor_vid,
                         &factor_vid,
                         true,
                     );
@@ -1735,25 +1741,25 @@ async fn find_and_submit_factors(
                 // be used as dests if their IDs are known
                 // however, this doesn't affect the divisibility graph because the ID may be found
                 // later
-                if dest_factor
+                if cofactor
                     .as_str_non_u128()
                     .is_some_and(|expr| expr.contains("..."))
-                    && number_facts_map.get(&dest_factor_vid).unwrap().entry_id.is_none()
+                    && number_facts_map.get(&cofactor_vid).unwrap().entry_id.is_none()
                 {
                     debug!(
-                        "{id}: Can't submit to {dest_factor} right now because we don't know its full specifier"
+                        "{id}: Can't submit to {cofactor} right now because we don't know its full specifier"
                     );
                     continue;
                 }
                 let dest_specifier =
-                    as_specifier(&dest_factor_vid, &dest_factor, &number_facts_map);
+                    as_specifier(&cofactor_vid, &cofactor, &number_facts_map);
                 match try_report_factor(http, &dest_specifier, &factor).await {
                     AlreadyFullyFactored => {
-                        if dest_factor_vid == root_node {
+                        if cofactor_vid == root_node {
                             warn!("{id}: Already fully factored");
                             return true;
                         }
-                        let dest_facts = number_facts_map.get_mut(&dest_factor_vid).unwrap();
+                        let dest_facts = number_facts_map.get_mut(&cofactor_vid).unwrap();
                         if dest_facts.last_known_status != Some(FullyFactored) && dest_facts.last_known_status != Some(Prime) {
                             dest_facts.last_known_status = if let UpToDate(factors) = &dest_facts.factors_known_to_factordb && factors.len() == 1 {
                                 Some(Prime)
@@ -1765,7 +1771,7 @@ async fn find_and_submit_factors(
                     }
                     Accepted => {
                         replace_with_or_abort(
-                            number_facts_map.get_mut(&dest_factor_vid).unwrap(),
+                            number_facts_map.get_mut(&cofactor_vid).unwrap(),
                             NumberFacts::marked_stale,
                         );
                         accepted_factors += 1;
@@ -1773,7 +1779,7 @@ async fn find_and_submit_factors(
                         propagate_divisibility(
                             &mut divisibility_graph,
                             &factor_vid,
-                            &dest_factor_vid,
+                            &cofactor_vid,
                             false,
                         );
                     }
@@ -1781,7 +1787,7 @@ async fn find_and_submit_factors(
                         rule_out_divisibility(
                             &mut divisibility_graph,
                             &factor_vid,
-                            &dest_factor_vid,
+                            &cofactor_vid,
                         );
                         if already_checked_for_algebraic.insert(factor_vid) {
                             debug!("{id}: Searching for algebraic factors of {factor}");
@@ -1839,25 +1845,25 @@ async fn find_and_submit_factors(
                         }
                     }
                     OtherError => {
-                        if number_facts_map.get(&dest_factor_vid).unwrap().factors_known_to_factordb.needs_update()
+                        if number_facts_map.get(&cofactor_vid).unwrap().factors_known_to_factordb.needs_update()
                         {
-                            debug!("{id}: Searching for known factors of {dest_factor}");
+                            debug!("{id}: Searching for known factors of {cofactor}");
                             // See if dest has some already-known factors we can submit to instead
                             let result = add_known_factors_to_graph(
                                 http,
                                 factor_finder,
                                 &mut divisibility_graph,
-                                dest_factor_vid,
+                                cofactor_vid,
                                 dest_specifier,
                                 false,
-                                &dest_factor,
+                                &cofactor,
                                 &mut number_facts_map,
                             )
                             .await;
                             if let Some(status) = result.status {
                                 handle_if_fully_factored(
                                     &mut divisibility_graph,
-                                    dest_factor_vid,
+                                    cofactor_vid,
                                     status,
                                     &mut number_facts_map,
                                 );
@@ -1867,13 +1873,13 @@ async fn find_and_submit_factors(
                             }
                             if let Some(dest_entry_id) = result.id {
                                 debug!(
-                                    "{id}: {dest_factor} (vertex ID {dest_factor_vid:?}) has entry ID {dest_entry_id}"
+                                    "{id}: {cofactor} (vertex ID {cofactor_vid:?}) has entry ID {dest_entry_id}"
                                 );
-                                if let Some(old_id) = number_facts_map.get_mut(&dest_factor_vid).unwrap().entry_id.replace(dest_entry_id)
+                                if let Some(old_id) = number_facts_map.get_mut(&cofactor_vid).unwrap().entry_id.replace(dest_entry_id)
                                     && old_id != dest_entry_id
                                 {
                                     error!(
-                                        "{id}: Detected that {dest_factor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
+                                        "{id}: Detected that {cofactor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
                                     );
                                 };
                             }
