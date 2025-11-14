@@ -2242,8 +2242,8 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                     number_facts_map,
                 )
                 .await;
-                if let Some(status) = result.status {
-                    if handle_if_fully_factored(
+                if let Some(status) = result.status
+                    && handle_if_fully_factored(
                         divisibility_graph,
                         root_vid,
                         status,
@@ -2251,7 +2251,6 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                     ) {
                         return true;
                     }
-                }
                 parseable_factors.extend(result.factors);
                 result.id
             }
