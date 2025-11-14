@@ -2153,18 +2153,27 @@ async fn add_known_factors_to_graph<
     let all_added = match len {
         0 => Box::new([]),
         1 => {
-            let dest_subfactor = dest_subfactors.into_iter().next().unwrap();
-            if dest_subfactor.as_str() == root.as_str() {
+            let equivalent = dest_subfactors.into_iter().next().unwrap();
+            if equivalent.as_str() == root.as_str() {
                 Box::new([])
             } else {
                 // These expressions are different but equivalent; merge their edges
-                info!("{id:?}: Detected that {dest_subfactor} and {root} are equivalent");
-                let (new_root_vid, added) = add_factor_node(
+                info!("{id:?}: Detected that {equivalent} and {root} are equivalent");
+                let (equivalent_vid, added) = add_factor_node(
                     divisibility_graph,
-                    dest_subfactor.as_ref(),
+                    equivalent.as_ref(),
                     factor_finder,
                     number_facts_map,
                 );
+                let new_facts = number_facts_map.get(&equivalent_vid).unwrap();
+                let NumberFacts {
+                    lower_bound_log10,
+                    upper_bound_log10,
+                    ..
+                } = *new_facts;
+                let facts = number_facts_map.get_mut(&root_vid).unwrap();
+                facts.lower_bound_log10 = facts.lower_bound_log10.max(lower_bound_log10);
+                facts.upper_bound_log10 = facts.upper_bound_log10.min(upper_bound_log10);
                 let old_out_neighbors =
                     neighbors_with_edge_weights(divisibility_graph, &root_vid, Outgoing);
                 let old_in_neighbors =
@@ -2174,15 +2183,15 @@ async fn add_known_factors_to_graph<
                     (Box::default(), Box::default())
                 } else {
                     (
-                        neighbors_with_edge_weights(divisibility_graph, &new_root_vid, Outgoing),
-                        neighbors_with_edge_weights(divisibility_graph, &new_root_vid, Incoming),
+                        neighbors_with_edge_weights(divisibility_graph, &equivalent_vid, Outgoing),
+                        neighbors_with_edge_weights(divisibility_graph, &equivalent_vid, Incoming),
                     )
                 };
-                upsert_edge(divisibility_graph, &root_vid, &new_root_vid, |_| Direct);
-                upsert_edge(divisibility_graph, &new_root_vid, &root_vid, |_| Direct);
+                upsert_edge(divisibility_graph, &root_vid, &equivalent_vid, |_| Direct);
+                upsert_edge(divisibility_graph, &equivalent_vid, &root_vid, |_| Direct);
                 copy_edges_true_overrides_false(
                     divisibility_graph,
-                    &new_root_vid,
+                    &equivalent_vid,
                     old_out_neighbors,
                     old_in_neighbors,
                 );
@@ -2192,7 +2201,7 @@ async fn add_known_factors_to_graph<
                     new_out_neighbors,
                     new_in_neighbors,
                 );
-                if added { vec![dest_subfactor] } else { vec![] }.into_boxed_slice()
+                if added { vec![equivalent] } else { vec![] }.into_boxed_slice()
             }
         }
         _ => {
