@@ -1656,18 +1656,19 @@ async fn find_and_submit_factors(
                     rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
                 }
-                let facts = number_facts_map.get(&factor_vid).unwrap();
-                if facts.is_known_fully_factored() {
+                let cofactor_facts = number_facts_map
+                    .get(&cofactor_vid)
+                    .unwrap();
+                if cofactor_facts.is_known_fully_factored() {
                     debug!("Skipping submission of {factor} to {cofactor} because {cofactor} is \
                     already fully factored");
                     rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
                 }
+                let cofactor_upper_bound = cofactor_facts.upper_bound_log10;
+                let facts = number_facts_map.get(&factor_vid).unwrap();
                 if facts.lower_bound_log10
-                    > number_facts_map
-                        .get(&cofactor_vid)
-                        .unwrap()
-                        .upper_bound_log10
+                    > cofactor_upper_bound
                 {
                     info!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
