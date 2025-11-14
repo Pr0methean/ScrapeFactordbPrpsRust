@@ -10,6 +10,9 @@ while read -r num; do
     echo "Aborting because yafu has been deleted"
     exit 0
   fi
+  if [ "$num" == "" ]; then
+    continue
+  fi
   exec 9>"/tmp/factordb-composites/${num:0:255}"
   if flock -xn 9; then
       let real_digits="${#num}"
