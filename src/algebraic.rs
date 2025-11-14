@@ -1127,6 +1127,8 @@ impl FactorFinder {
                 if *n == 0 {
                     warn!("log10 estimate for 0 was requested");
                     (0, 0)
+                } else if *n == 1 {
+                    (0, 0)
                 } else {
                     (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1)
                 }
