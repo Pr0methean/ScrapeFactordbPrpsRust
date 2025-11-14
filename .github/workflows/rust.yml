@@ -77,8 +77,8 @@ jobs:
         yafu_timer_pid=$!
         ./yafu.sh <composites &
         yafu_pid=$!
-        if [ "${{github.inputs.chosen_c}}" != "" ]; then
-          echo "${{github.inputs.chosen_c}}" | sed 's/\s\+/\n/g' >composites
+        if [ "${{ inputs.chosen_c }}" != "" ]; then
+          echo "${{ inputs.chosen_c }}" | sed 's/\s\+/\n/g' >composites
         fi
         wait -n "${yafu_pid}" "${yafu_timer_pid}" || true
         echo "yafu time is up"
