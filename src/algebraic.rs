@@ -1146,6 +1146,15 @@ impl FactorFinder {
                                 );
                                 return (0, u128::MAX);
                             };
+                            if term_number <= 2 {
+                                if index == 0 && term_number != 1 {
+                                    // factordb defines lucas(0) as 2 and lucas(2) as 3
+                                    return (0, 1);
+                                } else {
+                                    return (0, 0); // factordb defines I(0) as 0 and
+                                    // I(1), I(2) and lucas(1) as 1
+                                }
+                            }
                             let est_log = term_number as f64 * 0.20898;
                             (est_log.floor() as u128, est_log.ceil() as u128 + 1)
                         }
@@ -1217,9 +1226,6 @@ impl FactorFinder {
                                 warn!("Could not parse input to a factorial: {}", &captures[1]);
                                 return (0, u128::MAX);
                             };
-                            if input < 2 {
-                                return (0, 0);
-                            }
 
                             // Lower bound is from
                             // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
