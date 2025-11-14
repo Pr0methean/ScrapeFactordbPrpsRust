@@ -1326,8 +1326,11 @@ struct NumberFacts {
 }
 
 impl NumberFacts {
+    pub(crate) fn is_known_fully_factored(&self) -> bool {
+        self.last_known_status == Some(Prime) || self.last_known_status == Some(FullyFactored)
+    }
     fn marked_stale(self) -> Self {
-        if self.last_known_status == Some(Prime) || self.last_known_status == Some(FullyFactored) {
+        if self.is_known_fully_factored() {
             return self;
         }
         if let UpToDate(factors) = self.factors_known_to_factordb {
@@ -1349,6 +1352,10 @@ impl NumberFacts {
             self
         }
     }
+
+    pub(crate) fn is_final(&self) -> bool {
+        self.last_known_status == Some(Prime) || self.last_known_status == Some(FullyFactored)
+    }
 }
 
 async fn find_and_submit_factors(
@@ -1363,9 +1370,6 @@ async fn find_and_submit_factors(
     let mut digits_or_expr_full = Vec::new();
     let mut divisibility_graph: DivisibilityGraph =
         Graph::new_directed_in(AdjMatrix::new()).stabilize();
-    let mut ids = BTreeMap::new();
-    let mut checked_for_known_factors_since_last_submission = BTreeSet::new();
-    let mut root_status = None;
     let mut number_facts_map = BTreeMap::new();
     let (root_node, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
         add_factor_node(
@@ -1386,7 +1390,6 @@ async fn find_and_submit_factors(
             warn!("{id}: Already fully factored");
             return true;
         }
-        root_status = status;
         match known_factors.len() {
             0 => add_factor_node(
                 &mut divisibility_graph,
@@ -1403,7 +1406,7 @@ async fn find_and_submit_factors(
                 );
                 digits_or_expr_full.push(root_node);
                 if known_factors.len() > 1 {
-                    for known_factor in known_factors {
+                    let factor_vids = known_factors.into_iter().map(|known_factor| {
                         let (factor_vid, added) = add_factor_node(
                             &mut divisibility_graph,
                             &known_factor,
@@ -1422,23 +1425,24 @@ async fn find_and_submit_factors(
                         } else {
                             warn!("{id}: Tried to add a duplicate node: {known_factor}");
                         }
-                    }
+                        factor_vid
+                    }).collect::<Box<[_]>>();
+                    let root_facts = number_facts_map.get_mut(&root_node).unwrap();
+                    root_facts.factors_known_to_factordb = UpToDate(factor_vids);
+                    root_facts.last_known_status = status;
                 }
                 (root_node, true)
             }
         }
     };
-    if root_status.is_some() {
-        checked_for_known_factors_since_last_submission.insert(root_node);
-    }
     debug!(
         "{id}: Root node for {digits_or_expr} is {} with vertex ID {root_node:?}",
         divisibility_graph.vertex(root_node).unwrap()
     );
-    ids.insert(root_node, id);
+    let root_facts = number_facts_map.get_mut(&root_node).unwrap();
+    root_facts.entry_id = Some(id);
     let mut factor_found = false;
     let mut accepted_factors = 0;
-    let mut already_fully_factored = BTreeSet::new();
     let mut already_checked_for_algebraic = BTreeSet::new();
     let multiple_starting_entries = digits_or_expr_full.len() > 1;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
@@ -1482,7 +1486,7 @@ async fn find_and_submit_factors(
         if factor
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
-            && !ids.contains_key(&factor_vid)
+            && number_facts_map.get(&factor_vid).unwrap().entry_id.is_none()
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
@@ -1514,7 +1518,7 @@ async fn find_and_submit_factors(
                     debug!("{id}: Searching for algebraic factors of {factor}");
                     any_failed_retryably |= add_algebraic_factors_to_graph(
                         http,
-                        ids.get(&factor_vid).copied(),
+                        number_facts_map.get(&factor_vid).unwrap().entry_id,
                         factor_finder,
                         id_and_expr_regex,
                         skip_looking_up_listed_algebraic,
@@ -1548,8 +1552,8 @@ async fn find_and_submit_factors(
         info!(
             "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges. \
         {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
-            already_fully_factored.len(),
-            ids.len()
+            number_facts_map.iter().filter(|(_, facts)| facts.is_known_fully_factored()).count(),
+            number_facts_map.iter().filter(|(_, facts)| facts.entry_id.is_some()).count()
         );
         let mut factors_to_submit = divisibility_graph
             .vertices()
@@ -1585,7 +1589,7 @@ async fn find_and_submit_factors(
                     // if factor == dest, the relation is trivial
                     factor_vid != dest.id
                         // Don't try to submit to a dest for which FactorDB already has a full factorization
-                        && !already_fully_factored.contains(&dest.id)
+                        && !number_facts_map.get(&dest.id).unwrap().is_final()
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
                         && get_edge(&divisibility_graph, &factor_vid, &dest.id).is_none())
                 .map(|vertex| (vertex.id, vertex.attr.clone()))
@@ -1727,7 +1731,7 @@ async fn find_and_submit_factors(
                 if dest_factor
                     .as_str_non_u128()
                     .is_some_and(|expr| expr.contains("..."))
-                    && !ids.contains_key(&dest_factor_vid)
+                    && number_facts_map.get(&dest_factor_vid).unwrap().entry_id.is_none()
                 {
                     debug!(
                         "{id}: Can't submit to {dest_factor} right now because we don't know its full specifier"
@@ -1742,7 +1746,14 @@ async fn find_and_submit_factors(
                             warn!("{id}: Already fully factored");
                             return true;
                         }
-                        already_fully_factored.insert(dest_factor_vid);
+                        let dest_facts = number_facts_map.get_mut(&dest_factor_vid).unwrap();
+                        if dest_facts.last_known_status != Some(FullyFactored) && dest_facts.last_known_status != Some(Prime) {
+                            dest_facts.last_known_status = if let UpToDate(factors) = &dest_facts.factors_known_to_factordb && factors.len() == 1 {
+                                Some(Prime)
+                            } else {
+                                Some(FullyFactored)
+                            }
+                        }
                         continue;
                     }
                     Accepted => {
@@ -1769,7 +1780,7 @@ async fn find_and_submit_factors(
                             debug!("{id}: Searching for algebraic factors of {factor}");
                             add_algebraic_factors_to_graph(
                                 http,
-                                ids.get(&factor_vid).copied(),
+                                number_facts_map.get(&factor_vid).unwrap().entry_id,
                                 factor_finder,
                                 id_and_expr_regex,
                                 false,
@@ -1779,8 +1790,7 @@ async fn find_and_submit_factors(
                                 &mut number_facts_map,
                             )
                             .await;
-                        } else if !checked_for_known_factors_since_last_submission
-                            .contains(&factor_vid)
+                        } else if number_facts_map.get(&factor_vid).unwrap().factors_known_to_factordb.needs_update()
                         {
                             debug!("{id}: Searching for algebraic factors of {factor}");
                             let factor_specifier =
@@ -1803,7 +1813,6 @@ async fn find_and_submit_factors(
                                     status,
                                     &mut number_facts_map,
                                 );
-                                checked_for_known_factors_since_last_submission.insert(factor_vid);
                             }
                             if !result.factors.is_empty() {
                                 iters_without_progress = 0;
@@ -1812,7 +1821,7 @@ async fn find_and_submit_factors(
                                 debug!(
                                     "{id}: {factor} (vertex ID {factor_vid:?}) has entry ID {entry_id}"
                                 );
-                                if let Some(old_id) = ids.insert(factor_vid, entry_id)
+                                if let Some(old_id) = number_facts_map.get_mut(&factor_vid).unwrap().entry_id.replace(entry_id)
                                     && old_id != entry_id
                                 {
                                     error!(
@@ -1823,8 +1832,7 @@ async fn find_and_submit_factors(
                         }
                     }
                     OtherError => {
-                        if !checked_for_known_factors_since_last_submission
-                            .contains(&dest_factor_vid)
+                        if number_facts_map.get(&dest_factor_vid).unwrap().factors_known_to_factordb.needs_update()
                         {
                             debug!("{id}: Searching for known factors of {dest_factor}");
                             // See if dest has some already-known factors we can submit to instead
@@ -1840,8 +1848,6 @@ async fn find_and_submit_factors(
                             )
                             .await;
                             if let Some(status) = result.status {
-                                checked_for_known_factors_since_last_submission
-                                    .insert(dest_factor_vid);
                                 handle_if_fully_factored(
                                     &mut divisibility_graph,
                                     dest_factor_vid,
@@ -1856,7 +1862,7 @@ async fn find_and_submit_factors(
                                 debug!(
                                     "{id}: {dest_factor} (vertex ID {dest_factor_vid:?}) has entry ID {dest_entry_id}"
                                 );
-                                if let Some(old_id) = ids.insert(dest_factor_vid, dest_entry_id)
+                                if let Some(old_id) = number_facts_map.get_mut(&dest_factor_vid).unwrap().entry_id.replace(dest_entry_id)
                                     && old_id != dest_entry_id
                                 {
                                     error!(
