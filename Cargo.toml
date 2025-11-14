@@ -32,3 +32,4 @@ gryf = "0.1"
 curl = "0.4"
 arcstr = { version = "1.2", default-features = false, features = ["serde"] }
 serde_urlencoded = "0.7"
+replace_with = "0.1"

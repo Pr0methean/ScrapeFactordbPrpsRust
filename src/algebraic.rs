@@ -1118,7 +1118,7 @@ impl FactorFinder {
             .collect()
     }
 
-    fn estimate_log10<T: AsRef<str>, U: AsRef<str> + Display>(&self, expr: &Factor<T, U>) -> (u128, u128) {
+    pub(crate) fn estimate_log10<T: AsRef<str>, U: AsRef<str> + Display>(&self, expr: &Factor<T, U>) -> (u128, u128) {
         match expr {
             Numeric(n) => (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1),
             Factor::BigNumber(expr) => {
