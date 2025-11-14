@@ -1123,7 +1123,14 @@ impl FactorFinder {
         expr: &Factor<T, U>,
     ) -> (u128, u128) {
         match expr {
-            Numeric(n) => (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1),
+            Numeric(n) => {
+                if *n == 0 {
+                    warn!("log10 estimate for 0 was requested");
+                    (0, 0)
+                } else {
+                    (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1)
+                }
+            },
             Factor::BigNumber(expr) => {
                 let len = expr.as_ref().len();
                 ((len - 1) as u128, len as u128)
