@@ -2034,6 +2034,12 @@ mod tests {
         let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("2^607-1"));
         assert_eq!(lower, 182);
         assert_eq!(upper, 183);
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200-1"));
+        assert_eq!(lower, 199);
+        assert!(upper == 200 || upper == 201);
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200-1"));
+        assert_eq!(lower, 199);
+        assert!(upper == 200 || upper == 201);
         let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200*2-1"));
         assert_eq!(lower, 200);
         assert_eq!(upper, 201);
