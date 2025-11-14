@@ -1681,7 +1681,7 @@ async fn find_and_submit_factors(
                 let cofactor_upper_bound = cofactor_facts.upper_bound_log10;
                 let facts = number_facts_map.get(&factor_vid).unwrap();
                 if facts.lower_bound_log10 > cofactor_upper_bound {
-                    info!(
+                    debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller based on log10 bounds"
                     );
