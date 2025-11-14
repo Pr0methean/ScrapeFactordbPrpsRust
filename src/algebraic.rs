@@ -768,6 +768,13 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         }
     }
 
+    fn is_expression(&self) -> bool {
+        match self {
+            Factor::Expression(_) => true,
+            _ => false,
+        }
+    }
+
     pub fn may_be_proper_divisor_of<V: AsRef<str>, W: AsRef<str>>(
         &self,
         other: &Factor<V, W>,
@@ -777,21 +784,27 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         {
             return o > n && o.is_multiple_of(n);
         };
-        let Some(last_digit) = self.last_digit() else {
-            return self != other;
-        };
-        let Some(other_last_digit) = other.last_digit() else {
-            return self != other;
-        };
-        self.partial_cmp(other) != Some(Ordering::Greater)
-            && match last_digit {
-                0 => vec![0],
-                2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
-                5 => vec![0, 5],
-                1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                _ => unsafe { unreachable_unchecked() },
+        match self.partial_cmp(other) {
+            Some(Ordering::Greater) => self.is_expression() || other.is_expression(),
+            Some(Ordering::Equal) => false,
+            Some(Ordering::Less) => {
+                let Some(last_digit) = self.last_digit() else {
+                    return true;
+                };
+                let Some(other_last_digit) = other.last_digit() else {
+                    return true;
+                };
+                match last_digit {
+                    0 => vec![0],
+                    2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
+                    5 => vec![0, 5],
+                    1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                    _ => unsafe { unreachable_unchecked() },
+                }
+                    .contains(&other_last_digit)
             }
-            .contains(&other_last_digit)
+            None => unsafe { unreachable_unchecked() }
+        }
     }
 }
 
