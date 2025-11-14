@@ -1118,7 +1118,7 @@ impl FactorFinder {
             .collect()
     }
 
-    pub(crate) fn estimate_log10<T: AsRef<str>, U: AsRef<str> + Display>(
+    fn estimate_log10_internal<T: AsRef<str>, U: AsRef<str> + Display>(
         &self,
         expr: &Factor<T, U>,
     ) -> (u128, u128) {
@@ -1147,11 +1147,11 @@ impl FactorFinder {
                                 return (0, u128::MAX);
                             };
                             if term_number <= 2 {
-                                if index == 0 && term_number != 1 {
+                                return if index == 0 && term_number != 1 {
                                     // factordb defines lucas(0) as 2 and lucas(2) as 3
-                                    return (0, 1);
+                                    (0, 1)
                                 } else {
-                                    return (0, 0); // factordb defines I(0) as 0 and
+                                    (0, 0) // factordb defines I(0) as 0 and
                                     // I(1), I(2) and lucas(1) as 1
                                 }
                             }
@@ -1255,14 +1255,14 @@ impl FactorFinder {
                         }
                         7 => {
                             // parens
-                            self.estimate_log10(&Factor::<&str, &str>::from(&captures[1]))
+                            self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]))
                         }
                         8 => {
                             // division
                             let (numerator_lower, numerator_upper) =
-                                self.estimate_log10(&Factor::<&str, &str>::from(&captures[1]));
+                                self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]));
                             let (denominator_lower, denominator_upper) =
-                                self.estimate_log10(&Factor::<&str, &str>::from(&captures[2]));
+                                self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[2]));
                             (
                                 numerator_lower
                                     .saturating_sub(denominator_upper)
@@ -1275,9 +1275,9 @@ impl FactorFinder {
                         9 => {
                             // multiplication
                             let (left_lower, left_upper) =
-                                self.estimate_log10(&Factor::<&str, &str>::from(&captures[1]));
+                                self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]));
                             let (right_lower, right_upper) =
-                                self.estimate_log10(&Factor::<&str, &str>::from(&captures[2]));
+                                self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[2]));
                             (
                                 left_lower.saturating_add(right_lower),
                                 left_upper.saturating_add(right_upper).saturating_add(1),
@@ -1286,9 +1286,9 @@ impl FactorFinder {
                         10 => {
                             // addition/subtraction
                             let (left_lower, left_upper) =
-                                self.estimate_log10(&Factor::<&str, &str>::from(&captures[1]));
+                                self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]));
                             let (right_lower, right_upper) =
-                                self.estimate_log10(&Factor::<&str, &str>::from(&captures[3]));
+                                self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[3]));
                             let combined_lower = if &captures[2] == "-" {
                                 if left_lower.saturating_sub(right_upper) > 1 {
                                     left_lower.saturating_sub(1)
@@ -1311,6 +1311,19 @@ impl FactorFinder {
                     (0, u128::MAX)
                 }
             }
+        }
+    }
+
+    pub(crate) fn estimate_log10<T: AsRef<str>, U: AsRef<str> + Display>(
+        &self,
+        expr: &Factor<T, U>,
+    ) -> (u128, u128) {
+        let (lbound, ubound) = self.estimate_log10_internal(expr);
+        if lbound > ubound {
+            error!("{expr}: estimate_log10 produced inconsistent bounds: lower bound {lbound}, upper bound {ubound}");
+            (0, u128::MAX)
+        } else {
+            (lbound, ubound)
         }
     }
 
@@ -1990,49 +2003,49 @@ mod tests {
     #[test]
     fn test_estimate_log10() {
         let finder = FactorFinder::new();
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Numeric(99));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Numeric(99));
         assert_eq!(lower, 1);
         assert_eq!(upper, 2);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Numeric(100));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Numeric(100));
         assert_eq!(lower, 2);
         assert_eq!(upper, 2);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Numeric(101));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Numeric(101));
         assert_eq!(lower, 2);
         assert_eq!(upper, 3);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::BigNumber(
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::BigNumber(
             &("1".to_string() + &*repeat_n('0', 50).collect::<String>()),
         ));
         assert_eq!(lower, 50);
         assert!(upper == 50 || upper == 51);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::BigNumber(
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::BigNumber(
             &(repeat_n('9', 50).collect::<String>()),
         ));
         assert_eq!(lower, 49);
         assert!(upper == 49 || upper == 50);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::Expression("2^607-1"));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("2^607-1"));
         assert_eq!(lower, 182);
         assert_eq!(upper, 183);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::Expression("10^200*2-1"));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200*2-1"));
         assert_eq!(lower, 200);
         assert_eq!(upper, 201);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::Expression("100!"));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("100!"));
         assert_eq!(lower, 157);
         assert_eq!(upper, 158);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::Expression("100#"));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("100#"));
         assert!(lower <= 36);
         assert!(upper >= 37);
         assert!(upper <= 50);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::Expression("20+30"));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("20+30"));
         assert_eq!(lower, 1);
         assert!(upper == 2 || upper == 3);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::Expression("30-19"));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("30-19"));
         assert!(lower <= 1);
         assert_eq!(upper, 2);
-        let (lower, upper) = finder.estimate_log10::<&str, &str>(&Factor::Expression("11*11"));
+        let (lower, upper) = finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("11*11"));
         assert_eq!(lower, 2);
         assert!(upper >= 3);
         let (lower, upper) =
-            finder.estimate_log10::<&str, &str>(&Factor::Expression("(2^769-1)/1591805393"));
+            finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("(2^769-1)/1591805393"));
         assert!(lower <= 222);
         assert!(upper >= 223);
     }
