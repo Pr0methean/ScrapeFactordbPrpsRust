@@ -1301,6 +1301,7 @@ async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
 
 const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
 
+#[derive(Clone,Debug)]
 enum FactorsKnownToFactorDb {
     UpToDate(Box<[VertexId]>),
     NotUpToDate(Box<[VertexId]>),
@@ -1317,6 +1318,7 @@ impl FactorsKnownToFactorDb {
     }
 }
 
+#[derive(Debug)]
 struct NumberFacts {
     last_known_status: Option<NumberStatus>,
     factors_known_to_factordb: FactorsKnownToFactorDb,
@@ -1329,6 +1331,9 @@ struct NumberFacts {
 impl NumberFacts {
     pub(crate) fn is_known_fully_factored(&self) -> bool {
         self.last_known_status == Some(Prime) || self.last_known_status == Some(FullyFactored)
+    }
+    pub(crate) fn needs_update(&self) -> bool {
+        self.factors_known_to_factordb.needs_update()
     }
     fn marked_stale(self) -> Self {
         if self.is_known_fully_factored() {
@@ -2076,6 +2081,20 @@ async fn add_known_factors_to_graph<
     debug!(
         "add_known_factors_to_graph: root_vid={root_vid:?}, root_specifier={root_specifier}, root={root}"
     );
+    let facts = number_facts_map.get(&root_vid).unwrap();
+    if !facts.needs_update() {
+        warn!("add_known_factors_to_graph called for {root} when {facts:?} is already up-to-date");
+        let factors = match &facts.factors_known_to_factordb {
+            UpToDate(factors) => factors.into_iter().map(|factor_vid| divisibility_graph.vertex(factor_vid).unwrap().clone()).collect(),
+            NotUpToDate(factors) => factors.into_iter().map(|factor_vid| divisibility_graph.vertex(factor_vid).unwrap().clone()).collect(),
+            FactorsKnownToFactorDb::NotQueried => Box::default()
+        };
+        return ProcessedStatusApiResponse {
+            status: facts.last_known_status,
+            factors,
+            id: facts.entry_id,
+        }
+    }
     let ProcessedStatusApiResponse {
         status,
         factors: dest_subfactors,
