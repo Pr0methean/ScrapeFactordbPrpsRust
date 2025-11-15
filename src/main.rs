@@ -2092,10 +2092,7 @@ fn as_specifier<'a>(
     }
 }
 
-async fn add_known_factors_to_graph<
-    T: AsRef<str> + Debug,
-    U: AsRef<str> + Debug,
->(
+async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug>(
     http: &ThrottlingHttpClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
@@ -2104,9 +2101,7 @@ async fn add_known_factors_to_graph<
     include_ff: bool,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
 ) -> ProcessedStatusApiResponse {
-    debug!(
-        "add_known_factors_to_graph: root_vid={root_vid:?}, root_specifier={root_specifier}"
-    );
+    debug!("add_known_factors_to_graph: root_vid={root_vid:?}, root_specifier={root_specifier}");
     let facts = number_facts_map.get(&root_vid).unwrap();
     if !facts.needs_update() {
         let root = divisibility_graph.vertex(&root_vid).unwrap();
@@ -2135,7 +2130,10 @@ async fn add_known_factors_to_graph<
     } = factor_finder
         .known_factors_as_digits(http, root_specifier, include_ff, false)
         .await;
-    debug!("Got entry ID of {id:?} for {}", divisibility_graph.vertex(&root_vid).unwrap());
+    debug!(
+        "Got entry ID of {id:?} for {}",
+        divisibility_graph.vertex(&root_vid).unwrap()
+    );
     let facts = number_facts_map.get_mut(&root_vid).unwrap();
     if let Some(id) = id {
         facts.entry_id = Some(id);
@@ -2436,9 +2434,8 @@ async fn add_algebraic_factors_to_graph(
                                 ) =
                                     factor_entry_id.parse::<u128>()
                                 {
-                                    number_facts_map
-                                        .get_mut(&factor_vid)
-                                        .unwrap().entry_id = Some(factor_entry_id);
+                                    number_facts_map.get_mut(&factor_vid).unwrap().entry_id =
+                                        Some(factor_entry_id);
                                     debug!(
                                         "{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}"
                                     );
@@ -2511,16 +2508,21 @@ async fn add_algebraic_factors_to_graph(
         parseable_factors.insert(root_vid);
     }
     for parseable_factor in parseable_factors {
-        let facts = number_facts_map
-            .get(&parseable_factor)
-            .unwrap();
+        let facts = number_facts_map.get(&parseable_factor).unwrap();
         let entry_id = facts.entry_id;
-        let subfactors = facts
-            .factors_detected_by_factor_finder
-            .clone();
+        let subfactors = facts.factors_detected_by_factor_finder.clone();
         for subfactor_vid in subfactors {
-            any_added |= Box::pin(add_algebraic_factors_to_graph(http, entry_id, factor_finder, id_and_expr_regex,
-                                                        skip_looking_up_listed_algebraic, divisibility_graph, subfactor_vid, number_facts_map)).await;
+            any_added |= Box::pin(add_algebraic_factors_to_graph(
+                http,
+                entry_id,
+                factor_finder,
+                id_and_expr_regex,
+                skip_looking_up_listed_algebraic,
+                divisibility_graph,
+                subfactor_vid,
+                number_facts_map,
+            ))
+            .await;
         }
     }
     any_added

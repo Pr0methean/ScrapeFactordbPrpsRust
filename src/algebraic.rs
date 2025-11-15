@@ -1720,8 +1720,7 @@ impl FactorFinder {
         expr: &Factor<T, U>,
     ) -> Box<[Factor<ArcStr, CompactString>]> {
         let mut factors = self.find_factors(expr);
-        factors.retain(|f|
-            *f != Numeric::<T,U>(1) && f.may_be_proper_divisor_of(expr));
+        factors.retain(|f| *f != Numeric::<T, U>(1) && f.may_be_proper_divisor_of(expr));
         factors.sort();
         factors.dedup();
         if factors.is_empty() {
