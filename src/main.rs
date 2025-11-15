@@ -2387,6 +2387,7 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                 {
                     return true;
                 }
+                any_added |= !result.factors.is_empty();
                 parseable_factors.extend(result.factors.into_iter().map(|factor| {
                     let (factor_vid, _) = add_factor_node(
                         divisibility_graph,
@@ -2505,7 +2506,6 @@ async fn add_algebraic_factors_to_graph<T: AsRef<str> + Display, U: AsRef<str> +
                         }
                         if should_add_factor {
                             parseable_factors.insert(factor_vid);
-                            any_added |= added;
                         }
                     }
                 }
