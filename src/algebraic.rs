@@ -791,11 +791,10 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
                 if self.is_expression() {
                     let self_str = self.as_str();
                     let other_str = other.as_str();
-                    if self_str.starts_with(&*other_str) {
-                        if self_str.get(other_str.len()..=other_str.len()) == Some("/") {
+                    if self_str.starts_with(&*other_str)
+                        && self_str.get(other_str.len()..=other_str.len()) == Some("/") {
                             return false;
                         }
-                    }
                 }
                 let Some(last_digit) = self.last_digit() else {
                     return true;
