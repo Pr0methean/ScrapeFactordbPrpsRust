@@ -768,11 +768,9 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         }
     }
 
+    #[inline(always)]
     fn is_expression(&self) -> bool {
-        match self {
-            Factor::Expression(_) => true,
-            _ => false,
-        }
+        matches!(self, Factor::Expression(_))
     }
 
     pub fn may_be_proper_divisor_of<V: AsRef<str>, W: AsRef<str>>(
