@@ -788,6 +788,15 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
             Some(Ordering::Greater) => self.is_expression() || other.is_expression(),
             Some(Ordering::Equal) => false,
             Some(Ordering::Less) => {
+                if self.is_expression() {
+                    let self_str = self.as_str();
+                    let other_str = other.as_str();
+                    if self_str.starts_with(&*other_str) {
+                        if self_str.get(other_str.len()..=other_str.len()) == Some("/") {
+                            return false;
+                        }
+                    }
+                }
                 let Some(last_digit) = self.last_digit() else {
                     return true;
                 };
@@ -1713,25 +1722,7 @@ impl FactorFinder {
         expr: &Factor<T, U>,
     ) -> Box<[Factor<ArcStr, CompactString>]> {
         let mut factors = self.find_factors(expr);
-        factors.retain(|f| match f {
-            Numeric(n) => {
-                *n > 1
-                    && if let Numeric(expr) = expr {
-                        *n <= *expr >> 1
-                    } else {
-                        true
-                    }
-            }
-            Factor::Expression(s) => {
-                f.may_be_proper_divisor_of(expr)
-                    && if let Factor::Expression(expr) = &expr {
-                        !expr.as_ref().starts_with(&format!("{s}/"))
-                    } else {
-                        true
-                    }
-            }
-            Factor::BigNumber(_) => f.may_be_proper_divisor_of(expr),
-        });
+        factors.retain(|f| f.may_be_proper_divisor_of(expr));
         factors.sort();
         factors.dedup();
         if factors.is_empty() {
