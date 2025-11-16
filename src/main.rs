@@ -1,12 +1,5 @@
 #![allow(stable_features)]
 #![feature(duration_constructors_lite)]
-#![feature(file_buffered)]
-#![feature(const_destruct)]
-#![feature(unboxed_closures)]
-#![feature(fn_traits)]
-#![feature(never_type)]
-#![feature(btree_set_entry)]
-#![feature(str_as_str)]
 #![feature(float_gamma)]
 extern crate core;
 

@@ -273,7 +273,7 @@ impl FactorDbClient {
             }
             sleep(retry_delay).await;
         }
-        let alt_url = alt_url_supplier.call_once(());
+        let alt_url = alt_url_supplier();
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
         Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
     }
@@ -300,7 +300,7 @@ impl FactorDbClient {
         } else {
             let result = self
                 .http
-                .get(url.as_str())
+                .get(url)
                 .header("Referer", "https://factordb.com")
                 .send()
                 .await;
@@ -366,7 +366,7 @@ impl FactorDbClient {
     pub fn post<'a>(&'a self, url: &'a str) -> ThrottlingRequestBuilder<'a> {
         ThrottlingRequestBuilder {
             inner: if url.len() <= REQWEST_MAX_URL_LEN {
-                Ok(self.http.post(url.as_str()))
+                Ok(self.http.post(url))
             } else {
                 Err(url)
             },
@@ -467,7 +467,7 @@ impl FactorDbClient {
                         factors.len(),
                         factors.iter().map(|(digits, _)| digits.len()).join(",")
                     );
-                    let status = match status.as_str() {
+                    let status = match &*status {
                         "FF" => Some(FullyFactored),
                         "P" | "PRP" => Some(Prime),
                         "C" => Some(UnfactoredComposite),

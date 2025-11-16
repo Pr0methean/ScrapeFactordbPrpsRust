@@ -21,7 +21,6 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
-use std::marker::Destruct;
 use std::mem::swap;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
@@ -582,7 +581,7 @@ macro_rules! factor_from {
                 match value.parse() {
                     Ok(n) => Numeric(n),
                     Err(_) => {
-                        if value.as_str().chars().all(|c| c.is_ascii_digit()) {
+                        if value.chars().all(|c| c.is_ascii_digit()) {
                             Factor::BigNumber(value.into())
                         } else {
                             Factor::Expression(value.into())
@@ -604,7 +603,7 @@ impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
         match value.parse() {
             Ok(n) => Numeric(n),
             Err(_) => {
-                if value.as_str().chars().all(|c| c.is_ascii_digit()) {
+                if value.chars().all(|c| c.is_ascii_digit()) {
                     Factor::BigNumber(value)
                 } else {
                     Factor::Expression(value)
@@ -881,8 +880,6 @@ impl Clone for FactorFinder {
 
     #[inline(always)]
     fn clone_from(&mut self, _source: &Self)
-    where
-        Self: Destruct,
     {
         // No-op because all instances are interchangeables
     }
