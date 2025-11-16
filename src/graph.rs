@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use gryf::algo::ShortestPaths;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::Graph;
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
@@ -166,8 +167,8 @@ pub fn neighbors_with_edge_weights(
         .collect()
 }
 
-pub fn get_edge(graph: &DivisibilityGraph, source: &VertexId, dest: &VertexId) -> Option<Divisibility> {
-    Some(*graph.edge(graph.edge_id_any(source, dest)?)?)
+pub fn get_edge(graph: &DivisibilityGraph, source: VertexId, dest: VertexId) -> Option<Divisibility> {
+    Some(*graph.edge(graph.edge_id_any(&source, &dest)?)?)
 }
 
 pub fn add_factor_node(
@@ -215,4 +216,14 @@ pub fn add_factor_node(
         let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, NotFactor);
     }
     (factor_vid, added)
+}
+
+pub fn is_known_factor(divisibility_graph: &DivisibilityGraph, factor_vid: VertexId, composite_vid: VertexId) -> bool {
+    matches!(get_edge(divisibility_graph, factor_vid, composite_vid), Some(Direct) | Some(Transitive))
+    || ShortestPaths::on(&divisibility_graph)
+        .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
+        .goal(factor_vid)
+        .run(composite_vid)
+        .ok()
+        .and_then(|paths| paths.dist(factor_vid).copied()) == Some(0)
 }

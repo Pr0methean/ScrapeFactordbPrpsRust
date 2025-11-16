@@ -64,6 +64,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
 use tokio::{select, task};
 use graph::DivisibilityGraph;
+use crate::graph::is_known_factor;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -907,7 +908,6 @@ async fn main() -> anyhow::Result<()> {
     info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
     let mut max_concurrent_requests = 2usize;
-    let id_regex = Regex::new("index\\.php\\?id=([0-9]+)")?;
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
@@ -973,6 +973,7 @@ async fn main() -> anyhow::Result<()> {
                 new_c_buffer_task = true;
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
+                let prp_permits = prp_permits?;
                 info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
                 let mut results_text = None;
@@ -990,21 +991,13 @@ async fn main() -> anyhow::Result<()> {
                 let Some(results_text) = results_text else {
                     continue 'queue_tasks;
                 };
-                let mut prp_permits = prp_permits?;
-                for prp_id in id_regex
-                    .captures_iter(&results_text)
-                    .map(|result| result[1].parse::<u128>().ok())
-                    .unique()
+                for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
                 {
-                    let Some(prp_id) = prp_id else {
-                        error!("Invalid PRP ID found");
-                        continue;
-                    };
                     if let Ok(false) = prp_filter.test_and_add(&prp_id) {
                         warn!("{prp_id}: Skipping duplicate PRP");
                         continue;
                     }
-                    prp_permits.next().unwrap().send(prp_id);
+                    prp_permit.send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
                         queue_unknowns(&http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
@@ -1306,7 +1299,7 @@ async fn find_and_submit_factors(
             // out the ID later
             continue;
         }
-        match graph::get_edge(&divisibility_graph, &factor_vid, &root_node) {
+        match graph::get_edge(&divisibility_graph, factor_vid, root_node) {
             Some(Direct) | Some(NotFactor) => {
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
@@ -1410,7 +1403,7 @@ async fn find_and_submit_factors(
                         // Don't try to submit to a dest for which FactorDB already has a full factorization
                         && !number_facts_map.get(&dest.id).unwrap().is_final()
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                        && graph::get_edge(&divisibility_graph, &factor_vid, &dest.id).is_none())
+                        && graph::get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
                 .sorted_by_key(|vertex| vertex.attr) // Try to submit to smaller cofactors first
                 .map(|vertex| vertex.id)
                 .collect::<Box<[_]>>();
@@ -1428,7 +1421,7 @@ async fn find_and_submit_factors(
                 if edge_id.is_some() {
                     continue;
                 }
-                let reverse_edge = graph::get_edge(&divisibility_graph, &cofactor_vid, &factor_vid);
+                let reverse_edge = graph::get_edge(&divisibility_graph, cofactor_vid, factor_vid);
                 if reverse_edge == Some(Direct) || reverse_edge == Some(Transitive) {
                     graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
@@ -1506,13 +1499,7 @@ async fn find_and_submit_factors(
                     FactorsKnownToFactorDb::NotQueried => {}
                 }
 
-                let shortest_path_from_dest = ShortestPaths::on(&divisibility_graph)
-                    .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
-                    .goal(factor_vid)
-                    .run(cofactor_vid)
-                    .ok()
-                    .and_then(|paths| paths.dist(factor_vid).copied());
-                if shortest_path_from_dest == Some(0) {
+                if is_known_factor(&divisibility_graph, factor_vid, cofactor_vid) {
                     debug!(
                         "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is transitively a factor of {factor}"
                     );
@@ -1699,13 +1686,7 @@ async fn find_and_submit_factors(
             );
             continue;
         }
-        let reverse_dist = ShortestPaths::on(&divisibility_graph)
-            .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
-            .goal(root_node)
-            .run(factor_vid)
-            .ok()
-            .and_then(|paths| paths.dist(root_node).copied());
-        if reverse_dist == Some(0) {
+        if is_known_factor(&divisibility_graph, factor_vid, root_node) {
             debug!("{id}: {factor} was successfully submitted");
             continue;
         }
