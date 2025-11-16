@@ -926,15 +926,15 @@ fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec
 }
 
 #[inline(always)]
-fn multiset_union<T: Eq + Ord + Clone, U: Ord + From<T> + Clone>(
+fn multiset_union<T: Eq + Ord + Clone>(
     vec1: Vec<T>,
-    vec2: Vec<U>,
-) -> Vec<U> {
+    vec2: Vec<T>,
+) -> Vec<T> {
     if vec1.is_empty() {
         return vec2;
     }
     if vec2.is_empty() {
-        return vec1.into_iter().map(|item| item.into()).collect();
+        return vec1;
     }
     let counts1 = count_frequencies(vec1);
     let mut counts2 = count_frequencies(vec2);
