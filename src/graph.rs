@@ -178,13 +178,12 @@ pub fn add_factor_node(
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     root_node: Option<VertexId>,
 ) -> (VertexId, bool) {
-    let (factor_vid, added) = match divisibility_graph.find_vertex(&(&factor).into()) {
-        Some(id) => (id, false),
+    let (factor_vid, added) = match divisibility_graph.vertices().find(|v| v.attr.as_ref() == factor) {
+        Some(vertex_ref) => (vertex_ref.id, false),
         None => {
-            let factor_ref = factor.as_ref();
-            let factor_vid = divisibility_graph.add_vertex((&factor).into());
-            let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor_ref);
-            let detected_factors = factor_finder.find_unique_factors(&factor_ref);
+            let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
+            let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
+            let detected_factors = factor_finder.find_unique_factors(&factor);
             let detected_factor_vids: Box<[VertexId]> = detected_factors
                 .into_iter()
                 .map(|factor| {
