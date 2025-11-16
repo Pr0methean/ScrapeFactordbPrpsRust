@@ -1,7 +1,5 @@
 use crate::algebraic::Factor::Numeric;
-use crate::{
-    write_bignum,
-};
+use crate::write_bignum;
 use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;

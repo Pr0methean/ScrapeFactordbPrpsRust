@@ -1,32 +1,34 @@
-use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, MAX_ID_EQUAL_TO_VALUE, RETRY_DELAY};
+use crate::algebraic::Factor::Numeric;
+use crate::algebraic::NumberStatus::{
+    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
+};
+use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
 use crate::shutdown::Shutdown;
 use crate::{EXIT_TIME, MAX_CPU_BUDGET_TENTHS};
+use crate::{Factor, MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
-use arcstr::{literal, ArcStr};
+use arcstr::{ArcStr, literal};
 use atomic_time::AtomicInstant;
 use curl::easy::{Easy2, Handler, WriteError};
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
+use itertools::Itertools;
 use log::{debug, error, info, warn};
 use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
+use serde_json::from_str;
 use std::mem::swap;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
-use std::process::{exit, Command};
+use std::process::{Command, exit};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use itertools::Itertools;
-use serde_json::from_str;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::{sleep, sleep_until, Instant};
+use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
-use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
-use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -147,7 +149,8 @@ impl FactorDbClient {
                 .dot_matches_new_line(true)
                 .build()
                 .unwrap();
-        let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>").unwrap();
+        let id_and_expr_regex =
+            Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>").unwrap();
         let http = Client::builder()
             .pool_max_idle_per_host(max_concurrent_requests)
             .timeout(E2E_TIMEOUT)
@@ -179,7 +182,7 @@ impl FactorDbClient {
             shutdown_receiver,
             curl_client: Mutex::new(Easy2::new(Collector(Vec::new()))).into(),
             id_and_expr_regex: id_and_expr_regex.into(),
-            digits_fallback_regex: digits_fallback_regex.into()
+            digits_fallback_regex: digits_fallback_regex.into(),
         }
     }
 
@@ -196,11 +199,11 @@ impl FactorDbClient {
         let (
             _,
             [
-            requests,
-            cpu_seconds,
-            cpu_tenths_within_second,
-            minutes_to_reset,
-            seconds_within_minute_to_reset,
+                requests,
+                cpu_seconds,
+                cpu_tenths_within_second,
+                minutes_to_reset,
+                seconds_within_minute_to_reset,
             ],
         ) = captures.extract();
         let requests = requests.replace(",", "").parse::<u32>().unwrap();
@@ -305,7 +308,7 @@ impl FactorDbClient {
                 Ok(response) => response.text().await,
                 Err(e) => Err(e),
             }
-                .map_err(|e| anyhow::Error::from(e.without_url()))
+            .map_err(|e| anyhow::Error::from(e.without_url()))
         };
         drop(permit);
         match result {
@@ -372,10 +375,12 @@ impl FactorDbClient {
         }
     }
 
-    pub fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
-        -> impl Iterator<Item=(u128, &'a str)> {
+    pub fn read_ids_and_exprs<'a>(
+        &self,
+        haystack: &'a str,
+    ) -> impl Iterator<Item = (u128, &'a str)> {
         self.id_and_expr_regex
-        .captures_iter(haystack)
+            .captures_iter(haystack)
             .flat_map(move |capture| {
                 let Some(id) = capture.get(1) else {
                     error!("Failed to get ID for expression in\n{haystack}");
@@ -394,7 +399,7 @@ impl FactorDbClient {
                 };
                 Some((id, expr.as_str()))
             })
-                    .unique()
+            .unique()
     }
 
     #[inline]
@@ -432,8 +437,8 @@ impl FactorDbClient {
                     self.retrying_get_and_decode_or(url, RETRY_DELAY, || {
                         format!("https://factordb.com/index.php?showid={id}").into()
                     })
-                        .await
-                        .map_err(Some)
+                    .await
+                    .map_err(Some)
                 } else {
                     self.try_get_and_decode(url).await.ok_or(None)
                 }
@@ -451,10 +456,10 @@ impl FactorDbClient {
                     ProcessedStatusApiResponse::default()
                 }
                 Ok(NumberStatusApiResponse {
-                       status,
-                       factors,
-                       id: recvd_id,
-                   }) => {
+                    status,
+                    factors,
+                    id: recvd_id,
+                }) => {
                     let recvd_id_parsed = recvd_id.to_string().parse::<u128>().ok();
                     debug!("Parsed received ID {recvd_id} as {recvd_id_parsed:?}");
                     info!(
@@ -511,7 +516,7 @@ impl FactorDbClient {
                                 .collect::<Box<str>>()
                                 .into(),
                         ]
-                            .into_boxed_slice()
+                        .into_boxed_slice()
                     })
                     .unwrap_or_else(|| Box::new([]));
                 ProcessedStatusApiResponse {

@@ -27,8 +27,8 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
 use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
 use crate::net::ResourceLimits;
-use crate::shutdown::{handle_signals, Shutdown};
-use arcstr::{literal, ArcStr};
+use crate::shutdown::{Shutdown, handle_signals};
+use arcstr::{ArcStr, literal};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
@@ -42,10 +42,10 @@ use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
-use net::{FactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
+use net::{CPU_TENTHS_SPENT_LAST_CHECK, FactorDbClient};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use regex::Regex;
 use replace_with::replace_with_or_abort;
 use serde::{Deserialize, Serialize};
@@ -56,17 +56,17 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU128, NonZeroU32};
+use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::atomic::{AtomicBool};
 use tokio::sync::mpsc::error::TrySendError::Full;
-use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
-use tokio::sync::{oneshot, Mutex, OnceCell};
+use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
+use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -800,14 +800,7 @@ async fn throttle_if_necessary(
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
-        composites_while_waiting(
-            resets_at,
-            http,
-            c_receiver,
-            c_filter,
-            factor_finder,
-        )
-        .await;
+        composites_while_waiting(resets_at, http, c_receiver, c_filter, factor_finder).await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
         CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
     } else {
@@ -863,8 +856,12 @@ async fn queue_composites(
     let Some(composites_page) = composites_page else {
         return task::spawn(async {});
     };
-    let mut c_tasks: Box<[_]> = http.read_ids_and_exprs(&composites_page)
-        .map(|(id, expr)| CompositeCheckTask {id, digits_or_expr: expr.into()})
+    let mut c_tasks: Box<[_]> = http
+        .read_ids_and_exprs(&composites_page)
+        .map(|(id, expr)| CompositeCheckTask {
+            id,
+            digits_or_expr: expr.into(),
+        })
         .collect();
     c_tasks.shuffle(&mut rng());
     let mut c_buffered = Vec::with_capacity(c_tasks.len());
@@ -979,14 +976,10 @@ async fn main() -> anyhow::Result<()> {
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_buffer_task: JoinHandle<()> = task::spawn(async move {
-        queue_composites(
-            &http_clone,
-            &c_sender_clone,
-            c_digits,
-        )
-        .await
-        .await
-        .unwrap();
+        queue_composites(&http_clone, &c_sender_clone, c_digits)
+            .await
+            .await
+            .unwrap();
     });
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
@@ -1094,14 +1087,8 @@ async fn queue_unknowns(
 ) {
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
-        if let Err(u_permits) = try_queue_unknowns(
-            http,
-            u_digits,
-            u_permits,
-            u_filter,
-            factor_finder,
-        )
-        .await
+        if let Err(u_permits) =
+            try_queue_unknowns(http, u_digits, u_permits, u_filter, factor_finder).await
         {
             permits = Some(u_permits);
             sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
@@ -1137,16 +1124,7 @@ async fn try_queue_unknowns<'a>(
             warn!("{u_id}: Skipping duplicate U");
             continue;
         }
-        if find_and_submit_factors(
-            http,
-            u_id,
-            digits_or_expr,
-            factor_finder,
-            false,
-            false,
-        )
-        .await
-        {
+        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, false, false).await {
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
             let _ = u_filter.add(&u_id_bytes);
@@ -2387,8 +2365,8 @@ async fn add_algebraic_factors_to_graph(
                                 .needs_update()
                             {
                                 number_facts_map.get_mut(&factor_vid).unwrap().entry_id =
-                                        Some(factor_entry_id);
-                                let result = add_known_factors_to_graph::<&str,&str>(
+                                    Some(factor_entry_id);
+                                let result = add_known_factors_to_graph::<&str, &str>(
                                     http,
                                     factor_finder,
                                     divisibility_graph,
