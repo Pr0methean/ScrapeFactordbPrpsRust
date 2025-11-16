@@ -863,7 +863,7 @@ async fn queue_composites(
     let Some(composites_page) = composites_page else {
         return task::spawn(async {});
     };
-    let mut c_tasks: Box<[_]> = http.read_ids_and_exprs(&*composites_page)
+    let mut c_tasks: Box<[_]> = http.read_ids_and_exprs(&composites_page)
         .map(|(id, expr)| CompositeCheckTask {id, digits_or_expr: expr.into()})
         .collect();
     c_tasks.shuffle(&mut rng());
@@ -1128,7 +1128,7 @@ async fn try_queue_unknowns<'a>(
         return Err(u_permits);
     };
     info!("U search results retrieved");
-    let ids = http.read_ids_and_exprs(&*results_text);
+    let ids = http.read_ids_and_exprs(&results_text);
     let mut ids_found = false;
     for (u_id, digits_or_expr) in ids {
         ids_found = true;
