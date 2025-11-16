@@ -56,34 +56,17 @@ impl<T: Debug> PushbackReceiver<T> {
 
     pub fn try_recv(&mut self) -> Option<(T, OwnedPermit<T>)> {
         self.redrive_returned();
-        let return_sender = self.return_sender.clone();
-        match return_sender.try_reserve_owned() {
-            Ok(return_permit) => {
-                if let Ok(received) = self.receiver.try_recv() {
-                    Some((received, return_permit))
-                } else if let Ok(received_return) = self.return_receiver.try_recv() {
-                    info!(
-                        "Receiving returned item because main channel is empty: {:?}",
-                        received_return
-                    );
-                    Some((received_return, return_permit))
-                } else {
-                    None
-                }
-            }
-            Err(e) => {
-                let received = self.return_receiver.try_recv().expect(
-                    "Failed to receive a returned item when no return permits are available",
-                );
-                let return_permit = e.into_inner()
-                    .try_reserve_owned()
-                    .expect("Failed to obtain a return permit after receiving a returned item");
+        if let Ok(return_permit) = self.return_sender.clone().try_reserve_owned() {
+            if let Ok(received) = self.receiver.try_recv() {
+                return Some((received, return_permit));
+            } else if let Ok(received_return) = self.return_receiver.try_recv() {
                 info!(
-                    "Receiving returned item because return channel is full: {:?}",
-                    received
+                    "Receiving returned item because main channel is empty: {:?}",
+                    received_return
                 );
-                Some((received, return_permit))
+                return Some((received_return, return_permit));
             }
         }
+        None
     }
 }
