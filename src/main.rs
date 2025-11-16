@@ -1134,10 +1134,6 @@ impl NumberFacts {
             self
         }
     }
-
-    pub(crate) fn is_final(&self) -> bool {
-        self.last_known_status == Some(Prime) || self.last_known_status == Some(FullyFactored)
-    }
 }
 
 async fn find_and_submit_factors(
@@ -1364,7 +1360,6 @@ async fn find_and_submit_factors(
         for factor_vid in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
             graph::rule_out_divisibility(&mut divisibility_graph, &root_node, &factor_vid);
-
             // elided numbers and numbers over 65500 digits without an expression form can only
             // be submitted as factors, even if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
@@ -1382,8 +1377,6 @@ async fn find_and_submit_factors(
                 .filter(|dest|
                     // if factor == dest, the relation is trivial
                     factor_vid != dest.id
-                        // Don't try to submit to a dest for which FactorDB already has a full factorization
-                        && !number_facts_map.get(&dest.id).unwrap().is_final()
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
                         && graph::get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
                 .sorted_by_key(|vertex| vertex.attr) // Try to submit to smaller cofactors first
@@ -1396,7 +1389,7 @@ async fn find_and_submit_factors(
                 .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                 .run(factor_vid)
                 .unwrap();
-
+            let facts = number_facts_map.get(&factor_vid).unwrap();
             for cofactor_vid in dest_factors.into_iter() {
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &cofactor_vid);
@@ -1408,7 +1401,6 @@ async fn find_and_submit_factors(
                     graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
                 }
-
                 if shortest_paths.dist(cofactor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
@@ -1419,6 +1411,30 @@ async fn find_and_submit_factors(
                         true,
                     );
                     continue;
+                }
+                match facts.factors_known_to_factordb {
+                    UpToDate(ref already_known_factors)
+                    | NotUpToDate(ref already_known_factors) => {
+                        if already_known_factors.contains(&factor_vid) {
+                            graph::propagate_divisibility(
+                                &mut divisibility_graph,
+                                &factor_vid,
+                                &cofactor_vid,
+                                false,
+                            );
+                            continue;
+                        } else if matches!(facts.factors_known_to_factordb, UpToDate(_))
+                            && facts.is_known_fully_factored() {
+                            graph::propagate_divisibility(
+                                &mut divisibility_graph,
+                                &factor_vid,
+                                &cofactor_vid,
+                                false,
+                            );
+                            continue;
+                        }
+                    }
+                    FactorsKnownToFactorDb::NotQueried => {}
                 }
                 let factor = divisibility_graph.vertex(factor_vid).unwrap();
                 let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
@@ -1462,26 +1478,7 @@ async fn find_and_submit_factors(
                     graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
                     continue;
                 }
-                match facts.factors_known_to_factordb {
-                    UpToDate(ref already_known_factors)
-                    | NotUpToDate(ref already_known_factors) => {
-                        if already_known_factors.contains(&factor_vid) {
-                            debug!(
-                                "{id}: Propagating divisbility of {factor} into {cofactor} because it's already known to FactorDB"
-                            );
-                            graph::propagate_divisibility(
-                                &mut divisibility_graph,
-                                &factor_vid,
-                                &cofactor_vid,
-                                false,
-                            );
-                            continue;
-                        }
-                    }
-                    FactorsKnownToFactorDb::NotQueried => {}
-                }
-
-                if is_known_factor(&divisibility_graph, factor_vid, cofactor_vid) {
+                if is_known_factor(&divisibility_graph, cofactor_vid, factor_vid) {
                     debug!(
                         "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is transitively a factor of {factor}"
                     );
