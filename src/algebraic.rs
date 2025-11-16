@@ -2,6 +2,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::write_bignum;
 use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
+use gryf::core::id::VertexId;
 use itertools::Itertools;
 use log::{error, info, warn};
 use num_integer::Integer;
@@ -22,7 +23,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
-use gryf::core::id::VertexId;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],

@@ -282,9 +282,8 @@ impl FactorDbClient {
             // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
             // spawn_blocking
             let mut curl = self.curl_client.lock().await;
-            
-            curl
-                .get(true)
+
+            curl.get(true)
                 .and_then(|_| curl.url(url))
                 .and_then(|_| curl.perform())
                 .map_err(anyhow::Error::from)

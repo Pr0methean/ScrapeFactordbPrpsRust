@@ -24,7 +24,9 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef};
+use crate::algebraic::{
+    Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef,
+};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use arcstr::{ArcStr, literal};
@@ -197,7 +199,9 @@ async fn check_composite(
         return true;
     }
     let checks_triggered = if http
-        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}").into_boxed_str())
+        .try_get_and_decode(
+            &format!("https://factordb.com/sequences.php?check={id}").into_boxed_str(),
+        )
         .await
         .is_some()
     {
@@ -489,7 +493,8 @@ async fn get_prp_remaining_bases(
 async fn prove_by_np1(id: u128, http: &FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}").into_boxed_str(),
+            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}")
+                .into_boxed_str(),
             RETRY_DELAY,
         )
         .await;
@@ -498,7 +503,8 @@ async fn prove_by_np1(id: u128, http: &FactorDbClient) {
 async fn prove_by_nm1(id: u128, http: &FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}").into_boxed_str(),
+            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}")
+                .into_boxed_str(),
             RETRY_DELAY,
         )
         .await;
@@ -672,9 +678,8 @@ async fn try_handle_unknown(
     id: u128,
     next_attempt: &mut Instant,
 ) -> UnknownPrpCheckResult {
-    let url = format!(
-        "https://factordb.com/index.php?id={id}&prp=Assign+to+worker"
-    ).into_boxed_str();
+    let url =
+        format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker").into_boxed_str();
     let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
         match status.get(1) {
@@ -1073,7 +1078,8 @@ async fn try_queue_unknowns<'a>(
             .unwrap()
     });
     let u_start = rng.random_range(0..=MAX_START);
-    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into_boxed_str();
+    let u_search_url =
+        format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into_boxed_str();
     let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
         return Err(u_permits);
     };
@@ -1719,13 +1725,13 @@ async fn find_and_submit_factors(
                                     .unwrap()
                                     .entry_id
                                     .replace(entry_id)
-                                    && old_id != entry_id
-                                {
-                                    let factor = divisibility_graph.vertex(factor_vid).unwrap();
-                                    error!(
-                                        "{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}"
-                                    );
-                                };
+                                && old_id != entry_id
+                            {
+                                let factor = divisibility_graph.vertex(factor_vid).unwrap();
+                                error!(
+                                    "{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}"
+                                );
+                            };
                         }
                     }
                     OtherError => {
@@ -1762,13 +1768,13 @@ async fn find_and_submit_factors(
                                     .unwrap()
                                     .entry_id
                                     .replace(dest_entry_id)
-                                    && old_id != dest_entry_id
-                                {
-                                    let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
-                                    error!(
-                                        "{id}: Detected that {cofactor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
-                                    );
-                                };
+                                && old_id != dest_entry_id
+                            {
+                                let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
+                                error!(
+                                    "{id}: Detected that {cofactor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
+                                );
+                            };
                         }
                     }
                 }
@@ -1964,7 +1970,11 @@ async fn add_known_factors_to_graph(
             id: facts.entry_id,
         };
     }
-    let root_specifier = as_specifier(&root_vid, divisibility_graph.vertex(&root_vid).unwrap(), number_facts_map);
+    let root_specifier = as_specifier(
+        &root_vid,
+        divisibility_graph.vertex(&root_vid).unwrap(),
+        number_facts_map,
+    );
     let ProcessedStatusApiResponse {
         status,
         factors: dest_subfactors,
@@ -2229,7 +2239,8 @@ async fn add_algebraic_factors_to_graph(
             } else {
                 info!("{id}: Checking for listed algebraic factors");
                 // Links before the "Is factor of" header are algebraic factors; links after it aren't
-                let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
+                let url =
+                    format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
                 let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                 if let Some(listed_algebraic) = result.split("Is factor of").next() {
                     let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
