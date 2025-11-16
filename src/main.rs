@@ -113,18 +113,6 @@ enum UnknownPrpCheckResult {
     IneligibleForPrpCheck,
 }
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
-#[repr(u8)]
-enum CheckTaskType {
-    Prp,
-    U,
-}
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
-struct CheckTask {
-    id: u128,
-    task_type: CheckTaskType,
-}
-
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
     id: u128,
@@ -526,8 +514,8 @@ static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
 async fn do_checks(
-    mut prp_receiver: PushbackReceiver<CheckTask>,
-    mut u_receiver: PushbackReceiver<CheckTask>,
+    mut prp_receiver: PushbackReceiver<u128>,
+    mut u_receiver: PushbackReceiver<u128>,
     mut c_receiver: PushbackReceiver<CompositeCheckTask>,
     mut c_filter: CuckooFilter<DefaultHasher>,
     http: FactorDbClient,
@@ -556,105 +544,87 @@ async fn do_checks(
     .await;
     let mut successful_select_end = Instant::now();
     loop {
-        let task = select! {
+        select! {
             _ = shutdown_receiver.recv() => {
                 warn!("do_checks received shutdown signal; exiting");
                 return;
             }
             _ = sleep_until(next_unknown_attempt) => {
-                if retry.is_some() {
+                let Some((id, task_return_permit)) = retry.take().inspect(|_| {
                     info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
-                    retry.take()
-                } else {
+                }).or_else(||
                     u_receiver.try_recv().inspect(|_| {
                         info!("Ready to check a U after {:?}", Instant::now() - successful_select_end);
-                    })
+                    }))
+                else {
+                    continue;
+                };
+                match try_handle_unknown(
+                    &http,
+                    &u_status_regex,
+                    &many_digits_regex,
+                    id,
+                    &mut next_unknown_attempt,
+                )
+                .await
+                {
+                    Assigned | IneligibleForPrpCheck => {}
+                    PleaseWait => {
+                        if retry.is_none() {
+                            retry = Some((id, task_return_permit));
+                            info!("{id}: put U in retry buffer");
+                        } else {
+                            task_return_permit.send(id);
+                            info!("{id}: Requeued U");
+                        }
+                    }
+                    OtherRetryableFailure => {
+                        task_return_permit.send(id);
+                        info!("{id}: Requeued U");
+                    }
                 }
             }
-            prp_task = prp_receiver.recv() => {
+            (id, task_return_permit) = prp_receiver.recv() => {
                 info!("Ready to check a PRP after {:?}", Instant::now() - successful_select_end);
-                Some(prp_task)
-            }
-            c_task = c_receiver.recv() => {
-                info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
-                let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
-                check_composite(&http, &mut c_filter, &factor_finder, id, digits_or_expr, return_permit).await;
-                successful_select_end = Instant::now();
-                None
-            }
-        };
-        if let Some((CheckTask { id, task_type }, task_return_permit)) = task {
-            match task_type {
-                CheckTaskType::Prp => {
-                    let mut stopped_early = false;
-                    let Ok(bases_left) = get_prp_remaining_bases(
-                        id,
-                        &http,
-                        &bases_regex,
-                        &nm1_regex,
-                        &np1_regex,
-                        &mut c_receiver,
-                        &mut c_filter,
-                        &factor_finder,
-                    )
-                    .await
-                    else {
-                        task_return_permit.send(CheckTask { id, task_type });
+                let mut stopped_early = false;
+                let Ok(bases_left) = get_prp_remaining_bases(
+                    id,
+                    &http,
+                    &bases_regex,
+                    &nm1_regex,
+                    &np1_regex,
+                    &mut c_receiver,
+                    &mut c_filter,
+                    &factor_finder,
+                )
+                .await
+                else {
+                    task_return_permit.send(id);
+                    info!("{id}: Requeued PRP");
+                    continue;
+                };
+                if bases_left == U256::from(0) {
+                    continue;
+                }
+                for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
+                    let url = ArcStr::from(format!(
+                        "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
+                    ));
+                    let text = http.retrying_get_and_decode(url.clone(), RETRY_DELAY).await;
+                    if !text.contains(">number<") {
+                        error!("Failed to decode result from {url}: {text}");
+                        task_return_permit.send(id);
                         info!("{id}: Requeued PRP");
-                        continue;
-                    };
-                    if bases_left == U256::from(0) {
-                        continue;
-                    }
-                    for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                        let url = ArcStr::from(format!(
-                            "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
-                        ));
-                        let text = http.retrying_get_and_decode(url.clone(), RETRY_DELAY).await;
-                        if !text.contains(">number<") {
-                            error!("Failed to decode result from {url}: {text}");
-                            task_return_permit.send(CheckTask { id, task_type });
-                            info!("{id}: Requeued PRP");
-                            composites_while_waiting(
-                                Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                                &http,
-                                &mut c_receiver,
-                                &mut c_filter,
-                                &factor_finder,
-                            )
-                            .await;
-                            break;
-                        }
-                        throttle_if_necessary(
+                        composites_while_waiting(
+                            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                             &http,
                             &mut c_receiver,
-                            &mut bases_before_next_cpu_check,
-                            true,
                             &mut c_filter,
                             &factor_finder,
                         )
                         .await;
-                        if cert_regex.is_match(&text) {
-                            info!("{}: No longer PRP (has certificate)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if text.contains("set to C") {
-                            info!("{}: No longer PRP (ruled out by PRP check)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if !text.contains("PRP") {
-                            info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
-                            stopped_early = true;
-                            break;
-                        }
+                        break;
                     }
-                    if !stopped_early {
-                        info!("{}: all bases now checked", id);
-                    }
-                }
-                CheckTaskType::U => {
                     throttle_if_necessary(
                         &http,
                         &mut c_receiver,
@@ -664,34 +634,33 @@ async fn do_checks(
                         &factor_finder,
                     )
                     .await;
-                    match try_handle_unknown(
-                        &http,
-                        &u_status_regex,
-                        &many_digits_regex,
-                        id,
-                        &mut next_unknown_attempt,
-                    )
-                    .await
-                    {
-                        Assigned | IneligibleForPrpCheck => {}
-                        PleaseWait => {
-                            if retry.is_none() {
-                                retry = Some((CheckTask { id, task_type }, task_return_permit));
-                                info!("{id}: put U in retry buffer");
-                            } else {
-                                task_return_permit.send(CheckTask { id, task_type });
-                                info!("{id}: Requeued U");
-                            }
-                        }
-                        OtherRetryableFailure => {
-                            task_return_permit.send(CheckTask { id, task_type });
-                            info!("{id}: Requeued U");
-                        }
+                    if cert_regex.is_match(&text) {
+                        info!("{}: No longer PRP (has certificate)", id);
+                        stopped_early = true;
+                        break;
+                    }
+                    if text.contains("set to C") {
+                        info!("{}: No longer PRP (ruled out by PRP check)", id);
+                        stopped_early = true;
+                        break;
+                    }
+                    if !text.contains("PRP") {
+                        info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
+                        stopped_early = true;
+                        break;
                     }
                 }
+                if !stopped_early {
+                    info!("{}: all bases now checked", id);
+                }
             }
-            successful_select_end = Instant::now();
+            c_task = c_receiver.recv() => {
+                info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
+                let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
+                check_composite(&http, &mut c_filter, &factor_finder, id, digits_or_expr, return_permit).await;
+            }
         }
+        successful_select_end = Instant::now();
     }
 }
 
@@ -1051,11 +1020,7 @@ async fn main() -> anyhow::Result<()> {
                         warn!("{prp_id}: Skipping duplicate PRP");
                         continue;
                     }
-                    let prp_task = CheckTask {
-                        id: prp_id,
-                        task_type: CheckTaskType::Prp,
-                    };
-                    prp_permits.next().unwrap().send(prp_task);
+                    prp_permits.next().unwrap().send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
                         queue_unknowns(&http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
@@ -1081,7 +1046,7 @@ async fn main() -> anyhow::Result<()> {
 async fn queue_unknowns(
     http: &FactorDbClient,
     u_digits: Option<NonZeroU128>,
-    u_permits: PermitIterator<'_, CheckTask>,
+    u_permits: PermitIterator<'_, u128>,
     u_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
 ) {
@@ -1099,10 +1064,10 @@ async fn queue_unknowns(
 async fn try_queue_unknowns<'a>(
     http: &FactorDbClient,
     u_digits: Option<NonZeroU128>,
-    mut u_permits: PermitIterator<'a, CheckTask>,
+    mut u_permits: PermitIterator<'a, u128>,
     u_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
-) -> Result<(), PermitIterator<'a, CheckTask>> {
+) -> Result<(), PermitIterator<'a, u128>> {
     let mut rng = rng();
     let digits = u_digits.unwrap_or_else(|| {
         rng.random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
@@ -1128,10 +1093,7 @@ async fn try_queue_unknowns<'a>(
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
             let _ = u_filter.add(&u_id_bytes);
-            u_permits.next().unwrap().send(CheckTask {
-                id: u_id,
-                task_type: CheckTaskType::U,
-            });
+            u_permits.next().unwrap().send(u_id);
             info!("{u_id}: Queued U");
         }
     }
