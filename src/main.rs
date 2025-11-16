@@ -29,7 +29,7 @@ use crate::algebraic::{
 };
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
-use arcstr::{ArcStr, literal};
+use arcstr::{ArcStr};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
@@ -1141,7 +1141,7 @@ async fn try_report_factor<
         None
     };
     let request_builder = match http
-        .post(literal!("https://factordb.com/reportfactor.php"))
+        .post("https://factordb.com/reportfactor.php")
         .form(&FactorSubmission {
             id: if let Id(id) = u_id { Some(*id) } else { None },
             number,

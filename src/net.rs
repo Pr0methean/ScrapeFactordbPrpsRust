@@ -71,7 +71,7 @@ pub struct FactorDbClient {
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
-    inner: Result<RequestBuilder, ArcStr>,
+    inner: Result<RequestBuilder, &'a str>,
     client: &'a FactorDbClient,
     form: Option<Box<str>>,
 }
@@ -359,7 +359,7 @@ impl FactorDbClient {
             .await
     }
 
-    pub fn post(&'_ self, url: ArcStr) -> ThrottlingRequestBuilder<'_> {
+    pub fn post<'a>(&'a self, url: &'a str) -> ThrottlingRequestBuilder<'a> {
         ThrottlingRequestBuilder {
             inner: if url.len() <= REQWEST_MAX_URL_LEN {
                 Ok(self.http.post(url.as_str()))
