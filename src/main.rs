@@ -999,8 +999,8 @@ async fn main() -> anyhow::Result<()> {
                     }
                     prp_permit.send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
-                    if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
+                    if let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
+                        let _ = try_queue_unknowns(&http, u_digits, &mut u_permits, &mut u_filter, &factor_finder).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -1011,7 +1011,7 @@ async fn main() -> anyhow::Result<()> {
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
                 info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                queue_unknowns(&http, u_digits, u_permits?, &mut u_filter, &factor_finder).await;
+                let _ = try_queue_unknowns(&http, u_digits, &mut u_permits?, &mut u_filter, &factor_finder).await;
             }
         }
         if new_c_buffer_task {
@@ -1020,31 +1020,13 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn queue_unknowns(
-    http: &FactorDbClient,
-    u_digits: Option<NonZeroU128>,
-    u_permits: PermitIterator<'_, u128>,
-    u_filter: &mut CuckooFilter<DefaultHasher>,
-    factor_finder: &FactorFinder,
-) {
-    let mut permits = Some(u_permits);
-    while let Some(u_permits) = permits.take() {
-        if let Err(u_permits) =
-            try_queue_unknowns(http, u_digits, u_permits, u_filter, factor_finder).await
-        {
-            permits = Some(u_permits);
-            sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
-        }
-    }
-}
-
 async fn try_queue_unknowns<'a>(
     http: &FactorDbClient,
     u_digits: Option<NonZeroU128>,
-    mut u_permits: PermitIterator<'a, u128>,
+    u_permits: &mut PermitIterator<'a, u128>,
     u_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
-) -> Result<(), PermitIterator<'a, u128>> {
+) -> Result<(), ()> {
     let mut rng = rng();
     let digits = u_digits.unwrap_or_else(|| {
         rng.random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
@@ -1055,23 +1037,22 @@ async fn try_queue_unknowns<'a>(
     let u_search_url =
         format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into_boxed_str();
     let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
-        return Err(u_permits);
+        return Err(());
     };
     info!("U search results retrieved");
     let ids = http.read_ids_and_exprs(&results_text);
     let mut ids_found = false;
-    for (u_id, digits_or_expr) in ids {
+    for ((u_id, digits_or_expr), u_permit) in ids.zip(u_permits) {
         ids_found = true;
-        let u_id_bytes = u_id.to_ne_bytes();
-        if u_filter.contains(&u_id_bytes) {
+        if u_filter.contains(&u_id) {
             warn!("{u_id}: Skipping duplicate U");
             continue;
         }
         if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, false, false).await {
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
-            let _ = u_filter.add(&u_id_bytes);
-            u_permits.next().unwrap().send(u_id);
+            let _ = u_filter.add(&u_id);
+            u_permit.send(u_id);
             info!("{u_id}: Queued U");
         }
     }
@@ -1079,7 +1060,8 @@ async fn try_queue_unknowns<'a>(
         Ok(())
     } else {
         error!("Couldn't parse IDs from search result: {results_text}");
-        Err(u_permits)
+        sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
+        Err(())
     }
 }
 
