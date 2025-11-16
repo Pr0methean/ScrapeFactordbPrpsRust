@@ -2176,7 +2176,7 @@ fn upsert_edge<F: FnOnce(Option<Divisibility>) -> Divisibility>(
             );
         }
         None => {
-            add_edge_or_log(divisibility_graph, from_vid, to_vid, new_value_fn(None));
+            divisibility_graph.add_edge(from_vid, to_vid, new_value_fn(None));
         }
     }
 }
@@ -2450,20 +2450,4 @@ fn add_factor_node(
         let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, NotFactor);
     }
     (factor_vid, added)
-}
-
-fn add_edge_or_log(
-    graph: &mut DivisibilityGraph,
-    from_vid: &VertexId,
-    to_vid: &VertexId,
-    value: Divisibility,
-) {
-    if let Err(e) = graph.try_add_edge(from_vid, to_vid, value) {
-        error!(
-            "Error adding edge {}-({:?})->{} {e}",
-            graph.vertex(from_vid).unwrap(),
-            value,
-            graph.vertex(to_vid).unwrap()
-        );
-    }
 }
