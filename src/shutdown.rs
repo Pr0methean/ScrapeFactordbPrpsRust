@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::signal::ctrl_c;
-use tokio::sync::broadcast::{Sender, channel};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::broadcast::{Sender, Receiver, channel};
+use tokio::sync::{oneshot};
 use tokio::{select, signal};
 
 /// Listens for the server shutdown signal.
@@ -24,7 +24,7 @@ pub(crate) struct Shutdown {
     is_shutdown: Arc<AtomicBool>,
 
     /// The receiving half of the channel used to listen for shutdown.
-    notify: broadcast::Receiver<()>,
+    notify: Receiver<()>,
 }
 
 impl Shutdown {
