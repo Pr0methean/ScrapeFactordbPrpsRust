@@ -1352,8 +1352,6 @@ async fn find_and_submit_factors(
     let mut already_checked_for_algebraic = BTreeSet::new();
     let multiple_starting_entries = digits_or_expr_full.len() > 1;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
-        let factor = divisibility_graph.vertex(factor_vid).unwrap().clone();
-        debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         factor_found |= add_algebraic_factors_to_graph(
             http,
             if multiple_starting_entries {
@@ -1378,14 +1376,15 @@ async fn find_and_submit_factors(
     let mut any_failed_retryably = false;
     let mut known_factors = divisibility_graph
         .vertices()
-        .map(|vertex| (vertex.id, vertex.attr.clone()))
-        .filter(|(factor_vid, _)| *factor_vid != root_node)
+        .map(|vertex| vertex.id)
+        .filter(|factor_vid| *factor_vid != root_node)
         .collect::<Box<[_]>>();
 
     // Try to submit largest factors first
-    known_factors.sort_by(|(_, factor1), (_, factor2)| factor2.cmp(factor1));
+    known_factors.sort_by_key(|id| divisibility_graph.vertex(id).unwrap());
 
-    for (factor_vid, factor) in known_factors.into_iter() {
+    for factor_vid in known_factors.into_iter() {
+        let factor = divisibility_graph.vertex(factor_vid).unwrap();
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         if factor
             .as_str_non_u128()
@@ -1421,7 +1420,6 @@ async fn find_and_submit_factors(
             DoesNotDivide => {
                 // The root isn't divisible by this "factor", so try to split it up into smaller
                 // factors and then we'll submit those instead.
-                rule_out_divisibility(&mut divisibility_graph, &factor_vid, &root_node);
                 if already_checked_for_algebraic.insert(factor_vid) {
                     debug!("{id}: Searching for algebraic factors of {factor}");
                     any_failed_retryably |= add_algebraic_factors_to_graph(
@@ -1435,6 +1433,7 @@ async fn find_and_submit_factors(
                     )
                     .await;
                 }
+                rule_out_divisibility(&mut divisibility_graph, &factor_vid, &root_node);
             }
             _ => {
                 any_failed_retryably = true;
