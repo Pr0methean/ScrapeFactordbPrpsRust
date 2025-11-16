@@ -28,7 +28,10 @@ pub fn rule_out_divisibility(
     nonfactor: &VertexId,
     dest: &VertexId,
 ) {
-    let _ = divisibility_graph.try_add_edge(nonfactor, dest, NotFactor);
+    let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| old_div.unwrap_or_else(|| NotFactor));
+    if updated_edge != NotFactor {
+        return;
+    }
     for (neighbor, edge) in divisibility_graph
         .neighbors_directed(dest, Incoming)
         .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
@@ -56,15 +59,13 @@ pub fn propagate_divisibility(
     dest: &VertexId,
     transitive: bool,
 ) {
-    if transitive {
-        let _ = divisibility_graph.try_add_edge(factor, dest, Transitive);
-    } else {
-        upsert_edge(
-            divisibility_graph,
-            factor,
-            dest,
-            override_transitive_with_direct(Direct),
-        );
+    if upsert_edge(
+        divisibility_graph,
+        factor,
+        dest,
+        override_transitive_with_direct(if transitive { Transitive } else {Direct}),
+    ) == NotFactor {
+        return;
     }
     rule_out_divisibility(divisibility_graph, dest, factor);
     for (neighbor, edge) in divisibility_graph
@@ -99,16 +100,22 @@ pub fn upsert_edge<F: FnOnce(Option<Divisibility>) -> Divisibility>(
     from_vid: &VertexId,
     to_vid: &VertexId,
     new_value_fn: F,
-) {
+) -> Divisibility {
     match divisibility_graph.edge_id_any(from_vid, to_vid) {
         Some(old_edge_id) => {
-            divisibility_graph.replace_edge(
-                old_edge_id,
-                new_value_fn(Some(*divisibility_graph.edge(&old_edge_id).unwrap())),
-            );
+            let old_divisibility = *divisibility_graph.edge(&old_edge_id).unwrap();
+            let new_divisibility = new_value_fn(Some(old_divisibility));
+            if new_divisibility != old_divisibility {
+                divisibility_graph.replace_edge(
+                    old_edge_id,
+                    new_divisibility);
+            }
+            new_divisibility
         }
         None => {
-            divisibility_graph.add_edge(from_vid, to_vid, new_value_fn(None));
+            let divisibility = new_value_fn(None);
+            divisibility_graph.add_edge(from_vid, to_vid, divisibility);
+            divisibility
         }
     }
 }
