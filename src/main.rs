@@ -1385,6 +1385,7 @@ async fn find_and_submit_factors(
             Factor::<&str, &str>::from(digits_or_expr),
             factor_finder,
             &mut number_facts_map,
+            None,
         )
     } else {
         let ProcessedStatusApiResponse {
@@ -1404,6 +1405,7 @@ async fn find_and_submit_factors(
                 Factor::<&str, &str>::from(digits_or_expr),
                 factor_finder,
                 &mut number_facts_map,
+                None,
             ),
             _ => {
                 let (root_node, _) = add_factor_node(
@@ -1411,6 +1413,7 @@ async fn find_and_submit_factors(
                     Factor::from(known_factors.iter().join("*")).as_ref(),
                     factor_finder,
                     &mut number_facts_map,
+                    None,
                 );
                 digits_or_expr_full.push(root_node);
                 if known_factors.len() > 1 {
@@ -1422,6 +1425,7 @@ async fn find_and_submit_factors(
                                 known_factor.as_ref(),
                                 factor_finder,
                                 &mut number_facts_map,
+                                Some(root_node),
                             );
                             if added {
                                 propagate_divisibility(
@@ -2181,6 +2185,7 @@ async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug
                 factor.as_ref(),
                 factor_finder,
                 number_facts_map,
+                Some(root_vid),
             );
             factor_vid
         })
@@ -2200,6 +2205,7 @@ async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug
                     equivalent.as_ref(),
                     factor_finder,
                     number_facts_map,
+                    Some(root_vid),
                 );
                 let new_facts = number_facts_map.get(&equivalent_vid).unwrap();
                 let NumberFacts {
@@ -2248,6 +2254,7 @@ async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug
                     dest_subfactor.as_ref(),
                     factor_finder,
                     number_facts_map,
+                    Some(root_vid),
                 );
                 if added {
                     all_added.push(dest_subfactor);
@@ -2385,6 +2392,7 @@ async fn add_algebraic_factors_to_graph(
                         factor.as_ref(),
                         factor_finder,
                         number_facts_map,
+                        Some(root_vid),
                     );
                     factor_vid
                 }));
@@ -2412,6 +2420,7 @@ async fn add_algebraic_factors_to_graph(
                             factor.as_ref(),
                             factor_finder,
                             number_facts_map,
+                            Some(root_vid),
                         );
                         debug!(
                             "{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}"
@@ -2446,6 +2455,7 @@ async fn add_algebraic_factors_to_graph(
                                         factor.as_ref(),
                                         factor_finder,
                                         number_facts_map,
+                                        Some(root_vid),
                                     );
                                     debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
                                     (as_specifier(&factor_vid, &factor, number_facts_map), None)
@@ -2537,8 +2547,9 @@ fn add_factor_node(
     factor: Factor<&str, &str>,
     factor_finder: &FactorFinder,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
+    root_node: Option<VertexId>,
 ) -> (VertexId, bool) {
-    match divisibility_graph.find_vertex(&(&factor).into()) {
+    let (factor_vid, added) = match divisibility_graph.find_vertex(&(&factor).into()) {
         Some(id) => (id, false),
         None => {
             let factor_ref = factor.as_ref();
@@ -2553,6 +2564,7 @@ fn add_factor_node(
                         factor.as_ref(),
                         factor_finder,
                         number_facts_map,
+                        root_node,
                     );
                     factor_vid
                 })
@@ -2570,7 +2582,11 @@ fn add_factor_node(
             );
             (factor_vid, true)
         }
+    };
+    if let Some(root_node) = root_node {
+        let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, NotFactor);
     }
+    (factor_vid, added)
 }
 
 fn add_edge_or_log(
