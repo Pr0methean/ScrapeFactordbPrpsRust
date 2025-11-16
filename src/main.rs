@@ -1389,7 +1389,6 @@ async fn find_and_submit_factors(
                 .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                 .run(factor_vid)
                 .unwrap();
-            let facts = number_facts_map.get(&factor_vid).unwrap();
             for cofactor_vid in dest_factors.into_iter() {
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &cofactor_vid);
@@ -1412,6 +1411,7 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
+                let facts = number_facts_map.get(&factor_vid).unwrap();
                 match facts.factors_known_to_factordb {
                     UpToDate(ref already_known_factors)
                     | NotUpToDate(ref already_known_factors) => {
@@ -1469,7 +1469,6 @@ async fn find_and_submit_factors(
                     continue;
                 }
                 let cofactor_upper_bound = cofactor_facts.upper_bound_log10;
-                let facts = number_facts_map.get(&factor_vid).unwrap();
                 if facts.lower_bound_log10 > cofactor_upper_bound {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
