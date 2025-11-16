@@ -7,7 +7,7 @@ use crate::shutdown::Shutdown;
 use crate::{EXIT_TIME, MAX_CPU_BUDGET_TENTHS};
 use crate::{Factor, MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
-use arcstr::{ArcStr, literal};
+use arcstr::ArcStr;
 use atomic_time::AtomicInstant;
 use curl::easy::{Easy2, Handler, WriteError};
 use governor::middleware::StateInformationMiddleware;
@@ -238,9 +238,9 @@ impl FactorDbClient {
 
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    pub async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str> {
+    pub async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
         for _ in 0..MAX_RETRIES {
-            if let Some(value) = self.try_get_and_decode(url.clone()).await {
+            if let Some(value) = self.try_get_and_decode(url).await {
                 return value;
             }
             sleep(retry_delay).await;
@@ -260,32 +260,31 @@ impl FactorDbClient {
 
     pub async fn retrying_get_and_decode_or(
         &self,
-        url: ArcStr,
+        url: &str,
         retry_delay: Duration,
         alt_url_supplier: impl FnOnce() -> ArcStr,
     ) -> Result<Box<str>, Box<str>> {
         for _ in 0..MAX_RETRIES_WITH_FALLBACK {
-            if let Some(value) = self.try_get_and_decode(url.clone()).await {
+            if let Some(value) = self.try_get_and_decode(url).await {
                 return Ok(value);
             }
             sleep(retry_delay).await;
         }
         let alt_url = alt_url_supplier.call_once(());
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
-        Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
+        Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
     }
 
-    async fn try_get_and_decode_core(&self, url: ArcStr) -> Option<Box<str>> {
+    async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
             // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
             // spawn_blocking
             let mut curl = self.curl_client.lock().await;
-            let url = url.clone();
             let response_text = curl
                 .get(true)
-                .and_then(|_| curl.url(&url))
+                .and_then(|_| curl.url(url))
                 .and_then(|_| curl.perform())
                 .map_err(anyhow::Error::from)
                 .and_then(|_| {
@@ -295,7 +294,6 @@ impl FactorDbClient {
                     }
                     Ok(String::from_utf8(curl.get_mut().take_all())?)
                 });
-            drop(curl);
             response_text
         } else {
             let result = self
@@ -327,7 +325,7 @@ impl FactorDbClient {
         }
     }
 
-    pub async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
+    pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
         let mut temp_bases = usize::MAX;
@@ -357,7 +355,7 @@ impl FactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits> {
         let response = self
-            .try_get_and_decode_core(literal!("https://factordb.com/res.php"))
+            .try_get_and_decode_core("https://factordb.com/res.php")
             .await?;
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
             .await
@@ -432,20 +430,20 @@ impl FactorDbClient {
         }
         let response = match id {
             NumberSpecifier::Id(id) => {
-                let url = format!("https://factordb.com/api?id={id}").into();
+                let url = format!("https://factordb.com/api?id={id}");
                 if get_digits_as_fallback {
-                    self.retrying_get_and_decode_or(url, RETRY_DELAY, || {
+                    self.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
                         format!("https://factordb.com/index.php?showid={id}").into()
                     })
                     .await
                     .map_err(Some)
                 } else {
-                    self.try_get_and_decode(url).await.ok_or(None)
+                    self.try_get_and_decode(&url).await.ok_or(None)
                 }
             }
             NumberSpecifier::Expression(ref expr) => {
                 let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str()));
-                self.try_get_and_decode(url.into()).await.ok_or(None)
+                self.try_get_and_decode(&url).await.ok_or(None)
             }
         };
         debug!("{id}: Got API response:\n{response:?}");

@@ -197,7 +197,7 @@ async fn check_composite(
         return true;
     }
     let checks_triggered = if http
-        .try_get_and_decode(format!("https://factordb.com/sequences.php?check={id}").into())
+        .try_get_and_decode(&format!("https://factordb.com/sequences.php?check={id}").into_boxed_str())
         .await
         .is_some()
     {
@@ -311,7 +311,7 @@ async fn get_prp_remaining_bases(
     let mut bases_left = U256::MAX - 3;
     let bases_text = http
         .retrying_get_and_decode(
-            format!("https://factordb.com/frame_prime.php?id={id}").into(),
+            &format!("https://factordb.com/frame_prime.php?id={id}").into_boxed_str(),
             RETRY_DELAY,
         )
         .await;
@@ -440,7 +440,7 @@ async fn get_prp_remaining_bases(
     }
     let status_text = http
         .retrying_get_and_decode(
-            format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}").into(),
+            &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}").into_boxed_str(),
             RETRY_DELAY,
         )
         .await;
@@ -489,7 +489,7 @@ async fn get_prp_remaining_bases(
 async fn prove_by_np1(id: u128, http: &FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}").into(),
+            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}").into_boxed_str(),
             RETRY_DELAY,
         )
         .await;
@@ -498,7 +498,7 @@ async fn prove_by_np1(id: u128, http: &FactorDbClient) {
 async fn prove_by_nm1(id: u128, http: &FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}").into(),
+            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}").into_boxed_str(),
             RETRY_DELAY,
         )
         .await;
@@ -607,10 +607,10 @@ async fn do_checks(
                     continue;
                 }
                 for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                    let url = ArcStr::from(format!(
+                    let url = format!(
                         "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
-                    ));
-                    let text = http.retrying_get_and_decode(url.clone(), RETRY_DELAY).await;
+                    );
+                    let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
                         task_return_permit.send(id);
@@ -672,10 +672,10 @@ async fn try_handle_unknown(
     id: u128,
     next_attempt: &mut Instant,
 ) -> UnknownPrpCheckResult {
-    let url = ArcStr::from(format!(
+    let url = format!(
         "https://factordb.com/index.php?id={id}&prp=Assign+to+worker"
-    ));
-    let result = http.retrying_get_and_decode(url, RETRY_DELAY).await;
+    ).into_boxed_str();
+    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
         match status.get(1) {
             None => {
@@ -814,7 +814,7 @@ async fn queue_composites(
     let mut composites_page = None;
     while composites_page.is_none() && results_per_page > 0 {
         composites_page = http.try_get_and_decode(
-            format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}").into()
+            &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}").into_boxed_str()
         ).await;
         if composites_page.is_none() {
             results_per_page >>= 1;
@@ -991,8 +991,8 @@ async fn main() -> anyhow::Result<()> {
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
                 let mut results_text = None;
                 while results_text.is_none() && results_per_page > 0 {
-                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}").into();
-                    let Some(text) = http.try_get_and_decode(prp_search_url).await else {
+                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}").into_boxed_str();
+                    let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
                         sleep(SEARCH_RETRY_DELAY).await;
                         results_per_page >>= 1;
                         continue;
@@ -1073,8 +1073,8 @@ async fn try_queue_unknowns<'a>(
             .unwrap()
     });
     let u_start = rng.random_range(0..=MAX_START);
-    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
-    let Some(results_text) = http.try_get_and_decode(u_search_url).await else {
+    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into_boxed_str();
+    let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
         return Err(u_permits);
     };
     info!("U search results retrieved");
@@ -2294,8 +2294,8 @@ async fn add_algebraic_factors_to_graph(
             } else {
                 info!("{id}: Checking for listed algebraic factors");
                 // Links before the "Is factor of" header are algebraic factors; links after it aren't
-                let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into();
-                let result = http.retrying_get_and_decode(url, RETRY_DELAY).await;
+                let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
+                let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                 if let Some(listed_algebraic) = result.split("Is factor of").next() {
                     let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
                     for (factor_entry_id, factor_digits_or_expr) in algebraic_factors {
