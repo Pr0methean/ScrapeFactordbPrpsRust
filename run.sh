@@ -7,4 +7,4 @@
 mkfifo composites || true
 ./build.sh
 RUSTFLAGS="-C target-cpu=native" cargo +nightly run --release 2>&1 | tee /tmp/rust.log &
-./yafu.sh <composites 2>&1 | tee /tmp/yafu.log &
+./yafu.sh <composites 2>&1 | tee /tmp/yafu.log | awk 'length($0) < 1000' &
