@@ -480,7 +480,7 @@ impl FactorDbClient {
                     };
                     let factors =
                         if !include_ff && status == Some(FullyFactored) || status == Some(Prime) {
-                            Box::new([])
+                            vec![]
                         } else {
                             let mut factors: Vec<_> = factors
                                 .into_iter()
@@ -488,11 +488,11 @@ impl FactorDbClient {
                                 .collect();
                             factors.sort();
                             factors.dedup();
-                            factors.into_boxed_slice()
+                            factors
                         };
                     ProcessedStatusApiResponse {
                         status,
-                        factors,
+                        factors: factors.into_boxed_slice(),
                         id: recvd_id_parsed,
                     }
                 }
@@ -516,12 +516,11 @@ impl FactorDbClient {
                                 .collect::<Box<str>>()
                                 .into(),
                         ]
-                        .into_boxed_slice()
                     })
-                    .unwrap_or_else(|| Box::new([]));
+                    .unwrap_or_else(|| vec![]);
                 ProcessedStatusApiResponse {
                     status: None,
-                    factors,
+                    factors: factors.into_boxed_slice(),
                     id: None,
                 }
             }

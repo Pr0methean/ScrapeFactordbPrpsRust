@@ -1824,12 +1824,12 @@ async fn add_known_factors_to_graph(
         })
         .collect();
     let all_added = match len {
-        0 => Box::new([]),
+        0 => vec![],
         1 => {
             let equivalent = dest_subfactors.into_iter().next().unwrap();
             let root = divisibility_graph.vertex(&root_vid).unwrap();
             if equivalent.as_str() == root.as_str() {
-                Box::new([])
+                vec![]
             } else {
                 // These expressions are different but equivalent; merge their edges
                 info!("{id:?}: Detected that {equivalent} and {root} are equivalent");
@@ -1876,11 +1876,11 @@ async fn add_known_factors_to_graph(
                     new_out_neighbors,
                     new_in_neighbors,
                 );
-                if added { vec![equivalent_vid] } else { vec![] }.into_boxed_slice()
+                if added { vec![equivalent_vid] } else { vec![] }
             }
         }
         _ => {
-            let mut all_added = Vec::new();
+            let mut all_added = Vec::with_capacity(dest_subfactors.len());
             for dest_subfactor in dest_subfactors {
                 let (subfactor_vid, added) = graph::add_factor_node(
                     divisibility_graph,
@@ -1894,14 +1894,14 @@ async fn add_known_factors_to_graph(
                 }
                 graph::propagate_divisibility(divisibility_graph, &subfactor_vid, &root_vid, false);
             }
-            all_added.into_boxed_slice()
+            all_added
         }
     };
     let facts = number_facts_map.get_mut(&root_vid).unwrap();
     facts.factors_known_to_factordb = UpToDate(subfactor_vids);
     ProcessedStatusApiResponseRef {
         status,
-        factors: all_added,
+        factors: all_added.into_boxed_slice(),
         id,
     }
 }
