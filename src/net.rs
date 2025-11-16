@@ -1,10 +1,12 @@
+use std::fmt::Display;
+use std::io::Write;
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
 use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
 use crate::shutdown::Shutdown;
-use crate::{EXIT_TIME, MAX_CPU_BUDGET_TENTHS};
+use crate::{FactorSubmission, ReportFactorResult, EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, MAX_CPU_BUDGET_TENTHS, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use crate::{Factor, MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
 use arcstr::ArcStr;
@@ -29,6 +31,8 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
+use crate::NumberSpecifier::{Expression, Id};
+use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -522,6 +526,87 @@ impl FactorDbClient {
                 }
             }
         }
+    }
+
+    pub async fn try_report_factor<
+        T: AsRef<str>,
+        U: AsRef<str> + Display,
+        V: AsRef<str>,
+        W: AsRef<str> + Display,
+    >(
+        &self,
+        u_id: &NumberSpecifier<T, U>,
+        factor: &Factor<V, W>,
+    ) -> ReportFactorResult {
+        if let Expression(Numeric(_)) = u_id {
+            return AlreadyFullyFactored;
+        }
+        if let Id(n) = u_id
+            && *n <= MAX_ID_EQUAL_TO_VALUE
+        {
+            return AlreadyFullyFactored;
+        }
+        let number = if let Expression(expr) = u_id {
+            Some(expr.as_str())
+        } else {
+            None
+        };
+        let request_builder = match self
+            .post("https://factordb.com/reportfactor.php")
+            .form(&FactorSubmission {
+                id: if let Id(id) = u_id { Some(*id) } else { None },
+                number,
+                factor: factor.as_str(),
+            }) {
+            Ok(builder) => builder,
+            Err(e) => {
+                error!("Error building request: {e}");
+                return OtherError;
+            }
+        };
+        match request_builder.send().await {
+            Ok(text) => {
+                info!("{u_id}: reported a factor of {factor}; response: {text}",);
+                if text.contains("Error") {
+                    OtherError
+                } else if text.contains("submitted") {
+                    Accepted
+                } else if text.contains("fully factored") || text.contains("Number too small") {
+                    AlreadyFullyFactored
+                } else {
+                    DoesNotDivide
+                }
+            }
+            Err(e) => {
+                error!("{u_id}: Failed to get response when submitting {factor}: {e}");
+                sleep(RETRY_DELAY).await;
+                OtherError
+            }
+        }
+    }
+
+    pub async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
+        &self,
+        u_id: u128,
+        factor: &Factor<T, U>,
+    ) -> ReportFactorResult {
+        for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
+            let result = self.try_report_factor::<&str, &str, T, U>(&Id(u_id), factor).await;
+            if result != OtherError {
+                return result;
+            }
+        }
+        match FAILED_U_SUBMISSIONS_OUT
+            .get()
+            .unwrap()
+            .lock()
+            .await
+            .write_fmt(format_args!("{u_id},{}\n", factor.as_str()))
+        {
+            Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
+            Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
+        }
+        OtherError // factor that we failed to submit may still have been valid
     }
 }
 

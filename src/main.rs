@@ -386,7 +386,7 @@ async fn get_prp_remaining_bases(
         && !nm1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N-1 must be even
-        match report_factor::<&str, &str>(http, nm1_id, &Numeric(2)).await {
+        match http.report_factor::<&str, &str>(nm1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
@@ -402,7 +402,7 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N+1 must be even
-        match report_factor::<&str, &str>(http, np1_id, &Numeric(2)).await {
+        match http.report_factor::<&str, &str>(np1_id, &Numeric(2)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                 prove_by_np1(id, http).await;
@@ -420,14 +420,14 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_3
     {
         // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-        match report_factor::<&str, &str>(http, nm1_id, &Numeric(3)).await {
+        match http.report_factor::<&str, &str>(nm1_id, &Numeric(3)).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
                 return Ok(U256::from(0));
             }
             Accepted => {}
-            _ => match report_factor::<&str, &str>(http, np1_id, &Numeric(3)).await {
+            _ => match http.report_factor::<&str, &str>(np1_id, &Numeric(3)).await {
                 AlreadyFullyFactored => {
                     info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                     prove_by_np1(id, http).await;
@@ -1117,87 +1117,6 @@ enum ReportFactorResult {
     OtherError,
 }
 
-async fn try_report_factor<
-    T: AsRef<str>,
-    U: AsRef<str> + Display,
-    V: AsRef<str>,
-    W: AsRef<str> + Display,
->(
-    http: &FactorDbClient,
-    u_id: &NumberSpecifier<T, U>,
-    factor: &Factor<V, W>,
-) -> ReportFactorResult {
-    if let Expression(Numeric(_)) = u_id {
-        return AlreadyFullyFactored;
-    }
-    if let Id(n) = u_id
-        && *n <= MAX_ID_EQUAL_TO_VALUE
-    {
-        return AlreadyFullyFactored;
-    }
-    let number = if let Expression(expr) = u_id {
-        Some(expr.as_str())
-    } else {
-        None
-    };
-    let request_builder = match http
-        .post("https://factordb.com/reportfactor.php")
-        .form(&FactorSubmission {
-            id: if let Id(id) = u_id { Some(*id) } else { None },
-            number,
-            factor: factor.as_str(),
-        }) {
-        Ok(builder) => builder,
-        Err(e) => {
-            error!("Error building request: {e}");
-            return OtherError;
-        }
-    };
-    match request_builder.send().await {
-        Ok(text) => {
-            info!("{u_id}: reported a factor of {factor}; response: {text}",);
-            if text.contains("Error") {
-                OtherError
-            } else if text.contains("submitted") {
-                Accepted
-            } else if text.contains("fully factored") || text.contains("Number too small") {
-                AlreadyFullyFactored
-            } else {
-                DoesNotDivide
-            }
-        }
-        Err(e) => {
-            error!("{u_id}: Failed to get response when submitting {factor}: {e}");
-            sleep(RETRY_DELAY).await;
-            OtherError
-        }
-    }
-}
-
-async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
-    http: &FactorDbClient,
-    u_id: u128,
-    factor: &Factor<T, U>,
-) -> ReportFactorResult {
-    for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-        let result = try_report_factor::<&str, &str, T, U>(http, &Id(u_id), factor).await;
-        if result != OtherError {
-            return result;
-        }
-    }
-    match FAILED_U_SUBMISSIONS_OUT
-        .get()
-        .unwrap()
-        .lock()
-        .await
-        .write_fmt(format_args!("{u_id},{}\n", factor.as_str()))
-    {
-        Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
-        Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
-    }
-    OtherError // factor that we failed to submit may still have been valid
-}
-
 const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
 
 #[derive(Clone, Debug)]
@@ -1414,7 +1333,7 @@ async fn find_and_submit_factors(
             }
             _ => {}
         }
-        match try_report_factor::<&str, &str, _, _>(http, &Id(id), factor).await {
+        match http.try_report_factor::<&str, &str, _, _>(&Id(id), factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
                 replace_with_or_abort(
@@ -1645,8 +1564,7 @@ async fn find_and_submit_factors(
                 }
                 let dest_specifier = as_specifier(&cofactor_vid, cofactor, &number_facts_map);
                 let factor = divisibility_graph.vertex(factor_vid).unwrap();
-                match try_report_factor(http, &dest_specifier, factor).await {
-                    AlreadyFullyFactored => {
+                match http.try_report_factor(&dest_specifier, factor).await {                    AlreadyFullyFactored => {
                         if cofactor_vid == root_node {
                             warn!("{id}: Already fully factored");
                             return true;
@@ -1826,6 +1744,8 @@ async fn find_and_submit_factors(
     }
     accepted_factors > 0
 }
+
+
 
 fn handle_if_fully_factored(
     divisibility_graph: &mut DivisibilityGraph,
