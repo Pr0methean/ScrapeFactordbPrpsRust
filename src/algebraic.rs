@@ -949,12 +949,12 @@ fn multiset_union<T: Eq + Ord + Clone, U: Ord + From<T> + Clone>(
 }
 
 #[inline(always)]
-fn multiset_difference<T: Eq + Ord + Clone, U: Eq + Ord + From<T> + Clone, V: From<T> + Clone>(
+fn multiset_difference<T: Eq + Ord + Clone>(
     vec1: Vec<T>,
-    vec2: &[U],
-) -> Vec<V> {
+    vec2: &[T],
+) -> Vec<T> {
     if vec2.is_empty() {
-        return vec1.into_iter().map(|item| item.into()).collect();
+        return vec1;
     }
     if vec1.is_empty() {
         return vec![];
@@ -964,10 +964,10 @@ fn multiset_difference<T: Eq + Ord + Clone, U: Eq + Ord + From<T> + Clone, V: Fr
     let counts2 = count_frequencies_ref(vec2);
 
     for (item, mut count) in counts1 {
-        if let Some(&count2) = counts2.get::<U>(&item.clone().into()) {
+        if let Some(&count2) = counts2.get(&item) {
             count = count.saturating_sub(count2);
         }
-        difference_vec.extend(repeat_n(item.into(), count));
+        difference_vec.extend(repeat_n(item, count));
     }
     difference_vec
 }
