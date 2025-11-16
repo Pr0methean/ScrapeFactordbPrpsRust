@@ -57,7 +57,7 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use tokio::sync::mpsc::error::TrySendError::Full;
+use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
 use tokio::sync::{oneshot, Mutex, OnceCell};
 use tokio::task::JoinHandle;
@@ -783,7 +783,6 @@ async fn queue_composites(
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZeroU128>,
 ) -> JoinHandle<()> {
-    let mut c_sent = 0;
     let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
         0
     } else {
@@ -819,14 +818,15 @@ async fn queue_composites(
         })
         .collect();
     c_tasks.shuffle(&mut rng());
-    let mut c_buffered = Vec::with_capacity(c_tasks.len());
-    for c_task in c_tasks {
-        if let Err(Full(c_id)) = c_sender.try_send(c_task) {
-            c_buffered.push(c_id);
-        } else {
-            c_sent += 1;
-        }
-    }
+    let c_initial = c_tasks.len();
+    let c_buffered: Box<[_]> = c_tasks.into_iter()
+        .flat_map(|c_task| match c_sender.try_send(c_task) {
+            Ok(()) => None,
+            Err(Closed(_)) => None,
+            Err(Full(c_task)) => Some(c_task)
+        })
+        .collect();
+    let c_sent = c_initial - c_buffered.len();
     if c_buffered.is_empty() {
         info!("Sent {c_sent} C's to channel");
         task::spawn(async {})
