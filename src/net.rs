@@ -1,25 +1,32 @@
+use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, MAX_ID_EQUAL_TO_VALUE, RETRY_DELAY};
 use crate::shutdown::Shutdown;
-use crate::{CPU_TENTHS_SPENT_LAST_CHECK, EXIT_TIME};
+use crate::{EXIT_TIME, MAX_CPU_BUDGET_TENTHS};
 use anyhow::Error;
-use arcstr::{ArcStr, literal};
+use arcstr::{literal, ArcStr};
 use atomic_time::AtomicInstant;
 use curl::easy::{Easy2, Handler, WriteError};
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
-use log::{error, warn};
+use log::{debug, error, info, warn};
 use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
 use std::mem::swap;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
+use itertools::Itertools;
+use serde_json::from_str;
 use tokio::sync::{Mutex, Semaphore};
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::time::{sleep, sleep_until, Instant};
+use urlencoding::encode;
+use crate::algebraic::Factor::Numeric;
+use crate::algebraic::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
+use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -47,7 +54,7 @@ impl Collector {
 }
 
 #[derive(Clone)]
-pub struct ThrottlingHttpClient {
+pub struct FactorDbClient {
     resources_regex: Arc<Regex>,
     http: Client,
     rate_limiter: Arc<DefaultDirectRateLimiter<StateInformationMiddleware>>,
@@ -57,11 +64,13 @@ pub struct ThrottlingHttpClient {
     all_threads_blocked_until: Arc<AtomicInstant>,
     shutdown_receiver: Shutdown,
     curl_client: Arc<Mutex<Easy2<Collector>>>,
+    id_and_expr_regex: Arc<Regex>,
+    digits_fallback_regex: Arc<Regex>,
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
     inner: Result<RequestBuilder, ArcStr>,
-    client: &'a ThrottlingHttpClient,
+    client: &'a FactorDbClient,
     form: Option<Box<str>>,
 }
 
@@ -124,7 +133,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
     }
 }
 
-impl ThrottlingHttpClient {
+impl FactorDbClient {
     pub fn new(
         requests_per_hour: NonZeroU32,
         max_concurrent_requests: usize,
@@ -138,13 +147,19 @@ impl ThrottlingHttpClient {
                 .dot_matches_new_line(true)
                 .build()
                 .unwrap();
+        let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>").unwrap();
         let http = Client::builder()
             .pool_max_idle_per_host(max_concurrent_requests)
             .timeout(E2E_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .unwrap();
-
+        let digits_fallback_regex =
+            RegexBuilder::new("<tr><td>Number</td>[^<]*<td[^>]*>([0-9br<>\\pZ]+)")
+                .multi_line(true)
+                .dot_matches_new_line(true)
+                .build()
+                .unwrap();
         // Governor rate-limiters start out with their full burst capacity and recharge starting
         // immediately, but this would lead to twice the allowed number of requests in our first hour,
         // so we make it start nearly empty instead.
@@ -163,6 +178,8 @@ impl ThrottlingHttpClient {
             all_threads_blocked_until: AtomicInstant::now().into(),
             shutdown_receiver,
             curl_client: Mutex::new(Easy2::new(Collector(Vec::new()))).into(),
+            id_and_expr_regex: id_and_expr_regex.into(),
+            digits_fallback_regex: digits_fallback_regex.into()
         }
     }
 
@@ -179,11 +196,11 @@ impl ThrottlingHttpClient {
         let (
             _,
             [
-                requests,
-                cpu_seconds,
-                cpu_tenths_within_second,
-                minutes_to_reset,
-                seconds_within_minute_to_reset,
+            requests,
+            cpu_seconds,
+            cpu_tenths_within_second,
+            minutes_to_reset,
+            seconds_within_minute_to_reset,
             ],
         ) = captures.extract();
         let requests = requests.replace(",", "").parse::<u32>().unwrap();
@@ -288,7 +305,7 @@ impl ThrottlingHttpClient {
                 Ok(response) => response.text().await,
                 Err(e) => Err(e),
             }
-            .map_err(|e| anyhow::Error::from(e.without_url()))
+                .map_err(|e| anyhow::Error::from(e.without_url()))
         };
         drop(permit);
         match result {
@@ -354,4 +371,157 @@ impl ThrottlingHttpClient {
             form: None,
         }
     }
+
+    pub fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
+        -> impl Iterator<Item=(u128, &'a str)> {
+        self.id_and_expr_regex
+        .captures_iter(haystack)
+            .flat_map(move |capture| {
+                let Some(id) = capture.get(1) else {
+                    error!("Failed to get ID for expression in\n{haystack}");
+                    return None;
+                };
+                let id = match id.as_str().parse::<u128>() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        error!("Failed to parse ID {}: {e}", id.as_str());
+                        return None;
+                    }
+                };
+                let Some(expr) = capture.get(2) else {
+                    error!("Failed to get expression for ID {id} in\n{haystack}");
+                    return None;
+                };
+                Some((id, expr.as_str()))
+            })
+                    .unique()
+    }
+
+    #[inline]
+    pub async fn known_factors_as_digits<
+        T: AsRef<str> + std::fmt::Debug,
+        U: AsRef<str> + std::fmt::Debug,
+    >(
+        &self,
+        id: NumberSpecifier<T, U>,
+        include_ff: bool,
+        get_digits_as_fallback: bool,
+    ) -> ProcessedStatusApiResponse {
+        debug!("known_factors_as_digits: id={id:?}");
+        if let NumberSpecifier::Expression(Numeric(n)) = id {
+            debug!("Specially handling numeric expression {n}");
+            let factors = FactorFinder::find_factors_of_u128(n).into_boxed_slice();
+            return ProcessedStatusApiResponse {
+                status: Some(if factors.len() > 1 {
+                    Prime
+                } else {
+                    FullyFactored
+                }),
+                factors,
+                id: if n <= MAX_ID_EQUAL_TO_VALUE {
+                    Some(n)
+                } else {
+                    None
+                },
+            };
+        }
+        let response = match id {
+            NumberSpecifier::Id(id) => {
+                let url = format!("https://factordb.com/api?id={id}").into();
+                if get_digits_as_fallback {
+                    self.retrying_get_and_decode_or(url, RETRY_DELAY, || {
+                        format!("https://factordb.com/index.php?showid={id}").into()
+                    })
+                        .await
+                        .map_err(Some)
+                } else {
+                    self.try_get_and_decode(url).await.ok_or(None)
+                }
+            }
+            NumberSpecifier::Expression(ref expr) => {
+                let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str()));
+                self.try_get_and_decode(url.into()).await.ok_or(None)
+            }
+        };
+        debug!("{id}: Got API response:\n{response:?}");
+        match response {
+            Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
+                Err(e) => {
+                    error!("{id}: Failed to decode API response: {e}: {api_response}");
+                    ProcessedStatusApiResponse::default()
+                }
+                Ok(NumberStatusApiResponse {
+                       status,
+                       factors,
+                       id: recvd_id,
+                   }) => {
+                    let recvd_id_parsed = recvd_id.to_string().parse::<u128>().ok();
+                    debug!("Parsed received ID {recvd_id} as {recvd_id_parsed:?}");
+                    info!(
+                        "{recvd_id_parsed:?} ({id}): Fetched status of {status} and {} factors of sizes {}",
+                        factors.len(),
+                        factors.iter().map(|(digits, _)| digits.len()).join(",")
+                    );
+                    let status = match status.as_str() {
+                        "FF" => Some(FullyFactored),
+                        "P" | "PRP" => Some(Prime),
+                        "C" => Some(UnfactoredComposite),
+                        "CF" => Some(PartlyFactoredComposite),
+                        "U" => Some(Unknown),
+                        x => {
+                            error!("{recvd_id:?} ({id}): Unrecognized number status code: {x}");
+                            None
+                        }
+                    };
+                    let factors =
+                        if !include_ff && status == Some(FullyFactored) || status == Some(Prime) {
+                            Box::new([])
+                        } else {
+                            let mut factors: Vec<_> = factors
+                                .into_iter()
+                                .map(|(factor, _exponent)| Factor::from(factor))
+                                .collect();
+                            factors.sort();
+                            factors.dedup();
+                            factors.into_boxed_slice()
+                        };
+                    ProcessedStatusApiResponse {
+                        status,
+                        factors,
+                        id: recvd_id_parsed,
+                    }
+                }
+            },
+            Err(None) => ProcessedStatusApiResponse {
+                status: None,
+                id: None,
+                factors: Box::new([]),
+            },
+            Err(Some(fallback_response)) => {
+                let factors = self
+                    .digits_fallback_regex
+                    .captures(&fallback_response)
+                    .and_then(|c| c.get(1))
+                    .map(|digits_cell| {
+                        vec![
+                            digits_cell
+                                .as_str()
+                                .chars()
+                                .filter(char::is_ascii_digit)
+                                .collect::<Box<str>>()
+                                .into(),
+                        ]
+                            .into_boxed_slice()
+                    })
+                    .unwrap_or_else(|| Box::new([]));
+                ProcessedStatusApiResponse {
+                    status: None,
+                    factors,
+                    id: None,
+                }
+            }
+        }
+    }
 }
+
+pub static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGET_TENTHS);

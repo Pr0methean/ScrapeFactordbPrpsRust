@@ -27,8 +27,8 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
 use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
 use crate::net::ResourceLimits;
-use crate::shutdown::{Shutdown, handle_signals};
-use arcstr::{ArcStr, literal};
+use crate::shutdown::{handle_signals, Shutdown};
+use arcstr::{literal, ArcStr};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
@@ -42,10 +42,10 @@ use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
-use net::ThrottlingHttpClient;
+use net::{FactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use regex::Regex;
 use replace_with::replace_with_or_abort;
 use serde::{Deserialize, Serialize};
@@ -56,17 +56,17 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU32, NonZeroU128};
+use std::num::{NonZeroU128, NonZeroU32};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool};
 use tokio::sync::mpsc::error::TrySendError::Full;
-use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
+use tokio::sync::{oneshot, Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
 use tokio::{select, task};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -162,11 +162,10 @@ struct FactorSubmission<'a> {
 
 async fn composites_while_waiting(
     end: Instant,
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
 ) {
     let Some(mut remaining) = end.checked_duration_since(Instant::now()) else {
         return;
@@ -183,7 +182,6 @@ async fn composites_while_waiting(
             http,
             c_filter,
             factor_finder,
-            id_and_expr_regex,
             id,
             digits_or_expr,
             return_permit,
@@ -200,10 +198,9 @@ async fn composites_while_waiting(
 }
 
 async fn check_composite(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
     id: u128,
     digits_or_expr: CompactString,
     return_permit: OwnedPermit<CompositeCheckTask>,
@@ -225,8 +222,8 @@ async fn check_composite(
     // First, convert the composite to digits
     let ProcessedStatusApiResponse {
         factors, status, ..
-    } = factor_finder
-        .known_factors_as_digits::<&str, &str>(http, Id(id), false, true)
+    } = http
+        .known_factors_as_digits::<&str, &str>(Id(id), false, true)
         .await;
     if factors.is_empty() {
         if status == Some(FullyFactored) || status == Some(Prime) {
@@ -248,7 +245,6 @@ async fn check_composite(
                     id,
                     factor_str,
                     factor_finder,
-                    id_and_expr_regex,
                     true,
                     !subfactors_may_have_algebraic,
                 )
@@ -316,14 +312,13 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
 
 async fn get_prp_remaining_bases(
     id: u128,
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     bases_regex: &Regex,
     nm1_regex: &Regex,
     np1_regex: &Regex,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
 ) -> Result<U256, ()> {
     let mut bases_left = U256::MAX - 3;
     let bases_text = http
@@ -348,8 +343,8 @@ async fn get_prp_remaining_bases(
             status,
             factors: nm1_factors,
             ..
-        } = factor_finder
-            .known_factors_as_digits::<&str, &str>(http, Id(nm1_id), false, false)
+        } = http
+            .known_factors_as_digits::<&str, &str>(Id(nm1_id), false, false)
             .await;
         match nm1_factors.len() {
             0 => {
@@ -375,8 +370,8 @@ async fn get_prp_remaining_bases(
             status,
             factors: np1_factors,
             ..
-        } = factor_finder
-            .known_factors_as_digits::<&str, &str>(http, Id(np1_id), false, false)
+        } = http
+            .known_factors_as_digits::<&str, &str>(Id(np1_id), false, false)
             .await;
         match np1_factors.len() {
             0 => {
@@ -469,7 +464,6 @@ async fn get_prp_remaining_bases(
             c_receiver,
             c_filter,
             factor_finder,
-            id_and_expr_regex,
         )
         .await;
         return Err(());
@@ -504,7 +498,7 @@ async fn get_prp_remaining_bases(
     Ok(bases_left)
 }
 
-async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
+async fn prove_by_np1(id: u128, http: &FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
             format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}").into(),
@@ -513,7 +507,7 @@ async fn prove_by_np1(id: u128, http: &ThrottlingHttpClient) {
         .await;
 }
 
-async fn prove_by_nm1(id: u128, http: &ThrottlingHttpClient) {
+async fn prove_by_nm1(id: u128, http: &FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
             format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}").into(),
@@ -528,7 +522,6 @@ const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
 
 const MAX_CPU_BUDGET_TENTHS: usize = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
-static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGET_TENTHS);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[inline]
@@ -537,9 +530,8 @@ async fn do_checks(
     mut u_receiver: PushbackReceiver<CheckTask>,
     mut c_receiver: PushbackReceiver<CompositeCheckTask>,
     mut c_filter: CuckooFilter<DefaultHasher>,
-    http: ThrottlingHttpClient,
+    http: FactorDbClient,
     factor_finder: FactorFinder,
-    id_and_expr_regex: Regex,
     mut shutdown_receiver: Shutdown,
 ) {
     info!("do_checks task starting");
@@ -560,7 +552,6 @@ async fn do_checks(
         false,
         &mut c_filter,
         &factor_finder,
-        &id_and_expr_regex,
     )
     .await;
     let mut successful_select_end = Instant::now();
@@ -587,7 +578,7 @@ async fn do_checks(
             c_task = c_receiver.recv() => {
                 info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
                 let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
-                check_composite(&http, &mut c_filter, &factor_finder, &id_and_expr_regex, id, digits_or_expr, return_permit).await;
+                check_composite(&http, &mut c_filter, &factor_finder, id, digits_or_expr, return_permit).await;
                 successful_select_end = Instant::now();
                 None
             }
@@ -605,7 +596,6 @@ async fn do_checks(
                         &mut c_receiver,
                         &mut c_filter,
                         &factor_finder,
-                        &id_and_expr_regex,
                     )
                     .await
                     else {
@@ -631,7 +621,6 @@ async fn do_checks(
                                 &mut c_receiver,
                                 &mut c_filter,
                                 &factor_finder,
-                                &id_and_expr_regex,
                             )
                             .await;
                             break;
@@ -643,7 +632,6 @@ async fn do_checks(
                             true,
                             &mut c_filter,
                             &factor_finder,
-                            &id_and_expr_regex,
                         )
                         .await;
                         if cert_regex.is_match(&text) {
@@ -674,7 +662,6 @@ async fn do_checks(
                         true,
                         &mut c_filter,
                         &factor_finder,
-                        &id_and_expr_regex,
                     )
                     .await;
                     match try_handle_unknown(
@@ -710,7 +697,7 @@ async fn do_checks(
 
 #[inline]
 async fn try_handle_unknown(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     u_status_regex: &Regex,
     many_digits_regex: &Regex,
     id: u128,
@@ -759,13 +746,12 @@ async fn try_handle_unknown(
 }
 
 async fn throttle_if_necessary(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
 ) -> bool {
     *bases_before_next_cpu_check -= 1;
     if *bases_before_next_cpu_check != 0 {
@@ -778,7 +764,6 @@ async fn throttle_if_necessary(
             c_receiver,
             c_filter,
             factor_finder,
-            id_and_expr_regex,
         )
         .await; // allow for delay in CPU accounting
     }
@@ -821,7 +806,6 @@ async fn throttle_if_necessary(
             c_receiver,
             c_filter,
             factor_finder,
-            id_and_expr_regex,
         )
         .await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
@@ -847,8 +831,7 @@ async fn throttle_if_necessary(
 // into the channel, without blocking PRP or U searches on the main thread.
 #[allow(clippy::async_yields_async)]
 async fn queue_composites(
-    id_and_expr_regex: &Regex,
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZeroU128>,
 ) -> JoinHandle<()> {
@@ -880,15 +863,8 @@ async fn queue_composites(
     let Some(composites_page) = composites_page else {
         return task::spawn(async {});
     };
-    let mut c_tasks: Box<[_]> = id_and_expr_regex
-        .captures_iter(&composites_page)
-        .flat_map(|capture| {
-            Some(CompositeCheckTask {
-                id: capture[1].parse::<u128>().ok()?,
-                digits_or_expr: capture[2].into(),
-            })
-        })
-        .unique()
+    let mut c_tasks: Box<[_]> = http.read_ids_and_exprs(&*composites_page)
+        .map(|(id, expr)| CompositeCheckTask {id, digits_or_expr: expr.into()})
         .collect();
     c_tasks.shuffle(&mut rng());
     let mut c_buffered = Vec::with_capacity(c_tasks.len());
@@ -994,19 +970,16 @@ async fn main() -> anyhow::Result<()> {
         max_concurrent_requests = 3;
     }
     let c_filter = CuckooFilter::with_capacity(2500);
-    let id_and_expr_regex = Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>")?;
     let factor_finder = FactorFinder::new();
-    let http = ThrottlingHttpClient::new(
+    let http = FactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
         shutdown_receiver.clone(),
     );
-    let id_and_expr_regex_clone = id_and_expr_regex.clone();
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_buffer_task: JoinHandle<()> = task::spawn(async move {
         queue_composites(
-            &id_and_expr_regex_clone,
             &http_clone,
             &c_sender_clone,
             c_digits,
@@ -1036,7 +1009,6 @@ async fn main() -> anyhow::Result<()> {
         c_filter,
         http.clone(),
         factor_finder.clone(),
-        id_and_expr_regex.clone(),
         shutdown_receiver.clone(),
     ));
     'queue_tasks: loop {
@@ -1093,7 +1065,7 @@ async fn main() -> anyhow::Result<()> {
                     prp_permits.next().unwrap().send(prp_task);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
+                        queue_unknowns(&http, u_digits, u_permits, &mut u_filter, &factor_finder).await;
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -1104,18 +1076,17 @@ async fn main() -> anyhow::Result<()> {
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
                 info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                queue_unknowns(&id_and_expr_regex, &http, u_digits, u_permits?, &mut u_filter, &factor_finder).await;
+                queue_unknowns(&http, u_digits, u_permits?, &mut u_filter, &factor_finder).await;
             }
         }
         if new_c_buffer_task {
-            c_buffer_task = queue_composites(&id_and_expr_regex, &http, &c_sender, c_digits).await;
+            c_buffer_task = queue_composites(&http, &c_sender, c_digits).await;
         }
     }
 }
 
 async fn queue_unknowns(
-    id_and_expr_regex: &Regex,
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     u_digits: Option<NonZeroU128>,
     u_permits: PermitIterator<'_, CheckTask>,
     u_filter: &mut CuckooFilter<DefaultHasher>,
@@ -1124,7 +1095,6 @@ async fn queue_unknowns(
     let mut permits = Some(u_permits);
     while let Some(u_permits) = permits.take() {
         if let Err(u_permits) = try_queue_unknowns(
-            id_and_expr_regex,
             http,
             u_digits,
             u_permits,
@@ -1140,8 +1110,7 @@ async fn queue_unknowns(
 }
 
 async fn try_queue_unknowns<'a>(
-    id_and_expr_regex: &Regex,
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     u_digits: Option<NonZeroU128>,
     mut u_permits: PermitIterator<'a, CheckTask>,
     u_filter: &mut CuckooFilter<DefaultHasher>,
@@ -1159,34 +1128,20 @@ async fn try_queue_unknowns<'a>(
         return Err(u_permits);
     };
     info!("U search results retrieved");
-    let ids = id_and_expr_regex
-        .captures_iter(&results_text)
-        .map(|result| {
-            (
-                result[1].parse::<u128>().ok(),
-                result.get(2).unwrap().range(),
-            )
-        })
-        .unique();
+    let ids = http.read_ids_and_exprs(&*results_text);
     let mut ids_found = false;
-    for (u_id, digits_or_expr_range) in ids {
-        let Some(u_id) = u_id else {
-            error!("Skipping an invalid ID in U search results");
-            continue;
-        };
+    for (u_id, digits_or_expr) in ids {
         ids_found = true;
         let u_id_bytes = u_id.to_ne_bytes();
         if u_filter.contains(&u_id_bytes) {
             warn!("{u_id}: Skipping duplicate U");
             continue;
         }
-        let digits_or_expr = &results_text[digits_or_expr_range];
         if find_and_submit_factors(
             http,
             u_id,
             digits_or_expr,
             factor_finder,
-            id_and_expr_regex,
             false,
             false,
         )
@@ -1224,7 +1179,7 @@ async fn try_report_factor<
     V: AsRef<str>,
     W: AsRef<str> + Display,
 >(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     u_id: &NumberSpecifier<T, U>,
     factor: &Factor<V, W>,
 ) -> ReportFactorResult {
@@ -1276,7 +1231,7 @@ async fn try_report_factor<
 }
 
 async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     u_id: u128,
     factor: &Factor<T, U>,
 ) -> ReportFactorResult {
@@ -1367,11 +1322,10 @@ impl NumberFacts {
 }
 
 async fn find_and_submit_factors(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     id: u128,
     digits_or_expr: &str,
     factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
     skip_looking_up_known: bool,
     skip_looking_up_listed_algebraic: bool,
 ) -> bool {
@@ -1392,8 +1346,8 @@ async fn find_and_submit_factors(
             factors: known_factors,
             status,
             ..
-        } = factor_finder
-            .known_factors_as_digits::<&str, &str>(http, Id(id), false, true)
+        } = http
+            .known_factors_as_digits::<&str, &str>(Id(id), false, true)
             .await;
         if status == Some(FullyFactored) || status == Some(Prime) {
             warn!("{id}: Already fully factored");
@@ -1470,7 +1424,6 @@ async fn find_and_submit_factors(
                 Some(id)
             },
             factor_finder,
-            id_and_expr_regex,
             skip_looking_up_listed_algebraic,
             &mut divisibility_graph,
             factor_vid,
@@ -1537,7 +1490,6 @@ async fn find_and_submit_factors(
                         http,
                         number_facts_map.get(&factor_vid).unwrap().entry_id,
                         factor_finder,
-                        id_and_expr_regex,
                         skip_looking_up_listed_algebraic,
                         &mut divisibility_graph,
                         factor_vid,
@@ -1809,7 +1761,6 @@ async fn find_and_submit_factors(
                                 http,
                                 number_facts_map.get(&factor_vid).unwrap().entry_id,
                                 factor_finder,
-                                id_and_expr_regex,
                                 false,
                                 &mut divisibility_graph,
                                 factor_vid,
@@ -2097,7 +2048,7 @@ fn as_specifier<'a>(
 }
 
 async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug>(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
     root_vid: VertexId,
@@ -2131,8 +2082,8 @@ async fn add_known_factors_to_graph<T: AsRef<str> + Debug, U: AsRef<str> + Debug
         status,
         factors: dest_subfactors,
         id,
-    } = factor_finder
-        .known_factors_as_digits(http, root_specifier, include_ff, false)
+    } = http
+        .known_factors_as_digits(root_specifier, include_ff, false)
         .await;
     debug!(
         "Got entry ID of {id:?} for {}",
@@ -2347,10 +2298,9 @@ fn neighbors_with_edge_weights(
 }
 
 async fn add_algebraic_factors_to_graph(
-    http: &ThrottlingHttpClient,
+    http: &FactorDbClient,
     id: Option<u128>,
     factor_finder: &FactorFinder,
-    id_and_expr_regex: &Regex,
     skip_looking_up_listed_algebraic: bool,
     divisibility_graph: &mut DivisibilityGraph,
     root_vid: VertexId,
@@ -2410,10 +2360,8 @@ async fn add_algebraic_factors_to_graph(
                 let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into();
                 let result = http.retrying_get_and_decode(url, RETRY_DELAY).await;
                 if let Some(listed_algebraic) = result.split("Is factor of").next() {
-                    let algebraic_factors = id_and_expr_regex.captures_iter(listed_algebraic);
-                    for factor_captures in algebraic_factors {
-                        let factor_entry_id = &factor_captures[1];
-                        let factor_digits_or_expr = &factor_captures[2];
+                    let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
+                    for (factor_entry_id, factor_digits_or_expr) in algebraic_factors {
                         let factor: Factor<ArcStr, CompactString> = factor_digits_or_expr.into();
                         let (factor_vid, added) = add_factor_node(
                             divisibility_graph,
@@ -2438,34 +2386,14 @@ async fn add_algebraic_factors_to_graph(
                                 .factors_known_to_factordb
                                 .needs_update()
                             {
-                                let (factor_specifier, factor_entry_id) = if let Ok(
-                                    factor_entry_id,
-                                ) =
-                                    factor_entry_id.parse::<u128>()
-                                {
-                                    number_facts_map.get_mut(&factor_vid).unwrap().entry_id =
+                                number_facts_map.get_mut(&factor_vid).unwrap().entry_id =
                                         Some(factor_entry_id);
-                                    debug!(
-                                        "{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}"
-                                    );
-                                    (Id(factor_entry_id), Some(factor_entry_id))
-                                } else {
-                                    let (factor_vid, _) = add_factor_node(
-                                        divisibility_graph,
-                                        factor.as_ref(),
-                                        factor_finder,
-                                        number_facts_map,
-                                        Some(root_vid),
-                                    );
-                                    debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
-                                    (as_specifier(&factor_vid, &factor, number_facts_map), None)
-                                };
-                                let result = add_known_factors_to_graph(
+                                let result = add_known_factors_to_graph::<&str,&str>(
                                     http,
                                     factor_finder,
                                     divisibility_graph,
                                     factor_vid,
-                                    factor_specifier,
+                                    Id(factor_entry_id),
                                     true,
                                     number_facts_map,
                                 )
@@ -2487,20 +2415,18 @@ async fn add_algebraic_factors_to_graph(
                                         "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from add_known_factors_to_graph is {recvd_entry_id}"
                                     );
                                 };
-                                if let Some(factor_entry_id) = factor_entry_id {
-                                    debug!(
-                                        "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from algebraic-factor scrape is {factor_entry_id}"
+                                debug!(
+                                    "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from algebraic-factor scrape is {factor_entry_id}"
+                                );
+                                let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+                                if let Some(old_id) = facts.entry_id
+                                    && old_id != factor_entry_id
+                                {
+                                    error!(
+                                        "{id}: Detected that {factor}'s entry ID is {factor_entry_id}, but it was stored as {old_id}"
                                     );
-                                    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-                                    if let Some(old_id) = facts.entry_id
-                                        && old_id != factor_entry_id
-                                    {
-                                        error!(
-                                            "{id}: Detected that {factor}'s entry ID is {factor_entry_id}, but it was stored as {old_id}"
-                                        );
-                                    }
-                                    facts.entry_id = Some(factor_entry_id);
                                 }
+                                facts.entry_id = Some(factor_entry_id);
                             }
                         } else {
                             info!(
@@ -2526,7 +2452,6 @@ async fn add_algebraic_factors_to_graph(
                 http,
                 entry_id,
                 factor_finder,
-                id_and_expr_regex,
                 skip_looking_up_listed_algebraic,
                 divisibility_graph,
                 subfactor_vid,

@@ -1,23 +1,18 @@
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{
-    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
-};
-use crate::net::ThrottlingHttpClient;
 use crate::{
-    MAX_ID_EQUAL_TO_VALUE, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY, write_bignum,
+    write_bignum,
 };
 use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use itertools::Itertools;
-use log::{debug, error, info, warn};
+use log::{error, info, warn};
 use num_integer::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::nt_funcs::factorize128;
-use regex::{Regex, RegexBuilder, RegexSet};
-use serde_json::from_str;
+use regex::{Regex, RegexSet};
 use std::borrow::Cow::{Borrowed, Owned};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, PartialEq};
@@ -29,7 +24,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
-use urlencoding::encode;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -874,7 +868,6 @@ pub struct FactorFinder {
     regexes: Box<[Regex]>,
     regexes_as_set: RegexSet,
     sieve: NaiveBuffer,
-    digits_fallback_regex: Regex,
 }
 
 impl Clone for FactorFinder {
@@ -884,7 +877,6 @@ impl Clone for FactorFinder {
             regexes: self.regexes.clone(),
             regexes_as_set: self.regexes_as_set.clone(),
             sieve: NaiveBuffer::new(),
-            digits_fallback_regex: self.digits_fallback_regex.clone(),
         }
     }
 
@@ -1116,22 +1108,15 @@ impl FactorFinder {
             .map(|pat| Regex::new(pat).unwrap())
             .collect();
         let sieve = NaiveBuffer::new();
-        let digits_fallback_regex =
-            RegexBuilder::new("<tr><td>Number</td>[^<]*<td[^>]*>([0-9br<>\\pZ]+)")
-                .multi_line(true)
-                .dot_matches_new_line(true)
-                .build()
-                .unwrap();
         FactorFinder {
             regexes,
             regexes_as_set,
             sieve,
-            digits_fallback_regex,
         }
     }
 
     #[inline]
-    fn find_factors_of_u128<T: Clone, U: Clone>(input: u128) -> Vec<Factor<T, U>> {
+    pub(crate) fn find_factors_of_u128<T: Clone, U: Clone>(input: u128) -> Vec<Factor<T, U>> {
         factorize128(input)
             .into_iter()
             .flat_map(|(factor, power)| repeat_n(Numeric(factor), power))
@@ -1732,137 +1717,6 @@ impl FactorFinder {
             );
         }
         factors.into_boxed_slice()
-    }
-
-    // FIXME: This uses Web requests to find factors that FactorDB already knows of and/or convert
-    // them to digit form. That would be out of scope for this struct if we had anywhere else to put
-    // this method.
-
-    #[inline]
-    pub async fn known_factors_as_digits<
-        T: AsRef<str> + std::fmt::Debug,
-        U: AsRef<str> + std::fmt::Debug,
-    >(
-        &self,
-        http: &ThrottlingHttpClient,
-        id: NumberSpecifier<T, U>,
-        include_ff: bool,
-        get_digits_as_fallback: bool,
-    ) -> ProcessedStatusApiResponse {
-        debug!("known_factors_as_digits: id={id:?}");
-        if let NumberSpecifier::Expression(Numeric(n)) = id {
-            debug!("Specially handling numeric expression {n}");
-            let factors = Self::find_factors_of_u128(n).into_boxed_slice();
-            return ProcessedStatusApiResponse {
-                status: Some(if factors.len() > 1 {
-                    Prime
-                } else {
-                    FullyFactored
-                }),
-                factors,
-                id: if n <= MAX_ID_EQUAL_TO_VALUE {
-                    Some(n)
-                } else {
-                    None
-                },
-            };
-        }
-        let response = match id {
-            NumberSpecifier::Id(id) => {
-                let url = format!("https://factordb.com/api?id={id}").into();
-                if get_digits_as_fallback {
-                    http.retrying_get_and_decode_or(url, RETRY_DELAY, || {
-                        format!("https://factordb.com/index.php?showid={id}").into()
-                    })
-                    .await
-                    .map_err(Some)
-                } else {
-                    http.try_get_and_decode(url).await.ok_or(None)
-                }
-            }
-            NumberSpecifier::Expression(ref expr) => {
-                let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str()));
-                http.try_get_and_decode(url.into()).await.ok_or(None)
-            }
-        };
-        debug!("{id}: Got API response:\n{response:?}");
-        match response {
-            Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
-                Err(e) => {
-                    error!("{id}: Failed to decode API response: {e}: {api_response}");
-                    ProcessedStatusApiResponse::default()
-                }
-                Ok(NumberStatusApiResponse {
-                    status,
-                    factors,
-                    id: recvd_id,
-                }) => {
-                    let recvd_id_parsed = recvd_id.to_string().parse::<u128>().ok();
-                    debug!("Parsed received ID {recvd_id} as {recvd_id_parsed:?}");
-                    info!(
-                        "{recvd_id_parsed:?} ({id}): Fetched status of {status} and {} factors of sizes {}",
-                        factors.len(),
-                        factors.iter().map(|(digits, _)| digits.len()).join(",")
-                    );
-                    let status = match status.as_str() {
-                        "FF" => Some(FullyFactored),
-                        "P" | "PRP" => Some(Prime),
-                        "C" => Some(UnfactoredComposite),
-                        "CF" => Some(PartlyFactoredComposite),
-                        "U" => Some(Unknown),
-                        x => {
-                            error!("{recvd_id:?} ({id}): Unrecognized number status code: {x}");
-                            None
-                        }
-                    };
-                    let factors =
-                        if !include_ff && status == Some(FullyFactored) || status == Some(Prime) {
-                            Box::new([])
-                        } else {
-                            let mut factors: Vec<_> = factors
-                                .into_iter()
-                                .map(|(factor, _exponent)| Factor::from(factor))
-                                .collect();
-                            factors.sort();
-                            factors.dedup();
-                            factors.into_boxed_slice()
-                        };
-                    ProcessedStatusApiResponse {
-                        status,
-                        factors,
-                        id: recvd_id_parsed,
-                    }
-                }
-            },
-            Err(None) => ProcessedStatusApiResponse {
-                status: None,
-                id: None,
-                factors: Box::new([]),
-            },
-            Err(Some(fallback_response)) => {
-                let factors = self
-                    .digits_fallback_regex
-                    .captures(&fallback_response)
-                    .and_then(|c| c.get(1))
-                    .map(|digits_cell| {
-                        vec![
-                            digits_cell
-                                .as_str()
-                                .chars()
-                                .filter(char::is_ascii_digit)
-                                .collect::<Box<str>>()
-                                .into(),
-                        ]
-                        .into_boxed_slice()
-                    })
-                    .unwrap_or_else(|| Box::new([]));
-                ProcessedStatusApiResponse {
-                    status: None,
-                    factors,
-                    id: None,
-                }
-            }
-        }
     }
 }
 
