@@ -22,6 +22,14 @@ impl<T: Debug> PushbackReceiver<T> {
     }
 
     fn redrive_returned(&mut self) {
+        let amount = self.sender.capacity().min(self.return_receiver.len());
+        let permits = self.sender.try_reserve_many(amount);
+        if let Ok(permits) = permits {
+            permits.for_each(|permit| if let Ok(item) = self.return_receiver.try_recv() {
+                info!("Redriving returned item {:?}", item);
+                permit.send(item);
+            });
+        }
         while let Ok(permit) = self.sender.try_reserve()
             && let Ok(item) = self.return_receiver.try_recv()
         {
