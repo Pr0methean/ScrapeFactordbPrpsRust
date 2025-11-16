@@ -1,5 +1,4 @@
 #![allow(stable_features)]
-#![allow(clippy::too_many_arguments)]
 #![feature(duration_constructors_lite)]
 #![feature(file_buffered)]
 #![feature(const_destruct)]
@@ -310,6 +309,7 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_prp_remaining_bases(
     id: u128,
     http: &FactorDbClient,
