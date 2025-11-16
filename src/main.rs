@@ -2300,10 +2300,10 @@ async fn add_algebraic_factors_to_graph(
                 if let Some(listed_algebraic) = result.split("Is factor of").next() {
                     let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
                     for (factor_entry_id, factor_digits_or_expr) in algebraic_factors {
-                        let factor: Factor<ArcStr, CompactString> = factor_digits_or_expr.into();
+                        let factor: Factor<&str, &str> = factor_digits_or_expr.into();
                         let (factor_vid, added) = add_factor_node(
                             divisibility_graph,
-                            factor.as_ref(),
+                            factor,
                             factor_finder,
                             number_facts_map,
                             Some(root_vid),
