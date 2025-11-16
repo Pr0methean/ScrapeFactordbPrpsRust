@@ -1408,7 +1408,7 @@ async fn find_and_submit_factors(
             }
             _ => {}
         }
-        match try_report_factor::<&str, &str, _, _>(http, &Id(id), &factor).await {
+        match try_report_factor::<&str, &str, _, _>(http, &Id(id), factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
                 replace_with_or_abort(
@@ -1541,7 +1541,7 @@ async fn find_and_submit_factors(
                 }
                 let factor = divisibility_graph.vertex(factor_vid).unwrap();
                 let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
-                if !factor.may_be_proper_divisor_of(&cofactor) {
+                if !factor.may_be_proper_divisor_of(cofactor) {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller or equal or fails last-digit test"
@@ -1637,9 +1637,9 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
-                let dest_specifier = as_specifier(&cofactor_vid, &cofactor, &number_facts_map);
+                let dest_specifier = as_specifier(&cofactor_vid, cofactor, &number_facts_map);
                 let factor = divisibility_graph.vertex(factor_vid).unwrap();
-                match try_report_factor(http, &dest_specifier, &factor).await {
+                match try_report_factor(http, &dest_specifier, factor).await {
                     AlreadyFullyFactored => {
                         if cofactor_vid == root_node {
                             warn!("{id}: Already fully factored");
@@ -1713,8 +1713,8 @@ async fn find_and_submit_factors(
                             if !result.factors.is_empty() {
                                 iters_without_progress = 0;
                             }
-                            if let Some(entry_id) = result.id {
-                                if let Some(old_id) = number_facts_map
+                            if let Some(entry_id) = result.id
+                                && let Some(old_id) = number_facts_map
                                     .get_mut(&factor_vid)
                                     .unwrap()
                                     .entry_id
@@ -1726,7 +1726,6 @@ async fn find_and_submit_factors(
                                         "{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}"
                                     );
                                 };
-                            }
                         }
                     }
                     OtherError => {
@@ -1757,8 +1756,8 @@ async fn find_and_submit_factors(
                             if !result.factors.is_empty() {
                                 iters_without_progress = 0;
                             }
-                            if let Some(dest_entry_id) = result.id {
-                                if let Some(old_id) = number_facts_map
+                            if let Some(dest_entry_id) = result.id
+                                && let Some(old_id) = number_facts_map
                                     .get_mut(&cofactor_vid)
                                     .unwrap()
                                     .entry_id
@@ -1770,7 +1769,6 @@ async fn find_and_submit_factors(
                                         "{id}: Detected that {cofactor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
                                     );
                                 };
-                            }
                         }
                     }
                 }

@@ -282,7 +282,8 @@ impl FactorDbClient {
             // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
             // spawn_blocking
             let mut curl = self.curl_client.lock().await;
-            let response_text = curl
+            
+            curl
                 .get(true)
                 .and_then(|_| curl.url(url))
                 .and_then(|_| curl.perform())
@@ -293,8 +294,7 @@ impl FactorDbClient {
                         error!("Error reading {url}: HTTP response code {response_code}")
                     }
                     Ok(String::from_utf8(curl.get_mut().take_all())?)
-                });
-            response_text
+                })
         } else {
             let result = self
                 .http
