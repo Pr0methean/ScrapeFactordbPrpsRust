@@ -1,12 +1,10 @@
 use std::collections::BTreeMap;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::Graph;
-use arcstr::ArcStr;
-use compact_str::CompactString;
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::storage::{AdjMatrix, Stable};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
-use crate::algebraic::{Factor, FactorFinder};
+use crate::algebraic::{Factor, FactorFinder, OwnedFactor};
 use crate::{FactorsKnownToFactorDb, NumberFacts};
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 
@@ -18,10 +16,10 @@ pub enum Divisibility {
 }
 
 pub type DivisibilityGraph = Graph<
-    Factor<ArcStr, CompactString>,
+    OwnedFactor,
     Divisibility,
     Directed,
-    Stable<AdjMatrix<Factor<ArcStr, CompactString>, Divisibility, Directed, DefaultId>>,
+    Stable<AdjMatrix<OwnedFactor, Divisibility, Directed, DefaultId>>,
 >;
 
 pub fn rule_out_divisibility(

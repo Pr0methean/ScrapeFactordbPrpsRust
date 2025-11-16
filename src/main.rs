@@ -9,6 +9,7 @@ mod net;
 mod shutdown;
 mod graph;
 
+use crate::algebraic::OwnedFactor;
 use graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
 use crate::NumberSpecifier::{Expression, Id};
@@ -23,7 +24,6 @@ use crate::algebraic::{
 };
 use crate::net::ResourceLimits;
 use crate::shutdown::{handle_signals, Shutdown};
-use arcstr::ArcStr;
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
@@ -1757,7 +1757,7 @@ fn handle_if_fully_factored(
 
 fn as_specifier<'a>(
     factor_vid: &VertexId,
-    factor: &'a Factor<ArcStr, CompactString>,
+    factor: &'a OwnedFactor,
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
 ) -> NumberSpecifier<&'a str, &'a str> {
     if let Some(factor_entry_id) = number_facts_map

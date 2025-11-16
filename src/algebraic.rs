@@ -556,6 +556,8 @@ pub enum Factor<T, U> {
     Expression(U),
 }
 
+pub type OwnedFactor = Factor<ArcStr, CompactString>;
+
 impl<T: AsRef<str>, U: AsRef<str>> Hash for Factor<T, U> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
@@ -626,7 +628,7 @@ where
     }
 }
 
-impl<'a, T: Display, U: Display> From<&'a Factor<T, U>> for Factor<ArcStr, CompactString> {
+impl<'a, T: Display, U: Display> From<&'a Factor<T, U>> for OwnedFactor {
     fn from(value: &'a Factor<T, U>) -> Self {
         match value {
             Numeric(n) => Numeric(*n),
@@ -971,7 +973,7 @@ fn multiset_difference<T: Eq + Ord + Clone, U: Eq + Ord + From<T> + Clone, V: Fr
 }
 
 #[inline]
-fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor<ArcStr, CompactString>> {
+fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
     if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
         SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
@@ -1005,7 +1007,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor<ArcStr, C
 }
 
 #[inline]
-fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor<ArcStr, CompactString>> {
+fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
     if term < SMALL_LUCAS_FACTORS.len() as u128 {
         SMALL_LUCAS_FACTORS[term as usize]
             .iter()
@@ -1347,7 +1349,7 @@ impl FactorFinder {
     fn find_factors<T: AsRef<str>, U: AsRef<str> + Display>(
         &self,
         expr: &Factor<T, U>,
-    ) -> Vec<Factor<ArcStr, CompactString>> {
+    ) -> Vec<OwnedFactor> {
         match expr {
             Numeric(n) => Self::find_factors_of_u128(*n),
             Factor::BigNumber(expr) => Self::factor_big_num(expr),
@@ -1406,9 +1408,9 @@ impl FactorFinder {
                             if let Numeric(a) = a
                                 && let Numeric(n) = n
                             {
-                                let b_reduced: Vec<Factor<ArcStr, CompactString>> =
+                                let b_reduced: Vec<OwnedFactor> =
                                     multiset_difference(b, &gcd_bc);
-                                let c_reduced: Vec<Factor<ArcStr, CompactString>> =
+                                let c_reduced: Vec<OwnedFactor> =
                                     multiset_difference(c_abs, &gcd_bc);
                                 factors.extend(multiset_union(gcd_ac, gcd_bc));
                                 if let Some(b) = checked_product_u128(b_reduced.as_slice())
@@ -1449,7 +1451,7 @@ impl FactorFinder {
                                     let factors_of_n_count = factors_of_n.len();
                                     let mut factors_of_n = factors_of_n
                                         .iter()
-                                        .collect::<Vec<&Factor<ArcStr, CompactString>>>();
+                                        .collect::<Vec<&OwnedFactor>>();
                                     for factor_subset in power_multiset(&mut factors_of_n) {
                                         if factor_subset.len() == factors_of_n_count
                                             || factor_subset.is_empty()
@@ -1574,7 +1576,7 @@ impl FactorFinder {
                             // division by another expression
                             let numerator: Factor<&str, &str> = Factor::from(&captures[1]);
                             let numerator = self.find_factors(&numerator);
-                            let denominator: Factor<ArcStr, CompactString> = captures[2].into();
+                            let denominator: OwnedFactor = captures[2].into();
                             let denominator = if numerator.contains(&denominator) {
                                 vec![denominator]
                             } else {
@@ -1611,7 +1613,7 @@ impl FactorFinder {
         }
     }
 
-    fn factor_big_num<T: AsRef<str>>(expr: &T) -> Vec<Factor<ArcStr, CompactString>> {
+    fn factor_big_num<T: AsRef<str>>(expr: &T) -> Vec<OwnedFactor> {
         let mut factors = Vec::new();
         let mut expr_short = expr.as_ref();
         while expr_short != "0"
@@ -1672,7 +1674,7 @@ impl FactorFinder {
         expr1: &Factor<T, U>,
         expr2: &Factor<T, U>,
         for_add_or_sub: bool,
-    ) -> Vec<Factor<ArcStr, CompactString>> {
+    ) -> Vec<OwnedFactor> {
         if let Numeric(num1) = expr1
             && let Numeric(num2) = expr2
         {
@@ -1699,7 +1701,7 @@ impl FactorFinder {
     pub fn find_unique_factors<T: AsRef<str> + Display, U: AsRef<str> + Display>(
         &self,
         expr: &Factor<T, U>,
-    ) -> Box<[Factor<ArcStr, CompactString>]> {
+    ) -> Box<[OwnedFactor]> {
         let mut factors = self.find_factors(expr);
         factors.retain(|f| *f != Numeric::<T, U>(1) && f.may_be_proper_divisor_of(expr));
         factors.sort();
@@ -1719,7 +1721,7 @@ impl FactorFinder {
 #[derive(Default, Debug)]
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
-    pub factors: Box<[Factor<ArcStr, CompactString>]>,
+    pub factors: Box<[OwnedFactor]>,
     pub id: Option<u128>,
 }
 
