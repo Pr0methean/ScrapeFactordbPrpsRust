@@ -517,12 +517,12 @@ async fn do_checks(
     mut prp_receiver: PushbackReceiver<u128>,
     mut u_receiver: PushbackReceiver<u128>,
     mut c_receiver: PushbackReceiver<CompositeCheckTask>,
-    mut c_filter: CuckooFilter<DefaultHasher>,
     http: FactorDbClient,
     factor_finder: FactorFinder,
     mut shutdown_receiver: Shutdown,
 ) {
     info!("do_checks task starting");
+    let mut c_filter = CuckooFilter::with_capacity(4096);
     let mut next_unknown_attempt = Instant::now();
     let mut retry = None;
     let cert_regex = Regex::new("(Verified|Processing)").unwrap();
@@ -935,7 +935,6 @@ async fn main() -> anyhow::Result<()> {
             .await;
         max_concurrent_requests = 3;
     }
-    let c_filter = CuckooFilter::with_capacity(2500);
     let factor_finder = FactorFinder::new();
     let http = FactorDbClient::new(
         rph_limit,
@@ -968,7 +967,6 @@ async fn main() -> anyhow::Result<()> {
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
         c_receiver,
-        c_filter,
         http.clone(),
         factor_finder.clone(),
         shutdown_receiver.clone(),
