@@ -24,7 +24,7 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
+use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use arcstr::{ArcStr, literal};
@@ -1777,15 +1777,16 @@ async fn find_and_submit_factors(
             }
         }
     }
-    for (factor_vid, factor) in divisibility_graph
+    for factor_vid in divisibility_graph
         .vertices()
-        .map(|vertex| (vertex.id, vertex.attr.clone()))
+        .map(|vertex| vertex.id)
         .collect::<Box<[_]>>()
         .into_iter()
     {
         if factor_vid == root_node {
             continue;
         }
+        let factor = divisibility_graph.vertex(factor_vid).unwrap();
         if factor
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
@@ -1949,23 +1950,17 @@ async fn add_known_factors_to_graph(
     root_vid: VertexId,
     include_ff: bool,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
-) -> ProcessedStatusApiResponse {
+) -> ProcessedStatusApiResponseRef {
     let facts = number_facts_map.get(&root_vid).unwrap();
     if !facts.needs_update() {
         let root = divisibility_graph.vertex(&root_vid).unwrap();
         warn!("add_known_factors_to_graph called for {root} when {facts:?} is already up-to-date");
         let factors = match &facts.factors_known_to_factordb {
-            UpToDate(factors) => factors
-                .into_iter()
-                .map(|factor_vid| divisibility_graph.vertex(factor_vid).unwrap().clone())
-                .collect(),
-            NotUpToDate(factors) => factors
-                .into_iter()
-                .map(|factor_vid| divisibility_graph.vertex(factor_vid).unwrap().clone())
-                .collect(),
+            UpToDate(factors) => factors.clone(),
+            NotUpToDate(factors) => factors.clone(),
             FactorsKnownToFactorDb::NotQueried => Box::default(),
         };
-        return ProcessedStatusApiResponse {
+        return ProcessedStatusApiResponseRef {
             status: facts.last_known_status,
             factors,
             id: facts.entry_id,
@@ -2084,7 +2079,7 @@ async fn add_known_factors_to_graph(
                     new_out_neighbors,
                     new_in_neighbors,
                 );
-                if added { vec![equivalent] } else { vec![] }.into_boxed_slice()
+                if added { vec![equivalent_vid] } else { vec![] }.into_boxed_slice()
             }
         }
         _ => {
@@ -2098,7 +2093,7 @@ async fn add_known_factors_to_graph(
                     Some(root_vid),
                 );
                 if added {
-                    all_added.push(dest_subfactor);
+                    all_added.push(subfactor_vid);
                 }
                 propagate_divisibility(divisibility_graph, &subfactor_vid, &root_vid, false);
             }
@@ -2107,7 +2102,7 @@ async fn add_known_factors_to_graph(
     };
     let facts = number_facts_map.get_mut(&root_vid).unwrap();
     facts.factors_known_to_factordb = UpToDate(subfactor_vids);
-    ProcessedStatusApiResponse {
+    ProcessedStatusApiResponseRef {
         status,
         factors: all_added,
         id,
@@ -2224,16 +2219,7 @@ async fn add_algebraic_factors_to_graph(
                     return true;
                 }
                 any_added |= !result.factors.is_empty();
-                parseable_factors.extend(result.factors.into_iter().map(|factor| {
-                    let (factor_vid, _) = add_factor_node(
-                        divisibility_graph,
-                        factor.as_ref(),
-                        factor_finder,
-                        number_facts_map,
-                        Some(root_vid),
-                    );
-                    factor_vid
-                }));
+                parseable_factors.extend(result.factors);
                 result.id
             }
         };
@@ -2333,8 +2319,7 @@ async fn add_algebraic_factors_to_graph(
     for parseable_factor in parseable_factors {
         let facts = number_facts_map.get(&parseable_factor).unwrap();
         let entry_id = facts.entry_id;
-        let subfactors = facts.factors_detected_by_factor_finder.clone();
-        for subfactor_vid in subfactors {
+        for subfactor_vid in facts.factors_detected_by_factor_finder.clone() {
             any_added |= Box::pin(add_algebraic_factors_to_graph(
                 http,
                 entry_id,

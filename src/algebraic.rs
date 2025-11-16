@@ -22,6 +22,7 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::marker::Destruct;
 use std::mem::swap;
+use gryf::core::id::VertexId;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -949,7 +950,7 @@ fn multiset_union<T: Eq + Ord + Clone, U: Ord + From<T> + Clone>(
 }
 
 #[inline(always)]
-fn multiset_difference<T: Eq + Ord + Clone, U: Eq + Ord + From<T>, V: From<T> + Clone>(
+fn multiset_difference<T: Eq + Ord + Clone, U: Eq + Ord + From<T> + Clone, V: From<T> + Clone>(
     vec1: Vec<T>,
     vec2: &[U],
 ) -> Vec<V> {
@@ -1722,6 +1723,13 @@ impl FactorFinder {
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
     pub factors: Box<[Factor<ArcStr, CompactString>]>,
+    pub id: Option<u128>,
+}
+
+#[derive(Default, Debug)]
+pub struct ProcessedStatusApiResponseRef {
+    pub status: Option<NumberStatus>,
+    pub factors: Box<[VertexId]>,
     pub id: Option<u128>,
 }
 
