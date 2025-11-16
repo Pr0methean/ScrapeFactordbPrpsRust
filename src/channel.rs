@@ -48,8 +48,9 @@ impl<T: Debug> PushbackReceiver<T> {
 
     pub fn try_recv(&mut self) -> Option<(T, OwnedPermit<T>)> {
         self.redrive_returned();
-        match self.return_sender.clone().try_reserve_owned().ok() {
-            Some(return_permit) => {
+        let return_sender = self.return_sender.clone();
+        match return_sender.try_reserve_owned() {
+            Ok(return_permit) => {
                 if let Ok(received) = self.receiver.try_recv() {
                     Some((received, return_permit))
                 } else if let Ok(received_return) = self.return_receiver.try_recv() {
@@ -62,13 +63,11 @@ impl<T: Debug> PushbackReceiver<T> {
                     None
                 }
             }
-            None => {
+            Err(e) => {
                 let received = self.return_receiver.try_recv().expect(
                     "Failed to receive a returned item when no return permits are available",
                 );
-                let return_permit = self
-                    .return_sender
-                    .clone()
+                let return_permit = e.into_inner()
                     .try_reserve_owned()
                     .expect("Failed to obtain a return permit after receiving a returned item");
                 info!(
