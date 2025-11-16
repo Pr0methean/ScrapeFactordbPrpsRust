@@ -111,7 +111,6 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                     .map_err(|e| Error::from(e.without_url())),
                 Err(url) => {
                     let mut curl = self.client.curl_client.lock().await;
-                    let url = url.clone();
                     if let Some(form) = self.form {
                         curl.post_fields_copy(form.as_bytes())?;
                     }
