@@ -37,9 +37,6 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # Keep RUSTFLAGS consistent for the cached build and the run that uses it.
-
     steps:
       - uses: actions/checkout@v5
         with:
