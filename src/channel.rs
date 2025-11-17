@@ -1,4 +1,4 @@
-use log::info;
+use log::{info, warn};
 use std::fmt::Debug;
 use tokio::select;
 use tokio::sync::mpsc::{OwnedPermit, Receiver, Sender, channel};
@@ -44,26 +44,43 @@ impl<T: Debug> PushbackReceiver<T> {
         self.redrive_returned();
         let return_sender = self.return_sender.clone();
         let return_permit = return_sender.try_reserve_owned();
-        let item = select! {
-            biased;
-            result = self.receiver.recv() => {
-                result.unwrap()
+        match return_permit {
+            Ok(permit) => {
+                let item = select! {
+                    biased;
+                    result = self.receiver.recv() => {
+                        result.unwrap()
+                    },
+                    result = self.return_receiver.recv() => {
+                        let result = result.unwrap();
+                        info!("Receiving returned item: {:?}", result);
+                        result
+                    }
+                };
+                (item, permit)
             },
-            result = self.return_receiver.recv() => {
-                let result = result.unwrap();
-                info!("Receiving returned item: {:?}", result);
-                result
+            Err(e) => {
+                let item = select! {
+                    biased;
+                    // Polling return receiver first is more likely to get a permit sooner
+                    result = self.return_receiver.recv() => {
+                        let result = result.unwrap();
+                        warn!("Couldn't get a return permit before receiving returned item {result:?}");
+                        result
+                    }
+                    result = self.receiver.recv() => {
+                        warn!("Couldn't get a return permit before receiving item {result:?}");
+                        result.unwrap()
+                    },
+                };
+                let return_permit = select! {
+                    biased;
+                    result = e.into_inner().reserve_owned() => result.unwrap(),
+                    result = self.sender.clone().reserve_owned() => result.unwrap(),
+                };
+                (item, return_permit)
             }
-        };
-        let return_permit = match return_permit {
-            Ok(permit) => permit,
-            Err(e) => select! {
-                biased;
-                result = e.into_inner().reserve_owned() => result.unwrap(),
-                result = self.sender.clone().reserve_owned() => result.unwrap(),
-            }
-        };
-        (item, return_permit)
+        }
     }
 
     pub fn try_recv(&mut self) -> Option<(T, OwnedPermit<T>)> {
