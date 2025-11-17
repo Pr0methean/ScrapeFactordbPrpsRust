@@ -1,5 +1,5 @@
 use crate::algebraic::Factor::Numeric;
-use crate::write_bignum;
+use crate::{write_bignum, MAX_ID_EQUAL_TO_VALUE};
 use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use gryf::core::id::VertexId;
@@ -554,6 +554,16 @@ pub enum Factor<T, U> {
     Numeric(u128),
     BigNumber(T),
     Expression(U),
+}
+
+impl <T, U> Factor<T, U> {
+    pub fn known_id(&self) -> Option<u128> {
+        if let Numeric(n) = self && *n <= MAX_ID_EQUAL_TO_VALUE {
+            Some(*n)
+        } else {
+            None
+        }
+    }
 }
 
 pub type OwnedFactor = Factor<ArcStr, CompactString>;

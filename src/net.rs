@@ -413,7 +413,7 @@ impl FactorDbClient {
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
         debug!("known_factors_as_digits: id={id:?}");
-        if let NumberSpecifier::Expression(Numeric(n)) = id {
+        if let Expression(Numeric(n)) = id {
             debug!("Specially handling numeric expression {n}");
             let factors = FactorFinder::find_factors_of_u128(n).into_boxed_slice();
             return ProcessedStatusApiResponse {
@@ -423,15 +423,11 @@ impl FactorDbClient {
                     FullyFactored
                 }),
                 factors,
-                id: if n <= MAX_ID_EQUAL_TO_VALUE {
-                    Some(n)
-                } else {
-                    None
-                },
+                id: Numeric::<&str,&str>(n).known_id(),
             };
         }
         let response = match id {
-            NumberSpecifier::Id(id) => {
+            Id(id) => {
                 let url = format!("https://factordb.com/api?id={id}");
                 if get_digits_as_fallback {
                     self.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
@@ -443,7 +439,7 @@ impl FactorDbClient {
                     self.try_get_and_decode(&url).await.ok_or(None)
                 }
             }
-            NumberSpecifier::Expression(ref expr) => {
+            Expression(ref expr) => {
                 let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str()));
                 self.try_get_and_decode(&url).await.ok_or(None)
             }
@@ -538,11 +534,6 @@ impl FactorDbClient {
         factor: &Factor<V, W>,
     ) -> ReportFactorResult {
         if let Expression(Numeric(_)) = u_id {
-            return AlreadyFullyFactored;
-        }
-        if let Id(n) = u_id
-            && *n <= MAX_ID_EQUAL_TO_VALUE
-        {
             return AlreadyFullyFactored;
         }
         let number = if let Expression(expr) = u_id {

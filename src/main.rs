@@ -1727,12 +1727,8 @@ fn as_specifier<'a>(
             "as_specifier: got entry ID {factor_entry_id} for factor {factor} with vertex ID {factor_vid:?}"
         );
         Id(factor_entry_id)
-    } else if let Numeric(n) = factor
-        && *n <= MAX_ID_EQUAL_TO_VALUE
-    {
-        Id(*n)
     } else {
-        Expression(factor.as_ref())
+        factor.known_id().map(Id).unwrap_or_else(|| Expression(factor.as_ref()))
     }
 }
 
@@ -1948,8 +1944,8 @@ async fn add_algebraic_factors_to_graph(
             }
         };
         if let Some(id) = id {
-            if id <= MAX_ID_EQUAL_TO_VALUE {
-                let root = divisibility_graph.vertex(&root_vid).unwrap();
+            let root = divisibility_graph.vertex(&root_vid).unwrap();
+            if let Some(known_id) = root.known_id() && id != known_id {
                 error!("Tried to look up {root} using a smaller number's id {id}");
                 parseable_factors.insert(root_vid);
             } else {
