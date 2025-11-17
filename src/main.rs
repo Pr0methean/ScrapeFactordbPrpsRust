@@ -1425,11 +1425,10 @@ async fn find_and_submit_factors(
                             continue;
                         } else if matches!(facts.factors_known_to_factordb, UpToDate(_))
                             && facts.is_known_fully_factored() {
-                            graph::propagate_divisibility(
+                            graph::rule_out_divisibility(
                                 &mut divisibility_graph,
                                 &factor_vid,
                                 &cofactor_vid,
-                                false,
                             );
                             continue;
                         }
