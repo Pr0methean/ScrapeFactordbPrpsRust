@@ -16,12 +16,14 @@ use std::borrow::Cow::{Borrowed, Owned};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::BTreeMap;
+use std::f64::consts::LOG10_2;
 use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
+use num_prime::detail::SMALL_PRIMES;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -1088,6 +1090,30 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
     result
 }
 
+/// Modular inverse using extended Euclidean algorithm
+fn modinv(a: u128, m: u128) -> Option<u128> {
+    let (mut t, mut newt) = (0i128, 1i128);
+    let (mut r, mut newr) = (m as i128, a as i128);
+
+    while newr != 0 {
+        let quotient = r / newr;
+        t = t - quotient * newt;
+        swap(&mut t, &mut newt);
+        r = r - quotient * newr;
+        swap(&mut r, &mut newr);
+    }
+
+    if r > 1 {
+        return None; // no inverse
+    }
+
+    if t < 0 {
+        t += m as i128;
+    }
+
+    Some(t as u128)
+}
+
 impl FactorFinder {
     #[inline(always)]
     pub fn new() -> FactorFinder {
@@ -1095,6 +1121,7 @@ impl FactorFinder {
             "^lucas\\(([0-9]+)\\)$",
             "^I\\(([0-9]+)\\)$",
             "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
+            "^([0-9]+)\\^([0-9]+)([+-])([0-9]+)\\^([0-9]+)$",
             "^([0-9]+)!$",
             "^([0-9]+)#$",
             "^([0-9]+)$",
@@ -1207,19 +1234,34 @@ impl FactorFinder {
                                 );
                             }
                             let log_abs_c_upper_bound = (c as f64).abs().log10().next_up();
-                            if c < 0 {
-                                (
-                                    (log_anb_lower_bound - log_abs_c_upper_bound).floor() as u128,
-                                    log_anb_upper_bound.ceil() as u128,
-                                )
-                            } else {
-                                (
-                                    log_anb_lower_bound.floor() as u128,
-                                    (log_anb_upper_bound + log_abs_c_upper_bound).ceil() as u128,
-                                )
-                            }
+                            Self::addsub_log10(&captures[4][0..=0], log_anb_lower_bound, log_anb_upper_bound, 0.0, log_abs_c_upper_bound)
                         }
-                        3 => {
+                        3 => { // a^x +/- b^y
+                            let (Ok(a), Ok(x), sign, Ok(b), Ok(y)) = (
+                                captures[1].parse::<u128>(),
+                                captures[2].parse::<u128>(),
+                                &captures[3],
+                                captures[4].parse::<u128>(),
+                                captures[5].parse::<u128>())
+                            else {
+                                return (0, u128::MAX);
+                            };
+                            let log_ax_lower_bound = (a as f64)
+                                .log10()
+                                .next_down() * (x as f64).next_down();
+                            let log_ax_upper_bound = (a as f64)
+                                .log10()
+                                .next_up() * (x as f64).next_up();
+                            let log_by_lower_bound = (b as f64)
+                                .log10()
+                                .next_down() * (y as f64).next_down();
+                            let log_by_upper_bound = (b as f64)
+                                .log10()
+                                .next_up() * (y as f64).next_up();
+                            Self::addsub_log10(&sign, log_ax_lower_bound, log_ax_upper_bound,
+                                log_by_lower_bound, log_by_upper_bound)
+                        }
+                        4 => {
                             // factorial
                             let Ok(input) = captures[1].parse::<u128>() else {
                                 warn!("Could not parse input to a factorial: {}", &captures[1]);
@@ -1237,7 +1279,7 @@ impl FactorFinder {
                                 log_factorial_upper_bound.ceil() as u128,
                             )
                         }
-                        4 => {
+                        5 => {
                             // primorial
                             let Ok(input) = captures[1].parse::<u128>() else {
                                 warn!("Could not parse input to a factorial: {}", &captures[1]);
@@ -1262,19 +1304,19 @@ impl FactorFinder {
                             let upper_bound = (1.01624 / LN_10 * input as f64).floor();
                             (lower_bound, upper_bound as u128)
                         }
-                        5 => {
+                        6 => {
                             // Raw number
                             (expr.as_ref().len() as u128 - 1, expr.as_ref().len() as u128)
                         }
-                        6 => {
+                        7 => {
                             // Elided numbers from factordb are always at least 51 digits
                             (50, u128::MAX)
                         }
-                        7 => {
+                        8 => {
                             // parens
                             self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]))
                         }
-                        8 => {
+                        9 => {
                             // division
                             let (numerator_lower, numerator_upper) = self
                                 .estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]));
@@ -1289,7 +1331,7 @@ impl FactorFinder {
                                     .saturating_add(1),
                             )
                         }
-                        9 => {
+                        10 => {
                             // multiplication
                             let (left_lower, left_upper) =
                                 self.estimate_log10_internal(&Factor::<&str, &str>::from(
@@ -1302,7 +1344,7 @@ impl FactorFinder {
                                 left_upper.saturating_add(right_upper).saturating_add(1),
                             )
                         }
-                        10 => {
+                        11 => {
                             // addition/subtraction
                             let (left_lower, left_upper) =
                                 self.estimate_log10_internal(&Factor::<&str, &str>::from(
@@ -1310,21 +1352,7 @@ impl FactorFinder {
                                 ));
                             let (right_lower, right_upper) = self
                                 .estimate_log10_internal(&Factor::<&str, &str>::from(&captures[3]));
-                            let combined_lower = if &captures[2] == "-" {
-                                if left_lower.saturating_sub(right_upper) > 1 {
-                                    left_lower.saturating_sub(1)
-                                } else {
-                                    0
-                                }
-                            } else {
-                                left_lower.max(right_lower)
-                            };
-                            let combined_upper = if &captures[2] == "-" {
-                                left_upper
-                            } else {
-                                left_upper.max(right_upper).saturating_add(1)
-                            };
-                            (combined_lower, combined_upper)
+                            Self::addsub_log10(&captures[2], left_lower as f64, left_upper as f64, right_lower as f64, right_upper as f64)
                         }
                         _ => unsafe { unreachable_unchecked() },
                     }
@@ -1333,6 +1361,24 @@ impl FactorFinder {
                 }
             }
         }
+    }
+
+    fn addsub_log10(sign: &str, left_lower: f64, left_upper: f64, right_lower: f64, right_upper: f64) -> (u128, u128) {
+        let combined_lower = if sign == "-" {
+            if right_lower >= left_lower - LOG10_2 {
+                0.0
+            } else {
+                left_lower - LOG10_2
+            }
+        } else {
+            left_lower.max(right_lower)
+        };
+        let combined_upper = if sign == "-" {
+            left_upper
+        } else {
+            left_upper.max(right_upper) + LOG10_2
+        };
+        (combined_lower as u128, combined_upper.ceil() as u128)
     }
 
     pub(crate) fn estimate_log10<T: AsRef<str>, U: AsRef<str> + Display>(
@@ -1523,6 +1569,52 @@ impl FactorFinder {
                             factors
                         }
                         3 => {
+                            //a^x +/- b^y
+                            let (Ok(a), Ok(x), sign, Ok(b), Ok(y)) = (
+                                captures[1].parse::<u128>(),
+                                captures[2].parse::<u128>(),
+                                &captures[3],
+                                captures[4].parse::<u128>(),
+                                captures[5].parse::<u128>())
+                            else {
+                                return vec![];
+                            };
+                            if x != y {
+                                return self.find_common_factors(
+                                    &format!("{a}^{x}").into(),
+                                    &format!("{b}^{y}").into(),
+                                    true
+                                );
+                            }
+                            let mut factors = Vec::new();
+                            for p in SMALL_PRIMES {
+                                let p = p as u128;
+                                // Compute a*b^{-1} mod p
+                                let b_inv = modinv(b % p, p);
+                                if b_inv.is_none() {
+                                    continue;
+                                }
+                                let g = (a % p * b_inv.unwrap()) % p;
+
+                                // Compute g^x mod p
+                                let gx = g.powm(x, &p);
+
+                                let add_check = match sign {
+                                    "+" => gx == p - 1,
+                                    "-" => gx == 1,
+                                    _ => unsafe { unreachable_unchecked() }
+                                };
+
+                                if add_check {
+                                    factors.push(Numeric(p));
+                                }
+                            }
+                            if let Some(apb) = if sign == "-" { a.checked_sub(b) } else { a.checked_add(b) } {
+                                factors.extend(Self::find_factors_of_u128(apb));
+                            }
+                            factors
+                        }
+                        4 => {
                             // factorial
                             let Ok(input) = captures[1].parse::<u128>() else {
                                 warn!(
@@ -1537,7 +1629,7 @@ impl FactorFinder {
                             }
                             factors
                         }
-                        4 => {
+                        5 => {
                             // primorial
                             let Ok(input) = captures[1].parse::<u128>() else {
                                 warn!(
@@ -1554,11 +1646,11 @@ impl FactorFinder {
                             }
                             factors
                         }
-                        5 => {
+                        6 => {
                             // Raw number
                             Self::factor_big_num(expr)
                         }
-                        6 => {
+                        7 => {
                             // elided number
                             match expr.as_ref().chars().last() {
                                 Some('0') => vec![Numeric(2), Numeric(5)],
@@ -1571,11 +1663,11 @@ impl FactorFinder {
                                 }
                             }
                         }
-                        7 => {
+                        8 => {
                             // parens
                             self.find_factors(&Factor::<&str, &str>::from(&captures[1]))
                         }
-                        8 => {
+                        9 => {
                             // division by another expression
                             let numerator: Factor<&str, &str> = Factor::from(&captures[1]);
                             let numerator = self.find_factors(&numerator);
@@ -1587,7 +1679,7 @@ impl FactorFinder {
                             };
                             multiset_difference(numerator, &denominator)
                         }
-                        9 => {
+                        10 => {
                             let mut factors = Vec::new();
                             // multiplication
                             for term in [captures[1].into(), captures[2].into()] {
@@ -1600,7 +1692,7 @@ impl FactorFinder {
                             }
                             factors
                         }
-                        10 => {
+                        11 => {
                             // addition/subtraction; only return common factors of both sides, and 2
                             // if both are odd
                             let left_expr: Factor<&str, &str> = captures[1].into();
@@ -1747,10 +1839,7 @@ pub enum NumberStatus {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{
-        Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
-        lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset,
-    };
+    use crate::algebraic::{Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset, modinv};
     use itertools::Itertools;
     use std::iter::repeat_n;
 
@@ -1787,6 +1876,23 @@ mod tests {
         let factors = finder.find_factors(&expr.into());
         println!("{}", factors.iter().join(", "));
         assert!(factors.contains(&format!("{}^8-1", u128::MAX).into()));
+    }
+
+    #[test]
+    fn test_modinv() {
+        assert_eq!(modinv(3, 11), Some(4));
+        assert_eq!(modinv(17, 3120), Some(2753));
+        assert_eq!(modinv(6, 9), None);
+    }
+
+    #[test]
+    fn test_abxy() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors::<&str,&str>(&"1297^40000-901^40000".into());
+        assert!(factors.contains(&Numeric(2)));
+        assert!(factors.contains(&Numeric(3)));
+        assert!(factors.contains(&Numeric(5)));
+        assert!(factors.contains(&Numeric(11)));
     }
 
     #[test]
@@ -1910,13 +2016,13 @@ mod tests {
         assert_eq!(lower, 199);
         assert!(upper == 200 || upper == 201);
         let (lower, upper) =
-            finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200-1"));
-        assert_eq!(lower, 199);
-        assert!(upper == 200 || upper == 201);
-        let (lower, upper) =
-            finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200*2-1"));
-        assert_eq!(lower, 200);
+            finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200+1"));
+        assert!(lower == 199 || lower == 200);
         assert_eq!(upper, 201);
+        let (lower, upper) =
+            finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("10^200*31-1"));
+        assert!(lower == 200 || lower == 201);
+        assert_eq!(upper, 202);
         let (lower, upper) =
             finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("100!"));
         assert_eq!(lower, 157);
@@ -1940,7 +2046,11 @@ mod tests {
         assert!(upper >= 3);
         let (lower, upper) = finder
             .estimate_log10_internal::<&str, &str>(&Factor::Expression("(2^769-1)/1591805393"));
-        assert!(lower <= 222);
-        assert!(upper >= 223);
+        assert!(lower >= 220 && lower <= 222);
+        assert!(upper >= 223 && upper <= 225);
+        let (lower, upper) = finder
+            .estimate_log10_internal::<&str, &str>(&Factor::Expression("3^5000-4^2001"));
+        assert!(lower == 2385 || lower == 2384);
+        assert!(upper == 2386 || upper == 2387);
     }
 }
