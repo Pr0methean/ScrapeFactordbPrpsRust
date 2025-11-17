@@ -1480,16 +1480,18 @@ async fn find_and_submit_factors(
                     continue;
                 }
                 let cofactor_facts = number_facts_map.get(&cofactor_vid).unwrap();
-                if cofactor_facts.is_known_fully_factored() && !cofactor_facts.needs_update() {
+                if cofactor_facts.is_known_fully_factored() {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                     already fully factored"
                     );
-                    graph::rule_out_divisibility(
-                        &mut divisibility_graph,
-                        &factor_vid,
-                        &cofactor_vid,
-                    );
+                    if !cofactor_facts.needs_update() {
+                        graph::rule_out_divisibility(
+                            &mut divisibility_graph,
+                            &factor_vid,
+                            &cofactor_vid,
+                        );
+                    }
                     continue;
                 }
                 let cofactor_upper_bound = cofactor_facts.upper_bound_log10;
