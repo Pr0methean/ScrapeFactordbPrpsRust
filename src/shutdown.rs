@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::signal::ctrl_c;
-use tokio::sync::broadcast::{Sender, Receiver, channel};
-use tokio::sync::{oneshot};
+use tokio::sync::broadcast::{Receiver, Sender, channel};
+use tokio::sync::oneshot;
 use tokio::{select, signal};
 
 /// Listens for the server shutdown signal.

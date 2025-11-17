@@ -1,5 +1,5 @@
 use crate::algebraic::Factor::Numeric;
-use crate::{write_bignum, MAX_ID_EQUAL_TO_VALUE};
+use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
 use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
 use gryf::core::id::VertexId;
@@ -556,9 +556,11 @@ pub enum Factor<T, U> {
     Expression(U),
 }
 
-impl <T, U> Factor<T, U> {
+impl<T, U> Factor<T, U> {
     pub fn known_id(&self) -> Option<u128> {
-        if let Numeric(n) = self && *n <= MAX_ID_EQUAL_TO_VALUE {
+        if let Numeric(n) = self
+            && *n <= MAX_ID_EQUAL_TO_VALUE
+        {
             Some(*n)
         } else {
             None
@@ -891,8 +893,7 @@ impl Clone for FactorFinder {
     }
 
     #[inline(always)]
-    fn clone_from(&mut self, _source: &Self)
-    {
+    fn clone_from(&mut self, _source: &Self) {
         // No-op because all instances are interchangeables
     }
 }
@@ -936,10 +937,7 @@ fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec
 }
 
 #[inline(always)]
-fn multiset_union<T: Eq + Ord + Clone>(
-    vec1: Vec<T>,
-    vec2: Vec<T>,
-) -> Vec<T> {
+fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
     if vec1.is_empty() {
         return vec2;
     }
@@ -959,10 +957,7 @@ fn multiset_union<T: Eq + Ord + Clone>(
 }
 
 #[inline(always)]
-fn multiset_difference<T: Eq + Ord + Clone>(
-    vec1: Vec<T>,
-    vec2: &[T],
-) -> Vec<T> {
+fn multiset_difference<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: &[T]) -> Vec<T> {
     if vec2.is_empty() {
         return vec1;
     }
@@ -1418,8 +1413,7 @@ impl FactorFinder {
                             if let Numeric(a) = a
                                 && let Numeric(n) = n
                             {
-                                let b_reduced: Vec<OwnedFactor> =
-                                    multiset_difference(b, &gcd_bc);
+                                let b_reduced: Vec<OwnedFactor> = multiset_difference(b, &gcd_bc);
                                 let c_reduced: Vec<OwnedFactor> =
                                     multiset_difference(c_abs, &gcd_bc);
                                 factors.extend(multiset_union(gcd_ac, gcd_bc));
@@ -1459,9 +1453,8 @@ impl FactorFinder {
                                     };
                                     let factors_of_n = Self::find_factors_of_u128(n);
                                     let factors_of_n_count = factors_of_n.len();
-                                    let mut factors_of_n = factors_of_n
-                                        .iter()
-                                        .collect::<Vec<&OwnedFactor>>();
+                                    let mut factors_of_n =
+                                        factors_of_n.iter().collect::<Vec<&OwnedFactor>>();
                                     for factor_subset in power_multiset(&mut factors_of_n) {
                                         if factor_subset.len() == factors_of_n_count
                                             || factor_subset.is_empty()

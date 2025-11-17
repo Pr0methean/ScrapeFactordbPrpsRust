@@ -1,12 +1,15 @@
-use std::fmt::Display;
-use std::io::Write;
+use crate::NumberSpecifier::{Expression, Id};
+use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
 use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
 use crate::shutdown::Shutdown;
-use crate::{FactorSubmission, ReportFactorResult, EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, MAX_CPU_BUDGET_TENTHS, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use crate::{
+    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
+    ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
+};
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
 use arcstr::ArcStr;
@@ -20,6 +23,8 @@ use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
 use serde_json::from_str;
+use std::fmt::Display;
+use std::io::Write;
 use std::mem::swap;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
@@ -31,8 +36,6 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
-use crate::NumberSpecifier::{Expression, Id};
-use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -423,7 +426,7 @@ impl FactorDbClient {
                     FullyFactored
                 }),
                 factors,
-                id: Numeric::<&str,&str>(n).known_id(),
+                id: Numeric::<&str, &str>(n).known_id(),
             };
         }
         let response = match id {
@@ -541,19 +544,20 @@ impl FactorDbClient {
         } else {
             None
         };
-        let request_builder = match self
-            .post("https://factordb.com/reportfactor.php")
-            .form(&FactorSubmission {
-                id: if let Id(id) = u_id { Some(*id) } else { None },
-                number,
-                factor: factor.as_str(),
-            }) {
-            Ok(builder) => builder,
-            Err(e) => {
-                error!("Error building request: {e}");
-                return OtherError;
-            }
-        };
+        let request_builder =
+            match self
+                .post("https://factordb.com/reportfactor.php")
+                .form(&FactorSubmission {
+                    id: if let Id(id) = u_id { Some(*id) } else { None },
+                    number,
+                    factor: factor.as_str(),
+                }) {
+                Ok(builder) => builder,
+                Err(e) => {
+                    error!("Error building request: {e}");
+                    return OtherError;
+                }
+            };
         match request_builder.send().await {
             Ok(text) => {
                 info!("{u_id}: reported a factor of {factor}; response: {text}",);
@@ -581,7 +585,9 @@ impl FactorDbClient {
         factor: &Factor<T, U>,
     ) -> ReportFactorResult {
         for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-            let result = self.try_report_factor::<&str, &str, T, U>(&Id(u_id), factor).await;
+            let result = self
+                .try_report_factor::<&str, &str, T, U>(&Id(u_id), factor)
+                .await;
             if result != OtherError {
                 return result;
             }

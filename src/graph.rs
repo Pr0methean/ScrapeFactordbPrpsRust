@@ -1,13 +1,13 @@
-use std::collections::BTreeMap;
+use crate::algebraic::{Factor, FactorFinder, OwnedFactor};
+use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
+use crate::{FactorsKnownToFactorDb, NumberFacts};
+use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::id::{DefaultId, VertexId};
-use gryf::Graph;
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::storage::{AdjMatrix, Stable};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
-use crate::algebraic::{Factor, FactorFinder, OwnedFactor};
-use crate::{FactorsKnownToFactorDb, NumberFacts};
-use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
+use gryf::storage::{AdjMatrix, Stable};
+use std::collections::BTreeMap;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
@@ -28,7 +28,9 @@ pub fn rule_out_divisibility(
     nonfactor: &VertexId,
     dest: &VertexId,
 ) {
-    let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| old_div.unwrap_or(NotFactor));
+    let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| {
+        old_div.unwrap_or(NotFactor)
+    });
     if updated_edge != NotFactor {
         return;
     }
@@ -63,8 +65,9 @@ pub fn propagate_divisibility(
         divisibility_graph,
         factor,
         dest,
-        override_transitive_with_direct(if transitive { Transitive } else {Direct}),
-    ) == NotFactor {
+        override_transitive_with_direct(if transitive { Transitive } else { Direct }),
+    ) == NotFactor
+    {
         return;
     }
     rule_out_divisibility(divisibility_graph, dest, factor);
@@ -106,9 +109,7 @@ pub fn upsert_edge<F: FnOnce(Option<Divisibility>) -> Divisibility>(
             let old_divisibility = *divisibility_graph.edge(&old_edge_id).unwrap();
             let new_divisibility = new_value_fn(Some(old_divisibility));
             if new_divisibility != old_divisibility {
-                divisibility_graph.replace_edge(
-                    old_edge_id,
-                    new_divisibility);
+                divisibility_graph.replace_edge(old_edge_id, new_divisibility);
             }
             new_divisibility
         }
@@ -174,7 +175,11 @@ pub fn neighbors_with_edge_weights(
         .collect()
 }
 
-pub fn get_edge(graph: &DivisibilityGraph, source: VertexId, dest: VertexId) -> Option<Divisibility> {
+pub fn get_edge(
+    graph: &DivisibilityGraph,
+    source: VertexId,
+    dest: VertexId,
+) -> Option<Divisibility> {
     Some(*graph.edge(graph.edge_id_any(&source, &dest)?)?)
 }
 
@@ -185,7 +190,10 @@ pub fn add_factor_node(
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     root_node: Option<VertexId>,
 ) -> (VertexId, bool) {
-    let (factor_vid, added) = match divisibility_graph.vertices().find(|v| v.attr.as_ref() == factor) {
+    let (factor_vid, added) = match divisibility_graph
+        .vertices()
+        .find(|v| v.attr.as_ref() == factor)
+    {
         Some(vertex_ref) => (vertex_ref.id, false),
         None => {
             let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
@@ -224,12 +232,19 @@ pub fn add_factor_node(
     (factor_vid, added)
 }
 
-pub fn is_known_factor(divisibility_graph: &DivisibilityGraph, factor_vid: VertexId, composite_vid: VertexId) -> bool {
-    matches!(get_edge(divisibility_graph, factor_vid, composite_vid), Some(Direct) | Some(Transitive))
-    || ShortestPaths::on(&divisibility_graph)
+pub fn is_known_factor(
+    divisibility_graph: &DivisibilityGraph,
+    factor_vid: VertexId,
+    composite_vid: VertexId,
+) -> bool {
+    matches!(
+        get_edge(divisibility_graph, factor_vid, composite_vid),
+        Some(Direct) | Some(Transitive)
+    ) || ShortestPaths::on(&divisibility_graph)
         .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
         .goal(factor_vid)
         .run(composite_vid)
         .ok()
-        .and_then(|paths| paths.dist(factor_vid).copied()) == Some(0)
+        .and_then(|paths| paths.dist(factor_vid).copied())
+        == Some(0)
 }

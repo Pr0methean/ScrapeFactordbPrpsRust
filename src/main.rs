@@ -5,12 +5,10 @@ extern crate core;
 
 mod algebraic;
 mod channel;
+mod graph;
 mod net;
 mod shutdown;
-mod graph;
 
-use crate::algebraic::OwnedFactor;
-use graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -19,28 +17,32 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
+use crate::algebraic::OwnedFactor;
 use crate::algebraic::{
     Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef,
 };
+use crate::graph::is_known_factor;
 use crate::net::ResourceLimits;
-use crate::shutdown::{handle_signals, Shutdown};
+use crate::shutdown::{Shutdown, handle_signals};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
+use graph::Divisibility::{Direct, NotFactor, Transitive};
+use graph::DivisibilityGraph;
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
+use gryf::core::GraphRef;
 use gryf::core::facts::complete_graph_edge_count;
-use gryf::core::id::{VertexId};
+use gryf::core::id::VertexId;
 use gryf::core::marker::{Directed, Incoming, Outgoing};
-use gryf::core::{GraphRef};
-use gryf::storage::{AdjMatrix};
+use gryf::storage::AdjMatrix;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
-use net::{FactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
+use net::{CPU_TENTHS_SPENT_LAST_CHECK, FactorDbClient};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use regex::Regex;
 use replace_with::replace_with_or_abort;
 use serde::{Deserialize, Serialize};
@@ -51,20 +53,18 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU128, NonZeroU32};
+use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
-use tokio::sync::{oneshot, Mutex, OnceCell};
+use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
+use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use graph::DivisibilityGraph;
-use crate::graph::is_known_factor;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -820,11 +820,12 @@ async fn queue_composites(
         .collect();
     c_tasks.shuffle(&mut rng());
     let c_initial = c_tasks.len();
-    let c_buffered: Box<[_]> = c_tasks.into_iter()
+    let c_buffered: Box<[_]> = c_tasks
+        .into_iter()
         .flat_map(|c_task| match c_sender.try_send(c_task) {
             Ok(()) => None,
             Err(Closed(_)) => None,
-            Err(Full(c_task)) => Some(c_task)
+            Err(Full(c_task)) => Some(c_task),
         })
         .collect();
     let c_sent = c_initial - c_buffered.len();
@@ -1285,7 +1286,10 @@ async fn find_and_submit_factors(
             }
             _ => {}
         }
-        match http.try_report_factor::<&str, &str, _, _>(&Id(id), factor).await {
+        match http
+            .try_report_factor::<&str, &str, _, _>(&Id(id), factor)
+            .await
+        {
             AlreadyFullyFactored => return true,
             Accepted => {
                 replace_with_or_abort(
@@ -1293,7 +1297,12 @@ async fn find_and_submit_factors(
                     NumberFacts::marked_stale,
                 );
                 accepted_factors += 1;
-                graph::propagate_divisibility(&mut divisibility_graph, &factor_vid, &root_node, false);
+                graph::propagate_divisibility(
+                    &mut divisibility_graph,
+                    &factor_vid,
+                    &root_node,
+                    false,
+                );
             }
             DoesNotDivide => {
                 // The root isn't divisible by this "factor", so try to split it up into smaller
@@ -1397,7 +1406,11 @@ async fn find_and_submit_factors(
                 }
                 let reverse_edge = graph::get_edge(&divisibility_graph, cofactor_vid, factor_vid);
                 if reverse_edge == Some(Direct) || reverse_edge == Some(Transitive) {
-                    graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
+                    graph::rule_out_divisibility(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &cofactor_vid,
+                    );
                     continue;
                 }
                 if shortest_paths.dist(cofactor_vid) == Some(&0) {
@@ -1424,7 +1437,8 @@ async fn find_and_submit_factors(
                             );
                             continue;
                         } else if matches!(facts.factors_known_to_factordb, UpToDate(_))
-                            && facts.is_known_fully_factored() {
+                            && facts.is_known_fully_factored()
+                        {
                             graph::rule_out_divisibility(
                                 &mut divisibility_graph,
                                 &factor_vid,
@@ -1442,7 +1456,11 @@ async fn find_and_submit_factors(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller or equal or fails last-digit test"
                     );
-                    graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
+                    graph::rule_out_divisibility(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &cofactor_vid,
+                    );
                     continue;
                 }
                 // u128s are already fully factored
@@ -1464,7 +1482,11 @@ async fn find_and_submit_factors(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                     already fully factored"
                     );
-                    graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
+                    graph::rule_out_divisibility(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &cofactor_vid,
+                    );
                     continue;
                 }
                 let cofactor_upper_bound = cofactor_facts.upper_bound_log10;
@@ -1473,7 +1495,11 @@ async fn find_and_submit_factors(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller based on log10 bounds"
                     );
-                    graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
+                    graph::rule_out_divisibility(
+                        &mut divisibility_graph,
+                        &factor_vid,
+                        &cofactor_vid,
+                    );
                     continue;
                 }
                 if is_known_factor(&divisibility_graph, cofactor_vid, factor_vid) {
@@ -1509,7 +1535,8 @@ async fn find_and_submit_factors(
                 }
                 let dest_specifier = as_specifier(&cofactor_vid, cofactor, &number_facts_map);
                 let factor = divisibility_graph.vertex(factor_vid).unwrap();
-                match http.try_report_factor(&dest_specifier, factor).await {                    AlreadyFullyFactored => {
+                match http.try_report_factor(&dest_specifier, factor).await {
+                    AlreadyFullyFactored => {
                         if cofactor_vid == root_node {
                             warn!("{id}: Already fully factored");
                             return true;
@@ -1544,7 +1571,11 @@ async fn find_and_submit_factors(
                         );
                     }
                     DoesNotDivide => {
-                        graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &cofactor_vid);
+                        graph::rule_out_divisibility(
+                            &mut divisibility_graph,
+                            &factor_vid,
+                            &cofactor_vid,
+                        );
                         if already_checked_for_algebraic.insert(factor_vid) {
                             add_algebraic_factors_to_graph(
                                 http,
@@ -1684,8 +1715,6 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-
-
 fn handle_if_fully_factored(
     divisibility_graph: &mut DivisibilityGraph,
     factor_vid: VertexId,
@@ -1727,7 +1756,10 @@ fn as_specifier<'a>(
         );
         Id(factor_entry_id)
     } else {
-        factor.known_id().map(Id).unwrap_or_else(|| Expression(factor.as_ref()))
+        factor
+            .known_id()
+            .map(Id)
+            .unwrap_or_else(|| Expression(factor.as_ref()))
     }
 }
 
@@ -1853,8 +1885,16 @@ async fn add_known_factors_to_graph(
                     (Box::default(), Box::default())
                 } else {
                     (
-                        graph::neighbors_with_edge_weights(divisibility_graph, &equivalent_vid, Outgoing),
-                        graph::neighbors_with_edge_weights(divisibility_graph, &equivalent_vid, Incoming),
+                        graph::neighbors_with_edge_weights(
+                            divisibility_graph,
+                            &equivalent_vid,
+                            Outgoing,
+                        ),
+                        graph::neighbors_with_edge_weights(
+                            divisibility_graph,
+                            &equivalent_vid,
+                            Incoming,
+                        ),
                     )
                 };
                 graph::upsert_edge(divisibility_graph, &root_vid, &equivalent_vid, |_| Direct);
@@ -1944,7 +1984,9 @@ async fn add_algebraic_factors_to_graph(
         };
         if let Some(id) = id {
             let root = divisibility_graph.vertex(&root_vid).unwrap();
-            if let Some(known_id) = root.known_id() && id != known_id {
+            if let Some(known_id) = root.known_id()
+                && id != known_id
+            {
                 error!("Tried to look up {root} using a smaller number's id {id}");
                 parseable_factors.insert(root_vid);
             } else {
@@ -2054,4 +2096,3 @@ async fn add_algebraic_factors_to_graph(
     }
     any_added
 }
-
