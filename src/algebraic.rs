@@ -1893,6 +1893,11 @@ mod tests {
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
+        let factors = finder.find_factors::<&str,&str>(&"1297^39998-901^39998".into());println!("{}", factors.iter().join(", "));
+        assert!(factors.contains(&Numeric(2)));
+        assert!(factors.contains(&Numeric(3)));
+        assert!(!factors.contains(&Numeric(5)));
+        assert!(factors.contains(&Numeric(11)));
     }
 
     #[test]
