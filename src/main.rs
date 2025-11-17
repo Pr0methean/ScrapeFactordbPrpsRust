@@ -2085,11 +2085,14 @@ async fn add_algebraic_factors_to_graph(
     }
     for parseable_factor in parseable_factors {
         let facts = number_facts_map.get(&parseable_factor).unwrap();
-        let entry_id = facts.entry_id;
         for subfactor_vid in facts.factors_detected_by_factor_finder.clone() {
+            let subfactor_entry_id = divisibility_graph.vertex(&subfactor_vid)
+                .unwrap()
+                .known_id()
+                .or_else(|| number_facts_map.get(&subfactor_vid).unwrap().entry_id);
             any_added |= Box::pin(add_algebraic_factors_to_graph(
                 http,
-                entry_id,
+                subfactor_entry_id,
                 factor_finder,
                 skip_looking_up_listed_algebraic,
                 divisibility_graph,
