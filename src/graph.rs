@@ -28,7 +28,7 @@ pub fn rule_out_divisibility(
     nonfactor: &VertexId,
     dest: &VertexId,
 ) {
-    let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| old_div.unwrap_or_else(|| NotFactor));
+    let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| old_div.unwrap_or(NotFactor));
     if updated_edge != NotFactor {
         return;
     }

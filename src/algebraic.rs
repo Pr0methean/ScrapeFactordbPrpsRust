@@ -949,7 +949,7 @@ fn multiset_union<T: Eq + Ord + Clone>(
     let counts1 = count_frequencies(vec1);
     let mut counts2 = count_frequencies(vec2);
     for (item, count1) in counts1.into_iter() {
-        let union_count = counts2.entry(item.into()).or_insert(0);
+        let union_count = counts2.entry(item).or_insert(0);
         *union_count = (*union_count).max(count1);
     }
     counts2
