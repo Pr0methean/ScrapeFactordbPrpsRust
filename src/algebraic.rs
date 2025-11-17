@@ -10,20 +10,20 @@ use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
+use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
 use regex::{Regex, RegexSet};
 use std::borrow::Cow::{Borrowed, Owned};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::BTreeMap;
-use std::f64::consts::LOG10_2;
 use std::f64::consts::LN_10;
+use std::f64::consts::LOG10_2;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
-use num_prime::detail::SMALL_PRIMES;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -1234,32 +1234,40 @@ impl FactorFinder {
                                 );
                             }
                             let log_abs_c_upper_bound = (c as f64).abs().log10().next_up();
-                            Self::addsub_log10(&captures[4][0..=0], log_anb_lower_bound, log_anb_upper_bound, 0.0, log_abs_c_upper_bound)
+                            Self::addsub_log10(
+                                &captures[4][0..=0],
+                                log_anb_lower_bound,
+                                log_anb_upper_bound,
+                                0.0,
+                                log_abs_c_upper_bound,
+                            )
                         }
-                        3 => { // a^x +/- b^y
+                        3 => {
+                            // a^x +/- b^y
                             let (Ok(a), Ok(x), sign, Ok(b), Ok(y)) = (
                                 captures[1].parse::<u128>(),
                                 captures[2].parse::<u128>(),
                                 &captures[3],
                                 captures[4].parse::<u128>(),
-                                captures[5].parse::<u128>())
-                            else {
+                                captures[5].parse::<u128>(),
+                            ) else {
                                 return (0, u128::MAX);
                             };
-                            let log_ax_lower_bound = (a as f64)
-                                .log10()
-                                .next_down() * (x as f64).next_down();
-                            let log_ax_upper_bound = (a as f64)
-                                .log10()
-                                .next_up() * (x as f64).next_up();
-                            let log_by_lower_bound = (b as f64)
-                                .log10()
-                                .next_down() * (y as f64).next_down();
-                            let log_by_upper_bound = (b as f64)
-                                .log10()
-                                .next_up() * (y as f64).next_up();
-                            Self::addsub_log10(sign, log_ax_lower_bound, log_ax_upper_bound,
-                                log_by_lower_bound, log_by_upper_bound)
+                            let log_ax_lower_bound =
+                                (a as f64).log10().next_down() * (x as f64).next_down();
+                            let log_ax_upper_bound =
+                                (a as f64).log10().next_up() * (x as f64).next_up();
+                            let log_by_lower_bound =
+                                (b as f64).log10().next_down() * (y as f64).next_down();
+                            let log_by_upper_bound =
+                                (b as f64).log10().next_up() * (y as f64).next_up();
+                            Self::addsub_log10(
+                                sign,
+                                log_ax_lower_bound,
+                                log_ax_upper_bound,
+                                log_by_lower_bound,
+                                log_by_upper_bound,
+                            )
                         }
                         4 => {
                             // factorial
@@ -1352,7 +1360,13 @@ impl FactorFinder {
                                 ));
                             let (right_lower, right_upper) = self
                                 .estimate_log10_internal(&Factor::<&str, &str>::from(&captures[3]));
-                            Self::addsub_log10(&captures[2], left_lower as f64, left_upper as f64, right_lower as f64, right_upper as f64)
+                            Self::addsub_log10(
+                                &captures[2],
+                                left_lower as f64,
+                                left_upper as f64,
+                                right_lower as f64,
+                                right_upper as f64,
+                            )
                         }
                         _ => unsafe { unreachable_unchecked() },
                     }
@@ -1363,7 +1377,13 @@ impl FactorFinder {
         }
     }
 
-    fn addsub_log10(sign: &str, left_lower: f64, left_upper: f64, right_lower: f64, right_upper: f64) -> (u128, u128) {
+    fn addsub_log10(
+        sign: &str,
+        left_lower: f64,
+        left_upper: f64,
+        right_lower: f64,
+        right_upper: f64,
+    ) -> (u128, u128) {
         let combined_lower = if sign == "-" {
             if right_lower >= left_lower - LOG10_2 {
                 0.0
@@ -1575,15 +1595,15 @@ impl FactorFinder {
                                 captures[2].parse::<u128>(),
                                 &captures[3],
                                 captures[4].parse::<u128>(),
-                                captures[5].parse::<u128>())
-                            else {
+                                captures[5].parse::<u128>(),
+                            ) else {
                                 return vec![];
                             };
                             if x != y {
                                 return self.find_common_factors(
                                     &format!("{a}^{x}").into(),
                                     &format!("{b}^{y}").into(),
-                                    true
+                                    true,
                                 );
                             }
                             let mut factors = Vec::new();
@@ -1602,14 +1622,18 @@ impl FactorFinder {
                                 let add_check = match sign {
                                     "+" => gx == p - 1,
                                     "-" => gx == 1,
-                                    _ => unsafe { unreachable_unchecked() }
+                                    _ => unsafe { unreachable_unchecked() },
                                 };
 
                                 if add_check {
                                     factors.push(Numeric(p));
                                 }
                             }
-                            if let Some(apb) = if sign == "-" { a.checked_sub(b) } else { a.checked_add(b) } {
+                            if let Some(apb) = if sign == "-" {
+                                a.checked_sub(b)
+                            } else {
+                                a.checked_add(b)
+                            } {
                                 factors.extend(Self::find_factors_of_u128(apb));
                             }
                             factors
@@ -1839,7 +1863,11 @@ pub enum NumberStatus {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, multiset_difference, multiset_intersection, multiset_union, power_multiset, modinv};
+    use crate::algebraic::{
+        Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
+        lucas_factors, modinv, multiset_difference, multiset_intersection, multiset_union,
+        power_multiset,
+    };
     use itertools::Itertools;
     use std::iter::repeat_n;
 
@@ -1888,12 +1916,12 @@ mod tests {
     #[test]
     fn test_abxy() {
         let finder = FactorFinder::new();
-        let factors = finder.find_factors::<&str,&str>(&"1297^40000-901^40000".into());
+        let factors = finder.find_factors::<&str, &str>(&"1297^40000-901^40000".into());
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
-        let factors = finder.find_factors::<&str,&str>(&"1297^39998-901^39998".into());
+        let factors = finder.find_factors::<&str, &str>(&"1297^39998-901^39998".into());
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
         assert!(!factors.contains(&Numeric(5)));
@@ -2053,8 +2081,8 @@ mod tests {
             .estimate_log10_internal::<&str, &str>(&Factor::Expression("(2^769-1)/1591805393"));
         assert!(lower >= 220 && lower <= 222);
         assert!(upper >= 223 && upper <= 225);
-        let (lower, upper) = finder
-            .estimate_log10_internal::<&str, &str>(&Factor::Expression("3^5000-4^2001"));
+        let (lower, upper) =
+            finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("3^5000-4^2001"));
         assert!(lower == 2385 || lower == 2384);
         assert!(upper == 2386 || upper == 2387);
     }

@@ -1332,7 +1332,10 @@ async fn find_and_submit_factors(
         return accepted_factors > 0;
     }
     if accepted_factors > 0 {
-        replace_with_or_abort(number_facts_map.get_mut(&root_node).unwrap(), NumberFacts::marked_stale);
+        replace_with_or_abort(
+            number_facts_map.get_mut(&root_node).unwrap(),
+            NumberFacts::marked_stale,
+        );
     }
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
@@ -2086,7 +2089,8 @@ async fn add_algebraic_factors_to_graph(
     for parseable_factor in parseable_factors {
         let facts = number_facts_map.get(&parseable_factor).unwrap();
         for subfactor_vid in facts.factors_detected_by_factor_finder.clone() {
-            let subfactor_entry_id = divisibility_graph.vertex(&subfactor_vid)
+            let subfactor_entry_id = divisibility_graph
+                .vertex(&subfactor_vid)
                 .unwrap()
                 .known_id()
                 .or_else(|| number_facts_map.get(&subfactor_vid).unwrap().entry_id);

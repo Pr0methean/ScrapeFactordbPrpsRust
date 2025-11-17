@@ -28,7 +28,11 @@ impl<T: Debug> PushbackReceiver<T> {
         }
         let permits = self.sender.try_reserve_many(amount);
         if let Ok(permits) = permits {
-            info!("redrive_returned obtained batch of {} permits (requested {})", permits.len(), amount);
+            info!(
+                "redrive_returned obtained batch of {} permits (requested {})",
+                permits.len(),
+                amount
+            );
             permits.for_each(|permit| {
                 if let Ok(item) = self.return_receiver.try_recv() {
                     info!("Redriving returned item {:?} using a batched permit", item);
@@ -36,7 +40,10 @@ impl<T: Debug> PushbackReceiver<T> {
                 }
             });
         } else {
-            warn!("redrive_returned couldn't obtain batch of {} permits", amount);
+            warn!(
+                "redrive_returned couldn't obtain batch of {} permits",
+                amount
+            );
         }
         while let Ok(permit) = self.sender.try_reserve()
             && let Ok(item) = self.return_receiver.try_recv()
@@ -64,7 +71,7 @@ impl<T: Debug> PushbackReceiver<T> {
                     }
                 };
                 (item, permit)
-            },
+            }
             Err(e) => {
                 let item = select! {
                     biased;
@@ -91,8 +98,12 @@ impl<T: Debug> PushbackReceiver<T> {
 
     pub fn try_recv(&mut self) -> Option<(T, OwnedPermit<T>)> {
         self.redrive_returned();
-        if let Ok(return_permit) = self.return_sender.clone().try_reserve_owned()
-            .or_else(|_| self.sender.clone().try_reserve_owned()) {
+        if let Ok(return_permit) = self
+            .return_sender
+            .clone()
+            .try_reserve_owned()
+            .or_else(|_| self.sender.clone().try_reserve_owned())
+        {
             if let Ok(received) = self.receiver.try_recv() {
                 return Some((received, return_permit));
             } else if let Ok(received_return) = self.return_receiver.try_recv() {
