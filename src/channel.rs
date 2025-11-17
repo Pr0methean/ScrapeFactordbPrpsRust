@@ -69,6 +69,8 @@ impl<T: Debug> PushbackReceiver<T> {
                 return Some((received_return, return_permit));
             }
         }
+        // Without a permit, we can't safely return anything; consuming the returned item first
+        // would lead to a race condition where we might not be able to get the permit.
         None
     }
 }
