@@ -1097,9 +1097,9 @@ fn modinv(a: u128, m: u128) -> Option<u128> {
 
     while newr != 0 {
         let quotient = r / newr;
-        t = t - quotient * newt;
+        t -= quotient * newt;
         swap(&mut t, &mut newt);
-        r = r - quotient * newr;
+        r -= quotient * newr;
         swap(&mut r, &mut newr);
     }
 
@@ -1258,7 +1258,7 @@ impl FactorFinder {
                             let log_by_upper_bound = (b as f64)
                                 .log10()
                                 .next_up() * (y as f64).next_up();
-                            Self::addsub_log10(&sign, log_ax_lower_bound, log_ax_upper_bound,
+                            Self::addsub_log10(sign, log_ax_lower_bound, log_ax_upper_bound,
                                 log_by_lower_bound, log_by_upper_bound)
                         }
                         4 => {
