@@ -1322,7 +1322,7 @@ async fn find_and_submit_factors(
                 }
                 graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &root_node);
             }
-            _ => {
+            OtherError => {
                 any_failed_retryably = true;
             }
         }
@@ -1330,6 +1330,9 @@ async fn find_and_submit_factors(
     if !any_failed_retryably {
         info!("{id}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
+    }
+    if accepted_factors > 0 {
+        replace_with_or_abort(number_facts_map.get_mut(&root_node).unwrap(), NumberFacts::marked_stale);
     }
     let mut iters_without_progress = 0;
     while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
