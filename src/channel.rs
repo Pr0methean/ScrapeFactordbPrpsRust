@@ -23,14 +23,20 @@ impl<T: Debug> PushbackReceiver<T> {
 
     fn redrive_returned(&mut self) {
         let amount = self.sender.capacity().min(self.return_receiver.len());
+        if amount == 0 {
+            return;
+        }
         let permits = self.sender.try_reserve_many(amount);
         if let Ok(permits) = permits {
+            info!("redrive_returned obtained batch of {} permits (requested {})", permits.len(), amount);
             permits.for_each(|permit| {
                 if let Ok(item) = self.return_receiver.try_recv() {
-                    info!("Redriving returned item {:?}", item);
+                    info!("Redriving returned item {:?} using a batched permit", item);
                     permit.send(item);
                 }
             });
+        } else {
+            warn!("redrive_returned couldn't obtain batch of {} permits", amount);
         }
         while let Ok(permit) = self.sender.try_reserve()
             && let Ok(item) = self.return_receiver.try_recv()
