@@ -42,23 +42,34 @@ impl<T: Debug> PushbackReceiver<T> {
 
     pub async fn recv(&mut self) -> (T, OwnedPermit<T>) {
         self.redrive_returned();
-        let return_permit = self.return_sender.clone().reserve_owned().await.unwrap();
-        select! {
+        let return_sender = self.return_sender.clone();
+        let return_permit = return_sender.try_reserve_owned();
+        let item = select! {
             biased;
             result = self.receiver.recv() => {
-                (result.unwrap(), return_permit)
+                result.unwrap()
             },
             result = self.return_receiver.recv() => {
                 let result = result.unwrap();
                 info!("Receiving returned item: {:?}", result);
-                (result, return_permit)
+                result
             }
-        }
+        };
+        let return_permit = match return_permit {
+            Ok(permit) => permit,
+            Err(e) => select! {
+                biased;
+                result = e.into_inner().reserve_owned() => result.unwrap(),
+                result = self.sender.clone().reserve_owned() => result.unwrap(),
+            }
+        };
+        (item, return_permit)
     }
 
     pub fn try_recv(&mut self) -> Option<(T, OwnedPermit<T>)> {
         self.redrive_returned();
-        if let Ok(return_permit) = self.return_sender.clone().try_reserve_owned() {
+        if let Ok(return_permit) = self.return_sender.clone().try_reserve_owned()
+            .or_else(|_| self.sender.clone().try_reserve_owned()) {
             if let Ok(received) = self.receiver.try_recv() {
                 return Some((received, return_permit));
             } else if let Ok(received_return) = self.return_receiver.try_recv() {
