@@ -1851,13 +1851,13 @@ pub struct ProcessedStatusApiResponseRef {
     pub id: Option<u128>,
 }
 
-#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
 pub enum NumberStatus {
     Unknown,
-    FullyFactored,
-    Prime, // includes PRP
-    PartlyFactoredComposite,
     UnfactoredComposite,
+    PartlyFactoredComposite,
+    Prime, // includes PRP
+    FullyFactored,
 }
 
 #[cfg(test)]
