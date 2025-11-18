@@ -1577,9 +1577,12 @@ async fn find_and_submit_factors(
                             factor_vid,
                             &mut number_facts_map,
                         )
-                        .await {
+                        .await
+                        {
                             iters_without_progress = 0;
-                            if let Some(status) = number_facts_map.get(&factor_vid).unwrap().last_known_status {
+                            if let Some(status) =
+                                number_facts_map.get(&factor_vid).unwrap().last_known_status
+                            {
                                 handle_if_fully_factored(
                                     &mut divisibility_graph,
                                     factor_vid,
@@ -1910,7 +1913,9 @@ async fn add_algebraic_factors_to_graph(
             true,
             number_facts_map,
         )
-            .await.factors.is_empty();
+        .await
+        .factors
+        .is_empty();
     }
     let mut any_added = false;
     let mut parseable_factors: BTreeSet<VertexId> = BTreeSet::new();
@@ -1957,7 +1962,10 @@ async fn add_algebraic_factors_to_graph(
                     format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
                 let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                 if let Some(listed_algebraic) = result.split("Is factor of").next() {
-                    number_facts_map.get_mut(&root_vid).unwrap().checked_for_listed_algebraic = true;
+                    number_facts_map
+                        .get_mut(&root_vid)
+                        .unwrap()
+                        .checked_for_listed_algebraic = true;
                     let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
                     for (factor_entry_id, factor_digits_or_expr) in algebraic_factors {
                         let factor: Factor<&str, &str> = factor_digits_or_expr.into();
