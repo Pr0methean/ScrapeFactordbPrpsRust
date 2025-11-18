@@ -1753,20 +1753,45 @@ async fn add_factors_to_graph(
         factor_vid,
     )
     .await;
+    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+    facts.entry_id = facts.entry_id.or(result.id);
     let mut any_added = !result.factors.is_empty();
-    if result.status.is_known_fully_factored() {
+    if result.status.is_known_fully_factored() || facts.checked_for_listed_algebraic {
         return any_added;
     }
-    any_added |= add_algebraic_factor_vertices_to_graph(
-        http,
-        number_facts_map.get(&factor_vid).unwrap().entry_id,
-        factor_finder,
-        divisibility_graph,
-        factor_vid,
-        number_facts_map,
-        root_vid,
-    )
-    .await;
+    let id = facts.entry_id;
+    if let Some(id) = id {
+        let root = divisibility_graph.vertex(&factor_vid).unwrap();
+        if let Some(known_id) = root.known_id()
+            && id != known_id
+        {
+            error!("Tried to look up {root} using a smaller number's id {id}");
+        } else {
+            info!("{id}: Checking for listed algebraic factors");
+            // Links before the "Is factor of" header are algebraic factors; links after it aren't
+            let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
+            let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+            if let Some(listed_algebraic) = result.split("Is factor of").next() {
+                number_facts_map.get_mut(&factor_vid).unwrap().checked_for_listed_algebraic = true;
+                let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
+                for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
+                    let factor: Factor<&str, &str> = factor_digits_or_expr.into();
+                    let (subfactor_vid, added) = add_factor_node(
+                        divisibility_graph,
+                        factor,
+                        factor_finder,
+                        number_facts_map,
+                        Some(factor_vid),
+                        Some(subfactor_entry_id),
+                    );
+                    debug!(
+                        "{id}: Factor {factor} has entry ID {subfactor_entry_id} and vertex ID {subfactor_vid:?}"
+                    );
+                    any_added |= added;
+                }
+            }
+        }
+    }
     let facts = number_facts_map.get(&factor_vid).unwrap();
     if !facts.checked_in_factor_finder {
         any_added |= !add_factor_finder_factor_vertices_to_graph(
@@ -1982,80 +2007,4 @@ fn add_factor_finder_factor_vertices_to_graph(
         })
         .flat_map(|(vid, added)| if added { Some(vid) } else { None })
         .collect()
-}
-
-#[inline]
-async fn add_algebraic_factor_vertices_to_graph(
-    http: &FactorDbClient,
-    id: Option<u128>,
-    factor_finder: &FactorFinder,
-    divisibility_graph: &mut DivisibilityGraph,
-    factor_vid: VertexId,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
-    root_vid: VertexId,
-) -> bool {
-    debug!("add_algebraic_factors_to_graph: id={id:?}, root_vid={root_vid:?}");
-    let factor_facts = number_facts_map.get(&factor_vid).unwrap();
-    if factor_facts.checked_for_listed_algebraic {
-        return false;
-    }
-    let mut any_added = false;
-    let id = match id {
-        Some(id) => Some(id),
-        None => {
-            let result = add_known_factors_to_graph(
-                http,
-                factor_finder,
-                divisibility_graph,
-                root_vid,
-                true,
-                number_facts_map,
-                factor_vid,
-            )
-            .await;
-            if result.status.is_known_fully_factored() {
-                return true;
-            }
-            any_added |= !result.factors.is_empty();
-            result.id
-        }
-    };
-    if let Some(id) = id {
-        let root = divisibility_graph.vertex(&factor_vid).unwrap();
-        if let Some(known_id) = root.known_id()
-            && id != known_id
-        {
-            error!("Tried to look up {root} using a smaller number's id {id}");
-        } else {
-            info!("{id}: Checking for listed algebraic factors");
-            // Links before the "Is factor of" header are algebraic factors; links after it aren't
-            let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
-            let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-            if let Some(listed_algebraic) = result.split("Is factor of").next() {
-                number_facts_map
-                    .get_mut(&factor_vid)
-                    .unwrap()
-                    .checked_for_listed_algebraic = true;
-                let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
-                for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
-                    let factor: Factor<&str, &str> = factor_digits_or_expr.into();
-                    let (subfactor_vid, added) = add_factor_node(
-                        divisibility_graph,
-                        factor,
-                        factor_finder,
-                        number_facts_map,
-                        Some(factor_vid),
-                        Some(subfactor_entry_id),
-                    );
-                    debug!(
-                        "{id}: Factor {factor} has entry ID {subfactor_entry_id} and vertex ID {subfactor_vid:?}"
-                    );
-                    any_added |= added;
-                }
-            } else {
-                return false;
-            }
-        }
-    }
-    any_added
 }
