@@ -1654,7 +1654,22 @@ async fn add_factors_to_graph(
     root_vid: VertexId,
     factor_vid: VertexId,
 ) -> bool {
-    let mut any_added = false;
+    let result = add_known_factors_to_graph(
+        http,
+        factor_finder,
+        divisibility_graph,
+        root_vid,
+        true,
+        number_facts_map,
+        factor_vid,
+    )
+        .await;
+    let mut any_added = !result.factors.is_empty();
+    if let Some(status) = result.status
+        && handle_if_fully_factored(divisibility_graph, factor_vid, status, number_facts_map)
+    {
+        return any_added;
+    }
     any_added |= add_algebraic_factor_vertices_to_graph(
         http,
         number_facts_map.get(&factor_vid).unwrap().entry_id,
@@ -1665,22 +1680,6 @@ async fn add_factors_to_graph(
         root_vid,
     )
     .await;
-    let result = add_known_factors_to_graph(
-        http,
-        factor_finder,
-        divisibility_graph,
-        root_vid,
-        true,
-        number_facts_map,
-        factor_vid,
-    )
-    .await;
-    if let Some(status) = result.status
-        && handle_if_fully_factored(divisibility_graph, factor_vid, status, number_facts_map)
-    {
-        return any_added;
-    }
-    any_added |= !result.factors.is_empty();
     any_added |= !add_factor_finder_factor_vertices_to_graph(
         factor_finder,
         divisibility_graph,
