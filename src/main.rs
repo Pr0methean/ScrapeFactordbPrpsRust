@@ -1612,7 +1612,7 @@ async fn find_and_submit_factors(
                     );
                     continue;
                 }
-                let dest_specifier = as_specifier(&cofactor_vid, cofactor, &number_facts_map);
+                let dest_specifier = as_specifier(cofactor_vid, cofactor, &number_facts_map);
                 match http
                     .try_report_factor(
                         &dest_specifier,
@@ -1813,12 +1813,12 @@ fn handle_if_fully_factored(
 }
 
 fn as_specifier<'a>(
-    factor_vid: &VertexId,
+    factor_vid: VertexId,
     factor: &'a OwnedFactor,
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
 ) -> NumberSpecifier<&'a str, &'a str> {
     if let Some(factor_entry_id) = number_facts_map
-        .get(factor_vid)
+        .get(&factor_vid)
         .and_then(|facts| facts.entry_id)
     {
         debug!(
@@ -1851,7 +1851,7 @@ async fn add_known_factors_to_graph(
         };
     }
     let factor_specifier = as_specifier(
-        &factor_vid,
+        factor_vid,
         divisibility_graph.vertex(&factor_vid).unwrap(),
         number_facts_map,
     );
