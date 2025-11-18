@@ -17,10 +17,10 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::algebraic::{
     Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef,
 };
+use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::graph::{add_factor_node, is_known_factor};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
@@ -33,6 +33,7 @@ use graph::DivisibilityGraph;
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::GraphRef;
+use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::VertexId;
 use gryf::core::marker::Directed;
@@ -61,7 +62,6 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use gryf::core::base::VertexRef;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -1107,7 +1107,9 @@ struct NumberFacts {
 
 impl PartialEq<Self> for NumberFacts {
     fn eq(&self, other: &Self) -> bool {
-        if let Some(entry_id) = self.entry_id && other.entry_id == Some(entry_id) {
+        if let Some(entry_id) = self.entry_id
+            && other.entry_id == Some(entry_id)
+        {
             true
         } else {
             self.factors_known_to_factordb == other.factors_known_to_factordb
@@ -1129,8 +1131,16 @@ impl PartialOrd for NumberFacts {
     }
 }
 
-fn compare(number_facts_map: &BTreeMap<VertexId, NumberFacts>, left: &VertexRef<VertexId, OwnedFactor>, right: &VertexRef<VertexId, OwnedFactor>) -> Ordering {
-    if let Some(ordering) = number_facts_map.get(&left.id).unwrap().partial_cmp(number_facts_map.get(&right.id).unwrap()) {
+fn compare(
+    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
+    left: &VertexRef<VertexId, OwnedFactor>,
+    right: &VertexRef<VertexId, OwnedFactor>,
+) -> Ordering {
+    if let Some(ordering) = number_facts_map
+        .get(&left.id)
+        .unwrap()
+        .partial_cmp(number_facts_map.get(&right.id).unwrap())
+    {
         return ordering;
     }
     left.attr.cmp(right.attr)
@@ -1412,11 +1422,12 @@ async fn find_and_submit_factors(
         let (direct_divisors, non_factors) = divisibility_graph
             .edges()
             .map(|e| match *e.attr {
-                Direct => (1,0),
-                NotFactor => (0,1),
-                _ => (0,0)
+                Direct => (1, 0),
+                NotFactor => (0, 1),
+                _ => (0, 0),
             })
-            .reduce(|(x1,y1),(x2,y2)| (x1+x2,y1+y2)).unwrap_or((0,0));
+            .reduce(|(x1, y1), (x2, y2)| (x1 + x2, y1 + y2))
+            .unwrap_or((0, 0));
         info!(
             "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges \
             ({:.2}% fully connected). {direct_divisors} confirmed-known divides relations, \
