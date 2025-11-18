@@ -19,7 +19,9 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
 use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
-use crate::graph::{add_factor_node, get_edge, is_known_factor, propagate_divisibility, rule_out_divisibility};
+use crate::graph::{
+    add_factor_node, get_edge, is_known_factor, propagate_divisibility, rule_out_divisibility,
+};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use channel::PushbackReceiver;
@@ -1487,7 +1489,9 @@ async fn find_and_submit_factors(
                 .run(factor_vid)
                 .unwrap();
             if shortest_paths.dist(root_vid).copied() == Some(0)
-                && number_facts_map.get(&factor_vid).unwrap().lower_bound_log10 > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2 {
+                && number_facts_map.get(&factor_vid).unwrap().lower_bound_log10
+                    > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2
+            {
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
             }
@@ -1506,12 +1510,7 @@ async fn find_and_submit_factors(
                 if shortest_paths.dist(cofactor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
-                    propagate_divisibility(
-                        &mut divisibility_graph,
-                        factor_vid,
-                        cofactor_vid,
-                        true,
-                    );
+                    propagate_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid, true);
                     continue;
                 }
                 let facts = number_facts_map.get(&factor_vid).unwrap();
@@ -1567,26 +1566,39 @@ async fn find_and_submit_factors(
                     already fully factored"
                     );
                     if !cofactor_facts.needs_update() {
-                        rule_out_divisibility(
-                            &mut divisibility_graph,
-                            factor_vid,
-                            cofactor_vid,
-                        );
+                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     }
                     continue;
                 }
-                if let UpToDate(ref known_factor_vids) | NotUpToDate(ref known_factor_vids) = cofactor_facts.factors_known_to_factordb
-                        && !known_factor_vids.is_empty() {
-                    let known_factor_statuses: Vec<_> = known_factor_vids.iter()
-                        .map(|known_factor_vid| get_edge(&divisibility_graph, factor_vid, *known_factor_vid))
+                if let UpToDate(ref known_factor_vids) | NotUpToDate(ref known_factor_vids) =
+                    cofactor_facts.factors_known_to_factordb
+                    && !known_factor_vids.is_empty()
+                {
+                    let known_factor_statuses: Vec<_> = known_factor_vids
+                        .iter()
+                        .map(|known_factor_vid| {
+                            get_edge(&divisibility_graph, factor_vid, *known_factor_vid)
+                        })
                         .collect();
-                    if known_factor_statuses.iter().copied().all(|x| x == Some(NotFactor)) {
+                    if known_factor_statuses
+                        .iter()
+                        .copied()
+                        .all(|x| x == Some(NotFactor))
+                    {
                         // No possible path from factor to cofactor
                         rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                         continue;
-                    } else if known_factor_statuses.into_iter().all(|x| x == Some(NotFactor) || x == Some(Direct)) {
+                    } else if known_factor_statuses
+                        .into_iter()
+                        .all(|x| x == Some(NotFactor) || x == Some(Direct))
+                    {
                         // Submit to one of the known_factors instead
-                        propagate_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid, true);
+                        propagate_divisibility(
+                            &mut divisibility_graph,
+                            factor_vid,
+                            cofactor_vid,
+                            true,
+                        );
                         continue;
                     }
                 }
@@ -1604,12 +1616,7 @@ async fn find_and_submit_factors(
                         "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is transitively a factor of {factor}"
                     );
                     // factor is transitively divisible by dest_factor
-                    propagate_divisibility(
-                        &mut divisibility_graph,
-                        cofactor_vid,
-                        factor_vid,
-                        true,
-                    );
+                    propagate_divisibility(&mut divisibility_graph, cofactor_vid, factor_vid, true);
                     continue;
                 }
                 // elided numbers and numbers over 65500 digits without an expression form can only
@@ -1682,11 +1689,7 @@ async fn find_and_submit_factors(
                             factor_vid,
                         )
                         .await;
-                        rule_out_divisibility(
-                            &mut divisibility_graph,
-                            factor_vid,
-                            cofactor_vid,
-                        );
+                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     }
                     OtherError => {
                         if add_factors_to_graph(
@@ -1804,12 +1807,7 @@ async fn add_factors_to_graph(
                         Some(root_vid),
                         known_factor.known_id(),
                     );
-                    propagate_divisibility(
-                        divisibility_graph,
-                        known_factor_vid,
-                        factor_vid,
-                        false,
-                    );
+                    propagate_divisibility(divisibility_graph, known_factor_vid, factor_vid, false);
                     if added { Some(known_factor_vid) } else { None }
                 })
                 .collect(),
