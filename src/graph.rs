@@ -4,7 +4,7 @@ use crate::{FactorsKnownToFactorDb, NumberFacts};
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::id::{DefaultId, VertexId};
-use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
+use gryf::core::marker::{Directed, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
 use log::warn;
@@ -126,30 +126,6 @@ pub fn upsert_edge<F: FnOnce(Option<Divisibility>) -> Divisibility>(
     }
 }
 
-pub fn copy_edges_true_overrides_false(
-    divisibility_graph: &mut DivisibilityGraph,
-    new_vertex: &VertexId,
-    out_edges: Box<[(VertexId, Divisibility)]>,
-    in_edges: Box<[(VertexId, Divisibility)]>,
-) {
-    for (neighbor, divisible) in out_edges {
-        upsert_edge(
-            divisibility_graph,
-            new_vertex,
-            &neighbor,
-            override_transitive_with_direct(divisible),
-        );
-    }
-    for (neighbor, divisible) in in_edges {
-        upsert_edge(
-            divisibility_graph,
-            &neighbor,
-            new_vertex,
-            override_transitive_with_direct(divisible),
-        );
-    }
-}
-
 fn override_transitive_with_direct(
     divisible: Divisibility,
 ) -> impl FnOnce(Option<Divisibility>) -> Divisibility {
@@ -162,22 +138,6 @@ fn override_transitive_with_direct(
             NotFactor
         }
     }
-}
-
-pub fn neighbors_with_edge_weights(
-    divisibility_graph: &mut DivisibilityGraph,
-    root_vid: &VertexId,
-    direction: Direction,
-) -> Box<[(VertexId, Divisibility)]> {
-    divisibility_graph
-        .neighbors_directed(root_vid, direction)
-        .map(|neighbor_ref| {
-            (
-                neighbor_ref.id,
-                *divisibility_graph.edge(&neighbor_ref.edge).unwrap(),
-            )
-        })
-        .collect()
 }
 
 pub fn get_edge(
@@ -203,20 +163,6 @@ pub fn add_factor_node(
         None => {
             let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
-            let detected_factors = factor_finder.find_unique_factors(&factor);
-            let detected_factor_vids: Box<[VertexId]> = detected_factors
-                .into_iter()
-                .map(|factor| {
-                    let (factor_vid, _) = add_factor_node(
-                        divisibility_graph,
-                        factor.as_ref(),
-                        factor_finder,
-                        number_facts_map,
-                        root_node,
-                    );
-                    factor_vid
-                })
-                .collect();
             number_facts_map.insert(
                 factor_vid,
                 NumberFacts {
@@ -225,8 +171,8 @@ pub fn add_factor_node(
                     lower_bound_log10,
                     upper_bound_log10,
                     entry_id: None,
-                    factors_detected_by_factor_finder: detected_factor_vids,
                     checked_for_listed_algebraic: false,
+                    checked_in_factor_finder: false
                 },
             );
             (factor_vid, true)

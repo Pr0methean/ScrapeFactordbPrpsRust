@@ -21,7 +21,7 @@ use crate::algebraic::OwnedFactor;
 use crate::algebraic::{
     Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef,
 };
-use crate::graph::is_known_factor;
+use crate::graph::{add_factor_node, is_known_factor};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use channel::PushbackReceiver;
@@ -35,9 +35,9 @@ use gryf::algo::ShortestPaths;
 use gryf::core::GraphRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::VertexId;
-use gryf::core::marker::{Directed, Incoming, Outgoing};
+use gryf::core::marker::{Directed};
 use gryf::storage::AdjMatrix;
-use itertools::Itertools;
+use itertools::{Itertools};
 use log::{debug, error, info, warn};
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, FactorDbClient};
 use primitive_types::U256;
@@ -48,11 +48,12 @@ use replace_with::replace_with_or_abort;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
+use std::mem::replace;
 use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
@@ -208,7 +209,6 @@ async fn check_composite(
             false
         }
     } else {
-        let subfactors_may_have_algebraic = factors.len() > 1;
         let mut factors_submitted = false;
         let mut factors_to_dispatch = Vec::with_capacity(factors.len());
         for factor in factors {
@@ -219,7 +219,6 @@ async fn check_composite(
                     factor_str,
                     factor_finder,
                     true,
-                    !subfactors_may_have_algebraic,
                 )
                 .await
                 {
@@ -1049,7 +1048,7 @@ async fn try_queue_unknowns<'a>(
             warn!("{u_id}: Skipping duplicate U");
             continue;
         }
-        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, false, false).await {
+        if find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, false).await {
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
             let _ = u_filter.add(&u_id);
@@ -1100,13 +1099,16 @@ struct NumberFacts {
     lower_bound_log10: u128,
     upper_bound_log10: u128,
     entry_id: Option<u128>,
-    factors_detected_by_factor_finder: Box<[VertexId]>,
     checked_for_listed_algebraic: bool,
+    checked_in_factor_finder: bool,
 }
 
 impl NumberFacts {
     pub(crate) fn is_known_fully_factored(&self) -> bool {
         self.last_known_status == Some(Prime) || self.last_known_status == Some(FullyFactored)
+    }
+    pub(crate) fn is_final(&self) -> bool {
+        self.is_known_fully_factored() && !self.needs_update()
     }
     pub(crate) fn needs_update(&self) -> bool {
         self.factors_known_to_factordb.needs_update()
@@ -1132,14 +1134,13 @@ async fn find_and_submit_factors(
     digits_or_expr: &str,
     factor_finder: &FactorFinder,
     skip_looking_up_known: bool,
-    skip_looking_up_listed_algebraic: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
     let mut divisibility_graph: DivisibilityGraph =
         Graph::new_directed_in(AdjMatrix::new()).stabilize();
     let mut number_facts_map = BTreeMap::new();
-    let (root_node, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
-        graph::add_factor_node(
+    let (root_vid, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
+        add_factor_node(
             &mut divisibility_graph,
             Factor::<&str, &str>::from(digits_or_expr),
             factor_finder,
@@ -1159,7 +1160,7 @@ async fn find_and_submit_factors(
             return true;
         }
         match known_factors.len() {
-            0 => graph::add_factor_node(
+            0 => add_factor_node(
                 &mut divisibility_graph,
                 Factor::<&str, &str>::from(digits_or_expr),
                 factor_finder,
@@ -1167,7 +1168,7 @@ async fn find_and_submit_factors(
                 None,
             ),
             _ => {
-                let (root_node, _) = graph::add_factor_node(
+                let (root_node, _) = add_factor_node(
                     &mut divisibility_graph,
                     Factor::from(known_factors.iter().join("*")).as_ref(),
                     factor_finder,
@@ -1179,7 +1180,7 @@ async fn find_and_submit_factors(
                     let factor_vids = known_factors
                         .into_iter()
                         .map(|known_factor| {
-                            let (factor_vid, added) = graph::add_factor_node(
+                            let (factor_vid, added) = add_factor_node(
                                 &mut divisibility_graph,
                                 known_factor.as_ref(),
                                 factor_finder,
@@ -1209,27 +1210,21 @@ async fn find_and_submit_factors(
         }
     };
     debug!(
-        "{id}: Root node for {digits_or_expr} is {} with vertex ID {root_node:?}",
-        divisibility_graph.vertex(root_node).unwrap()
+        "{id}: Root node for {digits_or_expr} is {} with vertex ID {root_vid:?}",
+        divisibility_graph.vertex(root_vid).unwrap()
     );
-    let root_facts = number_facts_map.get_mut(&root_node).unwrap();
+    let root_facts = number_facts_map.get_mut(&root_vid).unwrap();
     root_facts.entry_id = Some(id);
     let mut factor_found = false;
     let mut accepted_factors = 0;
-    let multiple_starting_entries = digits_or_expr_full.len() > 1;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
-        factor_found |= add_algebraic_factors_to_graph(
+        factor_found |= add_factors_to_graph(
             http,
-            if multiple_starting_entries {
-                None
-            } else {
-                Some(id)
-            },
             factor_finder,
-            skip_looking_up_listed_algebraic,
             &mut divisibility_graph,
-            factor_vid,
             &mut number_facts_map,
+            root_vid,
+            factor_vid,
         )
         .await;
     }
@@ -1243,7 +1238,7 @@ async fn find_and_submit_factors(
         .vertices()
         .sorted_by_key(|vertex| vertex.attr)
         .map(|vertex| vertex.id)
-        .filter(|factor_vid| *factor_vid != root_node)
+        .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>();
 
     // Try to submit largest factors first
@@ -1265,7 +1260,7 @@ async fn find_and_submit_factors(
             // out the ID later
             continue;
         }
-        match graph::get_edge(&divisibility_graph, factor_vid, root_node) {
+        match graph::get_edge(&divisibility_graph, factor_vid, root_vid) {
             Some(Direct) | Some(NotFactor) => {
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
@@ -1280,33 +1275,26 @@ async fn find_and_submit_factors(
             AlreadyFullyFactored => return true,
             Accepted => {
                 replace_with_or_abort(
-                    number_facts_map.get_mut(&root_node).unwrap(),
+                    number_facts_map.get_mut(&root_vid).unwrap(),
                     NumberFacts::marked_stale,
                 );
                 accepted_factors += 1;
                 graph::propagate_divisibility(
                     &mut divisibility_graph,
                     &factor_vid,
-                    &root_node,
+                    &root_vid,
                     false,
                 );
             }
             DoesNotDivide => {
-                // The root isn't divisible by this "factor", so try to split it up into smaller
-                // factors and then we'll submit those instead.
-                any_failed_retryably |= add_algebraic_factors_to_graph(
-                    http,
-                    number_facts_map.get(&factor_vid).unwrap().entry_id,
-                    factor_finder,
-                    skip_looking_up_listed_algebraic,
-                    &mut divisibility_graph,
-                    factor_vid,
-                    &mut number_facts_map,
-                )
-                .await;
-                graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &root_node);
+                add_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut number_facts_map, root_vid, factor_vid).await;
+                graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &root_vid);
             }
             OtherError => {
+                add_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut number_facts_map, root_vid, root_vid).await;
+                if number_facts_map.get(&root_vid).unwrap().is_known_fully_factored() {
+                    return true;
+                }
                 any_failed_retryably = true;
             }
         }
@@ -1317,7 +1305,7 @@ async fn find_and_submit_factors(
     }
     if accepted_factors > 0 {
         replace_with_or_abort(
-            number_facts_map.get_mut(&root_node).unwrap(),
+            number_facts_map.get_mut(&root_vid).unwrap(),
             NumberFacts::marked_stale,
         );
     }
@@ -1345,7 +1333,7 @@ async fn find_and_submit_factors(
         );
         let mut factors_to_submit = divisibility_graph
             .vertices()
-            .filter(|factor| factor.id != root_node)
+            .filter(|factor| factor.id != root_vid)
             .sorted_by_key(|factor| factor.attr)
             .map(|vertex| vertex.id)
             .collect::<Box<[_]>>();
@@ -1358,7 +1346,7 @@ async fn find_and_submit_factors(
 
         for factor_vid in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
-            graph::rule_out_divisibility(&mut divisibility_graph, &root_node, &factor_vid);
+            graph::rule_out_divisibility(&mut divisibility_graph, &root_vid, &factor_vid);
             // elided numbers and numbers over 65500 digits without an expression form can only
             // be submitted as factors, even if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
@@ -1426,8 +1414,7 @@ async fn find_and_submit_factors(
                                 false,
                             );
                             continue;
-                        } else if matches!(facts.factors_known_to_factordb, UpToDate(_))
-                            && facts.is_known_fully_factored()
+                        } else if facts.is_final()
                         {
                             graph::rule_out_divisibility(
                                 &mut divisibility_graph,
@@ -1526,10 +1513,9 @@ async fn find_and_submit_factors(
                     continue;
                 }
                 let dest_specifier = as_specifier(&cofactor_vid, cofactor, &number_facts_map);
-                let factor = divisibility_graph.vertex(factor_vid).unwrap();
-                match http.try_report_factor(&dest_specifier, factor).await {
+                match http.try_report_factor(&dest_specifier, divisibility_graph.vertex(factor_vid).unwrap()).await {
                     AlreadyFullyFactored => {
-                        if cofactor_vid == root_node {
+                        if cofactor_vid == root_vid {
                             warn!("{id}: Already fully factored");
                             return true;
                         }
@@ -1563,69 +1549,19 @@ async fn find_and_submit_factors(
                         );
                     }
                     DoesNotDivide => {
+                        add_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut number_facts_map, root_vid, factor_vid).await;
                         graph::rule_out_divisibility(
                             &mut divisibility_graph,
                             &factor_vid,
                             &cofactor_vid,
                         );
-                        if add_algebraic_factors_to_graph(
-                            http,
-                            number_facts_map.get(&factor_vid).unwrap().entry_id,
-                            factor_finder,
-                            false,
-                            &mut divisibility_graph,
-                            factor_vid,
-                            &mut number_facts_map,
-                        )
-                        .await
-                        {
-                            iters_without_progress = 0;
-                            if let Some(status) =
-                                number_facts_map.get(&factor_vid).unwrap().last_known_status
-                            {
-                                handle_if_fully_factored(
-                                    &mut divisibility_graph,
-                                    factor_vid,
-                                    status,
-                                    &mut number_facts_map,
-                                );
-                            }
-                        }
                     }
                     OtherError => {
-                        // See if dest has some already-known factors we can submit to instead
-                        let result = add_known_factors_to_graph(
-                            http,
-                            factor_finder,
-                            &mut divisibility_graph,
-                            cofactor_vid,
-                            false,
-                            &mut number_facts_map,
-                        )
-                        .await;
-                        if let Some(status) = result.status {
-                            handle_if_fully_factored(
-                                &mut divisibility_graph,
-                                cofactor_vid,
-                                status,
-                                &mut number_facts_map,
-                            );
-                        }
-                        if !result.factors.is_empty() {
+                        if add_factors_to_graph(http, factor_finder, &mut divisibility_graph, &mut number_facts_map, root_vid, cofactor_vid).await {
+                            if number_facts_map.get(&root_vid).unwrap().is_known_fully_factored() {
+                                return true;
+                            }
                             iters_without_progress = 0;
-                        }
-                        if let Some(dest_entry_id) = result.id
-                            && let Some(old_id) = number_facts_map
-                                .get_mut(&cofactor_vid)
-                                .unwrap()
-                                .entry_id
-                                .replace(dest_entry_id)
-                            && old_id != dest_entry_id
-                        {
-                            let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
-                            error!(
-                                "{id}: Detected that {cofactor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
-                            );
                         }
                     }
                 }
@@ -1638,7 +1574,7 @@ async fn find_and_submit_factors(
         .collect::<Box<[_]>>()
         .into_iter()
     {
-        if factor_vid == root_node {
+        if factor_vid == root_vid {
             continue;
         }
         let factor = divisibility_graph.vertex(factor_vid).unwrap();
@@ -1651,7 +1587,7 @@ async fn find_and_submit_factors(
             );
             continue;
         }
-        if is_known_factor(&divisibility_graph, factor_vid, root_node) {
+        if is_known_factor(&divisibility_graph, factor_vid, root_vid) {
             debug!("{id}: {factor} was successfully submitted");
             continue;
         }
@@ -1670,6 +1606,44 @@ async fn find_and_submit_factors(
         }
     }
     accepted_factors > 0
+}
+
+async fn add_factors_to_graph(http: &FactorDbClient, factor_finder: &FactorFinder, divisibility_graph: &mut DivisibilityGraph, number_facts_map: &mut BTreeMap<VertexId, NumberFacts>, root_vid: VertexId, factor_vid: VertexId) -> bool {
+    let mut any_added = false;
+    any_added |= add_algebraic_factor_vertices_to_graph(
+        http,
+        number_facts_map.get(&factor_vid).unwrap().entry_id,
+        factor_finder,
+        divisibility_graph,
+        factor_vid,
+        number_facts_map,
+        root_vid
+    )
+        .await;
+    let result = add_known_factors_to_graph(
+        http,
+        factor_finder,
+        divisibility_graph,
+        root_vid,
+        true,
+        number_facts_map,
+        factor_vid
+    ).await;
+    if let Some(status) = result.status && handle_if_fully_factored(divisibility_graph, factor_vid, status, number_facts_map) {
+        return any_added;
+    }
+    any_added |= !result.factors.is_empty();
+    any_added |= !add_factor_finder_factor_vertices_to_graph(
+        factor_finder,
+        divisibility_graph,
+        root_vid,
+        number_facts_map,
+        factor_vid
+    ).is_empty();
+    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+    facts.checked_in_factor_finder = true;
+    facts.entry_id = facts.entry_id.or(result.id);
+    any_added
 }
 
 fn handle_if_fully_factored(
@@ -1727,11 +1701,10 @@ async fn add_known_factors_to_graph(
     root_vid: VertexId,
     include_ff: bool,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
+    factor_vid: VertexId,
 ) -> ProcessedStatusApiResponseRef {
     let facts = number_facts_map.get(&root_vid).unwrap();
     if !facts.needs_update() {
-        let root = divisibility_graph.vertex(&root_vid).unwrap();
-        warn!("add_known_factors_to_graph called for {root} when {facts:?} is already up-to-date");
         return ProcessedStatusApiResponseRef {
             status: facts.last_known_status,
             factors: Box::default(),
@@ -1745,7 +1718,7 @@ async fn add_known_factors_to_graph(
     );
     let ProcessedStatusApiResponse {
         status,
-        factors: dest_subfactors,
+        factors: known_factors,
         id,
     } = http
         .known_factors_as_digits(root_specifier, include_ff, false)
@@ -1754,122 +1727,36 @@ async fn add_known_factors_to_graph(
     if let Some(id) = id {
         facts.entry_id = Some(id);
     }
-    if let Some(status) = status {
-        facts.last_known_status = Some(status);
-        if !handle_if_fully_factored(divisibility_graph, root_vid, status, number_facts_map)
-            || status == Prime
-            || include_ff
-        {
-            let mut dest_subfactors_set = BTreeSet::new();
-            dest_subfactors_set.extend(dest_subfactors.iter().map(|factor| factor.as_ref()));
-            let vertices = divisibility_graph
-                .vertices()
-                .map(|vertex| {
-                    (
-                        vertex.id,
-                        dest_subfactors_set.contains(&vertex.attr.as_ref()),
-                    )
-                })
-                .collect::<Box<[_]>>();
-            for (vertex_id, divisible) in vertices {
-                if vertex_id == root_vid {
-                    continue;
-                }
-                if divisible {
-                    graph::propagate_divisibility(divisibility_graph, &vertex_id, &root_vid, false);
-                } else {
-                    graph::rule_out_divisibility(divisibility_graph, &vertex_id, &root_vid);
-                }
-            }
-        }
-    } else {
-        replace_with_or_abort(
-            number_facts_map.get_mut(&root_vid).unwrap(),
-            NumberFacts::marked_stale,
-        );
-    }
-    let len = dest_subfactors.len();
-    let subfactor_vids: Box<[VertexId]> = dest_subfactors
-        .iter()
-        .map(|factor| {
-            let (factor_vid, _) = graph::add_factor_node(
-                divisibility_graph,
-                factor.as_ref(),
-                factor_finder,
-                number_facts_map,
-                Some(root_vid),
-            );
-            factor_vid
-        })
-        .collect();
-    let all_added = match len {
+    let all_added = match known_factors.len() {
         0 => vec![],
         1 => {
-            let equivalent = dest_subfactors.into_iter().next().unwrap();
-            let root = divisibility_graph.vertex(&root_vid).unwrap();
-            if equivalent.as_str() == root.as_str() {
+            let equivalent = known_factors.into_iter().next().unwrap();
+            let current = divisibility_graph.vertex(&factor_vid).unwrap();
+            if equivalent == *current {
                 vec![]
             } else {
-                // These expressions are different but equivalent; merge their edges
-                info!("{id:?}: Detected that {equivalent} and {root} are equivalent");
-                let (equivalent_vid, added) = graph::add_factor_node(
-                    divisibility_graph,
-                    equivalent.as_ref(),
-                    factor_finder,
-                    number_facts_map,
-                    Some(root_vid),
-                );
-                let new_facts = number_facts_map.get(&equivalent_vid).unwrap();
-                let NumberFacts {
-                    lower_bound_log10,
-                    upper_bound_log10,
-                    ..
-                } = *new_facts;
-                let facts = number_facts_map.get_mut(&root_vid).unwrap();
-                facts.lower_bound_log10 = facts.lower_bound_log10.max(lower_bound_log10);
-                facts.upper_bound_log10 = facts.upper_bound_log10.min(upper_bound_log10);
-                let old_out_neighbors =
-                    graph::neighbors_with_edge_weights(divisibility_graph, &root_vid, Outgoing);
-                let old_in_neighbors =
-                    graph::neighbors_with_edge_weights(divisibility_graph, &root_vid, Incoming);
-                let (new_out_neighbors, new_in_neighbors) = if added {
-                    // new root is truly new, so there are no edges to copy *from* it
-                    (Box::default(), Box::default())
+                let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+                let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
+                    add_factor_finder_factor_vertices_to_graph(factor_finder, divisibility_graph, root_vid, number_facts_map, factor_vid)
                 } else {
-                    (
-                        graph::neighbors_with_edge_weights(
-                            divisibility_graph,
-                            &equivalent_vid,
-                            Outgoing,
-                        ),
-                        graph::neighbors_with_edge_weights(
-                            divisibility_graph,
-                            &equivalent_vid,
-                            Incoming,
-                        ),
-                    )
+                    Vec::new()
                 };
-                graph::upsert_edge(divisibility_graph, &root_vid, &equivalent_vid, |_| Direct);
-                graph::upsert_edge(divisibility_graph, &equivalent_vid, &root_vid, |_| Direct);
-                graph::copy_edges_true_overrides_false(
-                    divisibility_graph,
-                    &equivalent_vid,
-                    old_out_neighbors,
-                    old_in_neighbors,
-                );
-                graph::copy_edges_true_overrides_false(
-                    divisibility_graph,
-                    &root_vid,
-                    new_out_neighbors,
-                    new_in_neighbors,
-                );
-                if added { vec![equivalent_vid] } else { vec![] }
+                let (new_lower_bound_log10, new_upper_bound_log10) = factor_finder.estimate_log10(&equivalent);
+                let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+                facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
+                facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
+                let _ = replace(divisibility_graph.vertex_mut(factor_vid).unwrap(), equivalent);
+
+                // New expression may allow factor_finder to find factors it couldn't before
+                new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(factor_finder, divisibility_graph, root_vid, number_facts_map, factor_vid));
+
+                new_factor_vids
             }
         }
         _ => {
-            let mut all_added = Vec::with_capacity(dest_subfactors.len());
-            for dest_subfactor in dest_subfactors {
-                let (subfactor_vid, added) = graph::add_factor_node(
+            let mut all_added = Vec::with_capacity(known_factors.len());
+            for dest_subfactor in known_factors {
+                let (subfactor_vid, added) = add_factor_node(
                     divisibility_graph,
                     dest_subfactor.as_ref(),
                     factor_finder,
@@ -1885,7 +1772,7 @@ async fn add_known_factors_to_graph(
         }
     };
     let facts = number_facts_map.get_mut(&root_vid).unwrap();
-    facts.factors_known_to_factordb = UpToDate(subfactor_vids);
+    facts.factors_known_to_factordb = UpToDate(all_added.clone().into_boxed_slice());
     ProcessedStatusApiResponseRef {
         status,
         factors: all_added.into_boxed_slice(),
@@ -1893,177 +1780,90 @@ async fn add_known_factors_to_graph(
     }
 }
 
-async fn add_algebraic_factors_to_graph(
+fn add_factor_finder_factor_vertices_to_graph(factor_finder: &FactorFinder, divisibility_graph: &mut DivisibilityGraph, root_vid: VertexId, number_facts_map: &mut BTreeMap<VertexId, NumberFacts>, factor_vid: VertexId) -> Vec<VertexId> {
+    factor_finder.find_unique_factors(divisibility_graph.vertex(&factor_vid).unwrap())
+        .into_iter()
+        .map(|new_factor| add_factor_node(divisibility_graph, new_factor.as_ref(), factor_finder, number_facts_map, Some(root_vid)))
+        .flat_map(|(vid, added)| if added { Some(vid) } else { None })
+        .collect()
+}
+
+async fn add_algebraic_factor_vertices_to_graph(
     http: &FactorDbClient,
     id: Option<u128>,
     factor_finder: &FactorFinder,
-    skip_looking_up_listed_algebraic: bool,
     divisibility_graph: &mut DivisibilityGraph,
-    root_vid: VertexId,
+    factor_vid: VertexId,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
+    root_vid: VertexId
 ) -> bool {
-    debug!("add_algebraic_factors_to_graph: id={id:?}, root_vid={root_vid:?}");
-    let root_facts = number_facts_map.get(&root_vid).unwrap();
-    if root_facts.checked_for_listed_algebraic {
-        return !add_known_factors_to_graph(
-            http,
-            factor_finder,
-            divisibility_graph,
-            root_vid,
-            true,
-            number_facts_map,
-        )
-        .await
-        .factors
-        .is_empty();
+    debug!("add_algebraic_factors_to_graph: id={id:?}, root_vid={factor_vid:?}");
+    let factor_facts = number_facts_map.get(&factor_vid).unwrap();
+    if factor_facts.checked_for_listed_algebraic {
+        return false;
     }
     let mut any_added = false;
-    let mut parseable_factors: BTreeSet<VertexId> = BTreeSet::new();
-    if !skip_looking_up_listed_algebraic {
-        parseable_factors.insert(root_vid);
-        let id = match id {
-            Some(id) => Some(id),
-            None => {
-                let result = add_known_factors_to_graph(
-                    http,
-                    factor_finder,
-                    divisibility_graph,
-                    root_vid,
-                    true,
-                    number_facts_map,
+    let id = match id {
+        Some(id) => Some(id),
+        None => {
+            let result = add_known_factors_to_graph(
+                http,
+                factor_finder,
+                divisibility_graph,
+                root_vid,
+                true,
+                number_facts_map,
+                factor_vid
+            )
+            .await;
+            if let Some(status) = result.status
+                && handle_if_fully_factored(
+                divisibility_graph,
+                factor_vid,
+                status,
+                number_facts_map,
                 )
-                .await;
-                if let Some(status) = result.status
-                    && handle_if_fully_factored(
-                        divisibility_graph,
-                        root_vid,
-                        status,
-                        number_facts_map,
-                    )
-                {
-                    return true;
-                }
-                any_added |= !result.factors.is_empty();
-                parseable_factors.extend(result.factors);
-                result.id
-            }
-        };
-        if let Some(id) = id {
-            let root = divisibility_graph.vertex(&root_vid).unwrap();
-            if let Some(known_id) = root.known_id()
-                && id != known_id
             {
-                error!("Tried to look up {root} using a smaller number's id {id}");
-                parseable_factors.insert(root_vid);
-            } else {
-                info!("{id}: Checking for listed algebraic factors");
-                // Links before the "Is factor of" header are algebraic factors; links after it aren't
-                let url =
-                    format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
-                let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
-                if let Some(listed_algebraic) = result.split("Is factor of").next() {
-                    number_facts_map
-                        .get_mut(&root_vid)
-                        .unwrap()
-                        .checked_for_listed_algebraic = true;
-                    let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
-                    for (factor_entry_id, factor_digits_or_expr) in algebraic_factors {
-                        let factor: Factor<&str, &str> = factor_digits_or_expr.into();
-                        let (factor_vid, added) = graph::add_factor_node(
-                            divisibility_graph,
-                            factor,
-                            factor_finder,
-                            number_facts_map,
-                            Some(root_vid),
-                        );
-                        debug!(
-                            "{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}"
-                        );
-                        any_added |= added;
-                        let mut should_add_factor = true;
-                        if factor_digits_or_expr.contains("...") {
-                            // Link text isn't an expression for the factor, so we need to look up its value
-                            info!(
-                                "{id}: Algebraic factor with ID {factor_entry_id} represented as digits with ellipsis: {factor_digits_or_expr}"
-                            );
-                            number_facts_map.get_mut(&factor_vid).unwrap().entry_id =
-                                Some(factor_entry_id);
-                            let result = add_known_factors_to_graph(
-                                http,
-                                factor_finder,
-                                divisibility_graph,
-                                factor_vid,
-                                true,
-                                number_facts_map,
-                            )
-                            .await;
-                            if !result.factors.is_empty() {
-                                any_added = true;
-                            }
-                            if let Some(status) = result.status {
-                                handle_if_fully_factored(
-                                    divisibility_graph,
-                                    factor_vid,
-                                    status,
-                                    number_facts_map,
-                                );
-                                should_add_factor = false;
-                            }
-                            if let Some(recvd_entry_id) = result.id {
-                                debug!(
-                                    "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from add_known_factors_to_graph is {recvd_entry_id}"
-                                );
-                            };
-                            debug!(
-                                "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from algebraic-factor scrape is {factor_entry_id}"
-                            );
-                            let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-                            if let Some(old_id) = facts.entry_id
-                                && old_id != factor_entry_id
-                            {
-                                error!(
-                                    "{id}: Detected that {factor}'s entry ID is {factor_entry_id}, but it was stored as {old_id}"
-                                );
-                            }
-                            facts.entry_id = Some(factor_entry_id);
-                        } else {
-                            info!(
-                                "{id}: Algebraic factor with ID {factor_entry_id:?} represented in full: {factor_digits_or_expr}"
-                            );
-                        }
-                        if should_add_factor {
-                            parseable_factors.insert(factor_vid);
-                        }
-                    }
-                }
+                return true;
             }
+            any_added |= !result.factors.is_empty();
+            result.id
         }
-    } else {
-        parseable_factors.insert(root_vid);
-    }
-    for parseable_factor in parseable_factors {
-        let facts = number_facts_map.get(&parseable_factor).unwrap();
-        for subfactor_vid in facts.factors_detected_by_factor_finder.clone() {
-            if subfactor_vid == root_vid {
-                continue;
-            }
-            let subfactor_facts = number_facts_map.get(&subfactor_vid).unwrap();
-            if subfactor_facts.needs_update() || !subfactor_facts.is_known_fully_factored() {
-                let subfactor_entry_id = divisibility_graph
-                    .vertex(&subfactor_vid)
+    };
+    if let Some(id) = id {
+        let root = divisibility_graph.vertex(&factor_vid).unwrap();
+        if let Some(known_id) = root.known_id()
+            && id != known_id
+        {
+            error!("Tried to look up {root} using a smaller number's id {id}");
+        } else {
+            info!("{id}: Checking for listed algebraic factors");
+            // Links before the "Is factor of" header are algebraic factors; links after it aren't
+            let url =
+                format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
+            let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+            if let Some(listed_algebraic) = result.split("Is factor of").next() {
+                number_facts_map
+                    .get_mut(&factor_vid)
                     .unwrap()
-                    .known_id()
-                    .or(subfactor_facts.entry_id);
-                any_added |= Box::pin(add_algebraic_factors_to_graph(
-                    http,
-                    subfactor_entry_id,
-                    factor_finder,
-                    skip_looking_up_listed_algebraic,
-                    divisibility_graph,
-                    subfactor_vid,
-                    number_facts_map,
-                ))
-                .await;
+                    .checked_for_listed_algebraic = true;
+                let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
+                for (factor_entry_id, factor_digits_or_expr) in algebraic_factors {
+                    let factor: Factor<&str, &str> = factor_digits_or_expr.into();
+                    let (factor_vid, added) = add_factor_node(
+                        divisibility_graph,
+                        factor,
+                        factor_finder,
+                        number_facts_map,
+                        Some(factor_vid),
+                    );
+                    debug!(
+                        "{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}"
+                    );
+                    any_added |= added;
+                }
+            } else {
+                return false;
             }
         }
     }
