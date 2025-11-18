@@ -18,7 +18,7 @@ use crate::UnknownPrpCheckResult::{
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
 use crate::algebraic::{
-    Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef,
+    Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse,
 };
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::graph::{add_factor_node, is_known_factor};
@@ -1743,23 +1743,80 @@ async fn add_factors_to_graph(
     root_vid: VertexId,
     factor_vid: VertexId,
 ) -> bool {
-    let result = add_known_factors_to_graph(
-        http,
-        factor_finder,
-        divisibility_graph,
-        root_vid,
-        true,
-        number_facts_map,
-        factor_vid,
-    )
-    .await;
-    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-    facts.entry_id = facts.entry_id.or(result.id);
-    let mut any_added = !result.factors.is_empty();
-    if result.status.is_known_fully_factored() || facts.checked_for_listed_algebraic {
-        return any_added;
+    let facts = number_facts_map.get(&factor_vid).unwrap();
+    let mut any_added = false;
+    let mut id = facts.entry_id;
+    if facts.needs_update() {
+        let factor_specifier = as_specifier(
+            factor_vid,
+            divisibility_graph.vertex(&factor_vid).unwrap(),
+            number_facts_map,
+        );
+        let ProcessedStatusApiResponse {
+            status,
+            factors: known_factors,
+            id: new_id,
+        } = http
+            .known_factors_as_digits(factor_specifier, true, false)
+            .await;
+        if let Some(id) = id {
+            number_facts_map.get_mut(&factor_vid).unwrap().entry_id = Some(id);
+        }
+        let known_factor_count = known_factors.len();
+        let all_added = match known_factor_count {
+            0 => vec![],
+            1 => merge_equivalent_expressions(
+                factor_finder,
+                divisibility_graph,
+                root_vid,
+                number_facts_map,
+                factor_vid,
+                known_factors.into_iter().next().unwrap(),
+            ),
+            _ => {
+                known_factors.into_iter().flat_map(|known_factor| {
+                    let (known_factor_vid, added) = add_factor_node(
+                        divisibility_graph,
+                        known_factor.as_ref(),
+                        factor_finder,
+                        number_facts_map,
+                        Some(root_vid),
+                        known_factor.known_id(),
+                    );
+                    graph::propagate_divisibility(divisibility_graph, known_factor_vid, factor_vid, false);
+                    if added {
+                        Some(known_factor_vid)
+                    } else {
+                        None
+                    }
+                }).collect()
+            }
+        };
+        let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+        if known_factor_count > 0 {
+            facts.factors_known_to_factordb = UpToDate(all_added.clone().into_boxed_slice());
+        }
+        if let Some(status) = status {
+            facts.last_known_status = Some(status);
+            if status == Prime {
+                for other_vertex in divisibility_graph
+                    .vertices_by_id()
+                    .filter(|other_vid| *other_vid != factor_vid)
+                    .collect::<Box<[_]>>()
+                    .into_iter()
+                {
+                    graph::rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
+                }
+            }
+        }
+        any_added = !all_added.is_empty();
+        let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+        facts.entry_id = facts.entry_id.or(new_id);
+        if status.is_known_fully_factored() || facts.checked_for_listed_algebraic {
+            return any_added;
+        }
+        id = facts.entry_id;
     }
-    let id = facts.entry_id;
     if let Some(id) = id {
         let root = divisibility_graph.vertex(&factor_vid).unwrap();
         if let Some(known_id) = root.known_id()
@@ -1806,7 +1863,6 @@ async fn add_factors_to_graph(
     }
     let facts = number_facts_map.get_mut(&factor_vid).unwrap();
     facts.checked_in_factor_finder = true;
-    facts.entry_id = facts.entry_id.or(result.id);
     any_added
 }
 
@@ -1828,93 +1884,6 @@ fn as_specifier<'a>(
             .known_id()
             .map(Id)
             .unwrap_or_else(|| Expression(factor.as_ref()))
-    }
-}
-
-async fn add_known_factors_to_graph(
-    http: &FactorDbClient,
-    factor_finder: &FactorFinder,
-    divisibility_graph: &mut DivisibilityGraph,
-    root_vid: VertexId,
-    include_ff: bool,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
-    factor_vid: VertexId,
-) -> ProcessedStatusApiResponseRef {
-    let facts = number_facts_map.get(&factor_vid).unwrap();
-    if !facts.needs_update() {
-        return ProcessedStatusApiResponseRef {
-            status: facts.last_known_status,
-            factors: Box::default(),
-            id: facts.entry_id,
-        };
-    }
-    let factor_specifier = as_specifier(
-        factor_vid,
-        divisibility_graph.vertex(&factor_vid).unwrap(),
-        number_facts_map,
-    );
-    let ProcessedStatusApiResponse {
-        status,
-        factors: known_factors,
-        id,
-    } = http
-        .known_factors_as_digits(factor_specifier, include_ff, false)
-        .await;
-    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-    if let Some(id) = id {
-        facts.entry_id = Some(id);
-    }
-    let known_factor_count = known_factors.len();
-    let all_added = match known_factor_count {
-        0 => vec![],
-        1 => merge_equivalent_expressions(
-            factor_finder,
-            divisibility_graph,
-            root_vid,
-            number_facts_map,
-            factor_vid,
-            known_factors.into_iter().next().unwrap(),
-        ),
-        _ => {
-            let mut all_added = Vec::with_capacity(known_factors.len());
-            for dest_subfactor in known_factors {
-                let (subfactor_vid, added) = add_factor_node(
-                    divisibility_graph,
-                    dest_subfactor.as_ref(),
-                    factor_finder,
-                    number_facts_map,
-                    Some(root_vid),
-                    dest_subfactor.known_id(),
-                );
-                if added {
-                    all_added.push(subfactor_vid);
-                }
-                graph::propagate_divisibility(divisibility_graph, subfactor_vid, factor_vid, false);
-            }
-            all_added
-        }
-    };
-    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-    if known_factor_count > 0 {
-        facts.factors_known_to_factordb = UpToDate(all_added.clone().into_boxed_slice());
-    }
-    if let Some(status) = status {
-        facts.last_known_status = Some(status);
-        if status == Prime {
-            for other_vertex in divisibility_graph
-                .vertices_by_id()
-                .filter(|other_vid| *other_vid != factor_vid)
-                .collect::<Box<[_]>>()
-                .into_iter()
-            {
-                graph::rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
-            }
-        }
-    }
-    ProcessedStatusApiResponseRef {
-        status,
-        factors: all_added.into_boxed_slice(),
-        id,
     }
 }
 

@@ -2,7 +2,6 @@ use crate::algebraic::Factor::Numeric;
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
 use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
-use gryf::core::id::VertexId;
 use itertools::Itertools;
 use log::{error, info, warn};
 use num_integer::Integer;
@@ -1841,13 +1840,6 @@ impl FactorFinder {
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
     pub factors: Box<[OwnedFactor]>,
-    pub id: Option<u128>,
-}
-
-#[derive(Default, Debug)]
-pub struct ProcessedStatusApiResponseRef {
-    pub status: Option<NumberStatus>,
-    pub factors: Box<[VertexId]>,
     pub id: Option<u128>,
 }
 
