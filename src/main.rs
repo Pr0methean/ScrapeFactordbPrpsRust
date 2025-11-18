@@ -1746,6 +1746,8 @@ async fn add_factors_to_graph(
     let facts = number_facts_map.get(&factor_vid).unwrap();
     let mut any_added = false;
     let mut id = facts.entry_id;
+
+    // First, check factordb.com/api for already-known factors
     if facts.needs_update() {
         let factor_specifier = as_specifier(
             factor_vid,
@@ -1817,6 +1819,8 @@ async fn add_factors_to_graph(
         }
         id = facts.entry_id;
     }
+
+    // Next, check factordb.com/frame_moreinfo.php for listed algebraic factors
     if let Some(id) = id {
         let root = divisibility_graph.vertex(&factor_vid).unwrap();
         if let Some(known_id) = root.known_id()
@@ -1849,6 +1853,8 @@ async fn add_factors_to_graph(
             }
         }
     }
+
+    // Finally, check if factor_finder can find factors
     let facts = number_facts_map.get(&factor_vid).unwrap();
     if !facts.checked_in_factor_finder {
         any_added |= !add_factor_finder_factor_vertices_to_graph(
@@ -1863,6 +1869,7 @@ async fn add_factors_to_graph(
     }
     let facts = number_facts_map.get_mut(&factor_vid).unwrap();
     facts.checked_in_factor_finder = true;
+
     any_added
 }
 
