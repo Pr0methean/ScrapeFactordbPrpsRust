@@ -1137,17 +1137,20 @@ fn compare(number_facts_map: &BTreeMap<VertexId, NumberFacts>, left: &VertexRef<
 }
 
 impl NumberFacts {
+    #[inline(always)]
     pub(crate) fn is_known_fully_factored(&self) -> bool {
-        self.last_known_status == Some(Prime) || self.last_known_status == Some(FullyFactored)
+        self.last_known_status.is_known_fully_factored()
     }
+    #[inline(always)]
     pub(crate) fn is_final(&self) -> bool {
         self.is_known_fully_factored() && !self.needs_update()
     }
+    #[inline(always)]
     pub(crate) fn needs_update(&self) -> bool {
         self.factors_known_to_factordb.needs_update()
     }
     fn marked_stale(self) -> Self {
-        if self.is_known_fully_factored() {
+        if self.is_final() {
             return self;
         }
         if let UpToDate(factors) = self.factors_known_to_factordb {
