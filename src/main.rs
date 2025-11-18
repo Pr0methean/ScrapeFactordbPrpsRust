@@ -1368,14 +1368,26 @@ async fn find_and_submit_factors(
         iters_without_progress += 1;
         let node_count = divisibility_graph.vertex_count();
         let edge_count = divisibility_graph.edge_count();
-        if edge_count == complete_graph_edge_count::<Directed>(node_count) {
+        let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
+        if edge_count == complete_graph_edge_count {
             info!("{id}: {accepted_factors} factors accepted, none left to submit");
             // Graph is fully connected, meaning none are left to try
             return accepted_factors > 0;
         }
+        let (direct_divisors, non_factors) = divisibility_graph
+            .edges()
+            .map(|e| match *e.attr {
+                Direct => (1,0),
+                NotFactor => (0,1),
+                _ => (0,0)
+            })
+            .reduce(|(x1,y1),(x2,y2)| (x1+x2,y1+y2)).unwrap_or((0,0));
         info!(
-            "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges. \
+            "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges \
+            ({:.2}% fully connected). {direct_divisors} confirmed-known divides relations, \
+            {non_factors} ruled out. \
         {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
+            edge_count as f64 * 100.0 / complete_graph_edge_count as f64,
             number_facts_map
                 .iter()
                 .filter(|(_, facts)| facts.is_known_fully_factored())
