@@ -1577,20 +1577,24 @@ async fn find_and_submit_factors(
                     let known_factor_statuses: Vec<_> = known_factor_vids
                         .iter()
                         .map(|known_factor_vid| {
-                            get_edge(&divisibility_graph, factor_vid, *known_factor_vid)
+                            (*known_factor_vid, get_edge(&divisibility_graph, factor_vid, *known_factor_vid))
                         })
                         .collect();
-                    if known_factor_statuses
+                    let (possible_factors, unknown_non_factors): (Vec<_>, Vec<_>) = known_factor_statuses
                         .iter()
-                        .copied()
-                        .all(|x| x == Some(NotFactor))
-                    {
+                        .filter(|(_, divisibility)| *divisibility != Some(NotFactor))
+                        .partition(|(known_factor_vid, _)| factor.may_be_proper_divisor_of(divisibility_graph.vertex(known_factor_vid).unwrap())
+                        && facts.lower_bound_log10 <= number_facts_map.get(&known_factor_vid).unwrap().upper_bound_log10);
+                    if possible_factors.is_empty() {
                         // No possible path from factor to cofactor
+                        for (unknown_non_factor, _) in unknown_non_factors {
+                            rule_out_divisibility(&mut divisibility_graph, factor_vid, unknown_non_factor);
+                        }
                         rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                         continue;
-                    } else if known_factor_statuses
+                    } else if possible_factors
                         .into_iter()
-                        .all(|x| x == Some(NotFactor) || x == Some(Direct))
+                        .all(|(_, divisibility)| divisibility == Some(Direct))
                     {
                         // Submit to one of the known_factors instead
                         propagate_divisibility(
@@ -1871,6 +1875,8 @@ async fn add_factors_to_graph(
                     );
                     any_added |= added;
                 }
+            } else {
+                error!("{id}: Failed to decode algebraic-factor list");
             }
         }
     }
