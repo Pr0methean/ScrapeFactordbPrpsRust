@@ -1775,6 +1775,7 @@ async fn add_factors_to_graph(
             root_vid,
             number_facts_map,
             factor_vid,
+            facts.entry_id
         )
         .is_empty();
     }
@@ -1930,6 +1931,7 @@ fn merge_equivalent_expressions(
             current_expr.len()
         };
         let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+        let entry_id = facts.entry_id;
         let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
             add_factor_finder_factor_vertices_to_graph(
                 factor_finder,
@@ -1937,6 +1939,7 @@ fn merge_equivalent_expressions(
                 root_vid,
                 number_facts_map,
                 factor_vid,
+                entry_id
             )
         } else {
             Vec::new()
@@ -1955,12 +1958,14 @@ fn merge_equivalent_expressions(
         }
 
         // New expression may allow factor_finder to find factors it couldn't before
+        let entry_id = facts.entry_id;
         new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
             factor_finder,
             divisibility_graph,
             root_vid,
             number_facts_map,
             factor_vid,
+            entry_id
         ));
 
         new_factor_vids
@@ -1973,18 +1978,24 @@ fn add_factor_finder_factor_vertices_to_graph(
     root_vid: VertexId,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     factor_vid: VertexId,
+    entry_id: Option<u128>,
 ) -> Vec<VertexId> {
     factor_finder
-        .find_unique_factors(divisibility_graph.vertex(&factor_vid).unwrap())
+        .find_unique_factors(&divisibility_graph.vertex(&factor_vid).unwrap())
         .into_iter()
         .map(|new_factor| {
+            let entry_id = if new_factor == *divisibility_graph.vertex(&factor_vid).unwrap() {
+                entry_id
+            } else {
+                new_factor.known_id()
+            };
             add_factor_node(
                 divisibility_graph,
                 new_factor.as_ref(),
                 factor_finder,
                 number_facts_map,
                 Some(root_vid),
-                new_factor.known_id(),
+                entry_id
             )
         })
         .flat_map(|(vid, added)| if added { Some(vid) } else { None })
