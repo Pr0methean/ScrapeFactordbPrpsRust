@@ -61,6 +61,7 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use gryf::core::base::VertexRef;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -1068,7 +1069,7 @@ enum ReportFactorResult {
 
 const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum FactorsKnownToFactorDb {
     NotQueried,
     NotUpToDate(Box<[VertexId]>),
@@ -1102,6 +1103,37 @@ struct NumberFacts {
     entry_id: Option<u128>,
     checked_for_listed_algebraic: bool,
     checked_in_factor_finder: bool,
+}
+
+impl PartialEq<Self> for NumberFacts {
+    fn eq(&self, other: &Self) -> bool {
+        if let Some(entry_id) = self.entry_id && other.entry_id == Some(entry_id) {
+            true
+        } else {
+            self.factors_known_to_factordb == other.factors_known_to_factordb
+        }
+    }
+}
+
+impl PartialOrd for NumberFacts {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self == other {
+            Some(Ordering::Equal)
+        } else if self.upper_bound_log10 < other.lower_bound_log10 {
+            Some(Ordering::Less)
+        } else if self.lower_bound_log10 > other.upper_bound_log10 {
+            Some(Ordering::Greater)
+        } else {
+            None
+        }
+    }
+}
+
+fn compare(number_facts_map: &BTreeMap<VertexId, NumberFacts>, left: &VertexRef<VertexId, OwnedFactor>, right: &VertexRef<VertexId, OwnedFactor>) -> Ordering {
+    if let Some(ordering) = number_facts_map.get(&left.id).unwrap().partial_cmp(number_facts_map.get(&right.id).unwrap()) {
+        return ordering;
+    }
+    left.attr.cmp(right.attr)
 }
 
 impl NumberFacts {
@@ -1275,7 +1307,7 @@ async fn find_and_submit_factors(
     let mut any_failed_retryably = false;
     let mut known_factors = divisibility_graph
         .vertices()
-        .sorted_by_key(|vertex| vertex.attr)
+        .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>();
@@ -1400,7 +1432,7 @@ async fn find_and_submit_factors(
         let mut factors_to_submit = divisibility_graph
             .vertices()
             .filter(|factor| factor.id != root_vid)
-            .sorted_by_key(|factor| factor.attr)
+            .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
             .map(|vertex| vertex.id)
             .collect::<Box<[_]>>();
         if factors_to_submit.is_empty() {
@@ -1432,7 +1464,7 @@ async fn find_and_submit_factors(
                     factor_vid != dest.id
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
                         && graph::get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
-                .sorted_by_key(|vertex| vertex.attr)
+                .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
                 .map(|vertex| vertex.id)
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
