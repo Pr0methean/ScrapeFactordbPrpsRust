@@ -168,7 +168,7 @@ pub fn add_factor_node(
             })
             .map(|v| v.id)
             .collect::<Vec<_>>();
-        if let Some(&first_matching_vid) = matching_vertices.get(0) {
+        if let Some(&first_matching_vid) = matching_vertices.first() {
             merge_equivalent_expressions(
                 factor_finder,
                 divisibility_graph,
