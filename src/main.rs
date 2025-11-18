@@ -1785,7 +1785,7 @@ async fn add_known_factors_to_graph(
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     factor_vid: VertexId,
 ) -> ProcessedStatusApiResponseRef {
-    let facts = number_facts_map.get(&root_vid).unwrap();
+    let facts = number_facts_map.get(&factor_vid).unwrap();
     if !facts.needs_update() {
         return ProcessedStatusApiResponseRef {
             status: facts.last_known_status,
@@ -1833,7 +1833,7 @@ async fn add_known_factors_to_graph(
                 if added {
                     all_added.push(subfactor_vid);
                 }
-                graph::propagate_divisibility(divisibility_graph, subfactor_vid, root_vid, false);
+                graph::propagate_divisibility(divisibility_graph, subfactor_vid, factor_vid, false);
             }
             all_added
         }
