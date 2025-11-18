@@ -1243,8 +1243,10 @@ async fn find_and_submit_factors(
         "{id}: Root node for {digits_or_expr} is {} with vertex ID {root_vid:?}",
         divisibility_graph.vertex(root_vid).unwrap()
     );
-    let root_facts = number_facts_map.get_mut(&root_vid).unwrap();
-    root_facts.entry_id = Some(id);
+    if skip_looking_up_known {
+        let root_facts = number_facts_map.get_mut(&root_vid).unwrap();
+        root_facts.factors_known_to_factordb = UpToDate(vec![root_vid].into());
+    }
     let mut factor_found = false;
     let mut accepted_factors = 0;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
@@ -1932,7 +1934,7 @@ async fn add_algebraic_factor_vertices_to_graph(
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     root_vid: VertexId,
 ) -> bool {
-    debug!("add_algebraic_factors_to_graph: id={id:?}, root_vid={factor_vid:?}");
+    debug!("add_algebraic_factors_to_graph: id={id:?}, root_vid={root_vid:?}");
     let factor_facts = number_facts_map.get(&factor_vid).unwrap();
     if factor_facts.checked_for_listed_algebraic {
         return false;
