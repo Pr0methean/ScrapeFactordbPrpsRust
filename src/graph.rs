@@ -8,6 +8,7 @@ use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
 use std::collections::BTreeMap;
+use log::warn;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
@@ -104,6 +105,10 @@ pub fn upsert_edge<F: FnOnce(Option<Divisibility>) -> Divisibility>(
     to_vid: &VertexId,
     new_value_fn: F,
 ) -> Divisibility {
+    if from_vid == to_vid {
+        warn!("Attempted to add an edge from {from_vid:?} to itself!");
+        return Direct;
+    }
     match divisibility_graph.edge_id_any(from_vid, to_vid) {
         Some(old_edge_id) => {
             let old_divisibility = *divisibility_graph.edge(&old_edge_id).unwrap();
@@ -226,7 +231,7 @@ pub fn add_factor_node(
             (factor_vid, true)
         }
     };
-    if let Some(root_node) = root_node {
+    if let Some(root_node) = root_node && factor_vid != root_node {
         let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, NotFactor);
     }
     (factor_vid, added)
