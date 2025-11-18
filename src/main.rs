@@ -1380,7 +1380,7 @@ async fn find_and_submit_factors(
                     factor_vid != dest.id
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
                         && graph::get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
-                .sorted_by_key(|vertex| vertex.attr) // Try to submit to smaller cofactors first
+                .sorted_by_key(|vertex| vertex.attr)
                 .map(|vertex| vertex.id)
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
@@ -1390,7 +1390,7 @@ async fn find_and_submit_factors(
                 .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                 .run(factor_vid)
                 .unwrap();
-            for cofactor_vid in dest_factors.into_iter() {
+            for cofactor_vid in dest_factors.into_iter().rev() { // Try to submit to largest cofactors first
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &cofactor_vid);
                 if edge_id.is_some() {
