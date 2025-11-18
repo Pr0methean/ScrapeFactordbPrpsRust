@@ -1783,44 +1783,7 @@ async fn add_known_factors_to_graph(
     let all_added = match known_factors.len() {
         0 => vec![],
         1 => {
-            let equivalent = known_factors.into_iter().next().unwrap();
-            let current = divisibility_graph.vertex(&factor_vid).unwrap();
-            if equivalent == *current {
-                vec![]
-            } else {
-                let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-                let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
-                    add_factor_finder_factor_vertices_to_graph(
-                        factor_finder,
-                        divisibility_graph,
-                        root_vid,
-                        number_facts_map,
-                        factor_vid,
-                    )
-                } else {
-                    Vec::new()
-                };
-                let (new_lower_bound_log10, new_upper_bound_log10) =
-                    factor_finder.estimate_log10(&equivalent);
-                let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-                facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
-                facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
-                let _ = replace(
-                    divisibility_graph.vertex_mut(factor_vid).unwrap(),
-                    equivalent,
-                );
-
-                // New expression may allow factor_finder to find factors it couldn't before
-                new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
-                    factor_finder,
-                    divisibility_graph,
-                    root_vid,
-                    number_facts_map,
-                    factor_vid,
-                ));
-
-                new_factor_vids
-            }
+            merge_equivalent_expressions(factor_finder, divisibility_graph, root_vid, number_facts_map, factor_vid, known_factors.into_iter().next().unwrap())
         }
         _ => {
             let mut all_added = Vec::with_capacity(known_factors.len());
@@ -1846,6 +1809,55 @@ async fn add_known_factors_to_graph(
         status,
         factors: all_added.into_boxed_slice(),
         id,
+    }
+}
+
+fn merge_equivalent_expressions(factor_finder: &FactorFinder, divisibility_graph: &mut DivisibilityGraph, root_vid: VertexId, number_facts_map: &mut BTreeMap<VertexId, NumberFacts>, factor_vid: VertexId, equivalent: OwnedFactor) -> Vec<VertexId> {
+    let current = divisibility_graph.vertex(&factor_vid).unwrap();
+    if equivalent == *current {
+        vec![]
+    } else {
+        let current_expr = current.as_str();
+        let current_len = if current_expr.contains("...") {
+            usize::MAX // replace elided numbers with full ones ASAP
+        } else {
+            current_expr.len()
+        };
+        let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+        let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
+            add_factor_finder_factor_vertices_to_graph(
+                factor_finder,
+                divisibility_graph,
+                root_vid,
+                number_facts_map,
+                factor_vid,
+            )
+        } else {
+            Vec::new()
+        };
+        let (new_lower_bound_log10, new_upper_bound_log10) =
+            factor_finder.estimate_log10(&equivalent);
+        let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+        facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
+        facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
+        let equivalent_expr = equivalent.as_str();
+        if !equivalent_expr.contains("...") && equivalent_expr.len() < current_len {
+            let _ = replace(
+                divisibility_graph.vertex_mut(factor_vid).unwrap(),
+                equivalent,
+            );
+        }
+
+        // New expression may allow factor_finder to find factors it couldn't before
+        new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
+            factor_finder,
+            divisibility_graph,
+            root_vid,
+            number_facts_map,
+            factor_vid,
+        ));
+
+        new_factor_vids
     }
 }
 
@@ -1935,11 +1947,14 @@ async fn add_algebraic_factor_vertices_to_graph(
                     let factor: Factor<&str, &str> = factor_digits_or_expr.into();
                     let (factor_vid, added) = add_factor_node(
                         divisibility_graph,
-                        factor,
+                        factor.clone(),
                         factor_finder,
                         number_facts_map,
                         Some(factor_vid),
                     );
+                    if !added {
+                        merge_equivalent_expressions(factor_finder, divisibility_graph, root_vid, number_facts_map, factor_vid, OwnedFactor::from(&factor));
+                    }
                     debug!(
                         "{id}: Factor {factor} has entry ID {factor_entry_id} and vertex ID {factor_vid:?}"
                     );
