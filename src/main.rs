@@ -1793,9 +1793,9 @@ async fn add_known_factors_to_graph(
             id: facts.entry_id,
         };
     }
-    let root_specifier = as_specifier(
-        &root_vid,
-        divisibility_graph.vertex(&root_vid).unwrap(),
+    let factor_specifier = as_specifier(
+        &factor_vid,
+        divisibility_graph.vertex(&factor_vid).unwrap(),
         number_facts_map,
     );
     let ProcessedStatusApiResponse {
@@ -1803,9 +1803,9 @@ async fn add_known_factors_to_graph(
         factors: known_factors,
         id,
     } = http
-        .known_factors_as_digits(root_specifier, include_ff, false)
+        .known_factors_as_digits(factor_specifier, include_ff, false)
         .await;
-    let facts = number_facts_map.get_mut(&root_vid).unwrap();
+    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
     if let Some(id) = id {
         facts.entry_id = Some(id);
     }
@@ -1838,7 +1838,7 @@ async fn add_known_factors_to_graph(
             all_added
         }
     };
-    let facts = number_facts_map.get_mut(&root_vid).unwrap();
+    let facts = number_facts_map.get_mut(&factor_vid).unwrap();
     facts.factors_known_to_factordb = UpToDate(all_added.clone().into_boxed_slice());
     ProcessedStatusApiResponseRef {
         status,
