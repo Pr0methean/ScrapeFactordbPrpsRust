@@ -1584,7 +1584,7 @@ async fn find_and_submit_factors(
                         .iter()
                         .filter(|(_, divisibility)| *divisibility != Some(NotFactor))
                         .partition(|(known_factor_vid, _)| factor.may_be_proper_divisor_of(divisibility_graph.vertex(known_factor_vid).unwrap())
-                        && facts.lower_bound_log10 <= number_facts_map.get(&known_factor_vid).unwrap().upper_bound_log10);
+                        && facts.lower_bound_log10 <= number_facts_map.get(known_factor_vid).unwrap().upper_bound_log10);
                     if possible_factors.is_empty() {
                         // No possible path from factor to cofactor
                         for (unknown_non_factor, _) in unknown_non_factors {
