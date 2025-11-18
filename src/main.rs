@@ -2084,7 +2084,7 @@ async fn add_algebraic_factors_to_graph(
                     subfactor_vid,
                     number_facts_map,
                 ))
-                    .await;
+                .await;
             }
         }
     }
