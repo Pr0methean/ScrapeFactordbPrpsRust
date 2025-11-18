@@ -1595,12 +1595,7 @@ async fn find_and_submit_factors(
                                 &mut number_facts_map,
                             )
                             .await;
-                        } else if number_facts_map
-                            .get(&factor_vid)
-                            .unwrap()
-                            .factors_known_to_factordb
-                            .needs_update()
-                        {
+                        } else {
                             let result = add_known_factors_to_graph(
                                 http,
                                 factor_finder,
@@ -1637,46 +1632,39 @@ async fn find_and_submit_factors(
                         }
                     }
                     OtherError => {
-                        if number_facts_map
-                            .get(&cofactor_vid)
-                            .unwrap()
-                            .factors_known_to_factordb
-                            .needs_update()
-                        {
-                            // See if dest has some already-known factors we can submit to instead
-                            let result = add_known_factors_to_graph(
-                                http,
-                                factor_finder,
+                        // See if dest has some already-known factors we can submit to instead
+                        let result = add_known_factors_to_graph(
+                            http,
+                            factor_finder,
+                            &mut divisibility_graph,
+                            cofactor_vid,
+                            false,
+                            &mut number_facts_map,
+                        )
+                        .await;
+                        if let Some(status) = result.status {
+                            handle_if_fully_factored(
                                 &mut divisibility_graph,
                                 cofactor_vid,
-                                false,
+                                status,
                                 &mut number_facts_map,
-                            )
-                            .await;
-                            if let Some(status) = result.status {
-                                handle_if_fully_factored(
-                                    &mut divisibility_graph,
-                                    cofactor_vid,
-                                    status,
-                                    &mut number_facts_map,
-                                );
-                            }
-                            if !result.factors.is_empty() {
-                                iters_without_progress = 0;
-                            }
-                            if let Some(dest_entry_id) = result.id
-                                && let Some(old_id) = number_facts_map
-                                    .get_mut(&cofactor_vid)
-                                    .unwrap()
-                                    .entry_id
-                                    .replace(dest_entry_id)
-                                && old_id != dest_entry_id
-                            {
-                                let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
-                                error!(
-                                    "{id}: Detected that {cofactor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
-                                );
-                            };
+                            );
+                        }
+                        if !result.factors.is_empty() {
+                            iters_without_progress = 0;
+                        }
+                        if let Some(dest_entry_id) = result.id
+                            && let Some(old_id) = number_facts_map
+                                .get_mut(&cofactor_vid)
+                                .unwrap()
+                                .entry_id
+                                .replace(dest_entry_id)
+                            && old_id != dest_entry_id
+                        {
+                            let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
+                            error!(
+                                "{id}: Detected that {cofactor}'s entry ID is {dest_entry_id}, but it was stored as {old_id}"
+                            );
                         }
                     }
                 }
@@ -1783,14 +1771,9 @@ async fn add_known_factors_to_graph(
     if !facts.needs_update() {
         let root = divisibility_graph.vertex(&root_vid).unwrap();
         warn!("add_known_factors_to_graph called for {root} when {facts:?} is already up-to-date");
-        let factors = match &facts.factors_known_to_factordb {
-            UpToDate(factors) => factors.clone(),
-            NotUpToDate(factors) => factors.clone(),
-            FactorsKnownToFactorDb::NotQueried => Box::default(),
-        };
         return ProcessedStatusApiResponseRef {
             status: facts.last_known_status,
-            factors,
+            factors: Box::default(),
             id: facts.entry_id,
         };
     }
@@ -2024,53 +2007,46 @@ async fn add_algebraic_factors_to_graph(
                             info!(
                                 "{id}: Algebraic factor with ID {factor_entry_id} represented as digits with ellipsis: {factor_digits_or_expr}"
                             );
-                            if number_facts_map
-                                .get(&factor_vid)
-                                .unwrap()
-                                .factors_known_to_factordb
-                                .needs_update()
-                            {
-                                number_facts_map.get_mut(&factor_vid).unwrap().entry_id =
-                                    Some(factor_entry_id);
-                                let result = add_known_factors_to_graph(
-                                    http,
-                                    factor_finder,
+                            number_facts_map.get_mut(&factor_vid).unwrap().entry_id =
+                                Some(factor_entry_id);
+                            let result = add_known_factors_to_graph(
+                                http,
+                                factor_finder,
+                                divisibility_graph,
+                                factor_vid,
+                                true,
+                                number_facts_map,
+                            )
+                            .await;
+                            if !result.factors.is_empty() {
+                                any_added = true;
+                            }
+                            if let Some(status) = result.status {
+                                handle_if_fully_factored(
                                     divisibility_graph,
                                     factor_vid,
-                                    true,
+                                    status,
                                     number_facts_map,
-                                )
-                                .await;
-                                if !result.factors.is_empty() {
-                                    any_added = true;
-                                }
-                                if let Some(status) = result.status {
-                                    handle_if_fully_factored(
-                                        divisibility_graph,
-                                        factor_vid,
-                                        status,
-                                        number_facts_map,
-                                    );
-                                    should_add_factor = false;
-                                }
-                                if let Some(recvd_entry_id) = result.id {
-                                    debug!(
-                                        "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from add_known_factors_to_graph is {recvd_entry_id}"
-                                    );
-                                };
-                                debug!(
-                                    "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from algebraic-factor scrape is {factor_entry_id}"
                                 );
-                                let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-                                if let Some(old_id) = facts.entry_id
-                                    && old_id != factor_entry_id
-                                {
-                                    error!(
-                                        "{id}: Detected that {factor}'s entry ID is {factor_entry_id}, but it was stored as {old_id}"
-                                    );
-                                }
-                                facts.entry_id = Some(factor_entry_id);
+                                should_add_factor = false;
                             }
+                            if let Some(recvd_entry_id) = result.id {
+                                debug!(
+                                    "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from add_known_factors_to_graph is {recvd_entry_id}"
+                                );
+                            };
+                            debug!(
+                                "{id}: Entry ID of {factor} (vertex {factor_vid:?}) from algebraic-factor scrape is {factor_entry_id}"
+                            );
+                            let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+                            if let Some(old_id) = facts.entry_id
+                                && old_id != factor_entry_id
+                            {
+                                error!(
+                                    "{id}: Detected that {factor}'s entry ID is {factor_entry_id}, but it was stored as {old_id}"
+                                );
+                            }
+                            facts.entry_id = Some(factor_entry_id);
                         } else {
                             info!(
                                 "{id}: Algebraic factor with ID {factor_entry_id:?} represented in full: {factor_digits_or_expr}"
@@ -2089,21 +2065,27 @@ async fn add_algebraic_factors_to_graph(
     for parseable_factor in parseable_factors {
         let facts = number_facts_map.get(&parseable_factor).unwrap();
         for subfactor_vid in facts.factors_detected_by_factor_finder.clone() {
-            let subfactor_entry_id = divisibility_graph
-                .vertex(&subfactor_vid)
-                .unwrap()
-                .known_id()
-                .or_else(|| number_facts_map.get(&subfactor_vid).unwrap().entry_id);
-            any_added |= Box::pin(add_algebraic_factors_to_graph(
-                http,
-                subfactor_entry_id,
-                factor_finder,
-                skip_looking_up_listed_algebraic,
-                divisibility_graph,
-                subfactor_vid,
-                number_facts_map,
-            ))
-            .await;
+            if subfactor_vid == root_vid {
+                continue;
+            }
+            let subfactor_facts = number_facts_map.get(&subfactor_vid).unwrap();
+            if subfactor_facts.needs_update() || !subfactor_facts.is_known_fully_factored() {
+                let subfactor_entry_id = divisibility_graph
+                    .vertex(&subfactor_vid)
+                    .unwrap()
+                    .known_id()
+                    .or_else(|| number_facts_map.get(&subfactor_vid).unwrap().entry_id);
+                any_added |= Box::pin(add_algebraic_factors_to_graph(
+                    http,
+                    subfactor_entry_id,
+                    factor_finder,
+                    skip_looking_up_listed_algebraic,
+                    divisibility_graph,
+                    subfactor_vid,
+                    number_facts_map,
+                ))
+                    .await;
+            }
         }
     }
     any_added
