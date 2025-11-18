@@ -1680,14 +1680,17 @@ async fn add_factors_to_graph(
         root_vid,
     )
     .await;
-    any_added |= !add_factor_finder_factor_vertices_to_graph(
-        factor_finder,
-        divisibility_graph,
-        root_vid,
-        number_facts_map,
-        factor_vid,
-    )
-    .is_empty();
+    let facts = number_facts_map.get(&factor_vid).unwrap();
+    if !facts.checked_in_factor_finder {
+        any_added |= !add_factor_finder_factor_vertices_to_graph(
+            factor_finder,
+            divisibility_graph,
+            root_vid,
+            number_facts_map,
+            factor_vid,
+        )
+            .is_empty();
+    }
     let facts = number_facts_map.get_mut(&factor_vid).unwrap();
     facts.checked_in_factor_finder = true;
     facts.entry_id = facts.entry_id.or(result.id);
