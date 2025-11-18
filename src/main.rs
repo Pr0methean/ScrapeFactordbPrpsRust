@@ -2074,7 +2074,7 @@ async fn add_algebraic_factors_to_graph(
                     .vertex(&subfactor_vid)
                     .unwrap()
                     .known_id()
-                    .or_else(|| number_facts_map.get(&subfactor_vid).unwrap().entry_id);
+                    .or_else(|| subfactor_facts.entry_id);
                 any_added |= Box::pin(add_algebraic_factors_to_graph(
                     http,
                     subfactor_entry_id,
