@@ -1854,6 +1854,7 @@ fn merge_equivalent_expressions(factor_finder: &FactorFinder, divisibility_graph
     if equivalent == *current {
         vec![]
     } else {
+        info!("Merging equivalent expressions {current} and {equivalent}");
         let current_expr = current.as_str();
         let current_len = if current_expr.contains("...") {
             usize::MAX // replace elided numbers with full ones ASAP
