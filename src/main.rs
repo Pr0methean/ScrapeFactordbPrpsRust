@@ -1486,6 +1486,11 @@ async fn find_and_submit_factors(
                 .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                 .run(factor_vid)
                 .unwrap();
+            if shortest_paths.dist(&root_vid).copied() == Some(0)
+                && number_facts_map.get(&factor_vid).unwrap().lower_bound_log10 > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2 {
+                // Already a known factor of root, and can't be a factor through any remaining path due to size
+                continue;
+            }
             for cofactor_vid in dest_factors.into_iter().rev() {
                 // Try to submit to largest cofactors first
                 // Check if an edge has been added since dest_factors was built
