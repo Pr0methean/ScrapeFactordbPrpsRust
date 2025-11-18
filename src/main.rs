@@ -1988,7 +1988,7 @@ async fn add_algebraic_factor_vertices_to_graph(
                     let factor: Factor<&str, &str> = factor_digits_or_expr.into();
                     let (subfactor_vid, added) = add_factor_node(
                         divisibility_graph,
-                        factor.clone(),
+                        factor,
                         factor_finder,
                         number_facts_map,
                         Some(factor_vid),
