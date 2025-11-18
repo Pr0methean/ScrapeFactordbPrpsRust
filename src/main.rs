@@ -1194,7 +1194,9 @@ async fn find_and_submit_factors(
                         })
                         .collect::<Box<[_]>>();
                     let root_facts = number_facts_map.get_mut(&root_node).unwrap();
-                    root_facts.factors_known_to_factordb = UpToDate(factor_vids);
+                    if !factor_vids.is_empty() {
+                        root_facts.factors_known_to_factordb = UpToDate(factor_vids);
+                    }
                     root_facts.last_known_status = status;
                 }
                 (root_node, true)
