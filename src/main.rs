@@ -1981,7 +1981,7 @@ fn add_factor_finder_factor_vertices_to_graph(
     entry_id: Option<u128>,
 ) -> Vec<VertexId> {
     factor_finder
-        .find_unique_factors(&divisibility_graph.vertex(&factor_vid).unwrap())
+        .find_unique_factors(divisibility_graph.vertex(&factor_vid).unwrap())
         .into_iter()
         .map(|new_factor| {
             let entry_id = if new_factor == *divisibility_graph.vertex(&factor_vid).unwrap() {
