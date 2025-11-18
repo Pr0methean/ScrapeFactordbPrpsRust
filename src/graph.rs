@@ -169,7 +169,10 @@ pub fn add_factor_node(
             .map(|v| v.id)
             .collect::<Vec<_>>();
         if let Some(&first_matching_vid) = matching_vertices.first() {
-            info!("Merging {factor} with {} equivalent vertices", matching_vertices.len());
+            info!(
+                "Merging {factor} with {} equivalent vertices",
+                matching_vertices.len()
+            );
             merge_equivalent_expressions(
                 factor_finder,
                 divisibility_graph,
@@ -228,7 +231,7 @@ pub fn add_factor_node(
                 number_facts_map.get_mut(&vertex_ref.id).unwrap().entry_id = Some(entry_id);
             }
             (vertex_ref.id, false)
-        },
+        }
         None => {
             let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);

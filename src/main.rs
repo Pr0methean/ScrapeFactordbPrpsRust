@@ -17,9 +17,7 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{
-    Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse,
-};
+use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::graph::{add_factor_node, is_known_factor};
 use crate::net::ResourceLimits;
@@ -1775,8 +1773,9 @@ async fn add_factors_to_graph(
                 factor_vid,
                 known_factors.into_iter().next().unwrap(),
             ),
-            _ => {
-                known_factors.into_iter().flat_map(|known_factor| {
+            _ => known_factors
+                .into_iter()
+                .flat_map(|known_factor| {
                     let (known_factor_vid, added) = add_factor_node(
                         divisibility_graph,
                         known_factor.as_ref(),
@@ -1785,14 +1784,15 @@ async fn add_factors_to_graph(
                         Some(root_vid),
                         known_factor.known_id(),
                     );
-                    graph::propagate_divisibility(divisibility_graph, known_factor_vid, factor_vid, false);
-                    if added {
-                        Some(known_factor_vid)
-                    } else {
-                        None
-                    }
-                }).collect()
-            }
+                    graph::propagate_divisibility(
+                        divisibility_graph,
+                        known_factor_vid,
+                        factor_vid,
+                        false,
+                    );
+                    if added { Some(known_factor_vid) } else { None }
+                })
+                .collect(),
         };
         let facts = number_facts_map.get_mut(&factor_vid).unwrap();
         if known_factor_count > 0 {
@@ -1833,7 +1833,10 @@ async fn add_factors_to_graph(
             let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
             let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
             if let Some(listed_algebraic) = result.split("Is factor of").next() {
-                number_facts_map.get_mut(&factor_vid).unwrap().checked_for_listed_algebraic = true;
+                number_facts_map
+                    .get_mut(&factor_vid)
+                    .unwrap()
+                    .checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
                     let factor: Factor<&str, &str> = factor_digits_or_expr.into();
@@ -1863,7 +1866,7 @@ async fn add_factors_to_graph(
             root_vid,
             number_facts_map,
             factor_vid,
-            facts.entry_id
+            facts.entry_id,
         )
         .is_empty();
     }
@@ -1922,7 +1925,7 @@ fn merge_equivalent_expressions(
                 root_vid,
                 number_facts_map,
                 factor_vid,
-                entry_id
+                entry_id,
             )
         } else {
             Vec::new()
@@ -1948,7 +1951,7 @@ fn merge_equivalent_expressions(
             root_vid,
             number_facts_map,
             factor_vid,
-            entry_id
+            entry_id,
         ));
 
         new_factor_vids
@@ -1978,7 +1981,7 @@ fn add_factor_finder_factor_vertices_to_graph(
                 factor_finder,
                 number_facts_map,
                 Some(root_vid),
-                entry_id
+                entry_id,
             )
         })
         .flat_map(|(vid, added)| if added { Some(vid) } else { None })
