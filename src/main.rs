@@ -19,7 +19,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
 use crate::algebraic::{Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
-use crate::graph::{add_factor_node, is_known_factor};
+use crate::graph::{add_factor_node, get_edge, is_known_factor, propagate_divisibility, rule_out_divisibility};
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use channel::PushbackReceiver;
@@ -1266,7 +1266,7 @@ async fn find_and_submit_factors(
                                 known_factor.known_id(),
                             );
                             if added {
-                                graph::propagate_divisibility(
+                                propagate_divisibility(
                                     &mut divisibility_graph,
                                     factor_vid,
                                     root_node,
@@ -1342,7 +1342,7 @@ async fn find_and_submit_factors(
             // out the ID later
             continue;
         }
-        match graph::get_edge(&divisibility_graph, factor_vid, root_vid) {
+        match get_edge(&divisibility_graph, factor_vid, root_vid) {
             Some(Direct) | Some(NotFactor) => {
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
@@ -1361,7 +1361,7 @@ async fn find_and_submit_factors(
                     NumberFacts::marked_stale,
                 );
                 accepted_factors += 1;
-                graph::propagate_divisibility(&mut divisibility_graph, factor_vid, root_vid, false);
+                propagate_divisibility(&mut divisibility_graph, factor_vid, root_vid, false);
             }
             DoesNotDivide => {
                 add_factors_to_graph(
@@ -1373,7 +1373,7 @@ async fn find_and_submit_factors(
                     factor_vid,
                 )
                 .await;
-                graph::rule_out_divisibility(&mut divisibility_graph, factor_vid, root_vid);
+                rule_out_divisibility(&mut divisibility_graph, factor_vid, root_vid);
             }
             OtherError => {
                 add_factors_to_graph(
@@ -1456,7 +1456,7 @@ async fn find_and_submit_factors(
 
         for factor_vid in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
-            graph::rule_out_divisibility(&mut divisibility_graph, root_vid, factor_vid);
+            rule_out_divisibility(&mut divisibility_graph, root_vid, factor_vid);
             // elided numbers and numbers over 65500 digits without an expression form can only
             // be submitted as factors, even if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
@@ -1475,7 +1475,7 @@ async fn find_and_submit_factors(
                     // if factor == dest, the relation is trivial
                     factor_vid != dest.id
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                        && graph::get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
+                        && get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
                 .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
                 .map(|vertex| vertex.id)
                 .collect::<Box<[_]>>();
@@ -1486,7 +1486,7 @@ async fn find_and_submit_factors(
                 .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                 .run(factor_vid)
                 .unwrap();
-            if shortest_paths.dist(&root_vid).copied() == Some(0)
+            if shortest_paths.dist(root_vid).copied() == Some(0)
                 && number_facts_map.get(&factor_vid).unwrap().lower_bound_log10 > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2 {
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
@@ -1498,15 +1498,15 @@ async fn find_and_submit_factors(
                 if edge_id.is_some() {
                     continue;
                 }
-                let reverse_edge = graph::get_edge(&divisibility_graph, cofactor_vid, factor_vid);
+                let reverse_edge = get_edge(&divisibility_graph, cofactor_vid, factor_vid);
                 if reverse_edge == Some(Direct) || reverse_edge == Some(Transitive) {
-                    graph::rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                    rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     continue;
                 }
                 if shortest_paths.dist(cofactor_vid) == Some(&0) {
                     // dest_factor is divisible by factor, and this is already known to factordb
                     // because it follows that relation transitively
-                    graph::propagate_divisibility(
+                    propagate_divisibility(
                         &mut divisibility_graph,
                         factor_vid,
                         cofactor_vid,
@@ -1519,7 +1519,7 @@ async fn find_and_submit_factors(
                     UpToDate(ref already_known_factors)
                     | NotUpToDate(ref already_known_factors) => {
                         if already_known_factors.contains(&factor_vid) {
-                            graph::propagate_divisibility(
+                            propagate_divisibility(
                                 &mut divisibility_graph,
                                 factor_vid,
                                 cofactor_vid,
@@ -1527,7 +1527,7 @@ async fn find_and_submit_factors(
                             );
                             continue;
                         } else if facts.is_final() {
-                            graph::rule_out_divisibility(
+                            rule_out_divisibility(
                                 &mut divisibility_graph,
                                 factor_vid,
                                 cofactor_vid,
@@ -1544,7 +1544,7 @@ async fn find_and_submit_factors(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller or equal or fails last-digit test"
                     );
-                    graph::rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                    rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     continue;
                 }
                 // u128s are already fully factored
@@ -1552,7 +1552,7 @@ async fn find_and_submit_factors(
                     debug!(
                         "{id}: Skipping submission of {factor} to {cofactor} because the number is too small"
                     );
-                    graph::propagate_divisibility(
+                    propagate_divisibility(
                         &mut divisibility_graph,
                         factor_vid,
                         cofactor_vid,
@@ -1567,7 +1567,7 @@ async fn find_and_submit_factors(
                     already fully factored"
                     );
                     if !cofactor_facts.needs_update() {
-                        graph::rule_out_divisibility(
+                        rule_out_divisibility(
                             &mut divisibility_graph,
                             factor_vid,
                             cofactor_vid,
@@ -1575,13 +1575,28 @@ async fn find_and_submit_factors(
                     }
                     continue;
                 }
+                if let UpToDate(ref known_factor_vids) | NotUpToDate(ref known_factor_vids) = cofactor_facts.factors_known_to_factordb
+                        && !known_factor_vids.is_empty() {
+                    let known_factor_statuses: Vec<_> = known_factor_vids.iter()
+                        .map(|known_factor_vid| get_edge(&divisibility_graph, factor_vid, *known_factor_vid))
+                        .collect();
+                    if known_factor_statuses.iter().copied().all(|x| x == Some(NotFactor)) {
+                        // No possible path from factor to cofactor
+                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                        continue;
+                    } else if known_factor_statuses.into_iter().all(|x| x == Some(NotFactor) || x == Some(Direct)) {
+                        // Submit to one of the known_factors instead
+                        propagate_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid, true);
+                        continue;
+                    }
+                }
                 let cofactor_upper_bound = cofactor_facts.upper_bound_log10;
                 if facts.lower_bound_log10 > cofactor_upper_bound {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller based on log10 bounds"
                     );
-                    graph::rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                    rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     continue;
                 }
                 if is_known_factor(&divisibility_graph, cofactor_vid, factor_vid) {
@@ -1589,7 +1604,7 @@ async fn find_and_submit_factors(
                         "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is transitively a factor of {factor}"
                     );
                     // factor is transitively divisible by dest_factor
-                    graph::propagate_divisibility(
+                    propagate_divisibility(
                         &mut divisibility_graph,
                         cofactor_vid,
                         factor_vid,
@@ -1650,7 +1665,7 @@ async fn find_and_submit_factors(
                         );
                         accepted_factors += 1;
                         iters_without_progress = 0;
-                        graph::propagate_divisibility(
+                        propagate_divisibility(
                             &mut divisibility_graph,
                             factor_vid,
                             cofactor_vid,
@@ -1667,7 +1682,7 @@ async fn find_and_submit_factors(
                             factor_vid,
                         )
                         .await;
-                        graph::rule_out_divisibility(
+                        rule_out_divisibility(
                             &mut divisibility_graph,
                             factor_vid,
                             cofactor_vid,
@@ -1789,7 +1804,7 @@ async fn add_factors_to_graph(
                         Some(root_vid),
                         known_factor.known_id(),
                     );
-                    graph::propagate_divisibility(
+                    propagate_divisibility(
                         divisibility_graph,
                         known_factor_vid,
                         factor_vid,
@@ -1812,7 +1827,7 @@ async fn add_factors_to_graph(
                     .collect::<Box<[_]>>()
                     .into_iter()
                 {
-                    graph::rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
+                    rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
                 }
             }
         }
