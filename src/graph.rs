@@ -7,8 +7,8 @@ use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
-use std::collections::BTreeMap;
 use log::warn;
+use std::collections::BTreeMap;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
@@ -231,7 +231,9 @@ pub fn add_factor_node(
             (factor_vid, true)
         }
     };
-    if let Some(root_node) = root_node && factor_vid != root_node {
+    if let Some(root_node) = root_node
+        && factor_vid != root_node
+    {
         let _ = divisibility_graph.try_add_edge(&root_node, &factor_vid, NotFactor);
     }
     (factor_vid, added)
