@@ -172,7 +172,7 @@ pub fn add_factor_node(
                     upper_bound_log10,
                     entry_id: None,
                     checked_for_listed_algebraic: false,
-                    checked_in_factor_finder: false
+                    checked_in_factor_finder: false,
                 },
             );
             (factor_vid, true)
