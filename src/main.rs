@@ -17,7 +17,7 @@ use crate::UnknownPrpCheckResult::{
 };
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::OwnedFactor;
+use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::algebraic::{
     Factor, FactorFinder, NumberStatus, ProcessedStatusApiResponse, ProcessedStatusApiResponseRef,
 };
@@ -1708,9 +1708,7 @@ async fn add_factors_to_graph(
     )
     .await;
     let mut any_added = !result.factors.is_empty();
-    if let Some(status) = result.status
-        && handle_if_fully_factored(divisibility_graph, factor_vid, status, number_facts_map)
-    {
+    if result.status.is_known_fully_factored() {
         return any_added;
     }
     any_added |= add_algebraic_factor_vertices_to_graph(
@@ -1821,7 +1819,8 @@ async fn add_known_factors_to_graph(
     if let Some(id) = id {
         facts.entry_id = Some(id);
     }
-    let all_added = match known_factors.len() {
+    let known_factor_count = known_factors.len();
+    let all_added = match known_factor_count {
         0 => vec![],
         1 => merge_equivalent_expressions(
             factor_finder,
@@ -1851,7 +1850,13 @@ async fn add_known_factors_to_graph(
         }
     };
     let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-    facts.factors_known_to_factordb = UpToDate(all_added.clone().into_boxed_slice());
+    if known_factor_count > 0 {
+        facts.factors_known_to_factordb = UpToDate(all_added.clone().into_boxed_slice());
+    }
+    if let Some(status) = status {
+        facts.last_known_status = Some(status);
+        handle_if_fully_factored(divisibility_graph, factor_vid, status, number_facts_map);
+    }
     ProcessedStatusApiResponseRef {
         status,
         factors: all_added.into_boxed_slice(),
@@ -1968,14 +1973,7 @@ async fn add_algebraic_factor_vertices_to_graph(
                 factor_vid,
             )
             .await;
-            if let Some(status) = result.status
-                && handle_if_fully_factored(
-                    divisibility_graph,
-                    factor_vid,
-                    status,
-                    number_facts_map,
-                )
-            {
+            if result.status.is_known_fully_factored() {
                 return true;
             }
             any_added |= !result.factors.is_empty();

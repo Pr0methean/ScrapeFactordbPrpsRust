@@ -1860,6 +1860,16 @@ pub enum NumberStatus {
     FullyFactored,
 }
 
+pub trait NumberStatusExt {
+    fn is_known_fully_factored(&self) -> bool;
+}
+
+impl NumberStatusExt for Option<NumberStatus> {
+    fn is_known_fully_factored(&self) -> bool {
+        matches!(self, Some(NumberStatus::FullyFactored) | Some(NumberStatus::Prime))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
