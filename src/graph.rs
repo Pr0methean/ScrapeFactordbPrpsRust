@@ -226,6 +226,7 @@ pub fn add_factor_node(
                     upper_bound_log10,
                     entry_id: None,
                     factors_detected_by_factor_finder: detected_factor_vids,
+                    checked_for_listed_algebraic: false,
                 },
             );
             (factor_vid, true)

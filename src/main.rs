@@ -1101,6 +1101,7 @@ struct NumberFacts {
     upper_bound_log10: u128,
     entry_id: Option<u128>,
     factors_detected_by_factor_finder: Box<[VertexId]>,
+    checked_for_listed_algebraic: bool,
 }
 
 impl NumberFacts {
@@ -1115,21 +1116,9 @@ impl NumberFacts {
             return self;
         }
         if let UpToDate(factors) = self.factors_known_to_factordb {
-            let NumberFacts {
-                last_known_status,
-                lower_bound_log10,
-                upper_bound_log10,
-                entry_id,
-                factors_detected_by_factor_finder,
-                ..
-            } = self;
             NumberFacts {
-                last_known_status,
                 factors_known_to_factordb: NotUpToDate(factors),
-                lower_bound_log10,
-                upper_bound_log10,
-                entry_id,
-                factors_detected_by_factor_finder,
+                ..self
             }
         } else {
             self
@@ -1227,7 +1216,6 @@ async fn find_and_submit_factors(
     root_facts.entry_id = Some(id);
     let mut factor_found = false;
     let mut accepted_factors = 0;
-    let mut already_checked_for_algebraic = BTreeSet::new();
     let multiple_starting_entries = digits_or_expr_full.len() > 1;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
         factor_found |= add_algebraic_factors_to_graph(
@@ -1244,7 +1232,6 @@ async fn find_and_submit_factors(
             &mut number_facts_map,
         )
         .await;
-        already_checked_for_algebraic.insert(factor_vid);
     }
     if !factor_found {
         info!("{id}: No factors to submit");
@@ -1307,19 +1294,16 @@ async fn find_and_submit_factors(
             DoesNotDivide => {
                 // The root isn't divisible by this "factor", so try to split it up into smaller
                 // factors and then we'll submit those instead.
-                if already_checked_for_algebraic.insert(factor_vid) {
-                    debug!("{id}: Searching for algebraic factors of {factor}");
-                    any_failed_retryably |= add_algebraic_factors_to_graph(
-                        http,
-                        number_facts_map.get(&factor_vid).unwrap().entry_id,
-                        factor_finder,
-                        skip_looking_up_listed_algebraic,
-                        &mut divisibility_graph,
-                        factor_vid,
-                        &mut number_facts_map,
-                    )
-                    .await;
-                }
+                any_failed_retryably |= add_algebraic_factors_to_graph(
+                    http,
+                    number_facts_map.get(&factor_vid).unwrap().entry_id,
+                    factor_finder,
+                    skip_looking_up_listed_algebraic,
+                    &mut divisibility_graph,
+                    factor_vid,
+                    &mut number_facts_map,
+                )
+                .await;
                 graph::rule_out_divisibility(&mut divisibility_graph, &factor_vid, &root_node);
             }
             OtherError => {
@@ -1584,28 +1568,18 @@ async fn find_and_submit_factors(
                             &factor_vid,
                             &cofactor_vid,
                         );
-                        if already_checked_for_algebraic.insert(factor_vid) {
-                            add_algebraic_factors_to_graph(
-                                http,
-                                number_facts_map.get(&factor_vid).unwrap().entry_id,
-                                factor_finder,
-                                false,
-                                &mut divisibility_graph,
-                                factor_vid,
-                                &mut number_facts_map,
-                            )
-                            .await;
-                        } else {
-                            let result = add_known_factors_to_graph(
-                                http,
-                                factor_finder,
-                                &mut divisibility_graph,
-                                factor_vid,
-                                false,
-                                &mut number_facts_map,
-                            )
-                            .await;
-                            if let Some(status) = result.status {
+                        if add_algebraic_factors_to_graph(
+                            http,
+                            number_facts_map.get(&factor_vid).unwrap().entry_id,
+                            factor_finder,
+                            false,
+                            &mut divisibility_graph,
+                            factor_vid,
+                            &mut number_facts_map,
+                        )
+                        .await {
+                            iters_without_progress = 0;
+                            if let Some(status) = number_facts_map.get(&factor_vid).unwrap().last_known_status {
                                 handle_if_fully_factored(
                                     &mut divisibility_graph,
                                     factor_vid,
@@ -1613,22 +1587,6 @@ async fn find_and_submit_factors(
                                     &mut number_facts_map,
                                 );
                             }
-                            if !result.factors.is_empty() {
-                                iters_without_progress = 0;
-                            }
-                            if let Some(entry_id) = result.id
-                                && let Some(old_id) = number_facts_map
-                                    .get_mut(&factor_vid)
-                                    .unwrap()
-                                    .entry_id
-                                    .replace(entry_id)
-                                && old_id != entry_id
-                            {
-                                let factor = divisibility_graph.vertex(factor_vid).unwrap();
-                                error!(
-                                    "{id}: Detected that {factor}'s entry ID is {entry_id}, but it was stored as {old_id}"
-                                );
-                            };
                         }
                     }
                     OtherError => {
@@ -1942,6 +1900,18 @@ async fn add_algebraic_factors_to_graph(
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
 ) -> bool {
     debug!("add_algebraic_factors_to_graph: id={id:?}, root_vid={root_vid:?}");
+    let root_facts = number_facts_map.get(&root_vid).unwrap();
+    if root_facts.checked_for_listed_algebraic {
+        return !add_known_factors_to_graph(
+            http,
+            factor_finder,
+            divisibility_graph,
+            root_vid,
+            true,
+            number_facts_map,
+        )
+            .await.factors.is_empty();
+    }
     let mut any_added = false;
     let mut parseable_factors: BTreeSet<VertexId> = BTreeSet::new();
     if !skip_looking_up_listed_algebraic {
@@ -1987,6 +1957,7 @@ async fn add_algebraic_factors_to_graph(
                     format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
                 let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
                 if let Some(listed_algebraic) = result.split("Is factor of").next() {
+                    number_facts_map.get_mut(&root_vid).unwrap().checked_for_listed_algebraic = true;
                     let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
                     for (factor_entry_id, factor_digits_or_expr) in algebraic_factors {
                         let factor: Factor<&str, &str> = factor_digits_or_expr.into();
