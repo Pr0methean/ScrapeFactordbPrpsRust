@@ -1785,33 +1785,6 @@ async fn add_factors_to_graph(
     any_added
 }
 
-fn handle_if_fully_factored(
-    divisibility_graph: &mut DivisibilityGraph,
-    factor_vid: VertexId,
-    status: NumberStatus,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
-) -> bool {
-    number_facts_map
-        .get_mut(&factor_vid)
-        .unwrap()
-        .last_known_status = Some(status);
-    if status == FullyFactored {
-        true
-    } else if status == Prime {
-        for other_vertex in divisibility_graph
-            .vertices_by_id()
-            .filter(|other_vid| *other_vid != factor_vid)
-            .collect::<Box<[_]>>()
-            .into_iter()
-        {
-            graph::rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
-        }
-        true
-    } else {
-        false
-    }
-}
-
 fn as_specifier<'a>(
     factor_vid: VertexId,
     factor: &'a OwnedFactor,
@@ -1902,7 +1875,16 @@ async fn add_known_factors_to_graph(
     }
     if let Some(status) = status {
         facts.last_known_status = Some(status);
-        handle_if_fully_factored(divisibility_graph, factor_vid, status, number_facts_map);
+        if status == Prime {
+            for other_vertex in divisibility_graph
+                .vertices_by_id()
+                .filter(|other_vid| *other_vid != factor_vid)
+                .collect::<Box<[_]>>()
+                .into_iter()
+            {
+                graph::rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
+            }
+        }
     }
     ProcessedStatusApiResponseRef {
         status,
@@ -2002,6 +1984,7 @@ fn add_factor_finder_factor_vertices_to_graph(
         .collect()
 }
 
+#[inline]
 async fn add_algebraic_factor_vertices_to_graph(
     http: &FactorDbClient,
     id: Option<u128>,
