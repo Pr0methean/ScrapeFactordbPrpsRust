@@ -420,7 +420,7 @@ async fn get_prp_remaining_bases(
         for id in [nm1_id, np1_id] {
             for factor in http.known_factors_as_digits::<&str, &str>(Id(id), false, true).await.factors.into_iter() {
                 if factor.as_str_non_u128().is_some() {
-                    find_and_submit_factors(&http, id, &*factor.as_str(), &factor_finder, true).await;
+                    find_and_submit_factors(http, id, &factor.as_str(), factor_finder, true).await;
                 }
             }
         }
