@@ -1137,21 +1137,6 @@ impl PartialOrd for NumberFacts {
     }
 }
 
-fn compare(
-    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
-    left: &VertexRef<VertexId, OwnedFactor>,
-    right: &VertexRef<VertexId, OwnedFactor>,
-) -> Ordering {
-    if let Some(ordering) = number_facts_map
-        .get(&left.id)
-        .unwrap()
-        .partial_cmp(number_facts_map.get(&right.id).unwrap())
-    {
-        return ordering;
-    }
-    left.attr.cmp(right.attr)
-}
-
 impl NumberFacts {
     #[inline(always)]
     pub(crate) fn is_known_fully_factored(&self) -> bool {
