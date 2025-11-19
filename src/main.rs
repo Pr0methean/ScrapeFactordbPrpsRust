@@ -9,6 +9,7 @@ mod graph;
 mod net;
 mod shutdown;
 
+use Ordering::{Greater, Less};
 use crate::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -33,7 +34,6 @@ use graph::DivisibilityGraph;
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::GraphRef;
-use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::VertexId;
 use gryf::core::marker::Directed;
@@ -392,30 +392,44 @@ async fn get_prp_remaining_bases(
     }
     if let Some(nm1_id) = nm1_id_if_available
         && let Some(np1_id) = np1_id_if_available
-        && !nm1_known_to_divide_3
-        && !np1_known_to_divide_3
     {
-        // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-        match http.report_factor::<&str, &str>(nm1_id, &Numeric(3)).await {
-            AlreadyFullyFactored => {
-                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                prove_by_nm1(id, http).await;
-                return Ok(U256::from(0));
-            }
-            Accepted => {}
-            _ => match http.report_factor::<&str, &str>(np1_id, &Numeric(3)).await {
+        if !nm1_known_to_divide_3 && !np1_known_to_divide_3 {
+            // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
+            match http.report_factor::<&str, &str>(nm1_id, &Numeric(3)).await {
                 AlreadyFullyFactored => {
-                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                    prove_by_np1(id, http).await;
+                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+                    prove_by_nm1(id, http).await;
                     return Ok(U256::from(0));
                 }
                 Accepted => {}
-                _ => {
-                    error!(
-                        "{id}: PRP, but factor of 3 was rejected for both N-1 (id {nm1_id}) and N+1 (id {np1_id})"
-                    );
-                }
-            },
+                _ => match http.report_factor::<&str, &str>(np1_id, &Numeric(3)).await {
+                    AlreadyFullyFactored => {
+                        info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                        prove_by_np1(id, http).await;
+                        return Ok(U256::from(0));
+                    }
+                    Accepted => {}
+                    _ => {
+                        error!(
+                            "{id}: PRP, but factor of 3 was rejected for both N-1 (id {nm1_id}) and N+1 (id {np1_id})"
+                        );
+                    }
+                },
+            }
+        }
+        for id in [nm1_id, np1_id] {
+            http.known_factors_as_digits::<&str, &str>(Id(nm1_id), false, true)
+                .await.factors
+                .into_iter()
+                .for_each(move |factor| {
+                    if factor.as_str_non_u128().is_some() {
+                        let http = http.clone();
+                        let factor_finder = factor_finder.clone();
+                        let _ = task::spawn(async move {
+                            find_and_submit_factors(&http, id, &*factor.as_str(), &factor_finder, true).await;
+                        });
+                    }
+                });
         }
     }
     let status_text = http
@@ -1123,9 +1137,9 @@ impl PartialOrd for NumberFacts {
         if self == other {
             Some(Equal)
         } else if self.upper_bound_log10 < other.lower_bound_log10 {
-            Some(Ordering::Less)
+            Some(Less)
         } else if self.lower_bound_log10 > other.upper_bound_log10 {
-            Some(Ordering::Greater)
+            Some(Greater)
         } else if self.upper_bound_log10 != other.upper_bound_log10 {
             Some(self.upper_bound_log10.cmp(&other.upper_bound_log10))
         } else if self.lower_bound_log10 != other.lower_bound_log10 {
@@ -1176,9 +1190,9 @@ impl NumberFacts {
                 .len()
                 .cmp(&other.factors_known_to_factordb.len())
             {
-                Ordering::Less => other.factors_known_to_factordb,
-                Ordering::Greater => self.factors_known_to_factordb,
-                Ordering::Equal => match self.factors_known_to_factordb {
+                Less => other.factors_known_to_factordb,
+                Greater => self.factors_known_to_factordb,
+                Equal => match self.factors_known_to_factordb {
                     UpToDate(f) => {
                         if matches!(other.factors_known_to_factordb, UpToDate(_)) {
                             UpToDate(f)
