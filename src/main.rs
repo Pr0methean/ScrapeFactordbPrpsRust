@@ -1132,33 +1132,16 @@ impl PartialEq<Self> for NumberFacts {
     }
 }
 
-impl PartialOrd for NumberFacts {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self == other {
-            Some(Ordering::Equal)
-        } else if self.upper_bound_log10 < other.lower_bound_log10 {
-            Some(Less)
-        } else if self.lower_bound_log10 > other.upper_bound_log10 {
-            Some(Greater)
-        } else {
-            None
-        }
-    }
-}
-
 fn compare(
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
     left: &VertexRef<VertexId, OwnedFactor>,
     right: &VertexRef<VertexId, OwnedFactor>,
 ) -> Ordering {
-    if let Some(ordering) = number_facts_map
-        .get(&left.id)
-        .unwrap()
-        .partial_cmp(number_facts_map.get(&right.id).unwrap())
-    {
-        return ordering;
-    }
-    left.attr.cmp(right.attr)
+    let left_facts = number_facts_map.get(&left.id).unwrap();
+    let right_facts = number_facts_map.get(&right.id).unwrap();
+    left_facts.upper_bound_log10.cmp(&right_facts.upper_bound_log10)
+        .then_with(|| left_facts.lower_bound_log10.cmp(&right_facts.lower_bound_log10))
+        .then_with(|| left.attr.cmp(right.attr))
 }
 
 impl NumberFacts {
