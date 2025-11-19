@@ -418,18 +418,11 @@ async fn get_prp_remaining_bases(
             }
         }
         for id in [nm1_id, np1_id] {
-            http.known_factors_as_digits::<&str, &str>(Id(nm1_id), false, true)
-                .await.factors
-                .into_iter()
-                .for_each(move |factor| {
-                    if factor.as_str_non_u128().is_some() {
-                        let http = http.clone();
-                        let factor_finder = factor_finder.clone();
-                        let _ = task::spawn(async move {
-                            find_and_submit_factors(&http, id, &*factor.as_str(), &factor_finder, true).await;
-                        });
-                    }
-                });
+            for factor in http.known_factors_as_digits::<&str, &str>(Id(id), false, true).await.factors.into_iter() {
+                if factor.as_str_non_u128().is_some() {
+                    find_and_submit_factors(&http, id, &*factor.as_str(), &factor_finder, true).await;
+                }
+            }
         }
     }
     let status_text = http
