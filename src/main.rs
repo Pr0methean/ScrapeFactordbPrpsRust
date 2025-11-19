@@ -1132,25 +1132,6 @@ impl PartialEq<Self> for NumberFacts {
     }
 }
 
-impl PartialOrd for NumberFacts {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self == other {
-            Some(Equal)
-        } else if self.upper_bound_log10 < other.lower_bound_log10 {
-            Some(Less)
-        } else if self.lower_bound_log10 > other.upper_bound_log10 {
-            Some(Greater)
-        } else if self.upper_bound_log10 != other.upper_bound_log10 {
-            Some(self.upper_bound_log10.cmp(&other.upper_bound_log10))
-        } else if self.lower_bound_log10 != other.lower_bound_log10 {
-            Some(self.lower_bound_log10.cmp(&other.lower_bound_log10))
-        } else {
-            None
-        }
-
-    }
-}
-
 impl NumberFacts {
     #[inline(always)]
     pub(crate) fn is_known_fully_factored(&self) -> bool {
@@ -1325,6 +1306,7 @@ async fn find_and_submit_factors(
     let mut any_failed_retryably = false;
     let mut known_factors = divisibility_graph
         .vertices()
+        .sorted_by_key(|vertex| vertex.attr)
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>();
@@ -1449,8 +1431,9 @@ async fn find_and_submit_factors(
         );
         let mut factors_to_submit = divisibility_graph
             .vertices()
-            .filter(|factor| factor.id != root_vid)
+            .sorted_by_key(|vertex| vertex.attr)
             .map(|vertex| vertex.id)
+            .filter(|factor_vid| *factor_vid != root_vid)
             .collect::<Box<[_]>>();
         if factors_to_submit.is_empty() {
             return accepted_factors > 0;
@@ -1476,12 +1459,13 @@ async fn find_and_submit_factors(
 
             let dest_factors = divisibility_graph
                 .vertices()
-                .filter(|dest|
-                    // if factor == dest, the relation is trivial
-                    factor_vid != dest.id
-                        // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                        && get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
+                .sorted_by_key(|vertex| vertex.attr)
                 .map(|vertex| vertex.id)
+                .filter(|dest_vid|
+                    // if factor == dest, the relation is trivial
+                    factor_vid != *dest_vid
+                        // if this edge exists, FactorDB already knows whether factor is a factor of dest
+                        && get_edge(&divisibility_graph, factor_vid, *dest_vid).is_none())
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
                 continue;
