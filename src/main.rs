@@ -50,6 +50,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::cmp::Ordering::Equal;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
@@ -1120,14 +1121,19 @@ impl PartialEq<Self> for NumberFacts {
 impl PartialOrd for NumberFacts {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         if self == other {
-            Some(Ordering::Equal)
+            Some(Equal)
         } else if self.upper_bound_log10 < other.lower_bound_log10 {
             Some(Ordering::Less)
         } else if self.lower_bound_log10 > other.upper_bound_log10 {
             Some(Ordering::Greater)
+        } else if self.upper_bound_log10 != other.upper_bound_log10 {
+            Some(self.upper_bound_log10.cmp(&other.upper_bound_log10))
+        } else if self.lower_bound_log10 != other.lower_bound_log10 {
+            Some(self.lower_bound_log10.cmp(&other.lower_bound_log10))
         } else {
             None
         }
+
     }
 }
 
