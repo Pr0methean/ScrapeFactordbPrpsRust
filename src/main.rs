@@ -1132,6 +1132,40 @@ impl PartialEq<Self> for NumberFacts {
     }
 }
 
+impl PartialOrd for NumberFacts {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self == other {
+            Some(Equal)
+        } else if self.upper_bound_log10 < other.lower_bound_log10 {
+            Some(Ordering::Less)
+        } else if self.lower_bound_log10 > other.upper_bound_log10 {
+            Some(Ordering::Greater)
+        } else if self.upper_bound_log10 != other.upper_bound_log10 {
+            Some(self.upper_bound_log10.cmp(&other.upper_bound_log10))
+        } else if self.lower_bound_log10 != other.lower_bound_log10 {
+            Some(self.lower_bound_log10.cmp(&other.lower_bound_log10))
+        } else {
+            None
+        }
+
+    }
+}
+
+fn compare(
+    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
+    left: &VertexRef<VertexId, OwnedFactor>,
+    right: &VertexRef<VertexId, OwnedFactor>,
+) -> Ordering {
+    if let Some(ordering) = number_facts_map
+        .get(&left.id)
+        .unwrap()
+        .partial_cmp(number_facts_map.get(&right.id).unwrap())
+    {
+        return ordering;
+    }
+    left.attr.cmp(right.attr)
+}
+
 impl NumberFacts {
     #[inline(always)]
     pub(crate) fn is_known_fully_factored(&self) -> bool {
