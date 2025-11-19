@@ -1326,7 +1326,6 @@ async fn find_and_submit_factors(
     let mut any_failed_retryably = false;
     let mut known_factors = divisibility_graph
         .vertices()
-        .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>();
@@ -1452,7 +1451,6 @@ async fn find_and_submit_factors(
         let mut factors_to_submit = divisibility_graph
             .vertices()
             .filter(|factor| factor.id != root_vid)
-            .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
             .map(|vertex| vertex.id)
             .collect::<Box<[_]>>();
         if factors_to_submit.is_empty() {
@@ -1484,7 +1482,6 @@ async fn find_and_submit_factors(
                     factor_vid != dest.id
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
                         && get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
-                .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
                 .map(|vertex| vertex.id)
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
