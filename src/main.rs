@@ -1132,6 +1132,18 @@ impl PartialEq<Self> for NumberFacts {
     }
 }
 
+/// No ordering could be transitive if it treated an overlapping pair of ranges differently than a
+/// nonoverlapping pair. For example:
+///
+/// let a = Factor::Expression("100#"); // lower bound 10, upper bound 44
+/// let b = Factor::BigNumber("123456789012345678901234567890123456789012345678901234567890"); // lower bound 59, upper bound 60
+/// let c = Factor::Numeric(12345678901234567890); // lower bound 19, upper bound 20
+///
+/// So a < b and b < c because of the nonoverlapping bounds, but then c < a because expressions sort
+/// last in Factor::Ord, and we hace a cycle. By comparing the upper bounds first, we break this
+/// cycle in favor of c < a < b, which is the actual numeric-value ordering. This is probably about
+/// as close as we can come to a total numeric-value ordering with no bignum math and no isk of
+/// cycles.
 fn compare(
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
     left: &VertexRef<VertexId, OwnedFactor>,

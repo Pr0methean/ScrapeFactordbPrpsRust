@@ -2069,7 +2069,7 @@ mod tests {
             finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("100#"));
         assert!(lower <= 36);
         assert!(upper >= 37);
-        assert!(upper <= 50);
+        assert!(upper <= 44);
         let (lower, upper) =
             finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("20+30"));
         assert_eq!(lower, 1);
