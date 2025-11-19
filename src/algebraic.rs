@@ -2,7 +2,6 @@ use crate::algebraic::Factor::Numeric;
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
 use arcstr::ArcStr;
 use compact_str::{CompactString, ToCompactString, format_compact};
-use gryf::core::id::VertexId;
 use itertools::Itertools;
 use log::{error, info, warn};
 use num_integer::Integer;
@@ -1844,20 +1843,26 @@ pub struct ProcessedStatusApiResponse {
     pub id: Option<u128>,
 }
 
-#[derive(Default, Debug)]
-pub struct ProcessedStatusApiResponseRef {
-    pub status: Option<NumberStatus>,
-    pub factors: Box<[VertexId]>,
-    pub id: Option<u128>,
-}
-
-#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
 pub enum NumberStatus {
     Unknown,
-    FullyFactored,
-    Prime, // includes PRP
-    PartlyFactoredComposite,
     UnfactoredComposite,
+    PartlyFactoredComposite,
+    Prime, // includes PRP
+    FullyFactored,
+}
+
+pub trait NumberStatusExt {
+    fn is_known_fully_factored(&self) -> bool;
+}
+
+impl NumberStatusExt for Option<NumberStatus> {
+    fn is_known_fully_factored(&self) -> bool {
+        matches!(
+            self,
+            Some(NumberStatus::FullyFactored) | Some(NumberStatus::Prime)
+        )
+    }
 }
 
 #[cfg(test)]
