@@ -9,7 +9,6 @@ mod graph;
 mod net;
 mod shutdown;
 
-use Ordering::{Greater, Less, Equal};
 use crate::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -25,6 +24,7 @@ use crate::graph::{
 };
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
+use Ordering::{Equal, Greater, Less};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
@@ -34,6 +34,7 @@ use graph::DivisibilityGraph;
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::GraphRef;
+use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::VertexId;
 use gryf::core::marker::Directed;
@@ -62,7 +63,6 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use gryf::core::base::VertexRef;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -418,7 +418,12 @@ async fn get_prp_remaining_bases(
             }
         }
         for id in [nm1_id, np1_id] {
-            for factor in http.known_factors_as_digits::<&str, &str>(Id(id), false, true).await.factors.into_iter() {
+            for factor in http
+                .known_factors_as_digits::<&str, &str>(Id(id), false, true)
+                .await
+                .factors
+                .into_iter()
+            {
                 if factor.as_str_non_u128().is_some() {
                     find_and_submit_factors(http, id, &factor.as_str(), factor_finder, true).await;
                 }
@@ -1144,8 +1149,14 @@ fn compare(
 ) -> Ordering {
     let left_facts = number_facts_map.get(&left.id).unwrap();
     let right_facts = number_facts_map.get(&right.id).unwrap();
-    left_facts.upper_bound_log10.cmp(&right_facts.upper_bound_log10)
-        .then_with(|| left_facts.lower_bound_log10.cmp(&right_facts.lower_bound_log10))
+    left_facts
+        .upper_bound_log10
+        .cmp(&right_facts.upper_bound_log10)
+        .then_with(|| {
+            left_facts
+                .lower_bound_log10
+                .cmp(&right_facts.lower_bound_log10)
+        })
         .then_with(|| left.attr.cmp(right.attr))
 }
 
@@ -1581,18 +1592,33 @@ async fn find_and_submit_factors(
                     let known_factor_statuses: Vec<_> = known_factor_vids
                         .iter()
                         .map(|known_factor_vid| {
-                            (*known_factor_vid, get_edge(&divisibility_graph, factor_vid, *known_factor_vid))
+                            (
+                                *known_factor_vid,
+                                get_edge(&divisibility_graph, factor_vid, *known_factor_vid),
+                            )
                         })
                         .collect();
-                    let (possible_factors, unknown_non_factors): (Vec<_>, Vec<_>) = known_factor_statuses
-                        .iter()
-                        .filter(|(_, divisibility)| *divisibility != Some(NotFactor))
-                        .partition(|(known_factor_vid, _)| factor.may_be_proper_divisor_of(divisibility_graph.vertex(known_factor_vid).unwrap())
-                        && facts.lower_bound_log10 <= number_facts_map.get(known_factor_vid).unwrap().upper_bound_log10);
+                    let (possible_factors, unknown_non_factors): (Vec<_>, Vec<_>) =
+                        known_factor_statuses
+                            .iter()
+                            .filter(|(_, divisibility)| *divisibility != Some(NotFactor))
+                            .partition(|(known_factor_vid, _)| {
+                                factor.may_be_proper_divisor_of(
+                                    divisibility_graph.vertex(known_factor_vid).unwrap(),
+                                ) && facts.lower_bound_log10
+                                    <= number_facts_map
+                                        .get(known_factor_vid)
+                                        .unwrap()
+                                        .upper_bound_log10
+                            });
                     if possible_factors.is_empty() {
                         // No possible path from factor to cofactor
                         for (unknown_non_factor, _) in unknown_non_factors {
-                            rule_out_divisibility(&mut divisibility_graph, factor_vid, unknown_non_factor);
+                            rule_out_divisibility(
+                                &mut divisibility_graph,
+                                factor_vid,
+                                unknown_non_factor,
+                            );
                         }
                         rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                         continue;
@@ -1858,7 +1884,9 @@ async fn add_factors_to_graph(
             // Links before the "Is factor of" header are algebraic factors; links after it aren't
             let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
             let result = http.try_get_and_decode(&url).await;
-            if let Some(result) = result && let Some(listed_algebraic) = result.split("Is factor of").next() {
+            if let Some(result) = result
+                && let Some(listed_algebraic) = result.split("Is factor of").next()
+            {
                 number_facts_map
                     .get_mut(&factor_vid)
                     .unwrap()

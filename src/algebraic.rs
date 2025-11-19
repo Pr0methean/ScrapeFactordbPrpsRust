@@ -1600,8 +1600,16 @@ impl FactorFinder {
                             };
                             if x != y {
                                 return self.find_common_factors(
-                                    &if x > 1 { format!("{a}^{x}").into() } else { a.into() },
-                                    &if y > 1 { format!("{b}^{y}").into() } else { b.into() },
+                                    &if x > 1 {
+                                        format!("{a}^{x}").into()
+                                    } else {
+                                        a.into()
+                                    },
+                                    &if y > 1 {
+                                        format!("{b}^{y}").into()
+                                    } else {
+                                        b.into()
+                                    },
                                     true,
                                 );
                             }
