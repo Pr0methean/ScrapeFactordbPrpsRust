@@ -63,6 +63,7 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use gryf::core::base::VertexRef;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -1137,9 +1138,9 @@ impl PartialOrd for NumberFacts {
         if self == other {
             Some(Equal)
         } else if self.upper_bound_log10 < other.lower_bound_log10 {
-            Some(Ordering::Less)
+            Some(Less)
         } else if self.lower_bound_log10 > other.upper_bound_log10 {
-            Some(Ordering::Greater)
+            Some(Greater)
         } else if self.upper_bound_log10 != other.upper_bound_log10 {
             Some(self.upper_bound_log10.cmp(&other.upper_bound_log10))
         } else if self.lower_bound_log10 != other.lower_bound_log10 {
@@ -1494,14 +1495,13 @@ async fn find_and_submit_factors(
 
             let dest_factors = divisibility_graph
                 .vertices()
+                .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
                 .map(|vertex| vertex.id)
                 .filter(|dest_vid|
                     // if factor == dest, the relation is trivial
                     factor_vid != *dest_vid
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                        && get_edge(&divisibility_graph, factor_vid, dest.id).is_none())
-                .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
-                .map(|vertex| vertex.id)
+                        && get_edge(&divisibility_graph, factor_vid, *dest_vid).is_none())
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
                 continue;
