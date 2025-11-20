@@ -6,7 +6,10 @@ use crate::algebraic::NumberStatus::{
 };
 use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
 use crate::shutdown::Shutdown;
-use crate::{EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, MAX_ID_EQUAL_TO_VALUE};
+use crate::{
+    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
+    MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
+};
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
 use arcstr::ArcStr;
@@ -407,8 +410,16 @@ impl FactorDbClient {
 
     #[inline]
     pub async fn try_get_expression_form(&self, entry_id: u128) -> Option<ArcStr> {
-        let response = self.try_get_and_decode(&format!("http://factordb.com/index.php?id={entry_id}")).await?;
-        Some(self.expression_form_regex.captures(&response)?.get(1)?.as_str().into())
+        let response = self
+            .try_get_and_decode(&format!("http://factordb.com/index.php?id={entry_id}"))
+            .await?;
+        Some(
+            self.expression_form_regex
+                .captures(&response)?
+                .get(1)?
+                .as_str()
+                .into(),
+        )
     }
 
     #[inline]
@@ -422,7 +433,9 @@ impl FactorDbClient {
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
         debug!("known_factors_as_digits: id={id:?}");
-        if let Id(entry_id) = id && entry_id <= MAX_ID_EQUAL_TO_VALUE {
+        if let Id(entry_id) = id
+            && entry_id <= MAX_ID_EQUAL_TO_VALUE
+        {
             id = Expression(Numeric(entry_id));
         }
         if let Expression(Numeric(n)) = id {
