@@ -1713,7 +1713,6 @@ async fn find_and_submit_factors(
                                 mark_fully_factored(number_facts_map.get_mut(&dest_subfactor_vid).unwrap());
                             }
                         }
-                        }
                         continue;
                     }
                     Accepted => {
