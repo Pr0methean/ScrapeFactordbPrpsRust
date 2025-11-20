@@ -46,12 +46,12 @@ use primitive_types::U256;
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
 use regex::Regex;
-use replace_with::replace_with_or_abort;
+use replace_with::{replace_with_or_abort};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -63,6 +63,7 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use gryf::adapt::{Transpose};
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -1510,6 +1511,15 @@ async fn find_and_submit_factors(
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
             }
+            let reverse_graph = Transpose::new(&divisibility_graph);
+            let reverse_shortest_paths = ShortestPaths::on(&reverse_graph)
+                        .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
+                        .run(factor_vid)
+                        .unwrap();
+            let divisors_of_factor: BTreeSet<_> = divisibility_graph.vertices()
+                .map(|v| v.id)
+                .filter(|v| reverse_shortest_paths.dist(v) == Some(&0))
+                .collect();
             for cofactor_vid in dest_factors.into_iter().rev() {
                 // Try to submit to largest cofactors first
                 // Check if an edge has been added since dest_factors was built
@@ -1518,13 +1528,14 @@ async fn find_and_submit_factors(
                     continue;
                 }
                 let reverse_edge = get_edge(&divisibility_graph, cofactor_vid, factor_vid);
-                if reverse_edge == Some(Direct) || reverse_edge == Some(Transitive) {
+                if reverse_edge == Some(Direct) || reverse_edge == Some(Transitive)
+                        || divisors_of_factor.contains(&cofactor_vid) {
+                    // cofactor is divisible by factor, and this is already known to factordb
+                    // because it follows that relation transitively
                     rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     continue;
                 }
                 if shortest_paths.dist(cofactor_vid) == Some(&0) {
-                    // dest_factor is divisible by factor, and this is already known to factordb
-                    // because it follows that relation transitively
                     propagate_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid, true);
                     continue;
                 }
