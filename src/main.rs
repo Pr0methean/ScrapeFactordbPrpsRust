@@ -1730,11 +1730,6 @@ async fn find_and_submit_factors(
                             false,
                         );
                         // Move newly-accepted factor to the back of the list
-                        factors_to_submit.clear();
-                        factors_to_submit.extend(divisibility_graph.vertices()
-                            .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1))
-                            .map(|vertex| vertex.id)
-                            .filter(|other_factor_vid| *other_factor_vid != root_vid && *other_factor_vid != factor_vid));
                         factors_to_submit.push_back(factor_vid);
                         continue 'graph_iter;
                     }
