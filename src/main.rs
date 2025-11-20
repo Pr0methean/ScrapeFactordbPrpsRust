@@ -1134,6 +1134,7 @@ struct NumberFacts {
     entry_id: Option<u128>,
     checked_for_listed_algebraic: bool,
     checked_in_factor_finder: bool,
+    expression_form_checked_in_factor_finder: bool,
 }
 
 impl PartialEq<Self> for NumberFacts {
@@ -1231,7 +1232,9 @@ impl NumberFacts {
                 },
             },
             checked_in_factor_finder: self.checked_in_factor_finder
-                && other.checked_in_factor_finder,
+                || other.checked_in_factor_finder,
+            expression_form_checked_in_factor_finder: self.expression_form_checked_in_factor_finder
+                || other.expression_form_checked_in_factor_finder,
         }
     }
 }
@@ -1885,6 +1888,7 @@ async fn add_factors_to_graph(
             if status == Prime || status == FullyFactored {
                 facts.checked_for_listed_algebraic = true;
                 facts.checked_in_factor_finder = true;
+                facts.expression_form_checked_in_factor_finder = true;
             }
             if status == Prime {
                 for other_vertex in divisibility_graph
@@ -1946,7 +1950,7 @@ async fn add_factors_to_graph(
         }
     }
 
-    // Finally, check if factor_finder can find factors
+    // Next, check if factor_finder can find factors
     let facts = number_facts_map.get(&factor_vid).unwrap();
     if !facts.checked_in_factor_finder {
         added.extend(add_factor_finder_factor_vertices_to_graph(
@@ -1960,6 +1964,28 @@ async fn add_factors_to_graph(
     }
     let facts = number_facts_map.get_mut(&factor_vid).unwrap();
     facts.checked_in_factor_finder = true;
+
+    if let Some(entry_id) = facts.entry_id
+            && !facts.expression_form_checked_in_factor_finder
+            && let Some(expression_form) = http.try_get_expression_form(entry_id).await {
+        let expression_form: Factor<&str,&str> = Factor::from(expression_form.as_str());
+        added.extend(factor_finder
+            .find_unique_factors(&expression_form)
+            .into_iter()
+            .map(|new_factor| {
+                add_factor_node(
+                    divisibility_graph,
+                    new_factor.as_ref(),
+                    factor_finder,
+                    number_facts_map,
+                    Some(root_vid),
+                    Some(entry_id),
+                )
+            })
+            .flat_map(|(vid, added)| if added { Some(vid) } else { None }));
+        let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+        facts.expression_form_checked_in_factor_finder = true;
+    }
 
     added.into_iter().collect()
 }

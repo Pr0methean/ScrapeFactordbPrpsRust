@@ -72,6 +72,7 @@ pub struct FactorDbClient {
     curl_client: Arc<Mutex<Easy2<Collector>>>,
     id_and_expr_regex: Arc<Regex>,
     digits_fallback_regex: Arc<Regex>,
+    expression_form_regex: Arc<Regex>,
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -166,6 +167,7 @@ impl FactorDbClient {
                 .dot_matches_new_line(true)
                 .build()
                 .unwrap();
+        let expression_form_regex = Regex::new("name=\"query\" value=\"([^\"]+)\"").unwrap();
         // Governor rate-limiters start out with their full burst capacity and recharge starting
         // immediately, but this would lead to twice the allowed number of requests in our first hour,
         // so we make it start nearly empty instead.
@@ -186,6 +188,7 @@ impl FactorDbClient {
             curl_client: Mutex::new(Easy2::new(Collector(Vec::new()))).into(),
             id_and_expr_regex: id_and_expr_regex.into(),
             digits_fallback_regex: digits_fallback_regex.into(),
+            expression_form_regex: expression_form_regex.into(),
         }
     }
 
@@ -400,6 +403,12 @@ impl FactorDbClient {
                 Some((id, expr.as_str()))
             })
             .unique()
+    }
+
+    #[inline]
+    pub async fn try_get_expression_form(&self, entry_id: u128) -> Option<ArcStr> {
+        let response = self.try_get_and_decode(&format!("http://factordb.com/index.php?id={entry_id}")).await?;
+        Some(self.expression_form_regex.captures(&response)?.get(1)?.as_str().into())
     }
 
     #[inline]

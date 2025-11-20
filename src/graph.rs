@@ -251,6 +251,7 @@ pub fn add_factor_node(
                     entry_id,
                     checked_for_listed_algebraic: false,
                     checked_in_factor_finder: false,
+                    expression_form_checked_in_factor_finder: false,
                 },
             );
             (factor_vid, true)
