@@ -1902,51 +1902,51 @@ async fn add_factors_to_graph(
                 }
             }
         }
-        if facts.checked_for_listed_algebraic {
-            return added.into_iter().collect();
-        }
         id = facts.entry_id;
     }
 
     // Next, check factordb.com/frame_moreinfo.php for listed algebraic factors
     if let Some(id) = id {
-        let root = divisibility_graph.vertex(&factor_vid).unwrap();
-        if let Some(known_id) = root.known_id()
-            && id != known_id
-        {
-            error!("Tried to look up {root} using a smaller number's id {id}");
-        } else {
-            info!("{id}: Checking for listed algebraic factors");
-            // Links before the "Is factor of" header are algebraic factors; links after it aren't
-            let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
-            let result = http.try_get_and_decode(&url).await;
-            if let Some(result) = result
-                && let Some(listed_algebraic) = result.split("Is factor of").next()
+        let facts = number_facts_map.get(&factor_vid).unwrap();
+        if !facts.checked_for_listed_algebraic {
+            let root = divisibility_graph.vertex(&factor_vid).unwrap();
+            if let Some(known_id) = root.known_id()
+                && id != known_id
             {
-                number_facts_map
-                    .get_mut(&factor_vid)
-                    .unwrap()
-                    .checked_for_listed_algebraic = true;
-                let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
-                for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
-                    let factor: Factor<&str, &str> = factor_digits_or_expr.into();
-                    let (subfactor_vid, is_new) = add_factor_node(
-                        divisibility_graph,
-                        factor,
-                        factor_finder,
-                        number_facts_map,
-                        Some(factor_vid),
-                        Some(subfactor_entry_id),
-                    );
-                    debug!(
-                        "{id}: Factor {factor} has entry ID {subfactor_entry_id} and vertex ID {subfactor_vid:?}"
-                    );
-                    if is_new {
-                        added.insert(subfactor_vid);
-                    }
-                }
+                error!("Tried to look up {root} using a smaller number's id {id}");
             } else {
-                error!("{id}: Failed to decode algebraic-factor list");
+                info!("{id}: Checking for listed algebraic factors");
+                // Links before the "Is factor of" header are algebraic factors; links after it aren't
+                let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
+                let result = http.try_get_and_decode(&url).await;
+                if let Some(result) = result
+                    && let Some(listed_algebraic) = result.split("Is factor of").next()
+                {
+                    number_facts_map
+                        .get_mut(&factor_vid)
+                        .unwrap()
+                        .checked_for_listed_algebraic = true;
+                    let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
+                    for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
+                        let factor: Factor<&str, &str> = factor_digits_or_expr.into();
+                        let (subfactor_vid, is_new) = add_factor_node(
+                            divisibility_graph,
+                            factor,
+                            factor_finder,
+                            number_facts_map,
+                            Some(factor_vid),
+                            Some(subfactor_entry_id),
+                        );
+                        debug!(
+                            "{id}: Factor {factor} has entry ID {subfactor_entry_id} and vertex ID {subfactor_vid:?}"
+                        );
+                        if is_new {
+                            added.insert(subfactor_vid);
+                        }
+                    }
+                } else {
+                    error!("{id}: Failed to decode algebraic-factor list");
+                }
             }
         }
     }
