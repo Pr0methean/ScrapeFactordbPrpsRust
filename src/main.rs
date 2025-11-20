@@ -1332,7 +1332,7 @@ async fn find_and_submit_factors(
     );
     if skip_looking_up_known {
         let root_facts = number_facts_map.get_mut(&root_vid).unwrap();
-        root_facts.factors_known_to_factordb = UpToDate(vec![root_vid].into());
+        root_facts.factors_known_to_factordb = UpToDate(vec![root_vid]);
     }
     let mut factor_found = false;
     let mut accepted_factors = 0;
