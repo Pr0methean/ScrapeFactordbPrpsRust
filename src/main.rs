@@ -1340,16 +1340,14 @@ async fn find_and_submit_factors(
         return false;
     }
     // Simplest case: try submitting all factors as factors of the root
+    // Sort backwards so that we try to submit largest factors first
     let mut any_failed_retryably = false;
-    let mut known_factors = divisibility_graph
+    let known_factors = divisibility_graph
         .vertices()
-        .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
+        .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1))
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>();
-
-    // Try to submit largest factors first
-    known_factors.reverse();
 
     for factor_vid in known_factors.into_iter() {
         let factor = divisibility_graph.vertex(factor_vid).unwrap();
@@ -1466,18 +1464,16 @@ async fn find_and_submit_factors(
                 .filter(|(_, facts)| facts.entry_id.is_some())
                 .count()
         );
-        let mut factors_to_submit = divisibility_graph
+        // Sort backwards so that we try to submit largest factors first
+        let factors_to_submit = divisibility_graph
             .vertices()
-            .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
+            .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1))
             .map(|vertex| vertex.id)
             .filter(|factor_vid| *factor_vid != root_vid)
             .collect::<Box<[_]>>();
         if factors_to_submit.is_empty() {
             return accepted_factors > 0;
         }
-
-        // Try to submit largest factors first
-        factors_to_submit.reverse();
 
         for factor_vid in factors_to_submit {
             // root can't be a factor of any other number we'll encounter
