@@ -6,10 +6,7 @@ use crate::algebraic::NumberStatus::{
 };
 use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
 use crate::shutdown::Shutdown;
-use crate::{
-    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
-    ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
-};
+use crate::{EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, MAX_ID_EQUAL_TO_VALUE};
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
 use arcstr::ArcStr;
@@ -411,11 +408,14 @@ impl FactorDbClient {
         U: AsRef<str> + std::fmt::Debug,
     >(
         &self,
-        id: NumberSpecifier<T, U>,
+        mut id: NumberSpecifier<T, U>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
         debug!("known_factors_as_digits: id={id:?}");
+        if let Id(entry_id) = id && entry_id <= MAX_ID_EQUAL_TO_VALUE {
+            id = Expression(Numeric(entry_id));
+        }
         if let Expression(Numeric(n)) = id {
             debug!("Specially handling numeric expression {n}");
             let factors = FactorFinder::find_factors_of_u128(n).into_boxed_slice();
