@@ -1086,16 +1086,24 @@ const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum FactorsKnownToFactorDb {
     NotQueried,
-    NotUpToDate(Box<[VertexId]>),
-    UpToDate(Box<[VertexId]>),
+    NotUpToDate(Vec<VertexId>),
+    UpToDate(Vec<VertexId>),
+}
+
+impl FactorsKnownToFactorDb {
+    pub(crate) fn to_vec(&self) -> Vec<VertexId> {
+        match self {
+            FactorsKnownToFactorDb::NotQueried => vec![],
+            NotUpToDate(factors) | UpToDate(factors) => factors.clone(),
+        }
+    }
 }
 
 impl FactorsKnownToFactorDb {
     fn len(&self) -> usize {
         match self {
             FactorsKnownToFactorDb::NotQueried => 0,
-            NotUpToDate(factors) => factors.len(),
-            UpToDate(factors) => factors.len(),
+            NotUpToDate(factors) | UpToDate(factors) => factors.len(),
         }
     }
 
@@ -1271,7 +1279,7 @@ async fn find_and_submit_factors(
                 );
                 digits_or_expr_full.push(root_node);
                 if known_factors.len() > 1 {
-                    let factor_vids = known_factors
+                    let factor_vids: Vec<_> = known_factors
                         .into_iter()
                         .map(|known_factor| {
                             let (factor_vid, added) = add_factor_node(
@@ -1295,7 +1303,7 @@ async fn find_and_submit_factors(
                             }
                             factor_vid
                         })
-                        .collect::<Box<[_]>>();
+                        .collect();
                     let root_facts = number_facts_map.get_mut(&root_node).unwrap();
                     if !factor_vids.is_empty() {
                         root_facts.factors_known_to_factordb = UpToDate(factor_vids);
@@ -1841,7 +1849,7 @@ async fn add_factors_to_graph(
             ),
             _ => known_factors
                 .into_iter()
-                .flat_map(|known_factor| {
+                .map(|known_factor| {
                     let (known_factor_vid, added) = add_factor_node(
                         divisibility_graph,
                         known_factor.as_ref(),
@@ -1851,17 +1859,21 @@ async fn add_factors_to_graph(
                         known_factor.known_id(),
                     );
                     propagate_divisibility(divisibility_graph, known_factor_vid, factor_vid, false);
-                    if added { Some(known_factor_vid) } else { None }
+                    any_added |= added;
+                    known_factor_vid
                 })
                 .collect(),
         };
         let facts = number_facts_map.get_mut(&factor_vid).unwrap();
         if known_factor_count > 0 {
-            facts.factors_known_to_factordb = UpToDate(all_added.clone().into_boxed_slice());
+            facts.factors_known_to_factordb = UpToDate(all_added);
         }
+        facts.entry_id = facts.entry_id.or(new_id);
         if let Some(status) = status {
             facts.last_known_status = Some(status);
             if status == Prime {
+                facts.checked_for_listed_algebraic = true;
+                facts.checked_in_factor_finder = true;
                 for other_vertex in divisibility_graph
                     .vertices_by_id()
                     .filter(|other_vid| *other_vid != factor_vid)
@@ -1870,12 +1882,12 @@ async fn add_factors_to_graph(
                 {
                     rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
                 }
+            } else if status == FullyFactored {
+                facts.checked_for_listed_algebraic = true;
+                facts.checked_in_factor_finder = true;
             }
         }
-        any_added = !all_added.is_empty();
-        let facts = number_facts_map.get_mut(&factor_vid).unwrap();
-        facts.entry_id = facts.entry_id.or(new_id);
-        if status.is_known_fully_factored() || facts.checked_for_listed_algebraic {
+        if facts.checked_for_listed_algebraic {
             return any_added;
         }
         id = facts.entry_id;
@@ -1972,7 +1984,7 @@ fn merge_equivalent_expressions(
 ) -> Vec<VertexId> {
     let current = divisibility_graph.vertex(&factor_vid).unwrap();
     if equivalent == *current {
-        vec![]
+        number_facts_map.get(&factor_vid).unwrap().factors_known_to_factordb.to_vec()
     } else {
         info!("Merging equivalent expressions {current} and {equivalent}");
         let current_expr = current.as_str();
@@ -1983,18 +1995,17 @@ fn merge_equivalent_expressions(
         };
         let facts = number_facts_map.get_mut(&factor_vid).unwrap();
         let entry_id = facts.entry_id;
-        let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
-            add_factor_finder_factor_vertices_to_graph(
+        let mut new_factor_vids = facts.factors_known_to_factordb.to_vec();
+        if !replace(&mut facts.checked_in_factor_finder, true) {
+            new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
                 factor_finder,
                 divisibility_graph,
                 root_vid,
                 number_facts_map,
                 factor_vid,
                 entry_id,
-            )
-        } else {
-            Vec::new()
-        };
+            ));
+        }
         let (new_lower_bound_log10, new_upper_bound_log10) =
             factor_finder.estimate_log10(&equivalent);
         let facts = number_facts_map.get_mut(&factor_vid).unwrap();
@@ -2018,7 +2029,6 @@ fn merge_equivalent_expressions(
             factor_vid,
             entry_id,
         ));
-
         new_factor_vids
     }
 }
