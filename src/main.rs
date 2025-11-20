@@ -1708,14 +1708,11 @@ async fn find_and_submit_factors(
                         if dest_facts.last_known_status != Some(FullyFactored)
                             && dest_facts.last_known_status != Some(Prime)
                         {
-                            dest_facts.last_known_status = if let UpToDate(factors) =
-                                &dest_facts.factors_known_to_factordb
-                                && factors.len() == 1
-                            {
-                                Some(Prime)
-                            } else {
-                                Some(FullyFactored)
+                            mark_fully_factored(dest_facts);
+                            for dest_subfactor_vid in dest_facts.factors_known_to_factordb.to_vec() {
+                                mark_fully_factored(number_facts_map.get_mut(&dest_subfactor_vid).unwrap());
                             }
+                        }
                         }
                         continue;
                     }
@@ -1778,6 +1775,7 @@ async fn find_and_submit_factors(
             }
         }
     }
+
     for factor_vid in divisibility_graph
         .vertices_by_id()
         .collect::<Box<[_]>>()
@@ -1815,6 +1813,17 @@ async fn find_and_submit_factors(
         }
     }
     accepted_factors > 0
+}
+
+fn mark_fully_factored(dest_facts: &mut NumberFacts) {
+    dest_facts.last_known_status = if let UpToDate(factors) =
+        &dest_facts.factors_known_to_factordb
+        && factors.len() == 1
+    {
+        Some(Prime)
+    } else {
+        Some(FullyFactored)
+    };
 }
 
 async fn add_factors_to_graph(
