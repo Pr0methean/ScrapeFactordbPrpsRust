@@ -1810,9 +1810,12 @@ async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn mark_fully_factored(dest_facts: &mut NumberFacts) {
-    dest_facts.last_known_status = if let UpToDate(factors) =
-        &dest_facts.factors_known_to_factordb
+fn mark_fully_factored(facts: &mut NumberFacts) {
+    facts.checked_for_listed_algebraic = true;
+    facts.checked_in_factor_finder = true;
+    facts.expression_form_checked_in_factor_finder = true;
+    facts.last_known_status = if let UpToDate(factors) =
+        &facts.factors_known_to_factordb
         && factors.len() == 1
     {
         Some(Prime)
@@ -1890,9 +1893,7 @@ async fn add_factors_to_graph(
         if let Some(status) = status {
             facts.last_known_status = Some(status);
             if status == Prime || status == FullyFactored {
-                facts.checked_for_listed_algebraic = true;
-                facts.checked_in_factor_finder = true;
-                facts.expression_form_checked_in_factor_finder = true;
+                mark_fully_factored(facts);
             }
             if status == Prime {
                 for other_vertex in divisibility_graph
