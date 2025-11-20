@@ -1460,7 +1460,6 @@ async fn find_and_submit_factors(
         );
         let mut factors_to_submit = divisibility_graph
             .vertices()
-            .sorted_by_key(|vertex| vertex.attr)
             .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
             .map(|vertex| vertex.id)
             .filter(|factor_vid| *factor_vid != root_vid)
@@ -1516,8 +1515,7 @@ async fn find_and_submit_factors(
                         .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
                         .run(factor_vid)
                         .unwrap();
-            let divisors_of_factor: BTreeSet<_> = divisibility_graph.vertices()
-                .map(|v| v.id)
+            let divisors_of_factor: BTreeSet<_> = divisibility_graph.vertices_by_id()
                 .filter(|v| reverse_shortest_paths.dist(v) == Some(&0))
                 .collect();
             for cofactor_vid in dest_factors.into_iter().rev() {
@@ -1762,8 +1760,7 @@ async fn find_and_submit_factors(
         }
     }
     for factor_vid in divisibility_graph
-        .vertices()
-        .map(|vertex| vertex.id)
+        .vertices_by_id()
         .collect::<Box<[_]>>()
         .into_iter()
     {
