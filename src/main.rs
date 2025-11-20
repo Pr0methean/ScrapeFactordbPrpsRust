@@ -1424,7 +1424,7 @@ async fn find_and_submit_factors(
         );
     }
     let mut iters_without_progress = 0;
-    while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
+    'graph_iter: while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
         iters_without_progress += 1;
         let node_count = divisibility_graph.vertex_count();
         let edge_count = divisibility_graph.edge_count();
@@ -1721,6 +1721,7 @@ async fn find_and_submit_factors(
                             cofactor_vid,
                             false,
                         );
+                        continue 'graph_iter;
                     }
                     DoesNotDivide => {
                         add_factors_to_graph(
