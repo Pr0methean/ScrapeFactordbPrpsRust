@@ -1126,9 +1126,9 @@ impl FactorFinder {
             "^([0-9]+)$",
             "^([0-9]+\\.\\.+[0-9]+)$",
             "^\\(([^()]+)\\)$",
-            "^([^+-]+|\\([^()]+\\))/([^+-]+|\\([^()]+\\))$",
-            "^([^+-]+|\\([^()]+\\))\\*([^+-]+|\\([^()]+\\))$",
-            "^([^()]+|\\([^()]+\\))([+-])([^()]+|\\([^()]+\\))$",
+            "^([^+-]+|\\([^()]+\\))/([^+-]+|\\([^()]+\\).*)$",
+            "^([^+-]+|\\([^()]+\\))\\*([^+-]+|\\([^()]+\\).*)$",
+            "^([^()]+|\\([^()]+\\))([+-])([^()]+|\\([^()]+\\).*)$",
         ])
         .unwrap();
         let regexes = regexes_as_set
@@ -1939,6 +1939,14 @@ mod tests {
         assert!(factors.contains(&Numeric(3)));
         assert!(!factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
+    }
+
+    #[test]
+    fn test_chain() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors::<&str, &str>(&"2^8+3*5-1".into());
+        println!("{factors:?}");
+        assert!(factors.contains(&Numeric(2)));
     }
 
     #[test]
