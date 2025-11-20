@@ -1,6 +1,7 @@
 #![allow(stable_features)]
 #![feature(duration_constructors_lite)]
 #![feature(float_gamma)]
+#![feature(deque_extend_front)]
 extern crate core;
 
 mod algebraic;
@@ -51,7 +52,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -1097,6 +1098,14 @@ impl FactorsKnownToFactorDb {
             NotUpToDate(factors) | UpToDate(factors) => factors.clone(),
         }
     }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &VertexId> {
+        static EMPTY: Vec<VertexId> = vec![];
+        match self {
+            FactorsKnownToFactorDb::NotQueried => EMPTY.iter(),
+            NotUpToDate(factors) | UpToDate(factors) => factors.iter()
+        }
+    }
 }
 
 impl FactorsKnownToFactorDb {
@@ -1325,7 +1334,7 @@ async fn find_and_submit_factors(
     let mut factor_found = false;
     let mut accepted_factors = 0;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
-        factor_found |= add_factors_to_graph(
+        factor_found |= !add_factors_to_graph(
             http,
             factor_finder,
             &mut divisibility_graph,
@@ -1333,7 +1342,7 @@ async fn find_and_submit_factors(
             root_vid,
             factor_vid,
         )
-        .await;
+        .await.is_empty();
     }
     if !factor_found {
         info!("{id}: No factors to submit");
@@ -1430,7 +1439,15 @@ async fn find_and_submit_factors(
         );
     }
     let mut iters_without_progress = 0;
-    'graph_iter: while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS {
+    // Sort backwards so that we try to submit largest factors first
+    let mut factors_to_submit = divisibility_graph
+        .vertices()
+        .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1))
+        .map(|vertex| vertex.id)
+        .filter(|factor_vid| *factor_vid != root_vid)
+        .collect::<VecDeque<_>>();
+    'graph_iter: while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS
+            && !factors_to_submit.is_empty() {
         iters_without_progress += 1;
         let node_count = divisibility_graph.vertex_count();
         let edge_count = divisibility_graph.edge_count();
@@ -1464,18 +1481,11 @@ async fn find_and_submit_factors(
                 .filter(|(_, facts)| facts.entry_id.is_some())
                 .count()
         );
-        // Sort backwards so that we try to submit largest factors first
-        let factors_to_submit = divisibility_graph
-            .vertices()
-            .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1))
-            .map(|vertex| vertex.id)
-            .filter(|factor_vid| *factor_vid != root_vid)
-            .collect::<Box<[_]>>();
         if factors_to_submit.is_empty() {
             return accepted_factors > 0;
         }
 
-        for factor_vid in factors_to_submit {
+        while let Some(factor_vid) = factors_to_submit.pop_front() {
             // root can't be a factor of any other number we'll encounter
             rule_out_divisibility(&mut divisibility_graph, root_vid, factor_vid);
             // elided numbers and numbers over 65500 digits without an expression form can only
@@ -1725,10 +1735,17 @@ async fn find_and_submit_factors(
                             cofactor_vid,
                             false,
                         );
+                        // Move newly-accepted factor to the back of the list
+                        factors_to_submit.clear();
+                        factors_to_submit.extend(divisibility_graph.vertices()
+                            .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1))
+                            .map(|vertex| vertex.id)
+                            .filter(|other_factor_vid| *other_factor_vid != root_vid && *other_factor_vid != factor_vid));
+                        factors_to_submit.push_back(factor_vid);
                         continue 'graph_iter;
                     }
                     DoesNotDivide => {
-                        add_factors_to_graph(
+                        factors_to_submit.extend_front(add_factors_to_graph(
                             http,
                             factor_finder,
                             &mut divisibility_graph,
@@ -1736,11 +1753,16 @@ async fn find_and_submit_factors(
                             root_vid,
                             factor_vid,
                         )
-                        .await;
+                        .await.into_iter()
+                            .sorted_by(|v1, v2| compare(
+                                &number_facts_map,
+                                &VertexRef {id: *v2, attr: divisibility_graph.vertex(v2).unwrap()},
+                                &VertexRef {id: *v1, attr: divisibility_graph.vertex(v1).unwrap()}))
+                        );
                         rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     }
                     OtherError => {
-                        if add_factors_to_graph(
+                        if !add_factors_to_graph(
                             http,
                             factor_finder,
                             &mut divisibility_graph,
@@ -1748,7 +1770,7 @@ async fn find_and_submit_factors(
                             root_vid,
                             cofactor_vid,
                         )
-                        .await
+                        .await.is_empty()
                         {
                             if number_facts_map
                                 .get(&root_vid)
@@ -1810,9 +1832,9 @@ async fn add_factors_to_graph(
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     root_vid: VertexId,
     factor_vid: VertexId,
-) -> bool {
+) -> Box<[VertexId]> {
     let facts = number_facts_map.get(&factor_vid).unwrap();
-    let mut any_added = false;
+    let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
 
     // First, check factordb.com/api for already-known factors
@@ -1846,10 +1868,10 @@ async fn add_factors_to_graph(
                 );
             }
         }
-        let new_known_factors = known_factors
+        let new_known_factors: Vec<_> = known_factors
                 .into_iter()
                 .map(|known_factor| {
-                    let (known_factor_vid, added) = add_factor_node(
+                    let (known_factor_vid, is_new) = add_factor_node(
                         divisibility_graph,
                         known_factor.as_ref(),
                         factor_finder,
@@ -1858,11 +1880,15 @@ async fn add_factors_to_graph(
                         known_factor.known_id(),
                     );
                     propagate_divisibility(divisibility_graph, known_factor_vid, factor_vid, false);
-                    any_added |= added;
+                    if is_new {
+                        added.insert(known_factor_vid);
+                    }
                     known_factor_vid
                 })
                 .collect();
         let facts = number_facts_map.get_mut(&factor_vid).unwrap();
+        let old_factors: BTreeSet<_> = facts.factors_known_to_factordb.iter().collect();
+        added.extend(new_known_factors.iter().filter(|factor_vid| !old_factors.contains(factor_vid)));
         if known_factor_count > 0 {
             facts.factors_known_to_factordb = UpToDate(new_known_factors);
         }
@@ -1886,7 +1912,7 @@ async fn add_factors_to_graph(
             }
         }
         if facts.checked_for_listed_algebraic {
-            return any_added;
+            return added.into_iter().collect();
         }
         id = facts.entry_id;
     }
@@ -1913,7 +1939,7 @@ async fn add_factors_to_graph(
                 let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
                     let factor: Factor<&str, &str> = factor_digits_or_expr.into();
-                    let (subfactor_vid, added) = add_factor_node(
+                    let (subfactor_vid, is_new) = add_factor_node(
                         divisibility_graph,
                         factor,
                         factor_finder,
@@ -1924,7 +1950,9 @@ async fn add_factors_to_graph(
                     debug!(
                         "{id}: Factor {factor} has entry ID {subfactor_entry_id} and vertex ID {subfactor_vid:?}"
                     );
-                    any_added |= added;
+                    if is_new {
+                        added.insert(subfactor_vid);
+                    }
                 }
             } else {
                 error!("{id}: Failed to decode algebraic-factor list");
@@ -1935,20 +1963,19 @@ async fn add_factors_to_graph(
     // Finally, check if factor_finder can find factors
     let facts = number_facts_map.get(&factor_vid).unwrap();
     if !facts.checked_in_factor_finder {
-        any_added |= !add_factor_finder_factor_vertices_to_graph(
+        added.extend(add_factor_finder_factor_vertices_to_graph(
             factor_finder,
             divisibility_graph,
             root_vid,
             number_facts_map,
             factor_vid,
             facts.entry_id,
-        )
-        .is_empty();
+        ));
     }
     let facts = number_facts_map.get_mut(&factor_vid).unwrap();
     facts.checked_in_factor_finder = true;
 
-    any_added
+    added.into_iter().collect()
 }
 
 fn as_specifier<'a>(
