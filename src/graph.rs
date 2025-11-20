@@ -30,6 +30,9 @@ pub fn rule_out_divisibility(
     nonfactor: VertexId,
     dest: VertexId,
 ) {
+    if nonfactor == dest { // happens because of recursion
+        return;
+    }
     let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| {
         old_div.unwrap_or(NotFactor)
     });
@@ -63,6 +66,9 @@ pub fn propagate_divisibility(
     dest: VertexId,
     transitive: bool,
 ) {
+    if factor == dest { // happens because of recursion
+        return;
+    }
     if upsert_edge(
         divisibility_graph,
         factor,
