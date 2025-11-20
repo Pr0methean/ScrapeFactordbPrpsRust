@@ -1945,8 +1945,11 @@ mod tests {
     fn test_chain() {
         let finder = FactorFinder::new();
         let factors = finder.find_factors::<&str, &str>(&"2^8+3*5-1".into());
-        println!("{factors:?}");
         assert!(factors.contains(&Numeric(2)));
+        let factors = finder.find_factors::<&str, &str>(&"2*3*5/10".into());
+        assert!(factors.contains(&Numeric(3)));
+        assert!(!factors.contains(&Numeric(2)));
+        assert!(!factors.contains(&Numeric(5)));
     }
 
     #[test]
