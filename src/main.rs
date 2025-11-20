@@ -1833,17 +1833,20 @@ async fn add_factors_to_graph(
             number_facts_map.get_mut(&factor_vid).unwrap().entry_id = Some(id);
         }
         let known_factor_count = known_factors.len();
-        let all_added = match known_factor_count {
-            0 => vec![],
-            1 => merge_equivalent_expressions(
-                factor_finder,
-                divisibility_graph,
-                root_vid,
-                number_facts_map,
-                factor_vid,
-                known_factors.into_iter().next().unwrap(),
-            ),
-            _ => known_factors
+        if known_factor_count == 1 {
+            let known_factor = known_factors.iter().next().unwrap();
+            if known_factor != divisibility_graph.vertex(&factor_vid).unwrap() {
+                merge_equivalent_expressions(
+                    factor_finder,
+                    divisibility_graph,
+                    root_vid,
+                    number_facts_map,
+                    factor_vid,
+                    known_factor.clone(),
+                );
+            }
+        }
+        let new_known_factors = known_factors
                 .into_iter()
                 .map(|known_factor| {
                     let (known_factor_vid, added) = add_factor_node(
@@ -1858,11 +1861,10 @@ async fn add_factors_to_graph(
                     any_added |= added;
                     known_factor_vid
                 })
-                .collect(),
-        };
+                .collect();
         let facts = number_facts_map.get_mut(&factor_vid).unwrap();
         if known_factor_count > 0 {
-            facts.factors_known_to_factordb = UpToDate(all_added);
+            facts.factors_known_to_factordb = UpToDate(new_known_factors);
         }
         facts.entry_id = facts.entry_id.or(new_id);
         if let Some(status) = status {
