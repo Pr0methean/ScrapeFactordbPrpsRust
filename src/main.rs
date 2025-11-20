@@ -1443,13 +1443,11 @@ async fn find_and_submit_factors(
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<VecDeque<_>>();
-    'graph_iter: while iters_without_progress < SUBMIT_FACTOR_MAX_ATTEMPTS
-            && !factors_to_submit.is_empty() {
-        iters_without_progress += 1;
+    'graph_iter: while !factors_to_submit.is_empty() {
         let node_count = divisibility_graph.vertex_count();
         let edge_count = divisibility_graph.edge_count();
         let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
-        if edge_count == complete_graph_edge_count {
+        if edge_count == complete_graph_edge_count || iters_without_progress >= node_count * SUBMIT_FACTOR_MAX_ATTEMPTS {
             info!("{id}: {accepted_factors} factors accepted, none left to submit");
             // Graph is fully connected, meaning none are left to try
             return accepted_factors > 0;
@@ -1482,7 +1480,9 @@ async fn find_and_submit_factors(
             return accepted_factors > 0;
         }
 
-        while let Some(factor_vid) = factors_to_submit.pop_front() {
+        while let Some(factor_vid) = factors_to_submit.pop_front()
+                && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS {
+            iters_without_progress += 1;
             // root can't be a factor of any other number we'll encounter
             rule_out_divisibility(&mut divisibility_graph, root_vid, factor_vid);
             // elided numbers and numbers over 65500 digits without an expression form can only
