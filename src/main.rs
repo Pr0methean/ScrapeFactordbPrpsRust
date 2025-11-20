@@ -1432,12 +1432,6 @@ async fn find_and_submit_factors(
         info!("{id}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
     }
-    if accepted_factors > 0 {
-        replace_with_or_abort(
-            number_facts_map.get_mut(&root_vid).unwrap(),
-            NumberFacts::marked_stale,
-        );
-    }
     let mut iters_without_progress = 0;
     // Sort backwards so that we try to submit largest factors first
     let mut factors_to_submit = divisibility_graph
@@ -1851,13 +1845,11 @@ async fn add_factors_to_graph(
         } = http
             .known_factors_as_digits(factor_specifier, true, false)
             .await;
-        if let Some(id) = id {
-            number_facts_map.get_mut(&factor_vid).unwrap().entry_id = Some(id);
-        }
         let known_factor_count = known_factors.len();
         if known_factor_count == 1 {
             let known_factor = known_factors.iter().next().unwrap();
-            if known_factor != divisibility_graph.vertex(&factor_vid).unwrap() {
+            let existing_factor = divisibility_graph.vertex(&factor_vid).unwrap();
+            if *known_factor != *existing_factor {
                 merge_equivalent_expressions(
                     factor_finder,
                     divisibility_graph,
@@ -1895,9 +1887,11 @@ async fn add_factors_to_graph(
         facts.entry_id = facts.entry_id.or(new_id);
         if let Some(status) = status {
             facts.last_known_status = Some(status);
-            if status == Prime {
+            if status == Prime || status == FullyFactored {
                 facts.checked_for_listed_algebraic = true;
                 facts.checked_in_factor_finder = true;
+            }
+            if status == Prime {
                 for other_vertex in divisibility_graph
                     .vertices_by_id()
                     .filter(|other_vid| *other_vid != factor_vid)
@@ -1906,9 +1900,6 @@ async fn add_factors_to_graph(
                 {
                     rule_out_divisibility(divisibility_graph, other_vertex, factor_vid);
                 }
-            } else if status == FullyFactored {
-                facts.checked_for_listed_algebraic = true;
-                facts.checked_in_factor_finder = true;
             }
         }
         if facts.checked_for_listed_algebraic {
