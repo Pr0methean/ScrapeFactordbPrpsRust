@@ -1484,7 +1484,7 @@ async fn find_and_submit_factors(
             iters_without_progress += 1;
             if is_known_factor(&divisibility_graph, factor_vid, root_vid)
                 && number_facts_map.get(&factor_vid).unwrap().lower_bound_log10
-                > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2
+                    > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2
             {
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
@@ -1692,8 +1692,7 @@ async fn find_and_submit_factors(
                             return true;
                         }
                         let dest_facts = number_facts_map.get_mut(&cofactor_vid).unwrap();
-                        if !dest_facts.is_known_fully_factored()
-                        {
+                        if !dest_facts.is_known_fully_factored() {
                             mark_fully_factored(dest_facts);
                             for dest_subfactor_vid in dest_facts.factors_known_to_factordb.to_vec()
                             {

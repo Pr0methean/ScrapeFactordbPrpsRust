@@ -7,7 +7,7 @@ use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
-use log::{warn};
+use log::warn;
 use replace_with::replace_with_or_abort;
 use std::collections::BTreeMap;
 
@@ -168,10 +168,12 @@ pub fn add_factor_node(
     let (existing_vertex, matching_vertices) = divisibility_graph
         .vertices()
         .filter(|v| number_facts_map.get(&v.id).unwrap().entry_id == entry_id)
-        .partition::<Vec<_>,_>(|v| v.attr.as_ref() == factor);
+        .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
     let matching_vertices: Vec<_> = matching_vertices.into_iter().map(|v| v.id).collect();
-    let (merge_dest, added) = existing_vertex.or_else(|| matching_vertices.first().copied()).map(|x| (x, false))
+    let (merge_dest, added) = existing_vertex
+        .or_else(|| matching_vertices.first().copied())
+        .map(|x| (x, false))
         .unwrap_or_else(|| {
             let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
@@ -236,10 +238,9 @@ pub fn add_factor_node(
             merge_dest,
             old_factor,
         );
-        replace_with_or_abort(
-            number_facts_map.get_mut(&merge_dest).unwrap(),
-            |facts| facts.merged_with(old_facts),
-        );
+        replace_with_or_abort(number_facts_map.get_mut(&merge_dest).unwrap(), |facts| {
+            facts.merged_with(old_facts)
+        });
     }
     (merge_dest, added)
 }

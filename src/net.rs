@@ -499,18 +499,17 @@ impl FactorDbClient {
                             None
                         }
                     };
-                    let factors =
-                        if !include_ff && status.is_known_fully_factored() {
-                            vec![]
-                        } else {
-                            let mut factors: Vec<_> = factors
-                                .into_iter()
-                                .map(|(factor, _exponent)| Factor::from(factor))
-                                .collect();
-                            factors.sort();
-                            factors.dedup();
-                            factors
-                        };
+                    let factors = if !include_ff && status.is_known_fully_factored() {
+                        vec![]
+                    } else {
+                        let mut factors: Vec<_> = factors
+                            .into_iter()
+                            .map(|(factor, _exponent)| Factor::from(factor))
+                            .collect();
+                        factors.sort();
+                        factors.dedup();
+                        factors
+                    };
                     ProcessedStatusApiResponse {
                         status,
                         factors: factors.into_boxed_slice(),
