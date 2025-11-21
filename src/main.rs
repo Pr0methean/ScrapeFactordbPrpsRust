@@ -1290,8 +1290,8 @@ async fn find_and_submit_factors(
                     Some(id),
                 );
                 digits_or_expr_full.push(root_node);
-                if known_factors.len() > 1 {
-                    let factor_vids: Vec<_> = known_factors
+                let root_factors = UpToDate(if known_factors.len() > 1 {
+                    known_factors
                         .into_iter()
                         .map(|known_factor| {
                             let (factor_vid, added) = add_factor_node(
@@ -1315,13 +1315,13 @@ async fn find_and_submit_factors(
                             }
                             factor_vid
                         })
-                        .collect();
-                    let root_facts = number_facts_map.get_mut(&root_node).unwrap();
-                    if !factor_vids.is_empty() {
-                        root_facts.factors_known_to_factordb = UpToDate(factor_vids);
-                    }
-                    root_facts.last_known_status = status;
-                }
+                        .collect()
+                } else {
+                    vec![root_node]
+                });
+                let root_facts = number_facts_map.get_mut(&root_node).unwrap();
+                root_facts.factors_known_to_factordb = root_factors;
+                root_facts.last_known_status = status;
                 (root_node, true)
             }
         }
