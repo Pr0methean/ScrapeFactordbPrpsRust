@@ -475,7 +475,7 @@ pub async fn find_and_submit_factors(
             _ => {
                 let (root_node, _) = add_factor_node(
                     &mut divisibility_graph,
-                    Factor::from(known_factors.iter().join("*")).as_ref(),
+                    Factor::from(known_factors.iter().map(|f| f.as_str()).join("*")).as_ref(),
                     factor_finder,
                     &mut number_facts_map,
                     None,
