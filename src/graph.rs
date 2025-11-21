@@ -720,6 +720,7 @@ pub async fn find_and_submit_factors(
             if dest_factors.is_empty() {
                 continue;
             };
+            let mut submission_errors = false;
             for cofactor_vid in dest_factors.into_iter().rev() {
                 // Try to submit to largest cofactors first
                 if is_known_factor(&divisibility_graph, factor_vid, cofactor_vid) {
@@ -953,6 +954,7 @@ pub async fn find_and_submit_factors(
                         );
                     }
                     OtherError => {
+                        submission_errors = true;
                         if !add_factors_to_graph(
                             http,
                             factor_finder,
@@ -975,6 +977,9 @@ pub async fn find_and_submit_factors(
                         }
                     }
                 }
+            }
+            if submission_errors {
+                factors_to_submit.push_back(factor_vid);
             }
         }
     }
