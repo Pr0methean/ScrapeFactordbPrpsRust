@@ -1,28 +1,30 @@
-use std::cmp::Ordering;
-use std::cmp::Ordering::{Equal, Greater, Less};
-use crate::algebraic::{Factor, FactorFinder, NumberStatus, NumberStatusExt, OwnedFactor, ProcessedStatusApiResponse};
+use crate::NumberSpecifier::Id;
+use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
+use crate::algebraic::Factor::Numeric;
+use crate::algebraic::NumberStatus::{FullyFactored, Prime};
+use crate::algebraic::{
+    Factor, FactorFinder, NumberStatus, NumberStatusExt, OwnedFactor, ProcessedStatusApiResponse,
+};
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
-use crate::{SUBMIT_FACTOR_MAX_ATTEMPTS, FAILED_U_SUBMISSIONS_OUT};
+use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
+use crate::net::FactorDbClient;
+use crate::{FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
+use gryf::core::base::VertexRef;
+use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
+use itertools::Itertools;
 use log::{debug, error, info, warn};
 use replace_with::replace_with_or_abort;
+use std::cmp::Ordering;
+use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
-use gryf::core::base::VertexRef;
-use gryf::core::facts::complete_graph_edge_count;
-use itertools::Itertools;
-use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::FactorDbClient;
-use crate::NumberSpecifier::Id;
-use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
@@ -180,8 +182,10 @@ pub fn add_factor_node(
 ) -> (VertexId, bool) {
     let (existing_vertex, matching_vertices) = divisibility_graph
         .vertices()
-        .filter(|v| v.attr.as_ref() == factor
-                || (entry_id.is_some() && number_facts_map.get(&v.id).unwrap().entry_id == entry_id))
+        .filter(|v| {
+            v.attr.as_ref() == factor
+                || (entry_id.is_some() && number_facts_map.get(&v.id).unwrap().entry_id == entry_id)
+        })
         .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
     let matching_vertices: Vec<_> = matching_vertices.into_iter().map(|v| v.id).collect();

@@ -10,48 +10,48 @@ mod graph;
 mod net;
 mod shutdown;
 
-use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{FullyFactored};
-use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
-use crate::algebraic::{NumberStatusExt, OwnedFactor};
-use crate::net::ResourceLimits;
-use crate::shutdown::{handle_signals, Shutdown};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
+use crate::algebraic::Factor::Numeric;
+use crate::algebraic::NumberStatus::FullyFactored;
+use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
+use crate::algebraic::{NumberStatusExt, OwnedFactor};
+use crate::net::ResourceLimits;
+use crate::shutdown::{Shutdown, handle_signals};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
-use graph::{NumberFacts};
+use graph::NumberFacts;
 use gryf::core::id::VertexId;
 use log::{debug, error, info, warn};
-use net::{FactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
+use net::{CPU_TENTHS_SPENT_LAST_CHECK, FactorDbClient};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::borrow::Cow;
-use std::collections::{BTreeMap};
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU128, NonZeroU32};
+use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
-use tokio::sync::{oneshot, Mutex, OnceCell};
+use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
+use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
 const MAX_START: u128 = 100_000;
@@ -409,7 +409,8 @@ async fn get_prp_remaining_bases(
                 .into_iter()
             {
                 if factor.as_str_non_u128().is_some() {
-                    graph::find_and_submit_factors(http, id, &factor.as_str(), factor_finder, true).await;
+                    graph::find_and_submit_factors(http, id, &factor.as_str(), factor_finder, true)
+                        .await;
                 }
             }
         }
@@ -1086,4 +1087,3 @@ fn as_specifier<'a>(
             .unwrap_or_else(|| Expression(factor.as_ref()))
     }
 }
-
