@@ -1786,12 +1786,10 @@ async fn find_and_submit_factors(
 
     for factor_vid in divisibility_graph
         .vertices_by_id()
+        .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>()
         .into_iter()
     {
-        if factor_vid == root_vid {
-            continue;
-        }
         let factor = divisibility_graph.vertex(factor_vid).unwrap();
         if factor
             .as_str_non_u128()
