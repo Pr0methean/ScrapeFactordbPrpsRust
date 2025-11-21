@@ -204,7 +204,7 @@ async fn check_composite(
         .known_factors_as_digits::<&str, &str>(Id(id), false, true)
         .await;
     if factors.is_empty() {
-        if status == Some(FullyFactored) || status == Some(Prime) {
+        if status.is_known_fully_factored() {
             warn!("{id}: Already fully factored");
             true
         } else {
@@ -1266,7 +1266,7 @@ async fn find_and_submit_factors(
         } = http
             .known_factors_as_digits::<&str, &str>(Id(id), false, true)
             .await;
-        if status == Some(FullyFactored) || status == Some(Prime) {
+        if status.is_known_fully_factored() {
             warn!("{id}: Already fully factored");
             return true;
         }
@@ -1700,8 +1700,7 @@ async fn find_and_submit_factors(
                             return true;
                         }
                         let dest_facts = number_facts_map.get_mut(&cofactor_vid).unwrap();
-                        if dest_facts.last_known_status != Some(FullyFactored)
-                            && dest_facts.last_known_status != Some(Prime)
+                        if !dest_facts.is_known_fully_factored()
                         {
                             mark_fully_factored(dest_facts);
                             for dest_subfactor_vid in dest_facts.factors_known_to_factordb.to_vec()

@@ -1865,6 +1865,7 @@ pub trait NumberStatusExt {
 }
 
 impl NumberStatusExt for Option<NumberStatus> {
+    #[inline]
     fn is_known_fully_factored(&self) -> bool {
         matches!(
             self,

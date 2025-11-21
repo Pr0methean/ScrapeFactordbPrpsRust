@@ -4,7 +4,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
-use crate::algebraic::{FactorFinder, ProcessedStatusApiResponse};
+use crate::algebraic::{FactorFinder, NumberStatusExt, ProcessedStatusApiResponse};
 use crate::shutdown::Shutdown;
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
@@ -500,7 +500,7 @@ impl FactorDbClient {
                         }
                     };
                     let factors =
-                        if !include_ff && status == Some(FullyFactored) || status == Some(Prime) {
+                        if !include_ff && status.is_known_fully_factored() {
                             vec![]
                         } else {
                             let mut factors: Vec<_> = factors
