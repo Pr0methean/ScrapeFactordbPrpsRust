@@ -1399,6 +1399,7 @@ async fn find_and_submit_factors(
                 propagate_divisibility(&mut divisibility_graph, factor_vid, root_vid, false);
             }
             DoesNotDivide => {
+                rule_out_divisibility(&mut divisibility_graph, factor_vid, root_vid);
                 add_factors_to_graph(
                     http,
                     factor_finder,
@@ -1408,7 +1409,6 @@ async fn find_and_submit_factors(
                     factor_vid,
                 )
                 .await;
-                rule_out_divisibility(&mut divisibility_graph, factor_vid, root_vid);
             }
             OtherError => {
                 add_factors_to_graph(
@@ -1730,6 +1730,7 @@ async fn find_and_submit_factors(
                         continue 'graph_iter;
                     }
                     DoesNotDivide => {
+                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                         factors_to_submit.extend_front(
                             add_factors_to_graph(
                                 http,
@@ -1755,7 +1756,6 @@ async fn find_and_submit_factors(
                                 )
                             }),
                         );
-                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     }
                     OtherError => {
                         if !add_factors_to_graph(
