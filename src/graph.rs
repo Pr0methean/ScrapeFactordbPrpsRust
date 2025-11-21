@@ -6,15 +6,15 @@ use crate::algebraic::{
     Factor, FactorFinder, NumberStatus, NumberStatusExt, OwnedFactor, ProcessedStatusApiResponse,
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
-use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
+use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
 use crate::net::FactorDbClient;
 use crate::{FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
-use gryf::core::id::{DefaultId, VertexId};
-use gryf::core::marker::{Directed, Incoming, Outgoing};
+use gryf::core::id::{DefaultId, EdgeId, VertexId};
+use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
@@ -199,7 +199,7 @@ pub fn add_factor_node(
                 factor_vid,
                 NumberFacts {
                     last_known_status: None,
-                    factors_known_to_factordb: FactorsKnownToFactorDb::NotQueried,
+                    factors_known_to_factordb: NotQueried,
                     lower_bound_log10,
                     upper_bound_log10,
                     entry_id,
@@ -224,10 +224,7 @@ pub fn add_factor_node(
         if matching_vid == merge_dest {
             continue;
         }
-        divisibility_graph
-            .neighbors_directed(&matching_vid, Incoming)
-            .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
-            .collect::<Vec<_>>()
+        neighbor_vids(divisibility_graph, matching_vid, Incoming)
             .into_iter()
             .for_each(|(vid, edge)| {
                 let merged_edge = *divisibility_graph.edge(&edge).unwrap();
@@ -235,10 +232,7 @@ pub fn add_factor_node(
                     old.unwrap_or(merged_edge).max(merged_edge)
                 });
             });
-        divisibility_graph
-            .neighbors_directed(&matching_vid, Outgoing)
-            .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
-            .collect::<Vec<_>>()
+        neighbor_vids(divisibility_graph, matching_vid, Outgoing)
             .into_iter()
             .for_each(|(vid, edge)| {
                 let merged_edge = *divisibility_graph.edge(&edge).unwrap();
@@ -261,6 +255,17 @@ pub fn add_factor_node(
         });
     }
     (merge_dest, added)
+}
+
+fn neighbor_vids(
+    divisibility_graph: &DivisibilityGraph,
+    vertex_id: VertexId,
+    direction: Direction,
+) -> Vec<(VertexId, EdgeId)> {
+    divisibility_graph
+        .neighbors_directed(vertex_id, direction)
+        .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
+        .collect::<Vec<_>>()
 }
 
 pub fn is_known_factor(
@@ -290,7 +295,7 @@ pub enum FactorsKnownToFactorDb {
 impl FactorsKnownToFactorDb {
     pub(crate) fn to_vec(&self) -> Vec<VertexId> {
         match self {
-            FactorsKnownToFactorDb::NotQueried => vec![],
+            NotQueried => vec![],
             NotUpToDate(factors) | UpToDate(factors) => factors.clone(),
         }
     }
@@ -298,7 +303,7 @@ impl FactorsKnownToFactorDb {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &VertexId> {
         static EMPTY: Vec<VertexId> = vec![];
         match self {
-            FactorsKnownToFactorDb::NotQueried => EMPTY.iter(),
+            NotQueried => EMPTY.iter(),
             NotUpToDate(factors) | UpToDate(factors) => factors.iter(),
         }
     }
@@ -307,7 +312,7 @@ impl FactorsKnownToFactorDb {
 impl FactorsKnownToFactorDb {
     fn len(&self) -> usize {
         match self {
-            FactorsKnownToFactorDb::NotQueried => 0,
+            NotQueried => 0,
             NotUpToDate(factors) | UpToDate(factors) => factors.len(),
         }
     }
@@ -316,7 +321,7 @@ impl FactorsKnownToFactorDb {
         match self {
             UpToDate(_) => false,
             NotUpToDate(_) => true,
-            FactorsKnownToFactorDb::NotQueried => true,
+            NotQueried => true,
         }
     }
 }
@@ -650,7 +655,12 @@ pub async fn find_and_submit_factors(
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<VecDeque<_>>();
-    'graph_iter: while !factors_to_submit.is_empty() {
+    'graph_iter: while !factors_to_submit.is_empty()
+        && !number_facts_map
+            .get(&root_vid)
+            .unwrap()
+            .is_known_fully_factored()
+    {
         let node_count = divisibility_graph.vertex_count();
         let edge_count = divisibility_graph.edge_count();
         let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
@@ -755,7 +765,7 @@ pub async fn find_and_submit_factors(
                             continue;
                         }
                     }
-                    FactorsKnownToFactorDb::NotQueried => {}
+                    NotQueried => {}
                 }
                 let factor = divisibility_graph.vertex(factor_vid).unwrap();
                 let cofactor = divisibility_graph.vertex(cofactor_vid).unwrap();
@@ -842,17 +852,14 @@ pub async fn find_and_submit_factors(
                         continue;
                     }
                 }
-                let cofactor_upper_bound = cofactor_facts.upper_bound_log10.saturating_sub(
-                    divisibility_graph
-                        .neighbors_directed(cofactor_vid, Incoming)
-                        .map(|existing_factor| {
-                            number_facts_map
-                                .get(&existing_factor.id)
-                                .unwrap()
-                                .lower_bound_log10
-                        })
-                        .sum(),
-                );
+                let cofactor_upper_bound =
+                    cofactor_facts
+                        .upper_bound_log10
+                        .saturating_sub(known_factors_upper_bound(
+                            &divisibility_graph,
+                            &number_facts_map,
+                            cofactor_vid,
+                        ));
                 if facts.lower_bound_log10 > cofactor_upper_bound {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
@@ -1023,6 +1030,22 @@ pub async fn find_and_submit_factors(
         }
     }
     accepted_factors > 0
+}
+
+fn known_factors_upper_bound(
+    divisibility_graph: &DivisibilityGraph,
+    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
+    cofactor_vid: VertexId,
+) -> u128 {
+    neighbor_vids(divisibility_graph, cofactor_vid, Incoming)
+        .into_iter()
+        .map(|(existing_factor, _)| {
+            number_facts_map
+                .get(&existing_factor)
+                .unwrap()
+                .lower_bound_log10
+        })
+        .sum()
 }
 
 fn mark_fully_factored(facts: &mut NumberFacts) {
