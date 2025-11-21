@@ -167,7 +167,8 @@ pub fn add_factor_node(
 ) -> (VertexId, bool) {
     let (existing_vertex, matching_vertices) = divisibility_graph
         .vertices()
-        .filter(|v| number_facts_map.get(&v.id).unwrap().entry_id == entry_id)
+        .filter(|v| v.attr.as_ref() == factor
+                || (entry_id.is_some() && number_facts_map.get(&v.id).unwrap().entry_id == entry_id))
         .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
     let matching_vertices: Vec<_> = matching_vertices.into_iter().map(|v| v.id).collect();
