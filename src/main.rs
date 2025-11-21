@@ -39,7 +39,7 @@ use gryf::core::GraphRef;
 use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::VertexId;
-use gryf::core::marker::Directed;
+use gryf::core::marker::{Directed, Incoming};
 use gryf::storage::AdjMatrix;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -1660,7 +1660,17 @@ async fn find_and_submit_factors(
                         continue;
                     }
                 }
-                let cofactor_upper_bound = cofactor_facts.upper_bound_log10;
+                let cofactor_upper_bound = cofactor_facts.upper_bound_log10.saturating_sub(
+                    divisibility_graph
+                        .neighbors_directed(cofactor_vid, Incoming)
+                        .map(|existing_factor| {
+                            number_facts_map
+                                .get(&existing_factor.id)
+                                .unwrap()
+                                .lower_bound_log10
+                        })
+                        .sum(),
+                );
                 if facts.lower_bound_log10 > cofactor_upper_bound {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
