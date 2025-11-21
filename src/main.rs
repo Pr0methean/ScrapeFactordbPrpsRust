@@ -53,6 +53,7 @@ use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
+use crate::graph::facts_of;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -1072,9 +1073,7 @@ fn as_specifier<'a>(
     factor: &'a OwnedFactor,
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
 ) -> NumberSpecifier<&'a str, &'a str> {
-    if let Some(factor_entry_id) = number_facts_map
-        .get(&factor_vid)
-        .and_then(|facts| facts.entry_id)
+    if let Some(factor_entry_id) = facts_of(number_facts_map, factor_vid).entry_id
     {
         debug!(
             "as_specifier: got entry ID {factor_entry_id} for factor {factor} with vertex ID {factor_vid:?}"
