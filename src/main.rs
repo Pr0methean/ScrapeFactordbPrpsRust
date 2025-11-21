@@ -30,10 +30,9 @@ use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
-use graph::Divisibility::{Direct, NotFactor, Transitive};
+use graph::Divisibility::{Direct, NotFactor};
 use graph::DivisibilityGraph;
 use gryf::Graph;
-use gryf::adapt::Transpose;
 use gryf::algo::ShortestPaths;
 use gryf::core::GraphRef;
 use gryf::core::base::VertexRef;
@@ -1523,30 +1522,11 @@ async fn find_and_submit_factors(
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
             }
-            let reverse_graph = Transpose::new(&divisibility_graph);
-            let reverse_shortest_paths = ShortestPaths::on(&reverse_graph)
-                .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
-                .run(factor_vid)
-                .unwrap();
-            let divisors_of_factor: BTreeSet<_> = divisibility_graph
-                .vertices_by_id()
-                .filter(|v| reverse_shortest_paths.dist(v) == Some(&0))
-                .collect();
             for cofactor_vid in dest_factors.into_iter().rev() {
                 // Try to submit to largest cofactors first
                 // Check if an edge has been added since dest_factors was built
                 let edge_id = divisibility_graph.edge_id_any(&factor_vid, &cofactor_vid);
                 if edge_id.is_some() {
-                    continue;
-                }
-                let reverse_edge = get_edge(&divisibility_graph, cofactor_vid, factor_vid);
-                if reverse_edge == Some(Direct)
-                    || reverse_edge == Some(Transitive)
-                    || divisors_of_factor.contains(&cofactor_vid)
-                {
-                    // cofactor is divisible by factor, and this is already known to factordb
-                    // because it follows that relation transitively
-                    rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
                     continue;
                 }
                 if shortest_paths.dist(cofactor_vid) == Some(&0) {
