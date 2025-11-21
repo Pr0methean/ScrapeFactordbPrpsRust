@@ -7,7 +7,7 @@ use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Incoming, Outgoing};
 use gryf::core::{EdgeSet, GraphRef, Neighbors};
 use gryf::storage::{AdjMatrix, Stable};
-use log::{info, warn};
+use log::{warn};
 use replace_with::replace_with_or_abort;
 use std::collections::BTreeMap;
 
@@ -165,82 +165,14 @@ pub fn add_factor_node(
     root_vid: Option<VertexId>,
     entry_id: Option<u128>,
 ) -> (VertexId, bool) {
-    if entry_id.is_some()
-        && let Some(root_vid) = root_vid
-    {
-        let matching_vertices = divisibility_graph
-            .vertices()
-            .filter(|v| {
-                v.attr.as_ref() != factor
-                    && number_facts_map.get(&v.id).unwrap().entry_id == entry_id
-            })
-            .map(|v| v.id)
-            .collect::<Vec<_>>();
-        if let Some(&first_matching_vid) = matching_vertices.first() {
-            info!(
-                "Merging {factor} with {} equivalent vertices",
-                matching_vertices.len()
-            );
-            merge_equivalent_expressions(
-                factor_finder,
-                divisibility_graph,
-                root_vid,
-                number_facts_map,
-                first_matching_vid,
-                OwnedFactor::from(&factor),
-            );
-            for matching_vid in &matching_vertices[1..] {
-                divisibility_graph
-                    .neighbors_directed(matching_vid, Incoming)
-                    .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .for_each(|(vid, edge)| {
-                        let merged_edge = *divisibility_graph.edge(&edge).unwrap();
-                        upsert_edge(divisibility_graph, vid, first_matching_vid, |old| {
-                            old.unwrap_or(merged_edge).max(merged_edge)
-                        });
-                    });
-                divisibility_graph
-                    .neighbors_directed(matching_vid, Outgoing)
-                    .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .for_each(|(vid, edge)| {
-                        let merged_edge = *divisibility_graph.edge(&edge).unwrap();
-                        upsert_edge(divisibility_graph, first_matching_vid, vid, |old| {
-                            old.unwrap_or(merged_edge).max(merged_edge)
-                        });
-                    });
-                let old_factor = divisibility_graph.remove_vertex(matching_vid).unwrap();
-                let old_facts = number_facts_map.remove(matching_vid).unwrap();
-                merge_equivalent_expressions(
-                    factor_finder,
-                    divisibility_graph,
-                    root_vid,
-                    number_facts_map,
-                    first_matching_vid,
-                    old_factor,
-                );
-                replace_with_or_abort(
-                    number_facts_map.get_mut(&first_matching_vid).unwrap(),
-                    |facts| facts.merged_with(old_facts),
-                );
-            }
-            return (first_matching_vid, false);
-        }
-    }
-    let (factor_vid, added) = match divisibility_graph
+    let (existing_vertex, matching_vertices) = divisibility_graph
         .vertices()
-        .find(|v| v.attr.as_ref() == factor)
-    {
-        Some(vertex_ref) => {
-            if let Some(entry_id) = entry_id {
-                number_facts_map.get_mut(&vertex_ref.id).unwrap().entry_id = Some(entry_id);
-            }
-            (vertex_ref.id, false)
-        }
-        None => {
+        .filter(|v| number_facts_map.get(&v.id).unwrap().entry_id == entry_id)
+        .partition::<Vec<_>,_>(|v| v.attr.as_ref() == factor);
+    let existing_vertex = existing_vertex.first().map(|v| v.id);
+    let matching_vertices: Vec<_> = matching_vertices.into_iter().map(|v| v.id).collect();
+    let (merge_dest, added) = existing_vertex.or_else(|| matching_vertices.first().copied()).map(|x| (x, false))
+        .unwrap_or_else(|| {
             let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
             number_facts_map.insert(
@@ -257,14 +189,59 @@ pub fn add_factor_node(
                 },
             );
             (factor_vid, true)
-        }
-    };
-    if let Some(root_vid) = root_vid
-        && factor_vid != root_vid
-    {
-        let _ = divisibility_graph.try_add_edge(&root_vid, &factor_vid, NotFactor);
+        });
+    if divisibility_graph.vertex(&merge_dest).unwrap().as_ref() != factor {
+        merge_equivalent_expressions(
+            factor_finder,
+            divisibility_graph,
+            root_vid,
+            number_facts_map,
+            merge_dest,
+            OwnedFactor::from(&factor),
+        );
     }
-    (factor_vid, added)
+    for matching_vid in matching_vertices {
+        if matching_vid == merge_dest {
+            continue;
+        }
+        divisibility_graph
+            .neighbors_directed(&matching_vid, Incoming)
+            .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|(vid, edge)| {
+                let merged_edge = *divisibility_graph.edge(&edge).unwrap();
+                upsert_edge(divisibility_graph, vid, merge_dest, |old| {
+                    old.unwrap_or(merged_edge).max(merged_edge)
+                });
+            });
+        divisibility_graph
+            .neighbors_directed(&matching_vid, Outgoing)
+            .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .for_each(|(vid, edge)| {
+                let merged_edge = *divisibility_graph.edge(&edge).unwrap();
+                upsert_edge(divisibility_graph, merge_dest, vid, |old| {
+                    old.unwrap_or(merged_edge).max(merged_edge)
+                });
+            });
+        let old_factor = divisibility_graph.remove_vertex(matching_vid).unwrap();
+        let old_facts = number_facts_map.remove(&matching_vid).unwrap();
+        merge_equivalent_expressions(
+            factor_finder,
+            divisibility_graph,
+            root_vid,
+            number_facts_map,
+            merge_dest,
+            old_factor,
+        );
+        replace_with_or_abort(
+            number_facts_map.get_mut(&merge_dest).unwrap(),
+            |facts| facts.merged_with(old_facts),
+        );
+    }
+    (merge_dest, added)
 }
 
 pub fn is_known_factor(

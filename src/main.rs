@@ -1860,7 +1860,7 @@ async fn add_factors_to_graph(
                 merge_equivalent_expressions(
                     factor_finder,
                     divisibility_graph,
-                    root_vid,
+                    Some(root_vid),
                     number_facts_map,
                     factor_vid,
                     known_factor.clone(),
@@ -1968,7 +1968,7 @@ async fn add_factors_to_graph(
         added.extend(add_factor_finder_factor_vertices_to_graph(
             factor_finder,
             divisibility_graph,
-            root_vid,
+            Some(root_vid),
             number_facts_map,
             factor_vid,
             facts.entry_id,
@@ -2029,7 +2029,7 @@ fn as_specifier<'a>(
 fn merge_equivalent_expressions(
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
-    root_vid: VertexId,
+    root_vid: Option<VertexId>,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     factor_vid: VertexId,
     equivalent: OwnedFactor,
@@ -2092,7 +2092,7 @@ fn merge_equivalent_expressions(
 fn add_factor_finder_factor_vertices_to_graph(
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
-    root_vid: VertexId,
+    root_vid: Option<VertexId>,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     factor_vid: VertexId,
     entry_id: Option<u128>,
@@ -2111,7 +2111,7 @@ fn add_factor_finder_factor_vertices_to_graph(
                 new_factor.as_ref(),
                 factor_finder,
                 number_facts_map,
-                Some(root_vid),
+                root_vid,
                 entry_id,
             )
         })
