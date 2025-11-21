@@ -1434,6 +1434,16 @@ async fn find_and_submit_factors(
         info!("{id}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
     }
+
+    // A submission failed retryably, so now it gets more complicated:
+    // (1) We may have found a false factor, in which case we should try submitting factors of that
+    //     false factor if there are any.
+    // (2) The number may have exceeded the site's capacity because it has too many factors already
+    //     known, in which case we should submit the remaining factors to the cofactors rather than
+    //     directly to the root.
+    // (3) If both (1) and (2) apply, then we may end up with a factor that's a factor of multiple
+    //     cofactors, so we need to report it to *all* of them to ensure FactorDB knows its full
+    //     exponent.
     let mut iters_without_progress = 0;
     // Sort backwards so that we try to submit largest factors first
     let mut factors_to_submit = divisibility_graph
