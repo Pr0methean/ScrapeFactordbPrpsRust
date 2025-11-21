@@ -33,7 +33,6 @@ use cuckoofilter::CuckooFilter;
 use graph::Divisibility::{Direct, NotFactor};
 use graph::DivisibilityGraph;
 use gryf::Graph;
-use gryf::algo::ShortestPaths;
 use gryf::core::GraphRef;
 use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
@@ -1483,6 +1482,13 @@ async fn find_and_submit_factors(
             && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
         {
             iters_without_progress += 1;
+            if is_known_factor(&divisibility_graph, factor_vid, root_vid)
+                && number_facts_map.get(&factor_vid).unwrap().lower_bound_log10
+                > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2
+            {
+                // Already a known factor of root, and can't be a factor through any remaining path due to size
+                continue;
+            }
             // root can't be a factor of any other number we'll encounter
             rule_out_divisibility(&mut divisibility_graph, root_vid, factor_vid);
             // elided numbers and numbers over 65500 digits without an expression form can only
@@ -1497,7 +1503,6 @@ async fn find_and_submit_factors(
                 factors_to_submit.push_back(factor_vid);
                 continue;
             }
-
             let dest_factors = divisibility_graph
                 .vertices()
                 .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
@@ -1511,25 +1516,12 @@ async fn find_and_submit_factors(
             if dest_factors.is_empty() {
                 continue;
             };
-            let shortest_paths = ShortestPaths::on(&divisibility_graph)
-                .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
-                .run(factor_vid)
-                .unwrap();
-            if shortest_paths.dist(root_vid).copied() == Some(0)
-                && number_facts_map.get(&factor_vid).unwrap().lower_bound_log10
-                    > number_facts_map.get(&root_vid).unwrap().upper_bound_log10 / 2
-            {
-                // Already a known factor of root, and can't be a factor through any remaining path due to size
-                continue;
-            }
             for cofactor_vid in dest_factors.into_iter().rev() {
                 // Try to submit to largest cofactors first
-                // Check if an edge has been added since dest_factors was built
-                let edge_id = divisibility_graph.edge_id_any(&factor_vid, &cofactor_vid);
-                if edge_id.is_some() {
-                    continue;
-                }
-                if shortest_paths.dist(cofactor_vid) == Some(&0) {
+                if is_known_factor(&divisibility_graph, factor_vid, cofactor_vid) {
+                    // This factor already known.
+                    // If transitive, submit to a smaller cofactor instead.
+                    // If direct, nothing left to do.
                     propagate_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid, true);
                     continue;
                 }
