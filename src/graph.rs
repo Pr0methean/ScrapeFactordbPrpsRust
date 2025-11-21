@@ -709,7 +709,8 @@ pub async fn find_and_submit_factors(
             }
             let dest_factors = divisibility_graph
                 .vertices()
-                .sorted_by(|v1, v2| compare(&number_facts_map, v1, v2))
+                // Try to submit to largest cofactors first
+                .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1))
                 .map(|vertex| vertex.id)
                 .filter(|dest_vid|
                     // if factor == dest, the relation is trivial
@@ -721,8 +722,7 @@ pub async fn find_and_submit_factors(
                 continue;
             };
             let mut submission_errors = false;
-            for cofactor_vid in dest_factors.into_iter().rev() {
-                // Try to submit to largest cofactors first
+            for cofactor_vid in dest_factors.into_iter() {
                 if is_known_factor(&divisibility_graph, factor_vid, cofactor_vid) {
                     // This factor already known.
                     // If transitive, submit to a smaller cofactor instead.
