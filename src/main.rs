@@ -1495,6 +1495,7 @@ async fn find_and_submit_factors(
                 .as_str_non_u128()
                 .is_some_and(|expr| expr.contains("..."))
             {
+                factors_to_submit.push_back(factor_vid);
                 continue;
             }
 
