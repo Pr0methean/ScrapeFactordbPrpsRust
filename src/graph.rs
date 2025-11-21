@@ -1194,7 +1194,7 @@ async fn add_factors_to_graph(
                         factor_finder,
                         number_facts_map,
                         Some(root_vid),
-                        Some(entry_id),
+                        new_factor.known_id(),
                     )
                 })
                 .flat_map(|(vid, added)| if added { Some(vid) } else { None }),
