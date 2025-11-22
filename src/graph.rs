@@ -15,7 +15,7 @@ use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, EdgeId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::core::{EdgeSet, GraphRef, Neighbors};
+use gryf::core::{EdgeSet, GraphRef};
 use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -55,11 +55,7 @@ pub fn rule_out_divisibility(
     if updated_edge != NotFactor {
         return;
     }
-    for (neighbor, edge) in divisibility_graph
-        .neighbors_directed(&dest, Incoming)
-        .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
-        .collect::<Box<[_]>>()
-        .into_iter()
+    for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Incoming)
     {
         match divisibility_graph.edge(&edge) {
             Some(Transitive) | Some(Direct) => {
@@ -96,11 +92,7 @@ pub fn propagate_divisibility(
         return;
     }
     rule_out_divisibility(divisibility_graph, dest, factor);
-    for (neighbor, edge) in divisibility_graph
-        .neighbors_directed(&dest, Outgoing)
-        .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
-        .collect::<Box<[_]>>()
-        .into_iter()
+    for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Outgoing)
     {
         match divisibility_graph.edge(&edge) {
             Some(Transitive) | Some(Direct) => {
