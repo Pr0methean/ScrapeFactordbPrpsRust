@@ -423,6 +423,7 @@ impl FactorDbClient {
     #[inline]
     pub async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr> {
         if let Some(response) = self.expression_form_cache.get(&entry_id) {
+            info!("Expression-form cache hit for {entry_id}");
             return Some(response.clone());
         }
         let response = self
@@ -470,6 +471,7 @@ impl FactorDbClient {
         let response = match id {
             Id(id) => {
                 if let Some(response) = self.by_id_cache.get(&id) {
+                    info!("Factor cache hit for {id}");
                     return response.clone();
                 }
                 let url = format!("https://factordb.com/api?id={id}");
@@ -486,6 +488,7 @@ impl FactorDbClient {
             Expression(ref expr) => {
                 if let Factor::Expression(expr) = expr {
                     let expr = expr.to_compact_string();
+                    info!("Factor cache hit for {expr}");
                     if let Some(response) = self.by_expr_cache.get(&expr) {
                         return response.clone();
                     }
@@ -571,11 +574,13 @@ impl FactorDbClient {
                 }
             }
         };
-        if let Some(id) = processed.id.or(if let Id(id) = id { Some(id) } else { None }) {
-            self.by_id_cache.insert(id, processed.clone());
-        }
-        if let Some(expr) = expr_key {
-            self.by_expr_cache.insert(expr.to_compact_string(), processed.clone());
+        if processed.status.is_known_fully_factored() && !processed.factors.is_empty() {
+            if let Some(id) = processed.id.or(if let Id(id) = id { Some(id) } else { None }) {
+                self.by_id_cache.insert(id, processed.clone());
+            }
+            if let Some(expr) = expr_key {
+                self.by_expr_cache.insert(expr.to_compact_string(), processed.clone());
+            }
         }
         processed
     }
