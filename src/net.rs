@@ -33,6 +33,10 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
+use compact_str::{CompactString, ToCompactString};
+use quick_cache::{DefaultHashBuilder, UnitWeighter};
+use quick_cache::unsync::DefaultLifecycle;
+use quick_cache::unsync::Cache;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
@@ -62,6 +66,8 @@ impl Collector {
     }
 }
 
+type BasicCache<K,V> = Cache<K,V,UnitWeighter,DefaultHashBuilder,DefaultLifecycle<K,V>>;
+
 #[derive(Clone)]
 pub struct FactorDbClient {
     resources_regex: Arc<Regex>,
@@ -76,6 +82,9 @@ pub struct FactorDbClient {
     id_and_expr_regex: Arc<Regex>,
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
+    by_id_cache: BasicCache<u128,ProcessedStatusApiResponse>,
+    by_expr_cache: BasicCache<CompactString,ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<u128,ArcStr>
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -192,6 +201,9 @@ impl FactorDbClient {
             id_and_expr_regex: id_and_expr_regex.into(),
             digits_fallback_regex: digits_fallback_regex.into(),
             expression_form_regex: expression_form_regex.into(),
+            by_id_cache: Cache::new(256),
+            by_expr_cache: Cache::new(128),
+            expression_form_cache: Cache::new(128),
         }
     }
 
@@ -409,25 +421,28 @@ impl FactorDbClient {
     }
 
     #[inline]
-    pub async fn try_get_expression_form(&self, entry_id: u128) -> Option<ArcStr> {
+    pub async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr> {
+        if let Some(response) = self.expression_form_cache.get(&entry_id) {
+            return Some(response.clone());
+        }
         let response = self
-            .try_get_and_decode(&format!("http://factordb.com/index.php?id={entry_id}"))
+            .try_get_and_decode(&format!("https://factordb.com/index.php?id={entry_id}"))
             .await?;
-        Some(
-            self.expression_form_regex
+        let expression_form: ArcStr = self.expression_form_regex
                 .captures(&response)?
                 .get(1)?
                 .as_str()
-                .into(),
-        )
+                .into();
+        self.expression_form_cache.insert(entry_id, expression_form.clone());
+        Some(expression_form)
     }
 
     #[inline]
     pub async fn known_factors_as_digits<
         T: AsRef<str> + std::fmt::Debug,
-        U: AsRef<str> + std::fmt::Debug,
+        U: AsRef<str> + std::fmt::Debug + ToCompactString,
     >(
-        &self,
+        &mut self,
         mut id: NumberSpecifier<T, U>,
         include_ff: bool,
         get_digits_as_fallback: bool,
@@ -451,8 +466,12 @@ impl FactorDbClient {
                 id: Numeric::<&str, &str>(n).known_id(),
             };
         }
+        let mut expr_key = None;
         let response = match id {
             Id(id) => {
+                if let Some(response) = self.by_id_cache.get(&id) {
+                    return response.clone();
+                }
                 let url = format!("https://factordb.com/api?id={id}");
                 if get_digits_as_fallback {
                     self.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
@@ -465,12 +484,19 @@ impl FactorDbClient {
                 }
             }
             Expression(ref expr) => {
+                if let Factor::Expression(expr) = expr {
+                    let expr = expr.to_compact_string();
+                    if let Some(response) = self.by_expr_cache.get(&expr) {
+                        return response.clone();
+                    }
+                    expr_key = Some(expr);
+                }
                 let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str()));
                 self.try_get_and_decode(&url).await.ok_or(None)
             }
         };
         debug!("{id}: Got API response:\n{response:?}");
-        match response {
+        let processed = match response {
             Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
                 Err(e) => {
                     error!("{id}: Failed to decode API response: {e}: {api_response}");
@@ -544,7 +570,14 @@ impl FactorDbClient {
                     id: None,
                 }
             }
+        };
+        if let Some(id) = processed.id.or(if let Id(id) = id { Some(id) } else { None }) {
+            self.by_id_cache.insert(id, processed.clone());
         }
+        if let Some(expr) = expr_key {
+            self.by_expr_cache.insert(expr.to_compact_string(), processed.clone());
+        }
+        processed
     }
 
     pub async fn try_report_factor<

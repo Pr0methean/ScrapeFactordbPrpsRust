@@ -122,7 +122,7 @@ struct FactorSubmission<'a> {
 
 async fn composites_while_waiting(
     end: Instant,
-    http: &FactorDbClient,
+    http: &mut FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
@@ -158,7 +158,7 @@ async fn composites_while_waiting(
 }
 
 async fn check_composite(
-    http: &FactorDbClient,
+    http: &mut FactorDbClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
     id: u128,
@@ -265,7 +265,7 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
 #[allow(clippy::too_many_arguments)]
 async fn get_prp_remaining_bases(
     id: u128,
-    http: &FactorDbClient,
+    http: &mut FactorDbClient,
     bases_regex: &Regex,
     nm1_regex: &Regex,
     np1_regex: &Regex,
@@ -497,7 +497,7 @@ async fn do_checks(
     mut prp_receiver: PushbackReceiver<u128>,
     mut u_receiver: PushbackReceiver<u128>,
     mut c_receiver: PushbackReceiver<CompositeCheckTask>,
-    http: FactorDbClient,
+    mut http: FactorDbClient,
     factor_finder: FactorFinder,
     mut shutdown_receiver: Shutdown,
 ) {
@@ -514,7 +514,7 @@ async fn do_checks(
     let mut bases_before_next_cpu_check = 1;
     let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
     throttle_if_necessary(
-        &http,
+        &mut http,
         &mut c_receiver,
         &mut bases_before_next_cpu_check,
         false,
@@ -569,7 +569,7 @@ async fn do_checks(
                 let mut stopped_early = false;
                 let Ok(bases_left) = get_prp_remaining_bases(
                     id,
-                    &http,
+                    &mut http,
                     &bases_regex,
                     &nm1_regex,
                     &np1_regex,
@@ -597,7 +597,7 @@ async fn do_checks(
                         info!("{id}: Requeued PRP");
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                            &http,
+                            &mut http,
                             &mut c_receiver,
                             &mut c_filter,
                             &factor_finder,
@@ -606,7 +606,7 @@ async fn do_checks(
                         break;
                     }
                     throttle_if_necessary(
-                        &http,
+                        &mut http,
                         &mut c_receiver,
                         &mut bases_before_next_cpu_check,
                         true,
@@ -637,7 +637,7 @@ async fn do_checks(
             c_task = c_receiver.recv() => {
                 info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
                 let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
-                check_composite(&http, &mut c_filter, &factor_finder, id, digits_or_expr, return_permit).await;
+                check_composite(&mut http, &mut c_filter, &factor_finder, id, digits_or_expr, return_permit).await;
             }
         }
         successful_select_end = Instant::now();
@@ -694,7 +694,7 @@ async fn try_handle_unknown(
 }
 
 async fn throttle_if_necessary(
-    http: &FactorDbClient,
+    http: &mut FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
@@ -915,7 +915,7 @@ async fn main() -> anyhow::Result<()> {
         max_concurrent_requests = 3;
     }
     let factor_finder = FactorFinder::new();
-    let http = FactorDbClient::new(
+    let mut http = FactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
         shutdown_receiver.clone(),
@@ -984,7 +984,7 @@ async fn main() -> anyhow::Result<()> {
                 let Some(results_text) = results_text else {
                     continue 'queue_tasks;
                 };
-                for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
+                for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).collect::<Vec<_>>().into_iter().zip(prp_permits)
                 {
                     if let Ok(false) = prp_filter.test_and_add(&prp_id) {
                         warn!("{prp_id}: Skipping duplicate PRP");
@@ -993,7 +993,8 @@ async fn main() -> anyhow::Result<()> {
                     prp_permit.send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
                     if let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        let _ = try_queue_unknowns(&http, u_digits, &mut u_permits, &mut u_filter, &factor_finder).await;
+                        let _ = try_queue_unknowns(&mut http, u_digits, &mut u_permits, &mut u_filter, &factor_finder).await;
+
                     }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
@@ -1004,7 +1005,7 @@ async fn main() -> anyhow::Result<()> {
             }
             u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
                 info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                let _ = try_queue_unknowns(&http, u_digits, &mut u_permits?, &mut u_filter, &factor_finder).await;
+                let _ = try_queue_unknowns(&mut http, u_digits, &mut u_permits?, &mut u_filter, &factor_finder).await;
             }
         }
         if new_c_buffer_task {
@@ -1014,7 +1015,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn try_queue_unknowns<'a>(
-    http: &FactorDbClient,
+    http: &mut FactorDbClient,
     u_digits: Option<NonZeroU128>,
     u_permits: &mut PermitIterator<'a, u128>,
     u_filter: &mut CuckooFilter<DefaultHasher>,
@@ -1035,7 +1036,7 @@ async fn try_queue_unknowns<'a>(
     info!("U search results retrieved");
     let ids = http.read_ids_and_exprs(&results_text);
     let mut ids_found = false;
-    for ((u_id, digits_or_expr), u_permit) in ids.zip(u_permits) {
+    for ((u_id, digits_or_expr), u_permit) in ids.zip(u_permits).collect::<Vec<_>>().into_iter() {
         ids_found = true;
         if u_filter.contains(&u_id) {
             warn!("{u_id}: Skipping duplicate U");

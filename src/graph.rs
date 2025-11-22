@@ -441,7 +441,7 @@ impl NumberFacts {
 }
 
 pub async fn find_and_submit_factors(
-    http: &FactorDbClient,
+    http: &mut FactorDbClient,
     id: u128,
     digits_or_expr: &str,
     factor_finder: &FactorFinder,
@@ -1042,7 +1042,7 @@ fn mark_fully_factored(vid: VertexId, graph: &mut DivisibilityGraph, number_fact
 }
 
 async fn add_factors_to_graph(
-    http: &FactorDbClient,
+    http: &mut FactorDbClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,

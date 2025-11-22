@@ -1844,7 +1844,7 @@ impl FactorFinder {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Clone, Default, Debug)]
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
     pub factors: Box<[OwnedFactor]>,
