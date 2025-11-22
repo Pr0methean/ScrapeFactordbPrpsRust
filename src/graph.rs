@@ -57,6 +57,9 @@ pub fn rule_out_divisibility(
     }
     for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Incoming)
     {
+        if neighbor == nonfactor {
+            continue;
+        }
         match divisibility_graph.edge(&edge) {
             Some(Transitive) | Some(Direct) => {
                 // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
@@ -94,6 +97,9 @@ pub fn propagate_divisibility(
     rule_out_divisibility(divisibility_graph, dest, factor);
     for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Outgoing)
     {
+        if neighbor == factor {
+            continue;
+        }
         match divisibility_graph.edge(&edge) {
             Some(Transitive) | Some(Direct) => {
                 // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
