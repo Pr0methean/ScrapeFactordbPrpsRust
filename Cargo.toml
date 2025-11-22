@@ -34,3 +34,4 @@ arcstr = { version = "1.2", default-features = false, features = ["serde"] }
 serde_urlencoded = "0.7"
 replace_with = "0.1"
 quick_cache = "0.6"
+backtrace-on-stack-overflow = "0.3"

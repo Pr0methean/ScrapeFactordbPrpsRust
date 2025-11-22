@@ -858,6 +858,7 @@ async fn main() -> anyhow::Result<()> {
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
     task::spawn(handle_signals(shutdown_sender, installed_sender));
+    unsafe { backtrace_on_stack_overflow::enable(); }
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
