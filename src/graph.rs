@@ -80,7 +80,7 @@ pub fn propagate_divisibility(
             if transitive {
                 return;
             } else {
-                *divisibility_graph.edge_mut(&divisibility_graph.edge_id_any(&factor, &dest).unwrap()).unwrap() = Direct;
+                *divisibility_graph.edge_mut(divisibility_graph.edge_id_any(&factor, &dest).unwrap()).unwrap() = Direct;
             }
         },
         None => {
@@ -996,7 +996,7 @@ async fn add_factors_to_graph(
     root_vid: VertexId,
     factor_vid: VertexId,
 ) -> Box<[VertexId]> {
-    let facts = facts_of(&number_facts_map, factor_vid);
+    let facts = facts_of(number_facts_map, factor_vid);
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
 
@@ -1068,8 +1068,8 @@ async fn add_factors_to_graph(
     }
 
     // Next, check factordb.com/frame_moreinfo.php for listed algebraic factors
-    if let Some(id) = id {
-        if !facts_of(number_facts_map, factor_vid).checked_for_listed_algebraic {
+    if let Some(id) = id
+        && !facts_of(number_facts_map, factor_vid).checked_for_listed_algebraic {
             let root = divisibility_graph.vertex(&factor_vid).unwrap();
             if let Some(known_id) = root.known_id()
                 && id != known_id
@@ -1108,7 +1108,6 @@ async fn add_factors_to_graph(
                 }
             }
         }
-    }
 
     // Next, check if factor_finder can find factors
     let facts = facts_of(number_facts_map, factor_vid);
