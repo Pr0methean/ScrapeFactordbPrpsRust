@@ -74,12 +74,20 @@ pub fn propagate_divisibility(
         return;
     }
     let old_edge = get_edge(divisibility_graph, factor, dest);
-    if matches!(old_edge, Some(Direct) | Some(NotFactor))
-            || (transitive && old_edge == Some(Transitive)) {
-        return;
+    match old_edge {
+        Some(Direct) | Some(NotFactor) => return,
+        Some(Transitive) => {
+            if transitive {
+                return;
+            } else {
+                *divisibility_graph.edge_mut(&divisibility_graph.edge_id_any(&factor, &dest).unwrap()).unwrap() = Direct;
+            }
+        },
+        None => {
+            divisibility_graph.add_edge(factor, dest, if transitive { Transitive } else { Direct });
+        }
     }
-    info!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
-    divisibility_graph.add_edge(factor, dest, if transitive { Transitive } else { Direct });
+    debug!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
     rule_out_divisibility(divisibility_graph, dest, factor);
     for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Outgoing)
     {
