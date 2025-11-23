@@ -49,7 +49,7 @@ pub fn rule_out_divisibility(
         // happens because of recursion
         return;
     }
-    info!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
+    debug!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
     divisibility_graph.add_edge(nonfactor, dest, NotFactor);
     for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Incoming)
     {
