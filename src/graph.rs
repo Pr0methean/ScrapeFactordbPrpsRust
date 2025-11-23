@@ -45,33 +45,20 @@ pub fn rule_out_divisibility(
     nonfactor: VertexId,
     dest: VertexId,
 ) {
-    if nonfactor == dest {
+    if nonfactor == dest || divisibility_graph.edge_id_any(&nonfactor, &dest).is_some() {
         // happens because of recursion
         return;
     }
     info!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
-    let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| {
-        old_div.unwrap_or(NotFactor)
-    });
-    if updated_edge != NotFactor {
-        return;
-    }
+    divisibility_graph.add_edge(nonfactor, dest, NotFactor);
     for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Incoming)
     {
         if neighbor == nonfactor {
             continue;
         }
-        match divisibility_graph.edge(&edge) {
-            Some(Transitive) | Some(Direct) => {
-                // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
-                if divisibility_graph
-                    .try_add_edge(nonfactor, neighbor, NotFactor)
-                    .is_ok()
-                {
-                    rule_out_divisibility(divisibility_graph, nonfactor, neighbor);
-                };
-            }
-            _ => {}
+        if matches!(divisibility_graph.edge(&edge).unwrap(), Direct | Transitive) {
+            // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
+            rule_out_divisibility(divisibility_graph, nonfactor, neighbor);
         }
     }
 }
@@ -86,80 +73,28 @@ pub fn propagate_divisibility(
         // happens because of recursion
         return;
     }
-    info!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
-    if upsert_edge(
-        divisibility_graph,
-        factor,
-        dest,
-        override_transitive_with_direct(if transitive { Transitive } else { Direct }),
-    ) == NotFactor
-    {
+    let old_edge = get_edge(divisibility_graph, factor, dest);
+    if matches!(old_edge, Some(Direct) | Some(NotFactor))
+            || (transitive && old_edge == Some(Transitive)) {
         return;
     }
+    info!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
+    divisibility_graph.add_edge(factor, dest, if transitive { Transitive } else { Direct });
     rule_out_divisibility(divisibility_graph, dest, factor);
     for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Outgoing)
     {
         if neighbor == factor {
             continue;
         }
-        match divisibility_graph.edge(&edge) {
-            Some(Transitive) | Some(Direct) => {
-                // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
-                if divisibility_graph
-                    .try_add_edge(factor, neighbor, Transitive)
-                    .is_ok()
-                {
-                    propagate_divisibility(divisibility_graph, factor, neighbor, true);
-                };
-                if divisibility_graph
-                    .try_add_edge(&neighbor, &factor, NotFactor)
-                    .is_ok()
-                {
-                    rule_out_divisibility(divisibility_graph, neighbor, factor);
-                }
+        match divisibility_graph.edge(&edge).unwrap() {
+            NotFactor => {
+                // if factor divides dest_factor and dest_factor doesn't divide neighbor,
+                // then factor doesn't divide neighbor
+                rule_out_divisibility(divisibility_graph, neighbor, factor);
             }
-            _ => {}
-        }
-    }
-}
-
-pub fn upsert_edge<F: FnOnce(Option<Divisibility>) -> Divisibility>(
-    divisibility_graph: &mut DivisibilityGraph,
-    from_vid: VertexId,
-    to_vid: VertexId,
-    new_value_fn: F,
-) -> Divisibility {
-    if from_vid == to_vid {
-        warn!("Attempted to add an edge from {from_vid:?} to itself!");
-        return Direct;
-    }
-    match divisibility_graph.edge_id_any(&from_vid, &to_vid) {
-        Some(old_edge_id) => {
-            let old_divisibility = *divisibility_graph.edge(&old_edge_id).unwrap();
-            let new_divisibility = new_value_fn(Some(old_divisibility));
-            if new_divisibility != old_divisibility {
-                divisibility_graph.replace_edge(old_edge_id, new_divisibility);
+            _ => {
+                propagate_divisibility(divisibility_graph, factor, neighbor, true);
             }
-            new_divisibility
-        }
-        None => {
-            let divisibility = new_value_fn(None);
-            divisibility_graph.add_edge(from_vid, to_vid, divisibility);
-            divisibility
-        }
-    }
-}
-
-fn override_transitive_with_direct(
-    divisible: Divisibility,
-) -> impl FnOnce(Option<Divisibility>) -> Divisibility {
-    move |old_edge| {
-        if old_edge == Some(Direct) || divisible == Direct {
-            Direct
-        } else if old_edge == Some(Transitive) || divisible == Transitive {
-            Transitive
-        } else {
-            NotFactor
         }
     }
 }
@@ -226,19 +161,21 @@ pub fn add_factor_node(
         }
         neighbor_vids(divisibility_graph, matching_vid, Incoming)
             .into_iter()
-            .for_each(|(vid, edge)| {
-                let merged_edge = *divisibility_graph.edge(&edge).unwrap();
-                upsert_edge(divisibility_graph, vid, merge_dest, |old| {
-                    old.unwrap_or(merged_edge).max(merged_edge)
-                });
+            .for_each(|(neighbor_vid, edge)| {
+                match *divisibility_graph.edge(&edge).unwrap() {
+                    Direct => propagate_divisibility(divisibility_graph, neighbor_vid, merge_dest, false),
+                    Transitive => propagate_divisibility(divisibility_graph, neighbor_vid, merge_dest, true),
+                    NotFactor => rule_out_divisibility(divisibility_graph, neighbor_vid, merge_dest),
+                }
             });
         neighbor_vids(divisibility_graph, matching_vid, Outgoing)
             .into_iter()
-            .for_each(|(vid, edge)| {
-                let merged_edge = *divisibility_graph.edge(&edge).unwrap();
-                upsert_edge(divisibility_graph, merge_dest, vid, |old| {
-                    old.unwrap_or(merged_edge).max(merged_edge)
-                });
+            .for_each(|(neighbor_vid, edge)| {
+                match *divisibility_graph.edge(&edge).unwrap() {
+                    Direct => propagate_divisibility(divisibility_graph, merge_dest, neighbor_vid, false),
+                    Transitive => propagate_divisibility(divisibility_graph, merge_dest, neighbor_vid, true),
+                    NotFactor => rule_out_divisibility(divisibility_graph, merge_dest, neighbor_vid),
+                }
             });
         let old_factor = divisibility_graph.remove_vertex(matching_vid).unwrap();
         let old_facts = number_facts_map.remove(&matching_vid).unwrap();
@@ -1019,7 +956,7 @@ fn mark_fully_factored(vid: VertexId, graph: &mut DivisibilityGraph, number_fact
                 let neighbor_facts = facts_of_mut(number_facts_map, neighbor);
                 neighbor_facts.factors_known_to_factordb = UpToDate(vec![neighbor]);
                 neighbor_facts.last_known_status = Some(Prime);
-                upsert_edge(graph, neighbor, vid, |_| Direct);
+                propagate_divisibility(graph, neighbor, vid, false);
             }
         }
         true
