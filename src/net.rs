@@ -14,11 +14,15 @@ use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
 use arcstr::ArcStr;
 use atomic_time::AtomicInstant;
+use compact_str::{CompactString, ToCompactString};
 use curl::easy::{Easy2, Handler, WriteError};
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
+use quick_cache::unsync::Cache;
+use quick_cache::unsync::DefaultLifecycle;
+use quick_cache::{DefaultHashBuilder, UnitWeighter};
 use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
@@ -33,10 +37,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use compact_str::{CompactString, ToCompactString};
-use quick_cache::{DefaultHashBuilder, UnitWeighter};
-use quick_cache::unsync::DefaultLifecycle;
-use quick_cache::unsync::Cache;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
@@ -66,7 +66,7 @@ impl Collector {
     }
 }
 
-type BasicCache<K,V> = Cache<K,V,UnitWeighter,DefaultHashBuilder,DefaultLifecycle<K,V>>;
+type BasicCache<K, V> = Cache<K, V, UnitWeighter, DefaultHashBuilder, DefaultLifecycle<K, V>>;
 
 #[derive(Clone)]
 pub struct FactorDbClient {
@@ -82,9 +82,9 @@ pub struct FactorDbClient {
     id_and_expr_regex: Arc<Regex>,
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
-    by_id_cache: BasicCache<u128,ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<CompactString,ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<u128,ArcStr>
+    by_id_cache: BasicCache<u128, ProcessedStatusApiResponse>,
+    by_expr_cache: BasicCache<CompactString, ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<u128, ArcStr>,
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
@@ -429,12 +429,14 @@ impl FactorDbClient {
         let response = self
             .try_get_and_decode(&format!("https://factordb.com/index.php?id={entry_id}"))
             .await?;
-        let expression_form: ArcStr = self.expression_form_regex
-                .captures(&response)?
-                .get(1)?
-                .as_str()
-                .into();
-        self.expression_form_cache.insert(entry_id, expression_form.clone());
+        let expression_form: ArcStr = self
+            .expression_form_regex
+            .captures(&response)?
+            .get(1)?
+            .as_str()
+            .into();
+        self.expression_form_cache
+            .insert(entry_id, expression_form.clone());
         Some(expression_form)
     }
 
@@ -575,11 +577,15 @@ impl FactorDbClient {
             }
         };
         if processed.status.is_known_fully_factored() && !processed.factors.is_empty() {
-            if let Some(id) = processed.id.or(if let Id(id) = id { Some(id) } else { None }) {
+            if let Some(id) = processed
+                .id
+                .or(if let Id(id) = id { Some(id) } else { None })
+            {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache.insert(expr.to_compact_string(), processed.clone());
+                self.by_expr_cache
+                    .insert(expr.to_compact_string(), processed.clone());
             }
         }
         processed

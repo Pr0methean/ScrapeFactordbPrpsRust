@@ -19,6 +19,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
+use crate::graph::facts_of;
 use crate::net::ResourceLimits;
 use crate::shutdown::{Shutdown, handle_signals};
 use channel::PushbackReceiver;
@@ -53,7 +54,6 @@ use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
-use crate::graph::facts_of;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -858,7 +858,9 @@ async fn main() -> anyhow::Result<()> {
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
     task::spawn(handle_signals(shutdown_sender, installed_sender));
-    unsafe { backtrace_on_stack_overflow::enable(); }
+    unsafe {
+        backtrace_on_stack_overflow::enable();
+    }
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -1075,8 +1077,7 @@ fn as_specifier<'a>(
     factor: &'a OwnedFactor,
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
 ) -> NumberSpecifier<&'a str, &'a str> {
-    if let Some(factor_entry_id) = facts_of(number_facts_map, factor_vid).entry_id
-    {
+    if let Some(factor_entry_id) = facts_of(number_facts_map, factor_vid).entry_id {
         debug!(
             "as_specifier: got entry ID {factor_entry_id} for factor {factor} with vertex ID {factor_vid:?}"
         );
