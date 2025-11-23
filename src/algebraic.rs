@@ -1814,6 +1814,9 @@ impl FactorFinder {
                 .collect()
         } else {
             let expr1_factors = self.find_factors(expr1);
+            if expr1_factors.is_empty() && !for_add_or_sub {
+                return vec![];
+            }
             let expr2_factors = self.find_factors(expr2);
             let both_odd = for_add_or_sub
                 && !expr1_factors.contains(&Numeric(2))
