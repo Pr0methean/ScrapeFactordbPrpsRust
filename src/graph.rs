@@ -64,7 +64,7 @@ pub fn rule_out_divisibility(
             Some(Transitive) | Some(Direct) => {
                 // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
                 if divisibility_graph
-                    .try_add_edge(dest, neighbor, NotFactor)
+                    .try_add_edge(nonfactor, neighbor, NotFactor)
                     .is_ok()
                 {
                     rule_out_divisibility(divisibility_graph, nonfactor, neighbor);
