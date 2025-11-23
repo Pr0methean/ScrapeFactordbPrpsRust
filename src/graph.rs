@@ -49,6 +49,7 @@ pub fn rule_out_divisibility(
         // happens because of recursion
         return;
     }
+    info!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
     let updated_edge = upsert_edge(divisibility_graph, nonfactor, dest, |old_div| {
         old_div.unwrap_or(NotFactor)
     });
@@ -86,6 +87,7 @@ pub fn propagate_divisibility(
         // happens because of recursion
         return;
     }
+    info!("rule_out_divisibility: factor {factor:?}, dest {dest:?}");
     if upsert_edge(
         divisibility_graph,
         factor,

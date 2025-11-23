@@ -1156,6 +1156,7 @@ impl FactorFinder {
         &self,
         expr: &Factor<T, U>,
     ) -> (u128, u128) {
+        info!("estimate_log10_internal: {expr}");
         match expr {
             Numeric(n) => {
                 if *n == 0 {
@@ -1420,6 +1421,7 @@ impl FactorFinder {
         &self,
         expr: &Factor<T, U>,
     ) -> Vec<OwnedFactor> {
+        info!("find_factors: {expr}");
         match expr {
             Numeric(n) => Self::find_factors_of_u128(*n),
             Factor::BigNumber(expr) => Self::factor_big_num(expr),
