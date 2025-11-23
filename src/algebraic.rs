@@ -980,6 +980,7 @@ fn multiset_difference<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: &[T]) -> Vec<T> 
 
 #[inline]
 fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
+    info!("fibonacci_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
         SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
@@ -1014,6 +1015,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
 
 #[inline]
 fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
+    info!("lucas_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_LUCAS_FACTORS.len() as u128 {
         SMALL_LUCAS_FACTORS[term as usize]
             .iter()
