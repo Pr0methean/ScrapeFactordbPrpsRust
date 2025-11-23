@@ -87,7 +87,7 @@ pub fn propagate_divisibility(
         // happens because of recursion
         return;
     }
-    info!("rule_out_divisibility: factor {factor:?}, dest {dest:?}");
+    info!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
     if upsert_edge(
         divisibility_graph,
         factor,
