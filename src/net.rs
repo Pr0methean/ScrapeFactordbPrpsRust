@@ -78,18 +78,11 @@ pub trait FactorDbClient: Clone {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str>;
-    async fn retrying_get_and_decode_or(
-        &self,
-        url: ArcStr,
-        retry_delay: Duration,
-        alt_url_supplier: impl FnOnce() -> ArcStr,
-    ) -> Result<Box<str>, Box<str>>;
     async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>>;
     async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
-    fn post<'a>(&'a self, url: &'a str) -> impl ThrottlingRequestBuilder<'a>;
     fn read_ids_and_exprs<'a>(
         &self,
         haystack: &'a str,
@@ -140,12 +133,7 @@ pub struct RealFactorDbClient {
     expression_form_cache: BasicCache<u128, ArcStr>,
 }
 
-pub trait ThrottlingRequestBuilder<'a>: Sized {
-    fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error>;
-    fn send(self) -> impl Future<Output = Result<String, Error>> + Send;
-}
-
-pub struct RealThrottlingRequestBuilder<'a> {
+pub struct ThrottlingRequestBuilder<'a> {
     inner: Result<RequestBuilder, &'a str>,
     client: &'a RealFactorDbClient,
     form: Option<Box<str>>,
@@ -156,15 +144,15 @@ pub struct ResourceLimits {
     pub resets_at: Instant,
 }
 
-impl<'a> ThrottlingRequestBuilder<'a> for RealThrottlingRequestBuilder<'a> {
-    fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error> {
+impl<'a> ThrottlingRequestBuilder<'a> {
+    pub fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error> {
         match self.inner {
-            Ok(request_builder) => Ok(RealThrottlingRequestBuilder {
+            Ok(request_builder) => Ok(ThrottlingRequestBuilder {
                 inner: Ok(request_builder.form(payload)),
                 client: self.client,
                 form: None,
             }),
-            Err(_) => Ok(RealThrottlingRequestBuilder {
+            Err(_) => Ok(ThrottlingRequestBuilder {
                 inner: self.inner,
                 client: self.client,
                 form: Some(serde_urlencoded::to_string(payload)?.into_boxed_str()),
@@ -172,7 +160,7 @@ impl<'a> ThrottlingRequestBuilder<'a> for RealThrottlingRequestBuilder<'a> {
         }
     }
 
-    async fn send(self) -> Result<String, Error> {
+    pub async fn send(self) -> Result<String, Error> {
         sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
         self.client.rate_limiter.until_ready().await;
         match self.client.request_semaphore.acquire().await {
@@ -316,6 +304,36 @@ impl RealFactorDbClient {
             }
         }
     }
+
+
+    async fn retrying_get_and_decode_or(
+        &self,
+        url: ArcStr,
+        retry_delay: Duration,
+        alt_url_supplier: impl FnOnce() -> ArcStr,
+    ) -> Result<Box<str>, Box<str>> {
+        for _ in 0..MAX_RETRIES_WITH_FALLBACK {
+            if let Some(value) = self.try_get_and_decode(url.clone()).await {
+                return Ok(value);
+            }
+            sleep(retry_delay).await;
+        }
+        let alt_url = alt_url_supplier();
+        warn!("Giving up on reaching {url} and falling back to {alt_url}");
+        Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
+    }
+
+    pub fn post<'a>(&'a self, url: &'a str) -> ThrottlingRequestBuilder<'a> {
+        ThrottlingRequestBuilder {
+            inner: if url.len() <= REQWEST_MAX_URL_LEN {
+                Ok(self.http.post(url))
+            } else {
+                Err(url)
+            },
+            client: self,
+            form: None,
+        }
+    }
 }
 
 impl FactorDbClient for RealFactorDbClient {
@@ -391,23 +409,6 @@ impl FactorDbClient for RealFactorDbClient {
         }
     }
 
-    async fn retrying_get_and_decode_or(
-        &self,
-        url: ArcStr,
-        retry_delay: Duration,
-        alt_url_supplier: impl FnOnce() -> ArcStr,
-    ) -> Result<Box<str>, Box<str>> {
-        for _ in 0..MAX_RETRIES_WITH_FALLBACK {
-            if let Some(value) = self.try_get_and_decode(url.clone()).await {
-                return Ok(value);
-            }
-            sleep(retry_delay).await;
-        }
-        let alt_url = alt_url_supplier();
-        warn!("Giving up on reaching {url} and falling back to {alt_url}");
-        Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
-    }
-
     async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
@@ -442,18 +443,6 @@ impl FactorDbClient for RealFactorDbClient {
             .await?;
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
             .await
-    }
-
-    fn post<'a>(&'a self, url: &'a str) -> impl ThrottlingRequestBuilder<'a> {
-        RealThrottlingRequestBuilder {
-            inner: if url.len() <= REQWEST_MAX_URL_LEN {
-                Ok(self.http.post(url))
-            } else {
-                Err(url)
-            },
-            client: self,
-            form: None,
-        }
     }
 
     fn read_ids_and_exprs<'a>(
