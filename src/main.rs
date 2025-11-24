@@ -20,7 +20,7 @@ use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::graph::facts_of;
-use crate::net::ResourceLimits;
+use crate::net::{FactorDbClient, ResourceLimits};
 use crate::shutdown::{Shutdown, handle_signals};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
@@ -29,7 +29,7 @@ use cuckoofilter::CuckooFilter;
 use graph::NumberFacts;
 use gryf::core::id::VertexId;
 use log::{debug, error, info, warn};
-use net::{CPU_TENTHS_SPENT_LAST_CHECK, FactorDbClient};
+use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
@@ -122,7 +122,7 @@ struct FactorSubmission<'a> {
 
 async fn composites_while_waiting(
     end: Instant,
-    http: &mut FactorDbClient,
+    http: &mut impl FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
@@ -158,7 +158,7 @@ async fn composites_while_waiting(
 }
 
 async fn check_composite(
-    http: &mut FactorDbClient,
+    http: &mut impl FactorDbClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
     id: u128,
@@ -265,7 +265,7 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
 #[allow(clippy::too_many_arguments)]
 async fn get_prp_remaining_bases(
     id: u128,
-    http: &mut FactorDbClient,
+    http: &mut impl FactorDbClient,
     bases_regex: &Regex,
     nm1_regex: &Regex,
     np1_regex: &Regex,
@@ -464,7 +464,7 @@ async fn get_prp_remaining_bases(
     Ok(bases_left)
 }
 
-async fn prove_by_np1(id: u128, http: &FactorDbClient) {
+async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
             &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}")
@@ -474,7 +474,7 @@ async fn prove_by_np1(id: u128, http: &FactorDbClient) {
         .await;
 }
 
-async fn prove_by_nm1(id: u128, http: &FactorDbClient) {
+async fn prove_by_nm1(id: u128, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
             &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}")
@@ -497,7 +497,7 @@ async fn do_checks(
     mut prp_receiver: PushbackReceiver<u128>,
     mut u_receiver: PushbackReceiver<u128>,
     mut c_receiver: PushbackReceiver<CompositeCheckTask>,
-    mut http: FactorDbClient,
+    mut http: impl FactorDbClient,
     factor_finder: FactorFinder,
     mut shutdown_receiver: Shutdown,
 ) {
@@ -646,7 +646,7 @@ async fn do_checks(
 
 #[inline]
 async fn try_handle_unknown(
-    http: &FactorDbClient,
+    http: &impl FactorDbClient,
     u_status_regex: &Regex,
     many_digits_regex: &Regex,
     id: u128,
@@ -694,7 +694,7 @@ async fn try_handle_unknown(
 }
 
 async fn throttle_if_necessary(
-    http: &mut FactorDbClient,
+    http: &mut impl FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
@@ -772,7 +772,7 @@ async fn throttle_if_necessary(
 // into the channel, without blocking PRP or U searches on the main thread.
 #[allow(clippy::async_yields_async)]
 async fn queue_composites(
-    http: &FactorDbClient,
+    http: &impl FactorDbClient,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZeroU128>,
 ) -> JoinHandle<()> {
@@ -918,7 +918,7 @@ async fn main() -> anyhow::Result<()> {
         max_concurrent_requests = 3;
     }
     let factor_finder = FactorFinder::new();
-    let mut http = FactorDbClient::new(
+    let mut http = RealFactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
         shutdown_receiver.clone(),
@@ -1018,7 +1018,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn try_queue_unknowns<'a>(
-    http: &mut FactorDbClient,
+    http: &mut impl FactorDbClient,
     u_digits: Option<NonZeroU128>,
     u_permits: &mut PermitIterator<'a, u128>,
     u_filter: &mut CuckooFilter<DefaultHasher>,

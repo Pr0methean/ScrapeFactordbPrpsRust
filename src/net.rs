@@ -68,8 +68,60 @@ impl Collector {
 
 type BasicCache<K, V> = Cache<K, V, UnitWeighter, DefaultHashBuilder, DefaultLifecycle<K, V>>;
 
+pub trait FactorDbClient: Clone {
+    async fn parse_resource_limits(
+        &self,
+        bases_before_next_cpu_check: &mut usize,
+        resources_text: &str,
+    ) -> Option<ResourceLimits>;
+    /// Executes a GET request with a large reasonable default number of retries, or else
+    /// restarts the process if that request consistently fails.
+    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str>;
+    async fn retrying_get_and_decode_or(
+        &self,
+        url: &str,
+        retry_delay: Duration,
+        alt_url_supplier: impl FnOnce() -> ArcStr,
+    ) -> Result<Box<str>, Box<str>>;
+    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>>;
+    async fn try_get_resource_limits(
+        &self,
+        bases_before_next_cpu_check: &mut usize,
+    ) -> Option<ResourceLimits>;
+    fn post<'a>(&'a self, url: &'a str) -> impl ThrottlingRequestBuilder<'a>;
+    fn read_ids_and_exprs<'a>(
+        &self,
+        haystack: &'a str,
+    ) -> impl Iterator<Item = (u128, &'a str)>;
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr>;
+    async fn known_factors_as_digits<
+        T: AsRef<str> + std::fmt::Debug,
+        U: AsRef<str> + std::fmt::Debug + ToCompactString,
+    >(
+        &mut self,
+        id: NumberSpecifier<T, U>,
+        include_ff: bool,
+        get_digits_as_fallback: bool,
+    ) -> ProcessedStatusApiResponse;
+    async fn try_report_factor<
+        T: AsRef<str>,
+        U: AsRef<str> + Display,
+        V: AsRef<str>,
+        W: AsRef<str> + Display,
+    >(
+        &self,
+        u_id: &NumberSpecifier<T, U>,
+        factor: &Factor<V, W>,
+    ) -> ReportFactorResult;
+    async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
+        &self,
+        u_id: u128,
+        factor: &Factor<T, U>,
+    ) -> ReportFactorResult;
+}
+
 #[derive(Clone)]
-pub struct FactorDbClient {
+pub struct RealFactorDbClient {
     resources_regex: Arc<Regex>,
     http: Client,
     rate_limiter: Arc<DefaultDirectRateLimiter<StateInformationMiddleware>>,
@@ -87,9 +139,14 @@ pub struct FactorDbClient {
     expression_form_cache: BasicCache<u128, ArcStr>,
 }
 
-pub struct ThrottlingRequestBuilder<'a> {
+pub trait ThrottlingRequestBuilder<'a>: Sized {
+    fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error>;
+    fn send(self) -> impl Future<Output = Result<String, Error>> + Send;
+}
+
+pub struct RealThrottlingRequestBuilder<'a> {
     inner: Result<RequestBuilder, &'a str>,
-    client: &'a FactorDbClient,
+    client: &'a RealFactorDbClient,
     form: Option<Box<str>>,
 }
 
@@ -98,15 +155,15 @@ pub struct ResourceLimits {
     pub resets_at: Instant,
 }
 
-impl<'a> ThrottlingRequestBuilder<'a> {
-    pub fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error> {
+impl<'a> ThrottlingRequestBuilder<'a> for RealThrottlingRequestBuilder<'a> {
+    fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error> {
         match self.inner {
-            Ok(request_builder) => Ok(ThrottlingRequestBuilder {
+            Ok(request_builder) => Ok(RealThrottlingRequestBuilder {
                 inner: Ok(request_builder.form(payload)),
                 client: self.client,
                 form: None,
             }),
-            Err(_) => Ok(ThrottlingRequestBuilder {
+            Err(_) => Ok(RealThrottlingRequestBuilder {
                 inner: self.inner,
                 client: self.client,
                 form: Some(serde_urlencoded::to_string(payload)?.into_boxed_str()),
@@ -114,7 +171,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
         }
     }
 
-    pub async fn send(self) -> Result<String, Error> {
+    async fn send(self) -> Result<String, Error> {
         sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
         self.client.rate_limiter.until_ready().await;
         match self.client.request_semaphore.acquire().await {
@@ -151,7 +208,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
     }
 }
 
-impl FactorDbClient {
+impl RealFactorDbClient {
     pub fn new(
         requests_per_hour: NonZeroU32,
         max_concurrent_requests: usize,
@@ -207,7 +264,58 @@ impl FactorDbClient {
         }
     }
 
-    pub async fn parse_resource_limits(
+    async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
+        self.rate_limiter.until_ready().await;
+        let permit = self.request_semaphore.acquire().await.unwrap();
+        let result = if url.len() > REQWEST_MAX_URL_LEN {
+            // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
+            // spawn_blocking
+            let mut curl = self.curl_client.lock().await;
+
+            curl.get(true)
+                .and_then(|_| curl.url(url))
+                .and_then(|_| curl.perform())
+                .map_err(anyhow::Error::from)
+                .and_then(|_| {
+                    let response_code = curl.response_code()?;
+                    if response_code != 200 {
+                        error!("Error reading {url}: HTTP response code {response_code}")
+                    }
+                    Ok(String::from_utf8(curl.get_mut().take_all())?)
+                })
+        } else {
+            let result = self
+                .http
+                .get(url)
+                .header("Referer", "https://factordb.com")
+                .send()
+                .await;
+            match result {
+                Ok(response) => response.text().await,
+                Err(e) => Err(e),
+            }
+                .map_err(|e| anyhow::Error::from(e.without_url()))
+        };
+        drop(permit);
+        match result {
+            Err(e) => {
+                error!("Error reading {url}: {e}");
+                None
+            }
+            Ok(text) => {
+                if text.contains("502 Proxy Error") {
+                    error!("502 error from {url}");
+                    None
+                } else {
+                    Some(text.into_boxed_str())
+                }
+            }
+        }
+    }
+}
+
+impl FactorDbClient for RealFactorDbClient {
+    async fn parse_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
         resources_text: &str,
@@ -259,7 +367,7 @@ impl FactorDbClient {
 
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    pub async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
+    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url).await {
                 return value;
@@ -279,7 +387,7 @@ impl FactorDbClient {
         }
     }
 
-    pub async fn retrying_get_and_decode_or(
+    async fn retrying_get_and_decode_or(
         &self,
         url: &str,
         retry_delay: Duration,
@@ -296,56 +404,7 @@ impl FactorDbClient {
         Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
     }
 
-    async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
-        self.rate_limiter.until_ready().await;
-        let permit = self.request_semaphore.acquire().await.unwrap();
-        let result = if url.len() > REQWEST_MAX_URL_LEN {
-            // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
-            // spawn_blocking
-            let mut curl = self.curl_client.lock().await;
-
-            curl.get(true)
-                .and_then(|_| curl.url(url))
-                .and_then(|_| curl.perform())
-                .map_err(anyhow::Error::from)
-                .and_then(|_| {
-                    let response_code = curl.response_code()?;
-                    if response_code != 200 {
-                        error!("Error reading {url}: HTTP response code {response_code}")
-                    }
-                    Ok(String::from_utf8(curl.get_mut().take_all())?)
-                })
-        } else {
-            let result = self
-                .http
-                .get(url)
-                .header("Referer", "https://factordb.com")
-                .send()
-                .await;
-            match result {
-                Ok(response) => response.text().await,
-                Err(e) => Err(e),
-            }
-            .map_err(|e| anyhow::Error::from(e.without_url()))
-        };
-        drop(permit);
-        match result {
-            Err(e) => {
-                error!("Error reading {url}: {e}");
-                None
-            }
-            Ok(text) => {
-                if text.contains("502 Proxy Error") {
-                    error!("502 error from {url}");
-                    None
-                } else {
-                    Some(text.into_boxed_str())
-                }
-            }
-        }
-    }
-
-    pub async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
+    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
         let mut temp_bases = usize::MAX;
@@ -370,7 +429,7 @@ impl FactorDbClient {
         Some(response)
     }
 
-    pub async fn try_get_resource_limits(
+    async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits> {
@@ -381,8 +440,8 @@ impl FactorDbClient {
             .await
     }
 
-    pub fn post<'a>(&'a self, url: &'a str) -> ThrottlingRequestBuilder<'a> {
-        ThrottlingRequestBuilder {
+    fn post<'a>(&'a self, url: &'a str) -> impl ThrottlingRequestBuilder<'a> {
+        RealThrottlingRequestBuilder {
             inner: if url.len() <= REQWEST_MAX_URL_LEN {
                 Ok(self.http.post(url))
             } else {
@@ -393,7 +452,7 @@ impl FactorDbClient {
         }
     }
 
-    pub fn read_ids_and_exprs<'a>(
+    fn read_ids_and_exprs<'a>(
         &self,
         haystack: &'a str,
     ) -> impl Iterator<Item = (u128, &'a str)> {
@@ -421,7 +480,7 @@ impl FactorDbClient {
     }
 
     #[inline]
-    pub async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr> {
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr> {
         if let Some(response) = self.expression_form_cache.get(&entry_id) {
             info!("Expression-form cache hit for {entry_id}");
             return Some(response.clone());
@@ -441,7 +500,7 @@ impl FactorDbClient {
     }
 
     #[inline]
-    pub async fn known_factors_as_digits<
+    async fn known_factors_as_digits<
         T: AsRef<str> + std::fmt::Debug,
         U: AsRef<str> + std::fmt::Debug + ToCompactString,
     >(
@@ -591,7 +650,7 @@ impl FactorDbClient {
         processed
     }
 
-    pub async fn try_report_factor<
+    async fn try_report_factor<
         T: AsRef<str>,
         U: AsRef<str> + Display,
         V: AsRef<str>,
@@ -644,7 +703,7 @@ impl FactorDbClient {
         }
     }
 
-    pub async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
+    async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
         &self,
         u_id: u128,
         factor: &Factor<T, U>,

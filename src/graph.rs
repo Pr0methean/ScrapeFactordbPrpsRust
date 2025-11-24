@@ -398,7 +398,7 @@ impl NumberFacts {
 }
 
 pub async fn find_and_submit_factors(
-    http: &mut FactorDbClient,
+    http: &mut impl FactorDbClient,
     id: u128,
     digits_or_expr: &str,
     factor_finder: &FactorFinder,
@@ -1016,7 +1016,7 @@ fn mark_fully_factored(
 }
 
 async fn add_factors_to_graph(
-    http: &mut FactorDbClient,
+    http: &mut impl FactorDbClient,
     factor_finder: &FactorFinder,
     divisibility_graph: &mut DivisibilityGraph,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
@@ -1288,6 +1288,7 @@ pub fn facts_of_mut(
 
 #[test]
 fn test_find_and_submit() {
+    use crate::RealFactorDbClient;
     use crate::shutdown::Shutdown;
     use nonzero::nonzero;
     use rand::RngCore;
@@ -1306,7 +1307,7 @@ fn test_find_and_submit() {
             })
             .await;
         let (_channel, shutdown) = Shutdown::new();
-        let mut http = FactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
+        let mut http = RealFactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
         let factor_finder = FactorFinder::new();
         find_and_submit_factors(
             &mut http,
