@@ -1144,8 +1144,8 @@ impl FactorFinder {
             "^([0-9]+)$",
             "^([0-9]+\\.\\.+[0-9]+)$",
             "^\\(([^()]+)\\)$",
-            "^(.*)/([^()+-]+|\\([^()]+\\))$",
-            "^(.*)\\*([^()+-]+|\\([^()]+\\))$",
+            "^(.*)/([^()/+-]+|\\([^()]+\\))$",
+            "^(.*)\\*([^()\\*+-]+|\\([^()]+\\))$",
             "^([^()]+|\\([^()]+\\))([-+])(.*)$",
         ])
         .unwrap();
@@ -1757,7 +1757,7 @@ impl FactorFinder {
                                 self.regexes[DIV_INDEX].captures(remaining)
                             {
                                 denom_factors.reserve(remaining.len());
-                                let term: Factor<&str, &str> = Factor::from(&captures[1]);
+                                let term: Factor<&str, &str> = Factor::from(&inner_captures[2]);
                                 let term_factors = self.find_factors(&term);
                                 if term_factors.is_empty() {
                                     denom_factors.push(OwnedFactor::from(&term));
@@ -2028,8 +2028,14 @@ mod tests {
         let finder = FactorFinder::new();
         let factors = finder.find_factors::<&str, &str>(&"2^8+3*5-1".into());
         assert!(factors.contains(&Numeric(2)));
-        let factors = finder.find_factors::<&str, &str>(&"2*3*5/10".into());
+    }
+
+    #[test]
+    fn test_div_chain() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors::<&str, &str>(&"210/2/5".into());
         assert!(factors.contains(&Numeric(3)));
+        assert!(factors.contains(&Numeric(7)));
         assert!(!factors.contains(&Numeric(2)));
         assert!(!factors.contains(&Numeric(5)));
     }
