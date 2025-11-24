@@ -1465,7 +1465,7 @@ impl FactorFinder {
         &self,
         expr: &Factor<T, U>,
     ) -> Vec<OwnedFactor> {
-        debug!("find_factors: {expr}");
+        info!("find_factors: {expr}");
         match expr {
             Numeric(n) => Self::find_factors_of_u128(*n),
             Factor::BigNumber(expr) => Self::factor_big_num(expr),
