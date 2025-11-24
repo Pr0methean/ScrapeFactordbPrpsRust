@@ -795,13 +795,7 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         if self.is_expression() || other.is_expression() {
             let self_str = self.as_str();
             let other_str = other.as_str();
-            if self_str.starts_with(&*other_str)
-                && self_str.get(other_str.len()..=other_str.len()) == Some("/")
-            {
-                false
-            } else {
-                true
-            }
+            !(self_str.starts_with(&*other_str) && self_str.get(other_str.len()..=other_str.len()) == Some("/"))
         } else {
             if self > other {
                 return false;
