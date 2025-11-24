@@ -947,7 +947,7 @@ pub async fn find_and_submit_factors(
             .unwrap()
             .lock()
             .await
-            .write_fmt(format_args!("{id},{}\n", factor))
+            .write_fmt(format_args!("{id},{}\n", factor.as_str()))
         {
             Ok(_) => warn!("{id}: wrote {} to failed submissions file", factor),
             Err(e) => error!(
