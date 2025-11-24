@@ -789,35 +789,37 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         {
             return o > n && o.is_multiple_of(n);
         };
-        match self.partial_cmp(other) {
-            Some(Ordering::Greater) => self.is_expression() || other.is_expression(),
-            Some(Ordering::Equal) => false,
-            Some(Ordering::Less) => {
-                if self.is_expression() {
-                    let self_str = self.as_str();
-                    let other_str = other.as_str();
-                    if self_str.starts_with(&*other_str)
-                        && self_str.get(other_str.len()..=other_str.len()) == Some("/")
-                    {
-                        return false;
-                    }
-                }
-                let Some(last_digit) = self.last_digit() else {
-                    return true;
-                };
-                let Some(other_last_digit) = other.last_digit() else {
-                    return true;
-                };
-                match last_digit {
-                    0 => vec![0],
-                    2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
-                    5 => vec![0, 5],
-                    1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                    _ => unsafe { unreachable_unchecked() },
-                }
-                .contains(&other_last_digit)
+        if self == other {
+            return false;
+        }
+        if self.is_expression() || other.is_expression() {
+            let self_str = self.as_str();
+            let other_str = other.as_str();
+            if self_str.starts_with(&*other_str)
+                && self_str.get(other_str.len()..=other_str.len()) == Some("/")
+            {
+                false
+            } else {
+                true
             }
-            None => unsafe { unreachable_unchecked() },
+        } else {
+            if self > other {
+                return false;
+            }
+            let Some(last_digit) = self.last_digit() else {
+                return true;
+            };
+            let Some(other_last_digit) = other.last_digit() else {
+                return true;
+            };
+            match last_digit {
+                0 => vec![0],
+                2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
+                5 => vec![0, 5],
+                1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+                _ => unsafe { unreachable_unchecked() },
+            }
+                .contains(&other_last_digit)
         }
     }
 }
