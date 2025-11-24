@@ -1,3 +1,4 @@
+use tokio::task::spawn_blocking;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -76,14 +77,14 @@ pub trait FactorDbClient: Clone {
     ) -> Option<ResourceLimits>;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str>;
+    async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str>;
     async fn retrying_get_and_decode_or(
         &self,
-        url: &str,
+        url: ArcStr,
         retry_delay: Duration,
         alt_url_supplier: impl FnOnce() -> ArcStr,
     ) -> Result<Box<str>, Box<str>>;
-    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>>;
+    async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>>;
     async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
@@ -264,29 +265,32 @@ impl RealFactorDbClient {
         }
     }
 
-    async fn try_get_and_decode_core(&self, url: &str) -> Option<Box<str>> {
+    async fn try_get_and_decode_core(&self, url: ArcStr) -> Option<Box<str>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
             // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
             // spawn_blocking
-            let mut curl = self.curl_client.lock().await;
-
-            curl.get(true)
-                .and_then(|_| curl.url(url))
-                .and_then(|_| curl.perform())
-                .map_err(anyhow::Error::from)
-                .and_then(|_| {
-                    let response_code = curl.response_code()?;
-                    if response_code != 200 {
-                        error!("Error reading {url}: HTTP response code {response_code}")
-                    }
-                    Ok(String::from_utf8(curl.get_mut().take_all())?)
-                })
+            let curl_client = Arc::clone(&self.curl_client);
+            let url = url.clone();
+            spawn_blocking(move || {
+                let mut curl = curl_client.blocking_lock();
+                curl.get(true)
+                    .and_then(|_| curl.url(&url))
+                    .and_then(|_| curl.perform())
+                    .map_err(anyhow::Error::from)
+                    .and_then(|_| {
+                        let response_code = curl.response_code()?;
+                        if response_code != 200 {
+                            error!("Error reading {url}: HTTP response code {response_code}");
+                        }
+                        Ok(String::from_utf8(curl.get_mut().take_all())?)
+                    })
+            }).await.map_err(Error::from).and_then(|r| r.map_err(Error::from))
         } else {
             let result = self
                 .http
-                .get(url)
+                .get(url.as_str())
                 .header("Referer", "https://factordb.com")
                 .send()
                 .await;
@@ -367,9 +371,9 @@ impl FactorDbClient for RealFactorDbClient {
 
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Box<str> {
+    async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str> {
         for _ in 0..MAX_RETRIES {
-            if let Some(value) = self.try_get_and_decode(url).await {
+            if let Some(value) = self.try_get_and_decode(url.clone()).await {
                 return value;
             }
             sleep(retry_delay).await;
@@ -389,22 +393,22 @@ impl FactorDbClient for RealFactorDbClient {
 
     async fn retrying_get_and_decode_or(
         &self,
-        url: &str,
+        url: ArcStr,
         retry_delay: Duration,
         alt_url_supplier: impl FnOnce() -> ArcStr,
     ) -> Result<Box<str>, Box<str>> {
         for _ in 0..MAX_RETRIES_WITH_FALLBACK {
-            if let Some(value) = self.try_get_and_decode(url).await {
+            if let Some(value) = self.try_get_and_decode(url.clone()).await {
                 return Ok(value);
             }
             sleep(retry_delay).await;
         }
         let alt_url = alt_url_supplier();
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
-        Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
+        Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
     }
 
-    async fn try_get_and_decode(&self, url: &str) -> Option<Box<str>> {
+    async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
         let mut temp_bases = usize::MAX;
@@ -434,7 +438,7 @@ impl FactorDbClient for RealFactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits> {
         let response = self
-            .try_get_and_decode_core("https://factordb.com/res.php")
+            .try_get_and_decode_core("https://factordb.com/res.php".into())
             .await?;
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
             .await
@@ -486,7 +490,7 @@ impl FactorDbClient for RealFactorDbClient {
             return Some(response.clone());
         }
         let response = self
-            .try_get_and_decode(&format!("https://factordb.com/index.php?id={entry_id}"))
+            .try_get_and_decode(format!("https://factordb.com/index.php?id={entry_id}").into())
             .await?;
         let expression_form: ArcStr = self
             .expression_form_regex
@@ -535,15 +539,15 @@ impl FactorDbClient for RealFactorDbClient {
                     info!("Factor cache hit for {id}");
                     return response.clone();
                 }
-                let url = format!("https://factordb.com/api?id={id}");
+                let url = format!("https://factordb.com/api?id={id}").into();
                 if get_digits_as_fallback {
-                    self.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
+                    self.retrying_get_and_decode_or(url, RETRY_DELAY, || {
                         format!("https://factordb.com/index.php?showid={id}").into()
                     })
                     .await
                     .map_err(Some)
                 } else {
-                    self.try_get_and_decode(&url).await.ok_or(None)
+                    self.try_get_and_decode(url).await.ok_or(None)
                 }
             }
             Expression(ref expr) => {
@@ -555,8 +559,8 @@ impl FactorDbClient for RealFactorDbClient {
                     }
                     expr_key = Some(expr);
                 }
-                let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str()));
-                self.try_get_and_decode(&url).await.ok_or(None)
+                let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str())).into();
+                self.try_get_and_decode(url).await.ok_or(None)
             }
         };
         debug!("{id}: Got API response:\n{response:?}");

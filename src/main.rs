@@ -3,6 +3,7 @@
 #![feature(float_gamma)]
 #![feature(deque_extend_front)]
 extern crate core;
+extern crate alloc;
 
 mod algebraic;
 mod channel;
@@ -48,6 +49,7 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use arcstr::ArcStr;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -171,7 +173,7 @@ async fn check_composite(
     }
     let checks_triggered = if http
         .try_get_and_decode(
-            &format!("https://factordb.com/sequences.php?check={id}").into_boxed_str(),
+            format!("https://factordb.com/sequences.php?check={id}").into(),
         )
         .await
         .is_some()
@@ -276,7 +278,7 @@ async fn get_prp_remaining_bases(
     let mut bases_left = U256::MAX - 3;
     let bases_text = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/frame_prime.php?id={id}").into_boxed_str(),
+            format!("https://factordb.com/frame_prime.php?id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -418,7 +420,7 @@ async fn get_prp_remaining_bases(
     }
     let status_text = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}").into_boxed_str(),
+            format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -467,8 +469,7 @@ async fn get_prp_remaining_bases(
 async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}")
-                .into_boxed_str(),
+            format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -477,8 +478,7 @@ async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
 async fn prove_by_nm1(id: u128, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}")
-                .into_boxed_str(),
+            format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}").into(),
             RETRY_DELAY,
         )
         .await;
@@ -587,10 +587,10 @@ async fn do_checks(
                     continue;
                 }
                 for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                    let url = format!(
+                    let url: ArcStr = format!(
                         "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
-                    );
-                    let text = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                    ).into();
+                    let text = http.retrying_get_and_decode(url.clone(), RETRY_DELAY).await;
                     if !text.contains(">number<") {
                         error!("Failed to decode result from {url}: {text}");
                         task_return_permit.send(id);
@@ -653,8 +653,8 @@ async fn try_handle_unknown(
     next_attempt: &mut Instant,
 ) -> UnknownPrpCheckResult {
     let url =
-        format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker").into_boxed_str();
-    let result = http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+        format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker").into();
+    let result = http.retrying_get_and_decode(url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
         match status.get(1) {
             None => {
@@ -792,7 +792,7 @@ async fn queue_composites(
     let mut composites_page = None;
     while composites_page.is_none() && results_per_page > 0 {
         composites_page = http.try_get_and_decode(
-            &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}").into_boxed_str()
+            format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}").into()
         ).await;
         if composites_page.is_none() {
             results_per_page >>= 1;
@@ -974,8 +974,8 @@ async fn main() -> anyhow::Result<()> {
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
                 let mut results_text = None;
                 while results_text.is_none() && results_per_page > 0 {
-                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}").into_boxed_str();
-                    let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
+                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}").into();
+                    let Some(text) = http.try_get_and_decode(prp_search_url).await else {
                         sleep(SEARCH_RETRY_DELAY).await;
                         results_per_page >>= 1;
                         continue;
@@ -1032,8 +1032,8 @@ async fn try_queue_unknowns<'a>(
     });
     let u_start = rng.random_range(0..=MAX_START);
     let u_search_url =
-        format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into_boxed_str();
-    let Some(results_text) = http.try_get_and_decode(&u_search_url).await else {
+        format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
+    let Some(results_text) = http.try_get_and_decode(u_search_url).await else {
         return Err(());
     };
     info!("U search results retrieved");

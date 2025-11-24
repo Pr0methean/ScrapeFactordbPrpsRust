@@ -1106,8 +1106,8 @@ async fn add_factors_to_graph(
         } else {
             info!("{id}: Checking for listed algebraic factors");
             // Links before the "Is factor of" header are algebraic factors; links after it aren't
-            let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into_boxed_str();
-            let result = http.try_get_and_decode(&url).await;
+            let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into();
+            let result = http.try_get_and_decode(url).await;
             if let Some(result) = result
                 && let Some(listed_algebraic) = result.split("Is factor of").next()
             {
