@@ -892,6 +892,9 @@ pub async fn find_and_submit_factors(
                                 )
                             }),
                         );
+                        if cofactor_facts.needs_update() || !cofactor_facts.checked_for_listed_algebraic {
+                            submission_errors = true;
+                        }
                     }
                     OtherError => {
                         submission_errors = true;
