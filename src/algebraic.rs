@@ -795,7 +795,8 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         if self.is_expression() || other.is_expression() {
             let self_str = self.as_str();
             let other_str = other.as_str();
-            !(self_str.starts_with(&*other_str) && self_str.get(other_str.len()..=other_str.len()) == Some("/"))
+            !(self_str.starts_with(&*other_str)
+                && self_str.get(other_str.len()..=other_str.len()) == Some("/"))
         } else {
             if self > other {
                 return false;
@@ -813,7 +814,7 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
                 1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
                 _ => unsafe { unreachable_unchecked() },
             }
-                .contains(&other_last_digit)
+            .contains(&other_last_digit)
         }
     }
 }
@@ -2056,14 +2057,21 @@ mod tests {
     fn test_stack_depth_2() {
         const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
         // lucas_factors(PRIMORIAL, true);
-        println!("{}", fibonacci_factors(PRIMORIAL, true).into_iter().join(","));
+        println!(
+            "{}",
+            fibonacci_factors(PRIMORIAL, true).into_iter().join(",")
+        );
     }
 
     #[test]
     fn test_parse() {
         const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
         // lucas_factors(PRIMORIAL, true);
-        assert!(FactorFinder::new().find_factors(&format!("I({PRIMORIAL})").into()).contains(&Numeric(13)));
+        assert!(
+            FactorFinder::new()
+                .find_factors(&format!("I({PRIMORIAL})").into())
+                .contains(&Numeric(13))
+        );
     }
 
     #[test]
@@ -2228,13 +2236,14 @@ mod tests {
     #[test]
     fn test_may_be_proper_divisor_of() {
         fn may_be_proper_divisor_of(left: &str, right: &str) -> bool {
-            Factor::<&str,&str>::from(left).may_be_proper_divisor_of(&Factor::<&str,&str>::from(right))
+            Factor::<&str, &str>::from(left)
+                .may_be_proper_divisor_of(&Factor::<&str, &str>::from(right))
         }
-        assert!(may_be_proper_divisor_of("123","369^2"));
-        assert!(!may_be_proper_divisor_of("2","34567"));
-        assert!(may_be_proper_divisor_of("2","345-67"));
-        assert!(!may_be_proper_divisor_of("12345","54321"));
-        assert!(!may_be_proper_divisor_of("12345","12345"));
-        assert!(!may_be_proper_divisor_of("54321","12345"));
+        assert!(may_be_proper_divisor_of("123", "369^2"));
+        assert!(!may_be_proper_divisor_of("2", "34567"));
+        assert!(may_be_proper_divisor_of("2", "345-67"));
+        assert!(!may_be_proper_divisor_of("12345", "54321"));
+        assert!(!may_be_proper_divisor_of("12345", "12345"));
+        assert!(!may_be_proper_divisor_of("54321", "12345"));
     }
 }

@@ -893,7 +893,9 @@ pub async fn find_and_submit_factors(
                             }),
                         );
                         let cofactor_facts = facts_of(&number_facts_map, cofactor_vid);
-                        if cofactor_facts.needs_update() || !cofactor_facts.checked_for_listed_algebraic {
+                        if cofactor_facts.needs_update()
+                            || !cofactor_facts.checked_for_listed_algebraic
+                        {
                             // An error must have occurred while fetching cofactor's factors
                             submission_errors = true;
                         }
@@ -1286,6 +1288,7 @@ pub fn facts_of_mut(
 
 #[test]
 fn test_find_and_submit() {
+    use crate::shutdown::Shutdown;
     use nonzero::nonzero;
     use rand::RngCore;
     use rand::rng;
@@ -1293,18 +1296,26 @@ fn test_find_and_submit() {
     use std::fs::File;
     use tokio::runtime::Runtime;
     use tokio::sync::Mutex;
-    use crate::shutdown::Shutdown;
 
     simple_log::console("info").unwrap();
     let runtime = Runtime::new().unwrap();
     runtime.block_on(async {
-        FAILED_U_SUBMISSIONS_OUT.get_or_init(async ||
-            Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
-        ).await;
+        FAILED_U_SUBMISSIONS_OUT
+            .get_or_init(async || {
+                Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
+            })
+            .await;
         let (_channel, shutdown) = Shutdown::new();
         let mut http = FactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
         let factor_finder = FactorFinder::new();
-        find_and_submit_factors(&mut http, 11_000_000_004_420_33401, &format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19), &factor_finder, true).await
+        find_and_submit_factors(
+            &mut http,
+            11_000_000_004_420_33401,
+            &format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19),
+            &factor_finder,
+            true,
+        )
+        .await
     });
     runtime.shutdown_background();
 }
