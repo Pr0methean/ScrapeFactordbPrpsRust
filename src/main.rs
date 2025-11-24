@@ -16,7 +16,6 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
-use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
@@ -37,7 +36,6 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
@@ -118,8 +116,8 @@ struct NumberStatusApiResponse {
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
     id: Option<u128>,
-    number: Option<Cow<'a, str>>,
-    factor: Cow<'a, str>,
+    number: Option<&'a str>,
+    factor: &'a str,
 }
 
 async fn composites_while_waiting(
@@ -187,7 +185,7 @@ async fn check_composite(
     let ProcessedStatusApiResponse {
         factors, status, ..
     } = http
-        .known_factors_as_digits::<&str, &str>(Id(id), false, true)
+        .known_factors_as_digits(Id(id), false, true)
         .await;
     if factors.is_empty() {
         if status.is_known_fully_factored() {
@@ -299,7 +297,7 @@ async fn get_prp_remaining_bases(
             factors: nm1_factors,
             ..
         } = http
-            .known_factors_as_digits::<&str, &str>(Id(nm1_id), false, false)
+            .known_factors_as_digits(Id(nm1_id), false, false)
             .await;
         match nm1_factors.len() {
             0 => {
@@ -326,7 +324,7 @@ async fn get_prp_remaining_bases(
             factors: np1_factors,
             ..
         } = http
-            .known_factors_as_digits::<&str, &str>(Id(np1_id), false, false)
+            .known_factors_as_digits(Id(np1_id), false, false)
             .await;
         match np1_factors.len() {
             0 => {
@@ -349,7 +347,7 @@ async fn get_prp_remaining_bases(
         && !nm1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N-1 must be even
-        match http.report_factor::<&str, &str>(nm1_id, &Numeric(2)).await {
+        match http.report_numeric_factor(nm1_id, 2).await {
             AlreadyFullyFactored => {
                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                 prove_by_nm1(id, http).await;
@@ -365,7 +363,7 @@ async fn get_prp_remaining_bases(
         && !np1_known_to_divide_2
     {
         // N wouldn't be PRP if it was even, so N+1 must be even
-        match http.report_factor::<&str, &str>(np1_id, &Numeric(2)).await {
+        match http.report_numeric_factor(np1_id, 2).await {
             AlreadyFullyFactored => {
                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                 prove_by_np1(id, http).await;
@@ -382,14 +380,14 @@ async fn get_prp_remaining_bases(
     {
         if !nm1_known_to_divide_3 && !np1_known_to_divide_3 {
             // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-            match http.report_factor::<&str, &str>(nm1_id, &Numeric(3)).await {
+            match http.report_numeric_factor(nm1_id, 3).await {
                 AlreadyFullyFactored => {
                     info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
                     prove_by_nm1(id, http).await;
                     return Ok(U256::from(0));
                 }
                 Accepted => {}
-                _ => match http.report_factor::<&str, &str>(np1_id, &Numeric(3)).await {
+                _ => match http.report_numeric_factor(np1_id, 3).await {
                     AlreadyFullyFactored => {
                         info!("{id}: N+1 (ID {np1_id}) is fully factored!");
                         prove_by_np1(id, http).await;
@@ -406,7 +404,7 @@ async fn get_prp_remaining_bases(
         }
         for id in [nm1_id, np1_id] {
             for factor in http
-                .known_factors_as_digits::<&str, &str>(Id(id), false, true)
+                .known_factors_as_digits(Id(id), false, true)
                 .await
                 .factors
                 .into_iter()

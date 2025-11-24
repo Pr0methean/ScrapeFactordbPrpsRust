@@ -28,7 +28,6 @@ use regex::{Regex, RegexBuilder};
 use reqwest::{Client, RequestBuilder};
 use serde::Serialize;
 use serde_json::from_str;
-use std::fmt::Display;
 use std::io::Write;
 use std::mem::swap;
 use std::num::NonZeroU32;
@@ -88,29 +87,21 @@ pub trait FactorDbClient: Clone {
         haystack: &'a str,
     ) -> impl Iterator<Item = (u128, &'a str)>;
     async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr>;
-    async fn known_factors_as_digits<
-        T: AsRef<str> + std::fmt::Debug,
-        U: AsRef<str> + std::fmt::Debug + ToCompactString,
-    >(
+    async fn known_factors_as_digits(
         &mut self,
-        id: NumberSpecifier<T, U>,
+        id: NumberSpecifier<&str, &str>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
-    async fn try_report_factor<
-        T: AsRef<str>,
-        U: AsRef<str> + Display,
-        V: AsRef<str>,
-        W: AsRef<str> + Display,
-    >(
+    async fn try_report_factor(
         &self,
-        u_id: &NumberSpecifier<T, U>,
-        factor: &Factor<V, W>,
+        u_id: NumberSpecifier<&str, &str>,
+        factor: Factor<&str, &str>,
     ) -> ReportFactorResult;
-    async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
+    async fn report_numeric_factor(
         &self,
         u_id: u128,
-        factor: &Factor<T, U>,
+        factor: u128,
     ) -> ReportFactorResult;
 }
 
@@ -493,12 +484,9 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
-    async fn known_factors_as_digits<
-        T: AsRef<str> + std::fmt::Debug,
-        U: AsRef<str> + std::fmt::Debug + ToCompactString,
-    >(
+    async fn known_factors_as_digits(
         &mut self,
-        mut id: NumberSpecifier<T, U>,
+        mut id: NumberSpecifier<&str, &str>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
@@ -643,31 +631,24 @@ impl FactorDbClient for RealFactorDbClient {
         processed
     }
 
-    async fn try_report_factor<
-        T: AsRef<str>,
-        U: AsRef<str> + Display,
-        V: AsRef<str>,
-        W: AsRef<str> + Display,
-    >(
+    async fn try_report_factor(
         &self,
-        u_id: &NumberSpecifier<T, U>,
-        factor: &Factor<V, W>,
+        u_id: NumberSpecifier<&str, &str>,
+        factor: Factor<&str, &str>,
     ) -> ReportFactorResult {
-        if let Expression(Numeric(_)) = u_id {
-            return AlreadyFullyFactored;
-        }
-        let number = if let Expression(expr) = u_id {
-            Some(expr.as_str())
-        } else {
-            None
+        let (id, number) = match u_id {
+            Expression(Numeric(_)) => return AlreadyFullyFactored,
+            Expression(Factor::BigNumber(x)) => (None, Some(x)),
+            Expression(Factor::Expression(x)) => (None, Some(x)),
+            Id(id) => (Some(id), None),
         };
         let request_builder =
             match self
                 .post("https://factordb.com/reportfactor.php")
                 .form(&FactorSubmission {
-                    id: if let Id(id) = u_id { Some(*id) } else { None },
+                    id,
                     number,
-                    factor: factor.as_str(),
+                    factor: &factor.as_str(),
                 }) {
                 Ok(builder) => builder,
                 Err(e) => {
@@ -696,14 +677,14 @@ impl FactorDbClient for RealFactorDbClient {
         }
     }
 
-    async fn report_factor<T: Display + AsRef<str>, U: Display + AsRef<str>>(
+    async fn report_numeric_factor(
         &self,
         u_id: u128,
-        factor: &Factor<T, U>,
+        factor: u128,
     ) -> ReportFactorResult {
         for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
             let result = self
-                .try_report_factor::<&str, &str, T, U>(&Id(u_id), factor)
+                .try_report_factor(Id(u_id), Numeric(factor))
                 .await;
             if result != OtherError {
                 return result;
@@ -714,7 +695,7 @@ impl FactorDbClient for RealFactorDbClient {
             .unwrap()
             .lock()
             .await
-            .write_fmt(format_args!("{u_id},{}\n", factor.as_str()))
+            .write_fmt(format_args!("{u_id},{}\n", factor))
         {
             Ok(_) => warn!("{u_id}: wrote {factor} to failed submissions file"),
             Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),

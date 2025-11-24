@@ -423,7 +423,7 @@ pub async fn find_and_submit_factors(
             status,
             ..
         } = http
-            .known_factors_as_digits::<&str, &str>(Id(id), false, true)
+            .known_factors_as_digits(Id(id), false, true)
             .await;
         if status.is_known_fully_factored() {
             warn!("{id}: Already fully factored");
@@ -541,7 +541,7 @@ pub async fn find_and_submit_factors(
             _ => {}
         }
         match http
-            .try_report_factor::<&str, &str, _, _>(&Id(id), factor)
+            .try_report_factor(Id(id), factor.as_ref())
             .await
         {
             AlreadyFullyFactored => return true,
@@ -829,8 +829,8 @@ pub async fn find_and_submit_factors(
                 let dest_specifier = crate::as_specifier(cofactor_vid, cofactor, &number_facts_map);
                 match http
                     .try_report_factor(
-                        &dest_specifier,
-                        divisibility_graph.vertex(factor_vid).unwrap(),
+                        dest_specifier,
+                        divisibility_graph.vertex(factor_vid).unwrap().as_ref(),
                     )
                     .await
                 {
