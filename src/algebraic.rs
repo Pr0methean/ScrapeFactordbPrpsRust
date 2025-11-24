@@ -2215,4 +2215,17 @@ mod tests {
         assert!(lower == 2385 || lower == 2384);
         assert!(upper == 2386 || upper == 2387);
     }
+
+    #[test]
+    fn test_may_be_proper_divisor_of() {
+        fn may_be_proper_divisor_of(left: &str, right: &str) -> bool {
+            Factor::<&str,&str>::from(left).may_be_proper_divisor_of(&Factor::<&str,&str>::from(right))
+        }
+        assert!(may_be_proper_divisor_of("123","369^2"));
+        assert!(!may_be_proper_divisor_of("2","34567"));
+        assert!(may_be_proper_divisor_of("2","345-67"));
+        assert!(!may_be_proper_divisor_of("12345","54321"));
+        assert!(!may_be_proper_divisor_of("12345","12345"));
+        assert!(!may_be_proper_divisor_of("54321","12345"));
+    }
 }
