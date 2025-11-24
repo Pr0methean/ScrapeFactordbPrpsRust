@@ -796,7 +796,7 @@ pub async fn find_and_submit_factors(
                             &number_facts_map,
                             cofactor_vid,
                         ));
-                if cofactor_facts.lower_bound_log10 > cofactor_upper_bound {
+                if factor_facts.lower_bound_log10 > cofactor_upper_bound {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller based on log10 bounds"
