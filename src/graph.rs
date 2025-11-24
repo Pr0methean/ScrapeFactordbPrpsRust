@@ -682,23 +682,23 @@ pub async fn find_and_submit_factors(
                     propagate_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid, true);
                     continue;
                 }
-                let facts = facts_of(&number_facts_map, factor_vid);
-                match facts.factors_known_to_factordb {
+                let factor_facts = facts_of(&number_facts_map, factor_vid);
+                match factor_facts.factors_known_to_factordb {
                     UpToDate(ref already_known_factors)
                     | NotUpToDate(ref already_known_factors) => {
-                        if already_known_factors.contains(&factor_vid) {
+                        if already_known_factors.contains(&cofactor_vid) {
                             propagate_divisibility(
                                 &mut divisibility_graph,
-                                factor_vid,
                                 cofactor_vid,
+                                factor_vid,
                                 false,
                             );
                             continue;
-                        } else if facts.is_final() {
+                        } else if factor_facts.is_final() {
                             rule_out_divisibility(
                                 &mut divisibility_graph,
-                                factor_vid,
                                 cofactor_vid,
+                                factor_vid,
                             );
                             continue;
                         }
@@ -759,7 +759,7 @@ pub async fn find_and_submit_factors(
                             .partition(|(known_factor_vid, _)| {
                                 factor.may_be_proper_divisor_of(
                                     divisibility_graph.vertex(known_factor_vid).unwrap(),
-                                ) && facts.lower_bound_log10
+                                ) && cofactor_facts.lower_bound_log10
                                     <= facts_of(&number_facts_map, *known_factor_vid)
                                         .upper_bound_log10
                             });
@@ -796,7 +796,7 @@ pub async fn find_and_submit_factors(
                             &number_facts_map,
                             cofactor_vid,
                         ));
-                if facts.lower_bound_log10 > cofactor_upper_bound {
+                if cofactor_facts.lower_bound_log10 > cofactor_upper_bound {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller based on log10 bounds"
@@ -1277,4 +1277,29 @@ pub fn facts_of_mut(
     vertex_id: VertexId,
 ) -> &mut NumberFacts {
     number_facts_map.get_mut(&vertex_id).unwrap()
+}
+
+#[test]
+fn test_find_and_submit() {
+    use nonzero::nonzero;
+    use rand::RngCore;
+    use rand::rng;
+    use std::env::temp_dir;
+    use std::fs::File;
+    use tokio::runtime::Runtime;
+    use tokio::sync::Mutex;
+    use crate::shutdown::Shutdown;
+
+    simple_log::console("info").unwrap();
+    let runtime = Runtime::new().unwrap();
+    runtime.block_on(async {
+        FAILED_U_SUBMISSIONS_OUT.get_or_init(async ||
+            Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
+        ).await;
+        let (_channel, shutdown) = Shutdown::new();
+        let mut http = FactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
+        let factor_finder = FactorFinder::new();
+        find_and_submit_factors(&mut http, 11_000_000_004_420_33401, &format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19), &factor_finder, true).await
+    });
+    runtime.shutdown_background();
 }

@@ -2044,8 +2044,15 @@ mod tests {
     #[test]
     fn test_stack_depth_2() {
         const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
-        println!("{:?}", lucas_factors(PRIMORIAL, true));
-        println!("{:?}", fibonacci_factors(PRIMORIAL, true));
+        // lucas_factors(PRIMORIAL, true);
+        println!("{}", fibonacci_factors(PRIMORIAL, true).into_iter().join(","));
+    }
+
+    #[test]
+    fn test_parse() {
+        const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
+        // lucas_factors(PRIMORIAL, true);
+        assert!(FactorFinder::new().find_factors(&format!("I({PRIMORIAL})").into()).contains(&Numeric(13)));
     }
 
     #[test]
