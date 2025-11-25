@@ -94,6 +94,10 @@ pub trait FactorDbClient {
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
+    fn cached_factors(
+        &self,
+        id: NumberSpecifier<&str, &str>,
+    ) -> Option<ProcessedStatusApiResponse>;
     async fn try_report_factor(
         &self,
         u_id: NumberSpecifier<&str, &str>,
@@ -490,14 +494,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
-    #[framed]
-    async fn known_factors_as_digits(
-        &mut self,
-        mut id: NumberSpecifier<&str, &str>,
-        include_ff: bool,
-        get_digits_as_fallback: bool,
-    ) -> ProcessedStatusApiResponse {
-        debug!("known_factors_as_digits: id={id:?}");
+    fn cached_factors(&self, mut id: NumberSpecifier<&str, &str>) -> Option<ProcessedStatusApiResponse> {
         if let Id(entry_id) = id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
@@ -506,7 +503,7 @@ impl FactorDbClient for RealFactorDbClient {
         if let Expression(Numeric(n)) = id {
             debug!("Specially handling numeric expression {n}");
             let factors = FactorFinder::find_factors_of_u128(n).into_boxed_slice();
-            return ProcessedStatusApiResponse {
+            return Some(ProcessedStatusApiResponse {
                 status: Some(if factors.len() > 1 {
                     Prime
                 } else {
@@ -514,15 +511,36 @@ impl FactorDbClient for RealFactorDbClient {
                 }),
                 factors,
                 id: Numeric::<&str, &str>(n).known_id(),
-            };
+            });
+        }
+        match id {
+            Id(id) => {
+                self.by_id_cache.get(&id).cloned()
+            }
+            Expression(Factor::Expression(expr)) => {
+                let expr = expr.to_compact_string();
+                info!("Factor cache hit for {expr}");
+                self.by_expr_cache.get(&expr).cloned()
+            }
+            _ => None
+        }
+    }
+
+    #[inline]
+    #[framed]
+    async fn known_factors_as_digits(
+        &mut self,
+        id: NumberSpecifier<&str, &str>,
+        include_ff: bool,
+        get_digits_as_fallback: bool,
+    ) -> ProcessedStatusApiResponse {
+        debug!("known_factors_as_digits: id={id:?}");
+        if let Some(cached) = self.cached_factors(id.clone()) {
+            return cached;
         }
         let mut expr_key = None;
         let response = match id {
             Id(id) => {
-                if let Some(response) = self.by_id_cache.get(&id) {
-                    info!("Factor cache hit for {id}");
-                    return response.clone();
-                }
                 let url = format!("https://factordb.com/api?id={id}").into();
                 if get_digits_as_fallback {
                     self.retrying_get_and_decode_or(url, RETRY_DELAY, || {
@@ -548,7 +566,7 @@ impl FactorDbClient for RealFactorDbClient {
             }
         };
         debug!("{id}: Got API response:\n{response:?}");
-        let processed = match response {
+        let mut processed = match response {
             Ok(api_response) => match from_str::<NumberStatusApiResponse>(&api_response) {
                 Err(e) => {
                     error!("{id}: Failed to decode API response: {e}: {api_response}");
@@ -577,9 +595,7 @@ impl FactorDbClient for RealFactorDbClient {
                             None
                         }
                     };
-                    let factors = if !include_ff && status.is_known_fully_factored() {
-                        vec![]
-                    } else {
+                    let factors = {
                         let mut factors: Vec<_> = factors
                             .into_iter()
                             .map(|(factor, _exponent)| Factor::from(factor))
@@ -632,8 +648,11 @@ impl FactorDbClient for RealFactorDbClient {
             }
             if let Some(expr) = expr_key {
                 self.by_expr_cache
-                    .insert(expr.to_compact_string(), processed.clone());
+                    .insert(expr, processed.clone());
             }
+        }
+        if !include_ff && processed.status.is_known_fully_factored() {
+            processed.factors = Box::default();
         }
         processed
     }

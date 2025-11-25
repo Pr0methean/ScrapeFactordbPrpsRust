@@ -241,7 +241,7 @@ async fn check_composite(
     }
 }
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier<T: AsRef<str>, U: AsRef<str>> {
     Id(u128),
     Expression(Factor<T, U>),

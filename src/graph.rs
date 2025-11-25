@@ -9,7 +9,7 @@ use crate::algebraic::{
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
 use crate::net::FactorDbClient;
-use crate::{FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use crate::{as_specifier, FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::base::VertexRef;
@@ -122,8 +122,9 @@ pub fn add_factor_node(
     factor_finder: &FactorFinder,
     number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     root_vid: Option<VertexId>,
-    entry_id: Option<u128>,
+    mut entry_id: Option<u128>,
     deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
+    http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
     let (existing_vertex, matching_vertices) = divisibility_graph
         .vertices()
@@ -140,11 +141,28 @@ pub fn add_factor_node(
         .unwrap_or_else(|| {
             let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
+            let specifier = as_specifier(factor_vid, divisibility_graph.vertex(&factor_vid).unwrap(), number_facts_map, deleted_synonyms);
+            let cached = http.cached_factors(specifier);
+            let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
+                entry_id = entry_id.or(cached.id);
+                let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
+                for subfactor in cached.factors {
+                    let (subfactor_vid, _) = if subfactor == factor {
+                        (factor_vid, false)
+                    } else {
+                        add_factor_node(divisibility_graph, subfactor.as_ref(), factor_finder, number_facts_map, root_vid, subfactor.known_id(), deleted_synonyms, http)
+                    };
+                    cached_subfactors.push(subfactor_vid);
+                }
+                (cached.status, UpToDate(cached_subfactors))
+            } else {
+                (None, NotQueried)
+            };
             number_facts_map.insert(
                 factor_vid,
                 NumberFacts {
-                    last_known_status: None,
-                    factors_known_to_factordb: NotQueried,
+                    last_known_status,
+                    factors_known_to_factordb,
                     lower_bound_log10,
                     upper_bound_log10,
                     entry_id,
@@ -164,6 +182,7 @@ pub fn add_factor_node(
             merge_dest,
             OwnedFactor::from(&factor),
             deleted_synonyms,
+            http,
         );
     }
     for matching_vid in matching_vertices {
@@ -211,6 +230,7 @@ pub fn add_factor_node(
             merge_dest,
             old_factor,
             deleted_synonyms,
+            http,
         );
         replace_with_or_abort(facts_of_mut(number_facts_map, merge_dest), |facts| {
             facts.merged_with(old_facts)
@@ -443,6 +463,7 @@ pub async fn find_and_submit_factors(
             None,
             Some(id),
             &mut deleted_synonyms,
+            http,
         )
     } else {
         let ProcessedStatusApiResponse {
@@ -465,6 +486,7 @@ pub async fn find_and_submit_factors(
                 None,
                 Some(id),
                 &mut deleted_synonyms,
+                http,
             ),
             _ => {
                 let (root_node, _) = add_factor_node(
@@ -475,6 +497,7 @@ pub async fn find_and_submit_factors(
                     None,
                     Some(id),
                     &mut deleted_synonyms,
+                    http,
                 );
                 digits_or_expr_full.push(root_node);
                 let root_factors = UpToDate(if known_factors.len() > 1 {
@@ -489,6 +512,7 @@ pub async fn find_and_submit_factors(
                                 Some(root_node),
                                 known_factor.known_id(),
                                 &mut deleted_synonyms,
+                                http,
                             );
                             if added {
                                 propagate_divisibility(
@@ -1094,6 +1118,7 @@ async fn add_factors_to_graph(
                     factor_vid,
                     known_factor.clone(),
                     deleted_synonyms,
+                    http
                 );
             }
         }
@@ -1108,6 +1133,7 @@ async fn add_factors_to_graph(
                     Some(root_vid),
                     known_factor.known_id(),
                     deleted_synonyms,
+                    http,
                 );
                 propagate_divisibility(divisibility_graph, known_factor_vid, factor_vid, false);
                 if is_new {
@@ -1165,6 +1191,7 @@ async fn add_factors_to_graph(
                         Some(factor_vid),
                         Some(subfactor_entry_id),
                         deleted_synonyms,
+                        http,
                     );
                     debug!(
                         "{id}: Factor {factor} has entry ID {subfactor_entry_id} and vertex ID {subfactor_vid:?}"
@@ -1190,6 +1217,7 @@ async fn add_factors_to_graph(
             factor_vid,
             facts.entry_id,
             deleted_synonyms,
+            http
         ));
     }
     let facts = facts_of_mut(number_facts_map, factor_vid);
@@ -1213,6 +1241,7 @@ async fn add_factors_to_graph(
                         Some(root_vid),
                         new_factor.known_id(),
                         deleted_synonyms,
+                        http
                     )
                 })
                 .flat_map(|(vid, added)| if added { Some(vid) } else { None }),
@@ -1232,6 +1261,7 @@ fn merge_equivalent_expressions(
     factor_vid: VertexId,
     equivalent: OwnedFactor,
     deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
+    http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     let current = divisibility_graph.vertex(&factor_vid).unwrap();
     if equivalent == *current {
@@ -1258,6 +1288,7 @@ fn merge_equivalent_expressions(
                 factor_vid,
                 entry_id,
                 deleted_synonyms,
+                http
             ));
         }
         let (new_lower_bound_log10, new_upper_bound_log10) =
@@ -1283,6 +1314,7 @@ fn merge_equivalent_expressions(
             factor_vid,
             entry_id,
             deleted_synonyms,
+            http
         ));
         new_factor_vids
     }
@@ -1296,6 +1328,7 @@ fn add_factor_finder_factor_vertices_to_graph(
     factor_vid: VertexId,
     entry_id: Option<u128>,
     deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
+    http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     factor_finder
         .find_unique_factors(divisibility_graph.vertex(&factor_vid).unwrap())
@@ -1314,6 +1347,7 @@ fn add_factor_finder_factor_vertices_to_graph(
                 root_vid,
                 entry_id,
                 deleted_synonyms,
+                http,
             )
         })
         .flat_map(|(vid, added)| if added { Some(vid) } else { None })
