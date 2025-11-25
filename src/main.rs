@@ -9,7 +9,7 @@ mod algebraic;
 mod channel;
 mod graph;
 mod net;
-mod shutdown;
+mod monitor;
 
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
@@ -21,7 +21,7 @@ use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::graph::facts_of;
 use crate::net::{FactorDbClient, ResourceLimits};
-use crate::shutdown::{Monitor, monitor};
+use crate::monitor::{Monitor, monitor};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;

@@ -6,7 +6,7 @@ use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
 use crate::algebraic::{FactorFinder, NumberStatusExt, ProcessedStatusApiResponse};
-use crate::shutdown::Monitor;
+use crate::monitor::Monitor;
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,

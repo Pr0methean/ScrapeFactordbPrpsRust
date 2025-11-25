@@ -1341,7 +1341,7 @@ pub fn facts_of_mut(
 #[test]
 fn test_find_and_submit() {
     use crate::RealFactorDbClient;
-    use crate::shutdown::Monitor;
+    use crate::monitor::Monitor;
     use nonzero::nonzero;
     use rand::RngCore;
     use rand::rng;

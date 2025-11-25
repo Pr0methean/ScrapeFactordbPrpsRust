@@ -14,7 +14,10 @@ use tokio::time::{sleep_until, Instant};
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
-/// Listens for the server shutdown signal.
+/// A Monitor performs two tasks:
+/// 1. Periodically prints the async backtraces of running tasks, so that any
+///    deadlock can be diagnosed.
+/// 2. Listens for the server shutdown signal.
 ///
 /// Shutdown is signalled using a `broadcast::Receiver`. Only a single value is
 /// ever sent. Once a value has been sent via the broadcast channel, the server
