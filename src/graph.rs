@@ -1248,22 +1248,25 @@ async fn add_factors_to_graph(
         && let Some(expression_form) = http.try_get_expression_form(entry_id).await
     {
         let expression_form: Factor<&str, &str> = Factor::from(expression_form.as_str());
-        added.extend(
-            factor_finder
-                .find_unique_factors(&expression_form)
-                .into_iter()
-                .map(|new_factor| {
-                    add_factor_node(
-                        data,
-                        new_factor.as_ref(),
-                        factor_finder,
-                        Some(root_vid),
-                        new_factor.known_id(),
-                        http
-                    )
-                })
-                .flat_map(|(vid, added)| if added { Some(vid) } else { None }),
-        );
+        if expression_form != factor {
+            added.extend(
+                factor_finder
+                    .find_unique_factors(&expression_form)
+                    .into_iter()
+                    .map(|new_factor| {
+                        add_factor_node(
+                            data,
+                            new_factor.as_ref(),
+                            factor_finder,
+                            Some(root_vid),
+                            new_factor.known_id(),
+                            http
+                        )
+                    })
+                    .flat_map(|(vid, added)| if added { Some(vid) } else { None }),
+
+            );
+        }
         let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms);
         facts.expression_form_checked_in_factor_finder = true;
     }
