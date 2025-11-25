@@ -291,10 +291,13 @@ fn neighbor_vids(
 
 #[inline(always)]
 pub fn to_real_vertex_id(
-    vertex_id: VertexId,
+    mut vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>
 ) -> VertexId {
-    deleted_synonyms.get(&vertex_id).copied().unwrap_or(vertex_id)
+    while let Some(synonym) = deleted_synonyms.get(&vertex_id).copied() {
+        vertex_id = synonym;
+    }
+    vertex_id
 }
 
 #[inline(always)]
