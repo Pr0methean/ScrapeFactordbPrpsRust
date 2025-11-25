@@ -285,6 +285,7 @@ fn neighbor_vids(
         .collect::<Vec<_>>()
 }
 
+#[inline(always)]
 pub fn to_real_vertex_id(
     vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>
@@ -292,6 +293,7 @@ pub fn to_real_vertex_id(
     deleted_synonyms.get(&vertex_id).copied().unwrap_or(vertex_id)
 }
 
+#[inline(always)]
 pub fn get_vertex<'a>(
     divisibility_graph: &'a DivisibilityGraph,
     vertex_id: VertexId,
@@ -1340,29 +1342,22 @@ fn add_factor_finder_factor_vertices_to_graph(
         .collect()
 }
 
-#[inline]
+#[inline(always)]
 pub fn facts_of<'a>(
     number_facts_map: &'a BTreeMap<VertexId, NumberFacts>,
     vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>
 ) -> &'a NumberFacts {
-    number_facts_map.get(&vertex_id).unwrap_or_else(
-        || number_facts_map.get(deleted_synonyms.get(&vertex_id).unwrap()).unwrap())
+    number_facts_map.get(&to_real_vertex_id(vertex_id, deleted_synonyms)).unwrap()
 }
 
-#[inline]
+#[inline(always)]
 pub fn facts_of_mut<'a>(
     number_facts_map: &'a mut BTreeMap<VertexId, NumberFacts>,
     vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>,
 ) -> &'a mut NumberFacts {
-    let facts = number_facts_map.get_mut(&vertex_id).map(|entry| entry as *mut NumberFacts);
-    if let Some(facts) = facts {
-        // SAFETY: This is dropped unused before the second get_mut call.
-        unsafe { &mut *facts }
-    } else {
-        number_facts_map.get_mut(deleted_synonyms.get(&vertex_id).unwrap()).unwrap()
-    }
+    number_facts_map.get_mut(&to_real_vertex_id(vertex_id, deleted_synonyms)).unwrap()
 }
 
 #[test]
