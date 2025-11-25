@@ -2039,6 +2039,15 @@ mod tests {
     }
 
     #[test]
+    fn test_chain_2() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors::<&str, &str>(&"(2^9+1)^2*7^2/361".into());
+        assert!(factors.contains(&Numeric(3)));
+        assert!(factors.contains(&Numeric(7)));
+        assert!(!factors.contains(&Numeric(19)));
+    }
+
+    #[test]
     fn test_mul_chain() {
         let finder = FactorFinder::new();
         let factors = finder.find_factors::<&str, &str>(&"2^8*3*5".into());
