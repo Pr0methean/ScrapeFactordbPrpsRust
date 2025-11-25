@@ -1134,9 +1134,9 @@ async fn add_factors_to_graph(
             .await;
         let known_factor_count = known_factors.len();
         if known_factor_count == 1 {
+            let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
             let known_factor = known_factors.iter().next().unwrap();
-            let existing_factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
-            if *known_factor != *existing_factor {
+            if *known_factor != *factor {
                 merge_equivalent_expressions(
                     factor_finder,
                     data,
@@ -1191,11 +1191,11 @@ async fn add_factors_to_graph(
         .expect("Tried to check checked_for_listed_algebraic in add_factors_to_graph when not entered in number_facts_map")
         .checked_for_listed_algebraic
     {
-        let root = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
-        if let Some(known_id) = root.known_id()
+        let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
+        if let Some(known_id) = factor.known_id()
             && id != known_id
         {
-            error!("Tried to look up {root} using a smaller number's id {id}");
+            error!("Tried to look up {factor} using a smaller number's id {id}");
         } else {
             info!("{id}: Checking for listed algebraic factors");
             // Links before the "Is factor of" header are algebraic factors; links after it aren't
@@ -1249,8 +1249,9 @@ async fn add_factors_to_graph(
         && !facts.expression_form_checked_in_factor_finder
         && let Some(expression_form) = http.try_get_expression_form(entry_id).await
     {
+        let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         let expression_form: Factor<&str, &str> = Factor::from(expression_form.as_str());
-        if expression_form != factor {
+        if expression_form != *factor {
             added.extend(
                 factor_finder
                     .find_unique_factors(&expression_form)
