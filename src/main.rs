@@ -2,8 +2,8 @@
 #![feature(duration_constructors_lite)]
 #![feature(float_gamma)]
 #![feature(deque_extend_front)]
-extern crate core;
 extern crate alloc;
+extern crate core;
 
 mod algebraic;
 mod channel;
@@ -11,49 +11,45 @@ mod graph;
 mod net;
 mod monitor;
 
+use crate::algebraic::NumberStatus::FullyFactored;
+use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
+use crate::algebraic::{NumberStatusExt};
+use crate::monitor::{monitor, Monitor};
+use crate::net::{FactorDbClient, ResourceLimits};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
-use crate::algebraic::NumberStatus::FullyFactored;
-use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
-use crate::algebraic::{NumberStatusExt, OwnedFactor};
-use crate::graph::facts_of;
-use crate::net::{FactorDbClient, ResourceLimits};
-use crate::monitor::{Monitor, monitor};
+use arcstr::ArcStr;
+use async_backtrace::framed;
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
-use graph::NumberFacts;
-use gryf::core::id::VertexId;
-use log::{debug, error, info, warn};
-use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
+use log::{error, info, warn};
+use net::{RealFactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU32, NonZeroU128};
+use std::num::{NonZeroU128, NonZeroU32};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use arcstr::ArcStr;
-use async_backtrace::framed;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
+use tokio::sync::{oneshot, Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
 use tokio::{select, task};
 
 const MAX_START: u128 = 100_000;
@@ -1080,22 +1076,3 @@ enum ReportFactorResult {
 }
 
 const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
-
-fn as_specifier<'a>(
-    factor_vid: VertexId,
-    factor: &'a OwnedFactor,
-    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
-    deleted_synonyms: &BTreeMap<VertexId, VertexId>,
-) -> NumberSpecifier<&'a str, &'a str> {
-    if let Some(factor_entry_id) = facts_of(number_facts_map, factor_vid, &deleted_synonyms).entry_id {
-        debug!(
-            "as_specifier: got entry ID {factor_entry_id} for factor {factor} with vertex ID {factor_vid:?}"
-        );
-        Id(factor_entry_id)
-    } else {
-        factor
-            .known_id()
-            .map(Id)
-            .unwrap_or_else(|| Expression(factor.as_ref()))
-    }
-}

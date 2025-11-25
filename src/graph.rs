@@ -1,5 +1,5 @@
 use async_backtrace::framed;
-use crate::NumberSpecifier::Id;
+use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
@@ -9,14 +9,13 @@ use crate::algebraic::{
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
 use crate::net::FactorDbClient;
-use crate::{as_specifier, FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use crate::{NumberSpecifier, FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
 use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
-use gryf::core::id::{DefaultId, EdgeId, VertexId};
+use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::core::{EdgeSet, GraphRef};
 use gryf::storage::{AdjMatrix, Stable};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -41,96 +40,136 @@ pub type DivisibilityGraph = Graph<
     Stable<AdjMatrix<OwnedFactor, Divisibility, Directed, DefaultId>>,
 >;
 
+pub struct FactorData {
+    pub divisibility_graph: DivisibilityGraph,
+    pub deleted_synonyms: BTreeMap<VertexId, VertexId>,
+    pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
+}
+
 pub fn rule_out_divisibility(
-    divisibility_graph: &mut DivisibilityGraph,
+    data: &mut FactorData,
     nonfactor: VertexId,
     dest: VertexId,
 ) {
-    if nonfactor == dest || divisibility_graph.edge_id_any(&nonfactor, &dest).is_some() {
+    let nonfactor = to_real_vertex_id(nonfactor, &data.deleted_synonyms);
+    let dest = to_real_vertex_id(dest, &data.deleted_synonyms);
+    if nonfactor == dest {
         // happens because of recursion
         return;
     }
+    if get_edge(data, nonfactor, dest).is_some() {
+        return;
+    }
     debug!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
-    divisibility_graph.add_edge(nonfactor, dest, NotFactor);
-    for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Incoming) {
+    data.divisibility_graph.add_edge(nonfactor, dest, NotFactor);
+    for (neighbor, divisibility) in neighbor_vids(&data.divisibility_graph, dest, Incoming) {
         if neighbor == nonfactor {
             continue;
         }
-        if matches!(divisibility_graph.edge(&edge).unwrap(), Direct | Transitive) {
+        if matches!(divisibility, Direct | Transitive) {
             // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
-            rule_out_divisibility(divisibility_graph, nonfactor, neighbor);
+            rule_out_divisibility(data, nonfactor, neighbor);
         }
     }
 }
 
 pub fn propagate_divisibility(
-    divisibility_graph: &mut DivisibilityGraph,
+    data: &mut FactorData,
     factor: VertexId,
     dest: VertexId,
     transitive: bool,
 ) {
+    let factor = to_real_vertex_id(factor, &data.deleted_synonyms);
+    let dest = to_real_vertex_id(dest, &data.deleted_synonyms);
     if factor == dest {
         // happens because of recursion
         return;
     }
-    let old_edge = get_edge(divisibility_graph, factor, dest);
-    match old_edge {
+    let edge = get_edge_mut(data, factor, dest);
+    match edge {
         Some(Direct) | Some(NotFactor) => return,
         Some(Transitive) => {
             if transitive {
                 return;
             } else {
-                *divisibility_graph
-                    .edge_mut(divisibility_graph.edge_id_any(&factor, &dest).unwrap())
-                    .unwrap() = Direct;
+                *edge.unwrap() = Direct;
             }
         }
         None => {
-            divisibility_graph.add_edge(factor, dest, if transitive { Transitive } else { Direct });
+            data.divisibility_graph.add_edge(factor, dest, if transitive { Transitive } else { Direct });
         }
     }
     debug!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
-    rule_out_divisibility(divisibility_graph, dest, factor);
-    for (neighbor, edge) in neighbor_vids(divisibility_graph, dest, Outgoing) {
+    rule_out_divisibility(data, dest, factor);
+    for (neighbor, divisibility) in neighbor_vids(&data.divisibility_graph, dest, Outgoing) {
         if neighbor == factor {
             continue;
         }
-        match divisibility_graph.edge(&edge).unwrap() {
+        match divisibility {
             NotFactor => {
                 // if factor divides dest_factor and dest_factor doesn't divide neighbor,
                 // then factor doesn't divide neighbor
-                rule_out_divisibility(divisibility_graph, neighbor, factor);
+                rule_out_divisibility(data, neighbor, factor);
             }
             _ => {
-                propagate_divisibility(divisibility_graph, factor, neighbor, true);
+                propagate_divisibility(data, factor, neighbor, true);
             }
         }
+    }
+}
+
+fn as_specifier<'a>(
+    factor_vid: VertexId,
+    data: &'a FactorData,
+    factor: Option<&'a OwnedFactor>,
+) -> NumberSpecifier<&'a str, &'a str> {
+    if let Some(factor_entry_id) = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).entry_id {
+        debug!(
+            "as_specifier: got entry ID {factor_entry_id} for factor {factor:?} with vertex ID {factor_vid:?}"
+        );
+        Id(factor_entry_id)
+    } else {
+        let factor = factor
+            .unwrap_or_else(|| get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms));
+        factor.known_id()
+            .map(Id)
+            .unwrap_or_else(|| Expression(factor.as_ref()))
     }
 }
 
 pub fn get_edge(
-    graph: &DivisibilityGraph,
+    data: &FactorData,
     source: VertexId,
     dest: VertexId,
 ) -> Option<Divisibility> {
-    Some(*graph.edge(graph.edge_id_any(&source, &dest)?)?)
+    Some(*data.divisibility_graph.edge(data.divisibility_graph.edge_id_any(
+        to_real_vertex_id(source, &data.deleted_synonyms),
+        to_real_vertex_id(dest, &data.deleted_synonyms))?)?)
+}
+
+pub fn get_edge_mut(
+    data: &mut FactorData,
+    source: VertexId,
+    dest: VertexId,
+) -> Option<&mut Divisibility> {
+    Some(data.divisibility_graph.edge_mut(data.divisibility_graph.edge_id_any(
+        to_real_vertex_id(source, &data.deleted_synonyms),
+        to_real_vertex_id(dest, &data.deleted_synonyms))?)?)
 }
 
 pub fn add_factor_node(
-    divisibility_graph: &mut DivisibilityGraph,
+    data: &mut FactorData,
     factor: Factor<&str, &str>,
     factor_finder: &FactorFinder,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     root_vid: Option<VertexId>,
     mut entry_id: Option<u128>,
-    deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
-    let (existing_vertex, matching_vertices) = divisibility_graph
+    let (existing_vertex, matching_vertices) = data.divisibility_graph
         .vertices()
         .filter(|v| {
             v.attr.as_ref() == factor
-                || (entry_id.is_some() && facts_of(number_facts_map, v.id, &deleted_synonyms).entry_id == entry_id)
+                || (entry_id.is_some() && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms).entry_id == entry_id)
         })
         .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
@@ -139,9 +178,9 @@ pub fn add_factor_node(
         .or_else(|| matching_vertices.first().copied())
         .map(|x| (x, false))
         .unwrap_or_else(|| {
-            let factor_vid = divisibility_graph.add_vertex(OwnedFactor::from(&factor));
+            let factor_vid = data.divisibility_graph.add_vertex(OwnedFactor::from(&factor));
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
-            let specifier = as_specifier(factor_vid, divisibility_graph.vertex(&factor_vid).unwrap(), number_facts_map, deleted_synonyms);
+            let specifier = as_specifier(factor_vid, data, None);
             let cached = http.cached_factors(specifier);
             let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
                 entry_id = entry_id.or(cached.id);
@@ -150,7 +189,7 @@ pub fn add_factor_node(
                     let (subfactor_vid, _) = if subfactor == factor {
                         (factor_vid, false)
                     } else {
-                        add_factor_node(divisibility_graph, subfactor.as_ref(), factor_finder, number_facts_map, root_vid, subfactor.known_id(), deleted_synonyms, http)
+                        add_factor_node(data, subfactor.as_ref(), factor_finder, root_vid, subfactor.known_id(), http)
                     };
                     cached_subfactors.push(subfactor_vid);
                 }
@@ -158,7 +197,7 @@ pub fn add_factor_node(
             } else {
                 (None, NotQueried)
             };
-            number_facts_map.insert(
+            data.number_facts_map.insert(
                 factor_vid,
                 NumberFacts {
                     last_known_status,
@@ -173,15 +212,13 @@ pub fn add_factor_node(
             );
             (factor_vid, true)
         });
-    if divisibility_graph.vertex(&merge_dest).unwrap().as_ref() != factor {
+    if *get_vertex(&data.divisibility_graph, merge_dest, &data.deleted_synonyms) != factor {
         merge_equivalent_expressions(
             factor_finder,
-            divisibility_graph,
+            data,
             root_vid,
-            number_facts_map,
             merge_dest,
             OwnedFactor::from(&factor),
-            deleted_synonyms,
             http,
         );
     }
@@ -189,50 +226,48 @@ pub fn add_factor_node(
         if matching_vid == merge_dest {
             continue;
         }
-        neighbor_vids(divisibility_graph, matching_vid, Incoming)
+        neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
             .into_iter()
             .for_each(
-                |(neighbor_vid, edge)| match *divisibility_graph.edge(&edge).unwrap() {
+                |(neighbor_vid, divisibility)| match divisibility {
                     Direct => {
-                        propagate_divisibility(divisibility_graph, neighbor_vid, merge_dest, false)
+                        propagate_divisibility(data, neighbor_vid, merge_dest, false)
                     }
                     Transitive => {
-                        propagate_divisibility(divisibility_graph, neighbor_vid, merge_dest, true)
+                        propagate_divisibility(data, neighbor_vid, merge_dest, true)
                     }
                     NotFactor => {
-                        rule_out_divisibility(divisibility_graph, neighbor_vid, merge_dest)
+                        rule_out_divisibility(data, neighbor_vid, merge_dest)
                     }
                 },
             );
-        neighbor_vids(divisibility_graph, matching_vid, Outgoing)
+        neighbor_vids(&data.divisibility_graph, matching_vid, Outgoing)
             .into_iter()
             .for_each(
-                |(neighbor_vid, edge)| match *divisibility_graph.edge(&edge).unwrap() {
+                |(neighbor_vid, divisibility)| match divisibility {
                     Direct => {
-                        propagate_divisibility(divisibility_graph, merge_dest, neighbor_vid, false)
+                        propagate_divisibility(data, merge_dest, neighbor_vid, false)
                     }
                     Transitive => {
-                        propagate_divisibility(divisibility_graph, merge_dest, neighbor_vid, true)
+                        propagate_divisibility(data, merge_dest, neighbor_vid, true)
                     }
                     NotFactor => {
-                        rule_out_divisibility(divisibility_graph, merge_dest, neighbor_vid)
+                        rule_out_divisibility(data, merge_dest, neighbor_vid)
                     }
                 },
             );
-        deleted_synonyms.insert(matching_vid, merge_dest);
-        let old_factor = divisibility_graph.remove_vertex(matching_vid).unwrap();
-        let old_facts = number_facts_map.remove(&matching_vid).unwrap();
+        data.deleted_synonyms.insert(matching_vid, merge_dest);
+        let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
+        let old_facts = data.number_facts_map.remove(&matching_vid).unwrap();
         merge_equivalent_expressions(
             factor_finder,
-            divisibility_graph,
+            data,
             root_vid,
-            number_facts_map,
             merge_dest,
             old_factor,
-            deleted_synonyms,
             http,
         );
-        replace_with_or_abort(facts_of_mut(number_facts_map, merge_dest), |facts| {
+        replace_with_or_abort(facts_of_mut(&mut data.number_facts_map, merge_dest, &data.deleted_synonyms), |facts| {
             facts.merged_with(old_facts)
         });
     }
@@ -243,10 +278,10 @@ fn neighbor_vids(
     divisibility_graph: &DivisibilityGraph,
     vertex_id: VertexId,
     direction: Direction,
-) -> Vec<(VertexId, EdgeId)> {
+) -> Vec<(VertexId, Divisibility)> {
     divisibility_graph
         .neighbors_directed(vertex_id, direction)
-        .map(|neighbor_ref| (neighbor_ref.id, neighbor_ref.edge))
+        .map(|neighbor_ref| (neighbor_ref.id, *divisibility_graph.edge(neighbor_ref.edge).unwrap()))
         .collect::<Vec<_>>()
 }
 
@@ -266,17 +301,14 @@ pub fn get_vertex<'a>(
 }
 
 pub fn is_known_factor(
-    divisibility_graph: &DivisibilityGraph,
+    data: &FactorData,
     factor_vid: VertexId,
     composite_vid: VertexId,
-    deleted_synonyms: &BTreeMap<VertexId, VertexId>
 ) -> bool {
     matches!(
-        get_edge(divisibility_graph,
-            to_real_vertex_id(factor_vid, deleted_synonyms),
-            to_real_vertex_id(composite_vid, deleted_synonyms)),
+        get_edge(data, factor_vid, composite_vid),
         Some(Direct) | Some(Transitive)
-    ) || ShortestPaths::on(&divisibility_graph)
+    ) || ShortestPaths::on(&data.divisibility_graph)
         .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
         .goal(factor_vid)
         .run(composite_vid)
@@ -449,20 +481,19 @@ pub async fn find_and_submit_factors(
     factor_finder: &FactorFinder,
     skip_looking_up_known: bool,
 ) -> bool {
-    let mut deleted_synonyms = BTreeMap::new();
     let mut digits_or_expr_full = Vec::new();
-    let mut divisibility_graph: DivisibilityGraph =
-        Graph::new_directed_in(AdjMatrix::new()).stabilize();
-    let mut number_facts_map = BTreeMap::new();
+    let mut data = FactorData {
+        divisibility_graph: Graph::new_directed_in(AdjMatrix::new()).stabilize(),
+        deleted_synonyms: BTreeMap::new(),
+        number_facts_map: BTreeMap::new(),
+    };
     let (root_vid, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
         add_factor_node(
-            &mut divisibility_graph,
+            &mut data,
             Factor::<&str, &str>::from(digits_or_expr),
             factor_finder,
-            &mut number_facts_map,
             None,
             Some(id),
-            &mut deleted_synonyms,
             http,
         )
     } else {
@@ -479,24 +510,20 @@ pub async fn find_and_submit_factors(
         }
         match known_factors.len() {
             0 => add_factor_node(
-                &mut divisibility_graph,
+                &mut data,
                 Factor::<&str, &str>::from(digits_or_expr),
                 factor_finder,
-                &mut number_facts_map,
                 None,
                 Some(id),
-                &mut deleted_synonyms,
                 http,
             ),
             _ => {
                 let (root_node, _) = add_factor_node(
-                    &mut divisibility_graph,
+                    &mut data,
                     Factor::from(digits_or_expr),
                     factor_finder,
-                    &mut number_facts_map,
                     None,
                     Some(id),
-                    &mut deleted_synonyms,
                     http,
                 );
                 digits_or_expr_full.push(root_node);
@@ -505,18 +532,16 @@ pub async fn find_and_submit_factors(
                         .into_iter()
                         .map(|known_factor| {
                             let (factor_vid, added) = add_factor_node(
-                                &mut divisibility_graph,
+                                &mut data,
                                 known_factor.as_ref(),
                                 factor_finder,
-                                &mut number_facts_map,
                                 Some(root_node),
                                 known_factor.known_id(),
-                                &mut deleted_synonyms,
                                 http,
                             );
                             if added {
                                 propagate_divisibility(
-                                    &mut divisibility_graph,
+                                    &mut data,
                                     factor_vid,
                                     root_node,
                                     false,
@@ -531,7 +556,7 @@ pub async fn find_and_submit_factors(
                 } else {
                     vec![root_node]
                 });
-                let root_facts = facts_of_mut(&mut number_facts_map, root_node);
+                let root_facts = facts_of_mut(&mut data.number_facts_map, root_node, &data.deleted_synonyms);
                 root_facts.factors_known_to_factordb = root_factors;
                 root_facts.last_known_status = status;
                 (root_node, true)
@@ -540,10 +565,10 @@ pub async fn find_and_submit_factors(
     };
     debug!(
         "{id}: Root node for {digits_or_expr} is {} with vertex ID {root_vid:?}",
-        get_vertex(&divisibility_graph, root_vid, &deleted_synonyms)
+        get_vertex(&data.divisibility_graph, root_vid, &data.deleted_synonyms)
     );
     if skip_looking_up_known {
-        let root_facts = facts_of_mut(&mut number_facts_map, root_vid);
+        let root_facts = facts_of_mut(&mut data.number_facts_map, root_vid, &data.deleted_synonyms);
         root_facts.factors_known_to_factordb = UpToDate(vec![root_vid]);
     }
     let mut factor_found = false;
@@ -552,11 +577,9 @@ pub async fn find_and_submit_factors(
         factor_found |= !add_factors_to_graph(
             http,
             factor_finder,
-            &mut divisibility_graph,
-            &mut number_facts_map,
+            &mut data,
             root_vid,
             factor_vid,
-            &mut deleted_synonyms,
         )
         .await
         .is_empty();
@@ -568,26 +591,26 @@ pub async fn find_and_submit_factors(
     // Simplest case: try submitting all factors as factors of the root
     // Sort backwards so that we try to submit largest factors first
     let mut any_failed_retryably = false;
-    let known_factors = divisibility_graph
+    let known_factors = data.divisibility_graph
         .vertices()
-        .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1, &deleted_synonyms))
+        .sorted_by(|v1, v2| compare(&data.number_facts_map, v2, v1, &data.deleted_synonyms))
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>();
 
     for factor_vid in known_factors.into_iter() {
-        let factor = get_vertex(&divisibility_graph, factor_vid, &deleted_synonyms);
+        let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         if factor
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
-            && facts_of(&number_facts_map, factor_vid, &deleted_synonyms).entry_id.is_none()
+            && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).entry_id.is_none()
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
             continue;
         }
-        match get_edge(&divisibility_graph, factor_vid, root_vid) {
+        match get_edge(&data, factor_vid, root_vid) {
             Some(Direct) | Some(NotFactor) => {
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
@@ -602,22 +625,20 @@ pub async fn find_and_submit_factors(
             AlreadyFullyFactored => return true,
             Accepted => {
                 replace_with_or_abort(
-                    facts_of_mut(&mut number_facts_map, root_vid),
+                    facts_of_mut(&mut data.number_facts_map, root_vid, &data.deleted_synonyms),
                     NumberFacts::marked_stale,
                 );
                 accepted_factors += 1;
-                propagate_divisibility(&mut divisibility_graph, factor_vid, root_vid, false);
+                propagate_divisibility(&mut data, factor_vid, root_vid, false);
             }
             DoesNotDivide => {
-                rule_out_divisibility(&mut divisibility_graph, factor_vid, root_vid);
+                rule_out_divisibility(&mut data, factor_vid, root_vid);
                 if !add_factors_to_graph(
                     http,
                     factor_finder,
-                    &mut divisibility_graph,
-                    &mut number_facts_map,
+                    &mut data,
                     root_vid,
                     factor_vid,
-                    &mut deleted_synonyms,
                 )
                 .await
                 .is_empty()
@@ -646,17 +667,17 @@ pub async fn find_and_submit_factors(
     //     exponent.
     let mut iters_without_progress = 0;
     // Sort backwards so that we try to submit largest factors first
-    let mut factors_to_submit = divisibility_graph
+    let mut factors_to_submit = data.divisibility_graph
         .vertices()
-        .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1, &deleted_synonyms))
+        .sorted_by(|v1, v2| compare(&data.number_facts_map, v2, v1, &data.deleted_synonyms))
         .map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<VecDeque<_>>();
     'graph_iter: while !factors_to_submit.is_empty()
-        && !facts_of(&number_facts_map, root_vid, &deleted_synonyms).is_known_fully_factored()
+        && !facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).is_known_fully_factored()
     {
-        let node_count = divisibility_graph.vertex_count();
-        let edge_count = divisibility_graph.edge_count();
+        let node_count = data.divisibility_graph.vertex_count();
+        let edge_count = data.divisibility_graph.edge_count();
         let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
         if edge_count == complete_graph_edge_count
             || factors_to_submit.is_empty()
@@ -666,7 +687,7 @@ pub async fn find_and_submit_factors(
             // Graph is fully connected, meaning none are left to try
             return accepted_factors > 0;
         }
-        let (direct_divisors, non_factors) = divisibility_graph
+        let (direct_divisors, non_factors) = data.divisibility_graph
             .edges()
             .map(|e| match *e.attr {
                 Direct => (1, 0),
@@ -681,11 +702,11 @@ pub async fn find_and_submit_factors(
             {non_factors} ruled out. \
         {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
             edge_count as f64 * 100.0 / complete_graph_edge_count as f64,
-            number_facts_map
+            data.number_facts_map
                 .iter()
                 .filter(|(_, facts)| facts.is_known_fully_factored())
                 .count(),
-            number_facts_map
+            data.number_facts_map
                 .iter()
                 .filter(|(_, facts)| facts.entry_id.is_some())
                 .count()
@@ -694,20 +715,20 @@ pub async fn find_and_submit_factors(
             && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
         {
             iters_without_progress += 1;
-            if is_known_factor(&divisibility_graph, factor_vid, root_vid, &deleted_synonyms)
-                && facts_of(&number_facts_map, factor_vid, &deleted_synonyms).lower_bound_log10
-                    > facts_of(&number_facts_map, root_vid, &deleted_synonyms).upper_bound_log10 / 2
+            if is_known_factor(&data, factor_vid, root_vid)
+                && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).lower_bound_log10
+                    > facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).upper_bound_log10 / 2
             {
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
             }
             // root can't be a factor of any other number we'll encounter
-            rule_out_divisibility(&mut divisibility_graph, root_vid, factor_vid);
+            rule_out_divisibility(&mut data, root_vid, factor_vid);
             // elided numbers and numbers over 65500 digits without an expression form can only
             // be submitted as factors, even if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
             // later
-            let factor = get_vertex(&divisibility_graph, factor_vid, &deleted_synonyms);
+            let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
             if factor
                 .as_str_non_u128()
                 .is_some_and(|expr| expr.contains("..."))
@@ -715,36 +736,36 @@ pub async fn find_and_submit_factors(
                 factors_to_submit.push_back(factor_vid);
                 continue;
             }
-            let dest_factors = divisibility_graph
+            let dest_factors = data.divisibility_graph
                 .vertices()
                 // Try to submit to largest cofactors first
-                .sorted_by(|v1, v2| compare(&number_facts_map, v2, v1, &deleted_synonyms))
+                .sorted_by(|v1, v2| compare(&data.number_facts_map, v2, v1, &data.deleted_synonyms))
                 .map(|vertex| vertex.id)
                 .filter(|dest_vid|
                     // if factor == dest, the relation is trivial
                     factor_vid != *dest_vid
                         // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                        && get_edge(&divisibility_graph, factor_vid, *dest_vid).is_none())
+                        && get_edge(&data, factor_vid, *dest_vid).is_none())
                 .collect::<Box<[_]>>();
             if dest_factors.is_empty() {
                 continue;
             };
             let mut submission_errors = false;
             for cofactor_vid in dest_factors.into_iter() {
-                if is_known_factor(&divisibility_graph, factor_vid, cofactor_vid, &deleted_synonyms) {
+                if is_known_factor(&data, factor_vid, cofactor_vid) {
                     // This factor already known.
                     // If transitive, submit to a smaller cofactor instead.
                     // If direct, nothing left to do.
-                    propagate_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid, true);
+                    propagate_divisibility(&mut data, factor_vid, cofactor_vid, true);
                     continue;
                 }
-                let factor_facts = facts_of(&number_facts_map, factor_vid, &deleted_synonyms);
+                let factor_facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms);
                 match factor_facts.factors_known_to_factordb {
                     UpToDate(ref already_known_factors)
                     | NotUpToDate(ref already_known_factors) => {
                         if already_known_factors.contains(&cofactor_vid) {
                             propagate_divisibility(
-                                &mut divisibility_graph,
+                                &mut data,
                                 cofactor_vid,
                                 factor_vid,
                                 false,
@@ -752,7 +773,7 @@ pub async fn find_and_submit_factors(
                             continue;
                         } else if factor_facts.is_final() {
                             rule_out_divisibility(
-                                &mut divisibility_graph,
+                                &mut data,
                                 cofactor_vid,
                                 factor_vid,
                             );
@@ -761,14 +782,14 @@ pub async fn find_and_submit_factors(
                     }
                     NotQueried => {}
                 }
-                let factor = get_vertex(&divisibility_graph, factor_vid, &deleted_synonyms);
-                let cofactor = get_vertex(&divisibility_graph, cofactor_vid, &deleted_synonyms);
+                let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
+                let cofactor = get_vertex(&data.divisibility_graph, cofactor_vid, &data.deleted_synonyms);
                 if !factor.may_be_proper_divisor_of(cofactor) {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller or equal or fails last-digit test"
                     );
-                    rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                    rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     continue;
                 }
                 // u128s are already fully factored
@@ -777,21 +798,21 @@ pub async fn find_and_submit_factors(
                         "{id}: Skipping submission of {factor} to {cofactor} because the number is too small"
                     );
                     propagate_divisibility(
-                        &mut divisibility_graph,
+                        &mut data,
                         factor_vid,
                         cofactor_vid,
                         false,
                     );
                     continue;
                 }
-                let cofactor_facts = facts_of(&number_facts_map, cofactor_vid, &deleted_synonyms);
+                let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms);
                 if cofactor_facts.is_known_fully_factored() {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                     already fully factored"
                     );
                     if !cofactor_facts.needs_update() {
-                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                        rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     }
                     continue;
                 }
@@ -804,7 +825,7 @@ pub async fn find_and_submit_factors(
                         .map(|known_factor_vid| {
                             (
                                 *known_factor_vid,
-                                get_edge(&divisibility_graph, factor_vid, *known_factor_vid),
+                                get_edge(&data, factor_vid, *known_factor_vid),
                             )
                         })
                         .collect();
@@ -814,21 +835,21 @@ pub async fn find_and_submit_factors(
                             .filter(|(_, divisibility)| *divisibility != Some(NotFactor))
                             .partition(|(known_factor_vid, _)| {
                                 factor.may_be_proper_divisor_of(
-                                    get_vertex(&divisibility_graph, *known_factor_vid, &deleted_synonyms),
+                                    get_vertex(&data.divisibility_graph, *known_factor_vid, &data.deleted_synonyms),
                                 ) && cofactor_facts.lower_bound_log10
-                                    <= facts_of(&number_facts_map, *known_factor_vid, &deleted_synonyms)
+                                    <= facts_of(&data.number_facts_map, *known_factor_vid, &data.deleted_synonyms)
                                         .upper_bound_log10
                             });
                     if possible_factors.is_empty() {
                         // No possible path from factor to cofactor
                         for (unknown_non_factor, _) in unknown_non_factors {
                             rule_out_divisibility(
-                                &mut divisibility_graph,
+                                &mut data,
                                 factor_vid,
                                 unknown_non_factor,
                             );
                         }
-                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                        rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                         continue;
                     } else if possible_factors
                         .into_iter()
@@ -836,7 +857,7 @@ pub async fn find_and_submit_factors(
                     {
                         // Submit to one of the known_factors instead
                         propagate_divisibility(
-                            &mut divisibility_graph,
+                            &mut data,
                             factor_vid,
                             cofactor_vid,
                             true,
@@ -848,25 +869,23 @@ pub async fn find_and_submit_factors(
                     cofactor_facts
                         .upper_bound_log10
                         .saturating_sub(known_factors_upper_bound(
-                            &divisibility_graph,
-                            &number_facts_map,
-                            cofactor_vid,
-                            &deleted_synonyms,
+                            &data,
+                            cofactor_vid
                         ));
                 if factor_facts.lower_bound_log10 > cofactor_upper_bound {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller based on log10 bounds"
                     );
-                    rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                    rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     continue;
                 }
-                if is_known_factor(&divisibility_graph, cofactor_vid, factor_vid, &deleted_synonyms) {
+                if is_known_factor(&data, cofactor_vid, factor_vid) {
                     debug!(
                         "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is transitively a factor of {factor}"
                     );
                     // factor is transitively divisible by dest_factor
-                    propagate_divisibility(&mut divisibility_graph, cofactor_vid, factor_vid, true);
+                    propagate_divisibility(&mut data, cofactor_vid, factor_vid, true);
                     continue;
                 }
                 // elided numbers and numbers over 65500 digits without an expression form can only
@@ -876,18 +895,18 @@ pub async fn find_and_submit_factors(
                 if cofactor
                     .as_str_non_u128()
                     .is_some_and(|expr| expr.contains("..."))
-                    && facts_of(&number_facts_map, cofactor_vid, &deleted_synonyms).entry_id.is_none()
+                    && facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms).entry_id.is_none()
                 {
                     debug!(
                         "{id}: Can't submit to {cofactor} right now because we don't know its full specifier"
                     );
                     continue;
                 }
-                let dest_specifier = crate::as_specifier(cofactor_vid, cofactor, &number_facts_map, &deleted_synonyms);
+                let dest_specifier = as_specifier(cofactor_vid, &data, Some(cofactor));
                 match http
                     .try_report_factor(
                         dest_specifier,
-                        get_vertex(&divisibility_graph, factor_vid, &deleted_synonyms).as_ref(),
+                        get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms).as_ref(),
                     )
                     .await
                 {
@@ -896,24 +915,23 @@ pub async fn find_and_submit_factors(
                             warn!("{id}: Already fully factored");
                             return true;
                         }
-                        if !facts_of(&number_facts_map, cofactor_vid, &deleted_synonyms).is_known_fully_factored() {
+                        if !facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms).is_known_fully_factored() {
                             mark_fully_factored(
                                 cofactor_vid,
-                                &mut divisibility_graph,
-                                &mut number_facts_map,
+                                &mut data
                             );
                         }
                         continue;
                     }
                     Accepted => {
                         replace_with_or_abort(
-                            facts_of_mut(&mut number_facts_map, cofactor_vid),
+                            facts_of_mut(&mut data.number_facts_map, cofactor_vid, &data.deleted_synonyms),
                             NumberFacts::marked_stale,
                         );
                         accepted_factors += 1;
                         iters_without_progress = 0;
                         propagate_divisibility(
-                            &mut divisibility_graph,
+                            &mut data,
                             factor_vid,
                             cofactor_vid,
                             false,
@@ -923,35 +941,33 @@ pub async fn find_and_submit_factors(
                         continue 'graph_iter;
                     }
                     DoesNotDivide => {
-                        rule_out_divisibility(&mut divisibility_graph, factor_vid, cofactor_vid);
+                        rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                         factors_to_submit.extend_front(
                             add_factors_to_graph(
                                 http,
                                 factor_finder,
-                                &mut divisibility_graph,
-                                &mut number_facts_map,
+                                &mut data,
                                 root_vid,
                                 factor_vid,
-                                &mut deleted_synonyms,
                             )
                             .await
                             .into_iter()
                             .sorted_by(|v1, v2| {
                                 compare(
-                                    &number_facts_map,
+                                    &data.number_facts_map,
                                     &VertexRef {
                                         id: *v2,
-                                        attr: get_vertex(&divisibility_graph, *v2, &deleted_synonyms),
+                                        attr: get_vertex(&data.divisibility_graph, *v2, &data.deleted_synonyms),
                                     },
                                     &VertexRef {
                                         id: *v1,
-                                        attr: get_vertex(&divisibility_graph, *v1, &deleted_synonyms),
+                                        attr: get_vertex(&data.divisibility_graph, *v1, &data.deleted_synonyms),
                                     },
-                                    &deleted_synonyms,
+                                    &data.deleted_synonyms,
                                 )
                             }),
                         );
-                        let cofactor_facts = facts_of(&number_facts_map, cofactor_vid, &deleted_synonyms);
+                        let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms);
                         if cofactor_facts.needs_update()
                             || !cofactor_facts.checked_for_listed_algebraic
                         {
@@ -964,11 +980,9 @@ pub async fn find_and_submit_factors(
                         if !add_factors_to_graph(
                             http,
                             factor_finder,
-                            &mut divisibility_graph,
-                            &mut number_facts_map,
+                            &mut data,
                             root_vid,
                             cofactor_vid,
-                            &mut deleted_synonyms,
                         )
                         .await
                         .is_empty()
@@ -984,13 +998,13 @@ pub async fn find_and_submit_factors(
         }
     }
 
-    for factor_vid in divisibility_graph
+    for factor_vid in data.divisibility_graph
         .vertices_by_id()
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<Box<[_]>>()
         .into_iter()
     {
-        let factor = get_vertex(&divisibility_graph, factor_vid, &deleted_synonyms);
+        let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         if factor
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
@@ -1000,7 +1014,7 @@ pub async fn find_and_submit_factors(
             );
             continue;
         }
-        if is_known_factor(&divisibility_graph, factor_vid, root_vid, &deleted_synonyms) {
+        if is_known_factor(&data, factor_vid, root_vid) {
             debug!("{id}: {factor} was successfully submitted");
             continue;
         }
@@ -1022,23 +1036,20 @@ pub async fn find_and_submit_factors(
 }
 
 fn known_factors_upper_bound(
-    divisibility_graph: &DivisibilityGraph,
-    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
+    data: &FactorData,
     cofactor_vid: VertexId,
-    deleted_synonyms: &BTreeMap<VertexId, VertexId>,
 ) -> u128 {
-    neighbor_vids(divisibility_graph, cofactor_vid, Incoming)
+    neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
         .into_iter()
-        .map(|(existing_factor, _)| facts_of(number_facts_map, existing_factor, deleted_synonyms).lower_bound_log10)
+        .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &data.deleted_synonyms).lower_bound_log10)
         .sum()
 }
 
 fn mark_fully_factored(
     vid: VertexId,
-    graph: &mut DivisibilityGraph,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
+    data: &mut FactorData,
 ) {
-    let facts = facts_of_mut(number_facts_map, vid);
+    let facts = facts_of_mut(&mut data.number_facts_map, vid, &data.deleted_synonyms);
     facts.checked_for_listed_algebraic = true;
     facts.checked_in_factor_finder = true;
     facts.expression_form_checked_in_factor_finder = true;
@@ -1048,10 +1059,10 @@ fn mark_fully_factored(
         } else {
             facts.last_known_status = Some(FullyFactored);
             for neighbor in facts.factors_known_to_factordb.to_vec() {
-                let neighbor_facts = facts_of_mut(number_facts_map, neighbor);
+                let neighbor_facts = facts_of_mut(&mut data.number_facts_map, neighbor, &data.deleted_synonyms);
                 neighbor_facts.factors_known_to_factordb = UpToDate(vec![neighbor]);
                 neighbor_facts.last_known_status = Some(Prime);
-                propagate_divisibility(graph, neighbor, vid, false);
+                propagate_divisibility(data, neighbor, vid, false);
             }
         }
         true
@@ -1059,19 +1070,17 @@ fn mark_fully_factored(
         facts.last_known_status = Some(FullyFactored);
         false
     };
-    for other_vid in graph
+    for other_vid in data.divisibility_graph
         .vertices_by_id()
         .filter(|other_vid| *other_vid != vid)
         .collect::<Box<[_]>>()
         .into_iter()
     {
-        let edge = graph
-            .edge_id_any(&other_vid, &vid)
-            .and_then(|edge_id| graph.edge(&edge_id).copied());
+        let edge = get_edge(&data, other_vid, vid);
         if matches!(edge, Some(Direct) | Some(Transitive)) {
-            mark_fully_factored(other_vid, graph, number_facts_map);
+            mark_fully_factored(other_vid, data);
         } else if no_other_factors {
-            rule_out_divisibility(graph, other_vid, vid);
+            rule_out_divisibility(data, other_vid, vid);
         }
     }
 }
@@ -1080,23 +1089,20 @@ fn mark_fully_factored(
 async fn add_factors_to_graph(
     http: &mut impl FactorDbClient,
     factor_finder: &FactorFinder,
-    divisibility_graph: &mut DivisibilityGraph,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
+    data: &mut FactorData,
     root_vid: VertexId,
     factor_vid: VertexId,
-    deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
 ) -> Box<[VertexId]> {
-    let facts = facts_of(number_facts_map, factor_vid, &deleted_synonyms);
+    let facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms);
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
 
     // First, check factordb.com/api for already-known factors
     if facts.needs_update() {
-        let factor_specifier = crate::as_specifier(
+        let factor_specifier = as_specifier(
             factor_vid,
-            divisibility_graph.vertex(&factor_vid).unwrap(),
-            number_facts_map,
-            &deleted_synonyms,
+            data,
+            None
         );
         let ProcessedStatusApiResponse {
             status,
@@ -1108,16 +1114,14 @@ async fn add_factors_to_graph(
         let known_factor_count = known_factors.len();
         if known_factor_count == 1 {
             let known_factor = known_factors.iter().next().unwrap();
-            let existing_factor = divisibility_graph.vertex(&factor_vid).unwrap();
+            let existing_factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
             if *known_factor != *existing_factor {
                 merge_equivalent_expressions(
                     factor_finder,
-                    divisibility_graph,
+                    data,
                     Some(root_vid),
-                    number_facts_map,
                     factor_vid,
                     known_factor.clone(),
-                    deleted_synonyms,
                     http
                 );
             }
@@ -1126,23 +1130,21 @@ async fn add_factors_to_graph(
             .into_iter()
             .map(|known_factor| {
                 let (known_factor_vid, is_new) = add_factor_node(
-                    divisibility_graph,
+                    data,
                     known_factor.as_ref(),
                     factor_finder,
-                    number_facts_map,
                     Some(root_vid),
                     known_factor.known_id(),
-                    deleted_synonyms,
                     http,
                 );
-                propagate_divisibility(divisibility_graph, known_factor_vid, factor_vid, false);
+                propagate_divisibility(data, known_factor_vid, factor_vid, false);
                 if is_new {
                     added.insert(known_factor_vid);
                 }
                 known_factor_vid
             })
             .collect();
-        let facts = facts_of_mut(number_facts_map, factor_vid);
+        let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms);
         let old_factors: BTreeSet<_> = facts.factors_known_to_factordb.iter().collect();
         added.extend(
             new_known_factors
@@ -1157,16 +1159,16 @@ async fn add_factors_to_graph(
         if let Some(status) = status {
             facts.last_known_status = Some(status);
             if status == Prime || status == FullyFactored {
-                mark_fully_factored(factor_vid, divisibility_graph, number_facts_map);
+                mark_fully_factored(factor_vid, data);
             }
         }
     }
 
     // Next, check factordb.com/frame_moreinfo.php for listed algebraic factors
     if let Some(id) = id
-        && !facts_of(number_facts_map, factor_vid, &deleted_synonyms).checked_for_listed_algebraic
+        && !facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).checked_for_listed_algebraic
     {
-        let root = divisibility_graph.vertex(&factor_vid).unwrap();
+        let root = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         if let Some(known_id) = root.known_id()
             && id != known_id
         {
@@ -1179,18 +1181,16 @@ async fn add_factors_to_graph(
             if let Some(result) = result
                 && let Some(listed_algebraic) = result.split("Is factor of").next()
             {
-                facts_of_mut(number_facts_map, factor_vid).checked_for_listed_algebraic = true;
+                facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms).checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
                     let factor: Factor<&str, &str> = factor_digits_or_expr.into();
                     let (subfactor_vid, is_new) = add_factor_node(
-                        divisibility_graph,
+                        data,
                         factor,
                         factor_finder,
-                        number_facts_map,
                         Some(factor_vid),
                         Some(subfactor_entry_id),
-                        deleted_synonyms,
                         http,
                     );
                     debug!(
@@ -1207,20 +1207,18 @@ async fn add_factors_to_graph(
     }
 
     // Next, check if factor_finder can find factors
-    let facts = facts_of(number_facts_map, factor_vid, deleted_synonyms);
+    let facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms);
     if !facts.checked_in_factor_finder {
         added.extend(add_factor_finder_factor_vertices_to_graph(
             factor_finder,
-            divisibility_graph,
+            data,
             Some(root_vid),
-            number_facts_map,
             factor_vid,
             facts.entry_id,
-            deleted_synonyms,
             http
         ));
     }
-    let facts = facts_of_mut(number_facts_map, factor_vid);
+    let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms);
     facts.checked_in_factor_finder = true;
 
     if let Some(entry_id) = facts.entry_id
@@ -1234,19 +1232,17 @@ async fn add_factors_to_graph(
                 .into_iter()
                 .map(|new_factor| {
                     add_factor_node(
-                        divisibility_graph,
+                        data,
                         new_factor.as_ref(),
                         factor_finder,
-                        number_facts_map,
                         Some(root_vid),
                         new_factor.known_id(),
-                        deleted_synonyms,
                         http
                     )
                 })
                 .flat_map(|(vid, added)| if added { Some(vid) } else { None }),
         );
-        let facts = facts_of_mut(number_facts_map, factor_vid);
+        let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms);
         facts.expression_form_checked_in_factor_finder = true;
     }
 
@@ -1255,17 +1251,15 @@ async fn add_factors_to_graph(
 
 fn merge_equivalent_expressions(
     factor_finder: &FactorFinder,
-    divisibility_graph: &mut DivisibilityGraph,
+    data: &mut FactorData,
     root_vid: Option<VertexId>,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     factor_vid: VertexId,
     equivalent: OwnedFactor,
-    deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
-    let current = divisibility_graph.vertex(&factor_vid).unwrap();
+    let current = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
     if equivalent == *current {
-        facts_of(number_facts_map, factor_vid, deleted_synonyms)
+        facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
             .factors_known_to_factordb
             .to_vec()
     } else {
@@ -1276,30 +1270,28 @@ fn merge_equivalent_expressions(
         } else {
             current_expr.len()
         };
-        let facts = facts_of_mut(number_facts_map, factor_vid);
+        let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms);
         let entry_id = facts.entry_id;
         let mut new_factor_vids = facts.factors_known_to_factordb.to_vec();
         if !replace(&mut facts.checked_in_factor_finder, true) {
             new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
                 factor_finder,
-                divisibility_graph,
+                data,
                 root_vid,
-                number_facts_map,
                 factor_vid,
                 entry_id,
-                deleted_synonyms,
                 http
             ));
         }
         let (new_lower_bound_log10, new_upper_bound_log10) =
             factor_finder.estimate_log10(&equivalent);
-        let facts = facts_of_mut(number_facts_map, factor_vid);
+        let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms);
         facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
         facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
         let equivalent_expr = equivalent.as_str();
         if !equivalent_expr.contains("...") && equivalent_expr.len() < current_len {
             let _ = replace(
-                divisibility_graph.vertex_mut(factor_vid).unwrap(),
+                data.divisibility_graph.vertex_mut(factor_vid).unwrap(),
                 equivalent,
             );
         }
@@ -1308,12 +1300,10 @@ fn merge_equivalent_expressions(
         let entry_id = facts.entry_id;
         new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
             factor_finder,
-            divisibility_graph,
+            data,
             root_vid,
-            number_facts_map,
             factor_vid,
             entry_id,
-            deleted_synonyms,
             http
         ));
         new_factor_vids
@@ -1322,31 +1312,27 @@ fn merge_equivalent_expressions(
 
 fn add_factor_finder_factor_vertices_to_graph(
     factor_finder: &FactorFinder,
-    divisibility_graph: &mut DivisibilityGraph,
+    data: &mut FactorData,
     root_vid: Option<VertexId>,
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
     factor_vid: VertexId,
     entry_id: Option<u128>,
-    deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     factor_finder
-        .find_unique_factors(divisibility_graph.vertex(&factor_vid).unwrap())
+        .find_unique_factors(get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms))
         .into_iter()
         .map(|new_factor| {
-            let entry_id = if new_factor == *divisibility_graph.vertex(&factor_vid).unwrap() {
+            let entry_id = if new_factor == *get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms) {
                 entry_id
             } else {
                 new_factor.known_id()
             };
             add_factor_node(
-                divisibility_graph,
+                data,
                 new_factor.as_ref(),
                 factor_finder,
-                number_facts_map,
                 root_vid,
                 entry_id,
-                deleted_synonyms,
                 http,
             )
         })
@@ -1365,11 +1351,18 @@ pub fn facts_of<'a>(
 }
 
 #[inline]
-pub fn facts_of_mut(
-    number_facts_map: &mut BTreeMap<VertexId, NumberFacts>,
+pub fn facts_of_mut<'a>(
+    number_facts_map: &'a mut BTreeMap<VertexId, NumberFacts>,
     vertex_id: VertexId,
-) -> &mut NumberFacts {
-    number_facts_map.get_mut(&vertex_id).unwrap()
+    deleted_synonyms: &BTreeMap<VertexId, VertexId>,
+) -> &'a mut NumberFacts {
+    let facts = number_facts_map.get_mut(&vertex_id).map(|entry| entry as *mut NumberFacts);
+    if let Some(facts) = facts {
+        // SAFETY: This is dropped unused before the second get_mut call.
+        unsafe { &mut *facts }
+    } else {
+        number_facts_map.get_mut(deleted_synonyms.get(&vertex_id).unwrap()).unwrap()
+    }
 }
 
 #[test]
