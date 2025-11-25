@@ -68,7 +68,7 @@ impl Collector {
 
 type BasicCache<K, V> = Cache<K, V, UnitWeighter, DefaultHashBuilder, DefaultLifecycle<K, V>>;
 
-pub trait FactorDbClient: Clone {
+pub trait FactorDbClient {
     async fn parse_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,

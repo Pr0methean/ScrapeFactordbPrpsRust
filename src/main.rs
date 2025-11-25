@@ -1074,8 +1074,9 @@ fn as_specifier<'a>(
     factor_vid: VertexId,
     factor: &'a OwnedFactor,
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
+    deleted_synonyms: &BTreeMap<VertexId, VertexId>,
 ) -> NumberSpecifier<&'a str, &'a str> {
-    if let Some(factor_entry_id) = facts_of(number_facts_map, factor_vid).entry_id {
+    if let Some(factor_entry_id) = facts_of(number_facts_map, factor_vid, &deleted_synonyms).entry_id {
         debug!(
             "as_specifier: got entry ID {factor_entry_id} for factor {factor} with vertex ID {factor_vid:?}"
         );
