@@ -964,7 +964,7 @@ pub async fn find_and_submit_factors(
         .collect::<Box<[_]>>()
         .into_iter()
     {
-        let factor = divisibility_graph.vertex(factor_vid).unwrap();
+        let factor = get_vertex(&divisibility_graph, factor_vid, &deleted_synonyms);
         if factor
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
