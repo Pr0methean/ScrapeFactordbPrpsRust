@@ -1122,9 +1122,13 @@ const PRIMORIAL_INDEX: usize = 5;
 const RAW_NUMBER_INDEX: usize = 6;
 const ELIDED_NUMBER_INDEX: usize = 7;
 const PARENS_INDEX: usize = 8;
-const DIV_INDEX: usize = 9;
-const MUL_INDEX: usize = 10;
-const ADD_SUB_INDEX: usize = 11;
+const POWER_INDEX: usize = 9;
+const DIV_INDEX: usize = 10;
+const MUL_INDEX: usize = 11;
+const ADD_SUB_INDEX: usize = 12;
+
+// Maximum number of times a factor will be repeated when raised to a power, to limit memory usage.
+const MAX_REPEATS: u128 = 16;
 
 impl FactorFinder {
     #[inline(always)]
@@ -1139,6 +1143,7 @@ impl FactorFinder {
             "^([0-9]+)$",
             "^([0-9]+\\.\\.+[0-9]+)$",
             "^\\(([^()]+)\\)$",
+            "^([^()/+-]+|\\([^()]+\\))\\^([0-9]+)$",
             "^(.*)/([^()/+-]+|\\([^()]+\\))$",
             "^(.*)\\*([^()\\*+-]+|\\([^()]+\\))$",
             "^([^()]+|\\([^()]+\\))([-+])(.*)$",
@@ -1338,6 +1343,13 @@ impl FactorFinder {
                             // parens
                             self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]))
                         }
+                        POWER_INDEX => {
+                            let Ok(power) = captures[2].parse::<u128>() else {
+                                return (0, u128::MAX);
+                            };
+                            let (base_lower, base_upper) = self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]));
+                            (base_lower.saturating_mul(power), base_upper.saturating_mul(power))
+                        }
                         DIV_INDEX => {
                             // division
                             let (mut denom_lower, mut denom_upper) = self
@@ -1508,7 +1520,7 @@ impl FactorFinder {
                             let c_raw = if let Some(c_match) = captures.get(4) {
                                 SignedFactor::from(c_match.as_str())
                             } else {
-                                let n = captures[2].parse::<u128>().unwrap_or(16).min(16) as usize;
+                                let n = captures[2].parse::<u128>().unwrap_or(MAX_REPEATS).min(MAX_REPEATS) as usize;
                                 factors.extend(repeat_n(self.find_factors(&a), n).flatten());
                                 factors.extend(self.find_factors(&b));
                                 return factors;
@@ -1741,6 +1753,11 @@ impl FactorFinder {
                             // parens
                             self.find_factors(&Factor::<&str, &str>::from(&captures[1]))
                         }
+                        POWER_INDEX => {
+                            let power = captures[2].parse::<u128>().unwrap_or(MAX_REPEATS).min(MAX_REPEATS) as usize;
+                            let base_factors = self.find_factors(&Factor::<&str, &str>::from(&captures[1]));
+                            repeat_n(base_factors, power).flatten().collect()
+                        }
                         DIV_INDEX => {
                             // division
                             let mut denom_factors =
@@ -1953,11 +1970,7 @@ impl NumberStatusExt for Option<NumberStatus> {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{
-        Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
-        lucas_factors, modinv, multiset_difference, multiset_intersection, multiset_union,
-        power_multiset,
-    };
+    use crate::algebraic::{Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection, multiset_union, power_multiset, OwnedFactor};
     use itertools::Itertools;
     use std::iter::repeat_n;
 
@@ -2042,6 +2055,13 @@ mod tests {
         assert!(factors.contains(&Numeric(7)));
         assert!(!factors.contains(&Numeric(2)));
         assert!(!factors.contains(&Numeric(5)));
+    }
+
+    #[test]
+    fn test_power() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors::<&str, &str>(&"(2^7-1)^2".into());
+        assert_eq!(factors, Vec::<OwnedFactor>::from([Numeric(127), Numeric(127)]));
     }
 
     #[test]
