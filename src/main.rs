@@ -48,6 +48,7 @@ use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use arcstr::ArcStr;
+use async_backtrace::framed;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
@@ -120,6 +121,7 @@ struct FactorSubmission<'a> {
     factor: &'a str,
 }
 
+#[framed]
 async fn composites_while_waiting(
     end: Instant,
     http: &mut impl FactorDbClient,
@@ -157,6 +159,7 @@ async fn composites_while_waiting(
     }
 }
 
+#[framed]
 async fn check_composite(
     http: &mut impl FactorDbClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
@@ -263,6 +266,7 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[framed]
 async fn get_prp_remaining_bases(
     id: u128,
     http: &mut impl FactorDbClient,
@@ -464,6 +468,7 @@ async fn get_prp_remaining_bases(
     Ok(bases_left)
 }
 
+#[framed]
 async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -473,6 +478,7 @@ async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
         .await;
 }
 
+#[framed]
 async fn prove_by_nm1(id: u128, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
@@ -490,6 +496,7 @@ const MAX_CPU_BUDGET_TENTHS: usize = 6000;
 const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
+#[framed]
 #[inline]
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<u128>,
@@ -643,6 +650,7 @@ async fn do_checks(
 }
 
 #[inline]
+#[framed]
 async fn try_handle_unknown(
     http: &impl FactorDbClient,
     u_status_regex: &Regex,
@@ -691,6 +699,7 @@ async fn try_handle_unknown(
     }
 }
 
+#[framed]
 async fn throttle_if_necessary(
     http: &mut impl FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
@@ -769,6 +778,7 @@ async fn throttle_if_necessary(
 // fit into the channel at once. In that case, we want the remaining results to wait to be pushed
 // into the channel, without blocking PRP or U searches on the main thread.
 #[allow(clippy::async_yields_async)]
+#[framed]
 async fn queue_composites(
     http: &impl FactorDbClient,
     c_sender: &Sender<CompositeCheckTask>,
@@ -828,7 +838,7 @@ async fn queue_composites(
             c_buffered.len()
         );
         let c_sender = c_sender.clone();
-        task::spawn(async move {
+        task::spawn(async_backtrace::location!().frame(async move {
             let count = c_buffered.len();
             let mut c_sent = 0;
             for c_task in c_buffered {
@@ -844,13 +854,13 @@ async fn queue_composites(
             }
             info!("Sent {c_sent} buffered C's to channel");
             let _ = c_sender.reserve().await; // Prevent task from finishing until another C can be sent
-        })
+        }))
     }
 }
 
 // One worker thread for do_checks(), one for main(), one for c_buffer_task, one for handle_signals
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
-
+#[framed]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
@@ -923,12 +933,12 @@ async fn main() -> anyhow::Result<()> {
     );
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
-    let mut c_buffer_task: JoinHandle<()> = task::spawn(async move {
+    let mut c_buffer_task: JoinHandle<()> = task::spawn(async_backtrace::location!().frame(async move {
         queue_composites(&http_clone, &c_sender_clone, c_digits)
             .await
             .await
             .unwrap();
-    });
+    }));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -943,14 +953,14 @@ async fn main() -> anyhow::Result<()> {
     let mut prp_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
     let mut u_filter = CuckooFilter::with_capacity(4096);
     installed_receiver.await?;
-    task::spawn(do_checks(
+    task::spawn(async_backtrace::location!().frame(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
         PushbackReceiver::new(u_receiver, &u_sender),
         c_receiver,
         http.clone(),
         factor_finder.clone(),
         shutdown_receiver.clone(),
-    ));
+    )));
     'queue_tasks: loop {
         let mut new_c_buffer_task = false;
         let select_start = Instant::now();
@@ -1015,6 +1025,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
+#[framed]
 async fn try_queue_unknowns<'a>(
     http: &mut impl FactorDbClient,
     u_digits: Option<NonZeroU128>,

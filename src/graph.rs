@@ -1,3 +1,4 @@
+use async_backtrace::framed;
 use crate::NumberSpecifier::Id;
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -420,6 +421,7 @@ impl NumberFacts {
     }
 }
 
+#[framed]
 pub async fn find_and_submit_factors(
     http: &mut impl FactorDbClient,
     id: u128,
@@ -1050,6 +1052,7 @@ fn mark_fully_factored(
     }
 }
 
+#[framed]
 async fn add_factors_to_graph(
     http: &mut impl FactorDbClient,
     factor_finder: &FactorFinder,

@@ -37,6 +37,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
+use async_backtrace::framed;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
@@ -151,6 +152,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
         }
     }
 
+    #[framed]
     pub async fn send(self) -> Result<String, Error> {
         sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
         self.client.rate_limiter.until_ready().await;
@@ -244,15 +246,14 @@ impl RealFactorDbClient {
         }
     }
 
+    #[framed]
     async fn try_get_and_decode_core(&self, url: ArcStr) -> Option<Box<str>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
-            // FIXME: This blocks a Tokio thread, but it fails the borrow checker when wrapped in
-            // spawn_blocking
             let curl_client = Arc::clone(&self.curl_client);
             let url = url.clone();
-            spawn_blocking(move || {
+            async_backtrace::location!().frame(spawn_blocking(move || {
                 let mut curl = curl_client.blocking_lock();
                 curl.get(true)
                     .and_then(|_| curl.url(&url))
@@ -265,7 +266,7 @@ impl RealFactorDbClient {
                         }
                         Ok(String::from_utf8(curl.get_mut().take_all())?)
                     })
-            }).await.map_err(Error::from).and_then(|r| r.map_err(Error::from))
+            })).await.map_err(Error::from).and_then(|r| r.map_err(Error::from))
         } else {
             let result = self
                 .http
@@ -296,7 +297,7 @@ impl RealFactorDbClient {
         }
     }
 
-
+    #[framed]
     async fn retrying_get_and_decode_or(
         &self,
         url: ArcStr,
@@ -328,6 +329,7 @@ impl RealFactorDbClient {
 }
 
 impl FactorDbClient for RealFactorDbClient {
+    #[framed]
     async fn parse_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
@@ -380,6 +382,7 @@ impl FactorDbClient for RealFactorDbClient {
 
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
+    #[framed]
     async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str> {
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url.clone()).await {
@@ -400,6 +403,7 @@ impl FactorDbClient for RealFactorDbClient {
         }
     }
 
+    #[framed]
     async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
@@ -425,6 +429,7 @@ impl FactorDbClient for RealFactorDbClient {
         Some(response)
     }
 
+    #[framed]
     async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
@@ -464,6 +469,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
+    #[framed]
     async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr> {
         if let Some(response) = self.expression_form_cache.get(&entry_id) {
             info!("Expression-form cache hit for {entry_id}");
@@ -484,6 +490,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
+    #[framed]
     async fn known_factors_as_digits(
         &mut self,
         mut id: NumberSpecifier<&str, &str>,
@@ -631,6 +638,7 @@ impl FactorDbClient for RealFactorDbClient {
         processed
     }
 
+    #[framed]
     async fn try_report_factor(
         &self,
         u_id: NumberSpecifier<&str, &str>,
@@ -677,6 +685,7 @@ impl FactorDbClient for RealFactorDbClient {
         }
     }
 
+    #[framed]
     async fn report_numeric_factor(
         &self,
         u_id: u128,

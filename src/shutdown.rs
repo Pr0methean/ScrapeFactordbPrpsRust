@@ -5,10 +5,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::time::Duration;
+use async_backtrace::{framed, taskdump_tree};
 use tokio::signal::ctrl_c;
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 use tokio::sync::oneshot;
 use tokio::{select, signal};
+use tokio::time::{sleep_until, Instant};
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
@@ -56,6 +58,7 @@ impl Monitor {
     }
 
     /// Receive the shutdown notice, waiting if necessary.
+    #[framed]
     pub(crate) async fn recv(&mut self) {
         // If the shutdown signal has already been received, then return
         // immediately.
@@ -82,26 +85,40 @@ impl Clone for Monitor {
 }
 
 pub async fn monitor(shutdown_sender: Sender<()>, installed_sender: oneshot::Sender<()>) {
-    let sigint = ctrl_c();
+    let mut sigint = Box::pin(ctrl_c());
     info!("Signal handlers installed");
     installed_sender
         .send(())
         .expect("Error signaling main task that signal handlers are installed");
+    let mut sigterm;
     #[cfg(unix)]
     {
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+        sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
             .expect("Failed to create SIGTERM signal stream");
+    }
+    #[cfg(not(unix))]
+    {
+        // Create a channel that will never receive a signal
+        let (_sender, sigterm) = oneshot::channel();
+    }
+    let mut next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+    loop {
         select! {
-            _ = sigterm.recv() => {
+            _ = sleep_until(next_backtrace.clone()) => {
+                info!("Task backtraces:\n{}", taskdump_tree(false));
+                info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+                next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+            }
+            _ = (&mut sigterm).recv() => {
                 warn!("Received SIGTERM; signaling tasks to exit");
+                break;
             },
-            _ = sigint => {
+            _ = &mut sigint => {
                 warn!("Received SIGINT; signaling tasks to exit");
+                break;
             }
         }
     }
-    #[cfg(not(unix))]
-    let _ = sigint.await;
     if let Err(e) = shutdown_sender.send(()) {
         error!("Error sending shutdown signal: {e}");
     }
