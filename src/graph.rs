@@ -169,9 +169,11 @@ pub fn add_factor_node(
     let (existing_vertex, matching_vertices) = data.divisibility_graph
         .vertices()
         .filter(|v| {
+            // Existing vertices may be missing facts, because add_factors_to_graph calls
+            // add_factor_node on subfactors to generate the initial number_facts_map entry
             v.attr.as_ref() == factor
                 || (entry_id.is_some() && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms)
-                .expect("add_factor_node called before an existing vertex was entered in number_facts_map").entry_id == entry_id)
+                .is_some_and(|facts| facts.entry_id == entry_id))
         })
         .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
