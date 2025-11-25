@@ -122,4 +122,10 @@ pub async fn monitor(shutdown_sender: Sender<()>, installed_sender: oneshot::Sen
     if let Err(e) = shutdown_sender.send(()) {
         error!("Error sending shutdown signal: {e}");
     }
+    loop {
+        sleep_until(next_backtrace).await;
+        info!("Task backtraces:\n{}", taskdump_tree(false));
+        info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+        next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+    }
 }
