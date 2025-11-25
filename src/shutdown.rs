@@ -4,10 +4,13 @@ use log::{error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use std::time::Duration;
 use tokio::signal::ctrl_c;
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 use tokio::sync::oneshot;
 use tokio::{select, signal};
+
+const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
 /// Listens for the server shutdown signal.
 ///
@@ -19,23 +22,23 @@ use tokio::{select, signal};
 /// been received. Callers may query for whether the shutdown signal has been
 /// received or not.
 #[derive(Debug)]
-pub(crate) struct Shutdown {
+pub(crate) struct Monitor {
     /// `true` if the shutdown signal has been received
     is_shutdown: Arc<AtomicBool>,
 
     /// The receiving half of the channel used to listen for shutdown.
-    notify: Receiver<()>,
+    shutdown_notify: Receiver<()>,
 }
 
-impl Shutdown {
+impl Monitor {
     /// Create a new `Shutdown` and a sender for it.
-    pub(crate) fn new() -> (Sender<()>, Shutdown) {
+    pub(crate) fn new() -> (Sender<()>, Monitor) {
         let (sender, notify) = channel(1);
         (
             sender,
-            Shutdown {
+            Monitor {
                 is_shutdown: Arc::new(false.into()),
-                notify,
+                shutdown_notify: notify,
             },
         )
     }
@@ -44,7 +47,7 @@ impl Shutdown {
     pub(crate) fn check_for_shutdown(&mut self) -> bool {
         if self.is_shutdown.load(Acquire) {
             true
-        } else if self.notify.try_recv().is_ok() {
+        } else if self.shutdown_notify.try_recv().is_ok() {
             self.is_shutdown.store(true, Release);
             true
         } else {
@@ -61,24 +64,24 @@ impl Shutdown {
         }
 
         // Cannot receive a "lag error" as only one value is ever sent.
-        let _ = self.notify.recv().await;
+        let _ = self.shutdown_notify.recv().await;
 
         // Remember that the signal has been received.
         self.is_shutdown.store(true, Release);
     }
 }
 
-impl Clone for Shutdown {
+impl Clone for Monitor {
     /// All clones will receive the shutdown from the same sender.
     fn clone(&self) -> Self {
-        Shutdown {
+        Monitor {
             is_shutdown: self.is_shutdown.clone(),
-            notify: self.notify.resubscribe(),
+            shutdown_notify: self.shutdown_notify.resubscribe(),
         }
     }
 }
 
-pub async fn handle_signals(shutdown_sender: Sender<()>, installed_sender: oneshot::Sender<()>) {
+pub async fn monitor(shutdown_sender: Sender<()>, installed_sender: oneshot::Sender<()>) {
     let sigint = ctrl_c();
     info!("Signal handlers installed");
     installed_sender

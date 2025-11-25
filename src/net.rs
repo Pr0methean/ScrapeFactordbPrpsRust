@@ -6,7 +6,7 @@ use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
 use crate::algebraic::{FactorFinder, NumberStatusExt, ProcessedStatusApiResponse};
-use crate::shutdown::Shutdown;
+use crate::shutdown::Monitor;
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
@@ -114,7 +114,7 @@ pub struct RealFactorDbClient {
     requests_per_hour: u32,
     request_semaphore: Arc<Semaphore>,
     all_threads_blocked_until: Arc<AtomicInstant>,
-    shutdown_receiver: Shutdown,
+    shutdown_receiver: Monitor,
     curl_client: Arc<Mutex<Easy2<Collector>>>,
     id_and_expr_regex: Arc<Regex>,
     digits_fallback_regex: Arc<Regex>,
@@ -192,7 +192,7 @@ impl RealFactorDbClient {
     pub fn new(
         requests_per_hour: NonZeroU32,
         max_concurrent_requests: usize,
-        shutdown_receiver: Shutdown,
+        shutdown_receiver: Monitor,
     ) -> Self {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();

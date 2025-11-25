@@ -21,7 +21,7 @@ use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::algebraic::{NumberStatusExt, OwnedFactor};
 use crate::graph::facts_of;
 use crate::net::{FactorDbClient, ResourceLimits};
-use crate::shutdown::{Shutdown, handle_signals};
+use crate::shutdown::{Monitor, monitor};
 use channel::PushbackReceiver;
 use compact_str::CompactString;
 use const_format::formatcp;
@@ -497,7 +497,7 @@ async fn do_checks(
     mut c_receiver: PushbackReceiver<CompositeCheckTask>,
     mut http: impl FactorDbClient,
     factor_finder: FactorFinder,
-    mut shutdown_receiver: Shutdown,
+    mut shutdown_receiver: Monitor,
 ) {
     info!("do_checks task starting");
     let mut c_filter = CuckooFilter::with_capacity(4096);
@@ -852,10 +852,10 @@ async fn queue_composites(
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 
 async fn main() -> anyhow::Result<()> {
-    let (shutdown_sender, mut shutdown_receiver) = Shutdown::new();
+    let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
-    task::spawn(handle_signals(shutdown_sender, installed_sender));
+    task::spawn(monitor(shutdown_sender, installed_sender));
     unsafe {
         backtrace_on_stack_overflow::enable();
     }

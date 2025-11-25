@@ -1338,7 +1338,7 @@ pub fn facts_of_mut(
 #[test]
 fn test_find_and_submit() {
     use crate::RealFactorDbClient;
-    use crate::shutdown::Shutdown;
+    use crate::shutdown::Monitor;
     use nonzero::nonzero;
     use rand::RngCore;
     use rand::rng;
@@ -1355,7 +1355,7 @@ fn test_find_and_submit() {
                 Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
             })
             .await;
-        let (_channel, shutdown) = Shutdown::new();
+        let (_channel, shutdown) = Monitor::new();
         let mut http = RealFactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
         let factor_finder = FactorFinder::new();
         find_and_submit_factors(
