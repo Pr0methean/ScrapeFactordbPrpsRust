@@ -123,7 +123,8 @@ fn as_specifier<'a>(
     data: &'a FactorData,
     factor: Option<&'a OwnedFactor>,
 ) -> NumberSpecifier<&'a str, &'a str> {
-    if let Some(factor_entry_id) = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).entry_id {
+    if let Some(facts) = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
+        && let Some(factor_entry_id) = facts.entry_id {
         debug!(
             "as_specifier: got entry ID {factor_entry_id} for factor {factor:?} with vertex ID {factor_vid:?}"
         );
@@ -169,7 +170,8 @@ pub fn add_factor_node(
         .vertices()
         .filter(|v| {
             v.attr.as_ref() == factor
-                || (entry_id.is_some() && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms).entry_id == entry_id)
+                || (entry_id.is_some() && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms)
+                .expect("add_factor_node called before an existing vertex was entered in number_facts_map").entry_id == entry_id)
         })
         .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
@@ -402,8 +404,10 @@ fn compare(
     right: &VertexRef<VertexId, OwnedFactor>,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>,
 ) -> Ordering {
-    let left_facts = facts_of(number_facts_map, left.id, deleted_synonyms);
-    let right_facts = facts_of(number_facts_map, right.id, deleted_synonyms);
+    let left_facts = facts_of(number_facts_map, left.id, deleted_synonyms)
+        .expect("compare() called for a number not entered in number_facts_map");
+    let right_facts = facts_of(number_facts_map, right.id, deleted_synonyms)
+        .expect("compare() called for a number not entered in number_facts_map");
     left_facts
         .upper_bound_log10
         .cmp(&right_facts.upper_bound_log10)
@@ -606,7 +610,8 @@ pub async fn find_and_submit_factors(
         if factor
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
-            && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).entry_id.is_none()
+            && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
+            .expect("Tried to check for entry_id for a number not entered in number_facts_map").entry_id.is_none()
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
@@ -676,7 +681,9 @@ pub async fn find_and_submit_factors(
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<VecDeque<_>>();
     'graph_iter: while !factors_to_submit.is_empty()
-        && !facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).is_known_fully_factored()
+        && !facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms)
+        .expect("Reached 'graph_iter when root not entered in number_facts_map")
+        .is_known_fully_factored()
     {
         let node_count = data.divisibility_graph.vertex_count();
         let edge_count = data.divisibility_graph.edge_count();
@@ -718,8 +725,8 @@ pub async fn find_and_submit_factors(
         {
             iters_without_progress += 1;
             if is_known_factor(&data, factor_vid, root_vid)
-                && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).lower_bound_log10
-                    > facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).upper_bound_log10 / 2
+                && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for a number not entered in number_facts_map").lower_bound_log10
+                    > facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for entry_id for a number not entered in number_facts_map").upper_bound_log10 / 2
             {
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
@@ -761,7 +768,8 @@ pub async fn find_and_submit_factors(
                     propagate_divisibility(&mut data, factor_vid, cofactor_vid, true);
                     continue;
                 }
-                let factor_facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms);
+                let factor_facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
+                    .expect("Reached factors_known_to_factordb check for a number not entered in number_facts_map");
                 match factor_facts.factors_known_to_factordb {
                     UpToDate(ref already_known_factors)
                     | NotUpToDate(ref already_known_factors) => {
@@ -807,7 +815,8 @@ pub async fn find_and_submit_factors(
                     );
                     continue;
                 }
-                let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms);
+                let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
+                    .expect("Reached cofactor_facts check for a number not entered in number_facts_map");
                 if cofactor_facts.is_known_fully_factored() {
                     debug!(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
@@ -840,6 +849,7 @@ pub async fn find_and_submit_factors(
                                     get_vertex(&data.divisibility_graph, *known_factor_vid, &data.deleted_synonyms),
                                 ) && cofactor_facts.lower_bound_log10
                                     <= facts_of(&data.number_facts_map, *known_factor_vid, &data.deleted_synonyms)
+                                        .expect("known_factor_statuses included a number not entered in number_facts_map")
                                         .upper_bound_log10
                             });
                     if possible_factors.is_empty() {
@@ -897,7 +907,9 @@ pub async fn find_and_submit_factors(
                 if cofactor
                     .as_str_non_u128()
                     .is_some_and(|expr| expr.contains("..."))
-                    && facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms).entry_id.is_none()
+                    && facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
+                            .expect("Tried to check for entry_id for a cofactor not entered in number_facts_map")
+                    .entry_id.is_none()
                 {
                     debug!(
                         "{id}: Can't submit to {cofactor} right now because we don't know its full specifier"
@@ -917,7 +929,8 @@ pub async fn find_and_submit_factors(
                             warn!("{id}: Already fully factored");
                             return true;
                         }
-                        if !facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms).is_known_fully_factored() {
+                        if !facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
+                            .expect("Tried to check whether to mark_fully_factored for a number not entered in number_facts_map").is_known_fully_factored() {
                             mark_fully_factored(
                                 cofactor_vid,
                                 &mut data
@@ -969,7 +982,8 @@ pub async fn find_and_submit_factors(
                                 )
                             }),
                         );
-                        let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms);
+                        let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
+                            .expect("Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
                         if cofactor_facts.needs_update()
                             || !cofactor_facts.checked_for_listed_algebraic
                         {
@@ -1043,7 +1057,9 @@ fn known_factors_upper_bound(
 ) -> u128 {
     neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
         .into_iter()
-        .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &data.deleted_synonyms).lower_bound_log10)
+        .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &data.deleted_synonyms)
+            .expect("known_factors_upper_bound called for a number with a factor not entered in number_facts_map")
+            .lower_bound_log10)
         .sum()
 }
 
@@ -1095,7 +1111,8 @@ async fn add_factors_to_graph(
     root_vid: VertexId,
     factor_vid: VertexId,
 ) -> Box<[VertexId]> {
-    let facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms);
+    let facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
+        .expect("add_factors_to_graph called on a number that's not entered in number_facts_map");
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
 
@@ -1168,7 +1185,9 @@ async fn add_factors_to_graph(
 
     // Next, check factordb.com/frame_moreinfo.php for listed algebraic factors
     if let Some(id) = id
-        && !facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).checked_for_listed_algebraic
+        && !facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
+        .expect("Tried to check checked_for_listed_algebraic in add_factors_to_graph when not entered in number_facts_map")
+        .checked_for_listed_algebraic
     {
         let root = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         if let Some(known_id) = root.known_id()
@@ -1209,7 +1228,8 @@ async fn add_factors_to_graph(
     }
 
     // Next, check if factor_finder can find factors
-    let facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms);
+    let facts = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
+        .expect("Tried to check checked_in_factor_finder in add_factors_to_graph when not entered in number_facts_map");
     if !facts.checked_in_factor_finder {
         added.extend(add_factor_finder_factor_vertices_to_graph(
             factor_finder,
@@ -1262,6 +1282,7 @@ fn merge_equivalent_expressions(
     let current = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
     if equivalent == *current {
         facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
+            .expect("merge_equivalent_expressions called for a destination not entered in number_facts_map")
             .factors_known_to_factordb
             .to_vec()
     } else {
@@ -1347,8 +1368,8 @@ pub fn facts_of<'a>(
     number_facts_map: &'a BTreeMap<VertexId, NumberFacts>,
     vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>
-) -> &'a NumberFacts {
-    number_facts_map.get(&to_real_vertex_id(vertex_id, deleted_synonyms)).unwrap()
+) -> Option<&'a NumberFacts> {
+    number_facts_map.get(&to_real_vertex_id(vertex_id, deleted_synonyms))
 }
 
 #[inline(always)]
