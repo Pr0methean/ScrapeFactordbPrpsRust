@@ -46,8 +46,8 @@ use urlencoding::encode;
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-const E2E_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECT_TIMEOUT: Duration = Duration::from_mins(1);
+const E2E_TIMEOUT: Duration = Duration::from_mins(2);
 
 const REQWEST_MAX_URL_LEN: usize = (u16::MAX - 1) as usize;
 
@@ -171,6 +171,8 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                         }
                         let response_text = curl
                             .post(true)
+                            .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
+                            .and_then(|_| curl.timeout(E2E_TIMEOUT))
                             .and_then(|_| curl.url(url))
                             .and_then(|_| curl.perform())
                             .map_err(anyhow::Error::from)
@@ -252,6 +254,8 @@ impl RealFactorDbClient {
         let result = if url.len() > REQWEST_MAX_URL_LEN {
             block_in_place(|| CURL_CLIENT.with_borrow_mut(|curl| {
                 curl.get(true)
+                    .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
+                    .and_then(|_| curl.timeout(E2E_TIMEOUT))
                     .and_then(|_| curl.url(&url))
                     .and_then(|_| curl.perform())
                     .map_err(anyhow::Error::from)
