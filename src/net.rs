@@ -188,7 +188,7 @@ impl RealFactorDbClient {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
-            block_in_place(|| {
+            let result = block_in_place(|| {
                 CURL_CLIENT.with_borrow_mut(|curl| {
                     curl.get(true)
                         .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
@@ -206,21 +206,20 @@ impl RealFactorDbClient {
                             Ok(response_body)
                         })
                 })
-            }).and_then(|response_body| Ok(String::from_utf8(response_body)?))
+            });
+            drop(permit);
+            result.and_then(|response_body| Ok(String::from_utf8(response_body)?))
         } else {
             let result = self
                 .http
                 .get(url.as_str())
                 .header("Referer", "https://factordb.com")
                 .send()
+                .and_then(Response::text)
                 .await;
-            match result {
-                Ok(response) => response.text().await,
-                Err(e) => Err(e),
-            }
-            .map_err(|e| anyhow::Error::from(e.without_url()))
+            drop(permit);
+            result.map_err(|e| anyhow::Error::from(e.without_url()))
         };
-        drop(permit);
         match result {
             Err(e) => {
                 error!("Error reading {url}: {e}");
@@ -591,14 +590,15 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(Factor::Expression(x)) => (None, Some(x)),
             Id(id) => (Some(id), None),
         };
-        let semaphore = self.request_semaphore.acquire().await.unwrap();
+        self.rate_limiter.until_ready().await;
+        let permit = self.request_semaphore.acquire().await.unwrap();
         let response = self.http.post("https://factordb.com/reportfactor.php")
                 .form(&FactorSubmission {
                     id,
                     number,
                     factor: &factor.as_str(),
                 }).send().and_then(Response::text).await;
-        drop(semaphore);
+        drop(permit);
         match response {
             Ok(text) => {
                 info!("{u_id}: reported a factor of {factor}; response: {text}",);
