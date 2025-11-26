@@ -21,10 +21,9 @@ use crate::algebraic::NumberStatusExt;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::monitor::{Monitor, monitor};
 use crate::net::{FactorDbClient, ResourceLimits};
-use arcstr::ArcStr;
+use hipstr::HipStr;
 use async_backtrace::framed;
 use channel::PushbackReceiver;
-use compact_str::CompactString;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
 use log::{error, info, warn};
@@ -86,7 +85,7 @@ enum UnknownPrpCheckResult {
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
     id: u128,
-    digits_or_expr: CompactString,
+    digits_or_expr: HipStr<'static>,
 }
 
 impl PartialEq<Self> for CompositeCheckTask {
@@ -106,8 +105,8 @@ impl Hash for CompositeCheckTask {
 #[derive(Debug, Deserialize, Serialize)]
 struct NumberStatusApiResponse {
     id: Value,
-    status: Box<str>,
-    factors: Box<[(Box<str>, u128)]>,
+    status: HipStr<'static>,
+    factors: Box<[(HipStr<'static>, u128)]>,
 }
 
 #[derive(Serialize)]
@@ -161,7 +160,7 @@ async fn check_composite(
     c_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
     id: u128,
-    digits_or_expr: CompactString,
+    digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
 ) -> bool {
     if c_filter.contains(&id) {
@@ -580,7 +579,7 @@ async fn do_checks(
                     continue;
                 }
                 for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                    let url: ArcStr = format!(
+                    let url: HipStr = format!(
                         "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
                     ).into();
                     let text = http.retrying_get_and_decode(url.clone(), RETRY_DELAY).await;

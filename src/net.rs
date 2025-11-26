@@ -12,10 +12,9 @@ use crate::{
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
-use arcstr::ArcStr;
+use hipstr::HipStr;
 use async_backtrace::framed;
 use atomic_time::AtomicInstant;
-use compact_str::{CompactString, ToCompactString};
 use core::cell::RefCell;
 use curl::easy::{Easy2, Handler, WriteError};
 use governor::middleware::StateInformationMiddleware;
@@ -82,14 +81,14 @@ pub trait FactorDbClient {
     ) -> Option<ResourceLimits>;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str>;
-    async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>>;
+    async fn retrying_get_and_decode(&self, url: HipStr<'_>, retry_delay: Duration) -> HipStr<'static>;
+    async fn try_get_and_decode(&self, url: HipStr<'_>) -> Option<HipStr<'static>>;
     async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr>;
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<HipStr<'static>>;
     async fn known_factors_as_digits(
         &mut self,
         id: NumberSpecifier<&str, &str>,
@@ -120,14 +119,14 @@ pub struct RealFactorDbClient {
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
     by_id_cache: BasicCache<u128, ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<CompactString, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<u128, ArcStr>,
+    by_expr_cache: BasicCache<HipStr<'static>, ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<u128, HipStr<'static>>,
 }
 
 pub struct ThrottlingRequestBuilder<'a> {
     inner: Result<RequestBuilder, &'a str>,
     client: &'a RealFactorDbClient,
-    form: Option<Box<str>>,
+    form: Option<HipStr<'static>>,
 }
 
 pub struct ResourceLimits {
@@ -146,7 +145,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
             Err(_) => Ok(ThrottlingRequestBuilder {
                 inner: self.inner,
                 client: self.client,
-                form: Some(serde_urlencoded::to_string(payload)?.into_boxed_str()),
+                form: Some(serde_urlencoded::to_string(payload)?.into()),
             }),
         }
     }
@@ -248,7 +247,7 @@ impl RealFactorDbClient {
     }
 
     #[framed]
-    async fn try_get_and_decode_core(&self, url: ArcStr) -> Option<Box<str>> {
+    async fn try_get_and_decode_core(&self, url: HipStr<'_>) -> Option<HipStr<'static>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
@@ -295,19 +294,19 @@ impl RealFactorDbClient {
                     error!("502 error from {url}");
                     None
                 } else {
-                    Some(text.into_boxed_str())
+                    Some(text.into())
                 }
             }
         }
     }
 
     #[framed]
-    async fn retrying_get_and_decode_or(
+    async fn retrying_get_and_decode_or<'a>(
         &self,
-        url: ArcStr,
+        url: HipStr<'_>,
         retry_delay: Duration,
-        alt_url_supplier: impl FnOnce() -> ArcStr,
-    ) -> Result<Box<str>, Box<str>> {
+        alt_url_supplier: impl FnOnce() -> HipStr<'a>,
+    ) -> Result<HipStr<'static>, HipStr<'static>> {
         for _ in 0..MAX_RETRIES_WITH_FALLBACK {
             if let Some(value) = self.try_get_and_decode(url.clone()).await {
                 return Ok(value);
@@ -387,7 +386,7 @@ impl FactorDbClient for RealFactorDbClient {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     #[framed]
-    async fn retrying_get_and_decode(&self, url: ArcStr, retry_delay: Duration) -> Box<str> {
+    async fn retrying_get_and_decode(&self, url: HipStr<'_>, retry_delay: Duration) -> HipStr<'static> {
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url.clone()).await {
                 return value;
@@ -408,7 +407,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[framed]
-    async fn try_get_and_decode(&self, url: ArcStr) -> Option<Box<str>> {
+    async fn try_get_and_decode(&self, url: HipStr<'_>) -> Option<HipStr<'static>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
         let mut temp_bases = usize::MAX;
@@ -471,7 +470,7 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr> {
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<HipStr<'static>> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
             return Some(entry_id.to_string().into());
         }
@@ -482,7 +481,7 @@ impl FactorDbClient for RealFactorDbClient {
         let response = self
             .try_get_and_decode(format!("https://factordb.com/index.php?id={entry_id}").into())
             .await?;
-        let expression_form: ArcStr = self
+        let expression_form: HipStr = self
             .expression_form_regex
             .captures(&response)?
             .get(1)?
@@ -517,9 +516,10 @@ impl FactorDbClient for RealFactorDbClient {
             });
         }
         let cached = match id {
-            Id(id) => self.by_id_cache.get(&id).cloned(),
+            Id(id) => self.by_id_cache.get(&id).or_else(||
+                self.expression_form_cache.get(&id).and_then(|expr| self.by_expr_cache.get(expr.as_str()))).cloned(),
             Expression(Factor::Expression(expr)) =>
-                self.by_expr_cache.get(&expr.to_compact_string()).cloned(),
+                self.by_expr_cache.get(expr).cloned(),
             _ => None,
         };
         if cached.is_some() {
@@ -625,7 +625,7 @@ impl FactorDbClient for RealFactorDbClient {
                                 .as_str()
                                 .chars()
                                 .filter(char::is_ascii_digit)
-                                .collect::<Box<str>>()
+                                .collect::<String>()
                                 .into(),
                         ]
                     })
@@ -645,7 +645,7 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache.insert(expr.to_compact_string(), processed.clone());
+                self.by_expr_cache.insert(HipStr::from(*expr), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {

@@ -1186,7 +1186,7 @@ async fn add_factors_to_graph(
                 && let Some(listed_algebraic) = result.split("Is factor of").next()
             {
                 facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms).checked_for_listed_algebraic = true;
-                let algebraic_factors = http.read_ids_and_exprs(listed_algebraic);
+                let algebraic_factors = http.read_ids_and_exprs(&listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
                     let factor: Factor<&str, &str> = factor_digits_or_expr.into();
                     let (subfactor_vid, is_new) = add_factor_node(
@@ -1235,11 +1235,11 @@ async fn add_factors_to_graph(
         && let Some(expression_form) = http.try_get_expression_form(entry_id).await
     {
         let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
-        let expression_form: Factor<&str, &str> = Factor::from(expression_form.as_str());
-        if expression_form != *factor {
-            added.extend(
-                factor_finder
-                    .find_unique_factors(&expression_form)
+        if expression_form != factor.as_str() {
+            let factors = factor_finder
+                .find_unique_factors(&Factor::from(expression_form.clone()));
+            drop(expression_form);
+            added.extend(factors
                     .into_iter()
                     .map(|new_factor| {
                         add_factor_node(

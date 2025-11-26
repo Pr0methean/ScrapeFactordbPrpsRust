@@ -1,7 +1,6 @@
 use crate::algebraic::Factor::Numeric;
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
-use arcstr::ArcStr;
-use compact_str::{CompactString, ToCompactString, format_compact};
+use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
@@ -569,7 +568,7 @@ impl<T, U> Factor<T, U> {
     }
 }
 
-pub type OwnedFactor = Factor<ArcStr, CompactString>;
+pub type OwnedFactor = Factor<HipStr<'static>, HipStr<'static>>;
 
 impl<T: AsRef<str>, U: AsRef<str>> Hash for Factor<T, U> {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -608,13 +607,28 @@ macro_rules! factor_from {
     };
 }
 
-factor_from!(Box<str>, ArcStr, CompactString);
-factor_from!(&str, ArcStr, CompactString);
-factor_from!(String, ArcStr, CompactString);
+factor_from!(String, HipStr<'static>, HipStr<'static>);
+factor_from!(&str, HipStr<'static>, HipStr<'static>);
 
 impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
     #[inline(always)]
     fn from(value: &'a str) -> Self {
+        match value.parse() {
+            Ok(n) => Numeric(n),
+            Err(_) => {
+                if value.chars().all(|c| c.is_ascii_digit()) {
+                    Factor::BigNumber(value)
+                } else {
+                    Factor::Expression(value)
+                }
+            }
+        }
+    }
+}
+
+impl<'a> From<HipStr<'a>> for Factor<HipStr<'a>,HipStr<'a>> {
+    #[inline(always)]
+    fn from(value: HipStr<'a>) -> Self {
         match value.parse() {
             Ok(n) => Numeric(n),
             Err(_) => {
@@ -645,7 +659,7 @@ impl<'a, T: Display, U: Display> From<&'a Factor<T, U>> for OwnedFactor {
     fn from(value: &'a Factor<T, U>) -> Self {
         match value {
             Numeric(n) => Numeric(*n),
-            Factor::Expression(s) => Factor::Expression(s.to_compact_string()),
+            Factor::Expression(s) => Factor::Expression(s.to_string().into()),
             Factor::BigNumber(s) => Factor::BigNumber(s.to_string().into()),
         }
     }
@@ -989,7 +1003,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
         factors.extend(lucas_factors(term >> 1, subset_recursion));
         factors
     } else if !subset_recursion {
-        vec![Factor::Expression(format_compact!("I({})", term))]
+        vec![Factor::Expression(format!("I({})", term).into())]
     } else {
         let mut factors = Vec::new();
         let factors_of_term = factorize128(term);
@@ -1020,7 +1034,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
             .map(Factor::from)
             .collect()
     } else if !subset_recursion {
-        vec![Factor::Expression(format_compact!("lucas({})", term))]
+        vec![Factor::Expression(format!("lucas({})", term).into())]
     } else {
         let mut factors = Vec::new();
         let mut factors_of_term = factorize128(term);
@@ -1500,7 +1514,7 @@ impl FactorFinder {
                                     "Could not parse term number of a Lucas number: {}",
                                     &captures[1]
                                 );
-                                return vec![expr.as_ref().into()];
+                                return vec![OwnedFactor::from(expr.as_ref())];
                             };
                             lucas_factors(term_number, true)
                         }
@@ -1511,7 +1525,7 @@ impl FactorFinder {
                                     "Could not parse term number of a Fibonacci number: {}",
                                     &captures[1]
                                 );
-                                return vec![expr.as_ref().into()];
+                                return vec![OwnedFactor::from(expr.as_ref())];
                             };
                             fibonacci_factors(term_number, true)
                         }
@@ -1627,19 +1641,19 @@ impl FactorFinder {
                                                     "{}{}{}{}",
                                                     a,
                                                     if n / subset_product > 1 {
-                                                        format_compact!("^{}", n / subset_product)
+                                                        format!("^{}", n / subset_product)
                                                     } else {
-                                                        CompactString::from("")
+                                                        "".to_string()
                                                     },
                                                     if root_b > 1 {
-                                                        format_compact!("*{}", root_b)
+                                                        format!("*{}", root_b)
                                                     } else {
-                                                        CompactString::from("")
+                                                        "".to_string()
                                                     },
                                                     if root_c != 0 {
-                                                        format_compact!("{:+}", root_c)
+                                                        format!("{:+}", root_c)
                                                     } else {
-                                                        CompactString::from("")
+                                                        "".to_string()
                                                     }
                                                 );
                                                 factors.push(factor_expr.into());
@@ -1717,7 +1731,7 @@ impl FactorFinder {
                                     "Could not parse input to factorial function: {}",
                                     &captures[1]
                                 );
-                                return vec![expr.as_ref().into()];
+                                return vec![OwnedFactor::from(expr.as_ref())];
                             };
                             let mut factors = Vec::new();
                             for i in 2..=input {
@@ -1732,7 +1746,7 @@ impl FactorFinder {
                                     "Could not parse input to primorial function: {}",
                                     &captures[1]
                                 );
-                                return vec![expr.as_ref().into()];
+                                return vec![OwnedFactor::from(expr.as_ref())];
                             };
                             let mut factors = Vec::new();
                             for i in 2..=input {
@@ -1837,7 +1851,7 @@ impl FactorFinder {
                         _ => unsafe { unreachable_unchecked() },
                     }
                 } else {
-                    vec![expr.as_ref().into()]
+                    vec![OwnedFactor::from(expr.as_ref())]
                 }
             }
         }
