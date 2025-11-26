@@ -38,7 +38,7 @@ while read -r num; do
         fi
       )& done < <(
         echo "Factoring ${num} with yafu" >&2
-        ./yafu -threads 2 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" -pscreen -inmem 2000000000 <<<"factor(${num})" 2>&1 \
+        ./yafu -threads 4 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" -pscreen -inmem 2000000000 <<<"factor(${num})" 2>&1 \
           | tee "./out" \
           | grep -i '\(P[0-9]\+\|factor\) = ' | grep -o '= [0-9]\+' | grep -o '[0-9]\+' | grep -o "^[0-9]\{1,$max_factor_digits\}$" \
           | awk '!x[$0]++'
