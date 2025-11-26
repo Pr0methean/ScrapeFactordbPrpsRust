@@ -8,19 +8,19 @@ extern crate core;
 mod algebraic;
 mod channel;
 mod graph;
-mod net;
 mod monitor;
+mod net;
 
-use crate::algebraic::NumberStatus::FullyFactored;
-use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
-use crate::algebraic::{NumberStatusExt};
-use crate::monitor::{monitor, Monitor};
-use crate::net::{FactorDbClient, ResourceLimits};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::UnknownPrpCheckResult::{
     Assigned, IneligibleForPrpCheck, OtherRetryableFailure, PleaseWait,
 };
+use crate::algebraic::NumberStatus::FullyFactored;
+use crate::algebraic::NumberStatusExt;
+use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
+use crate::monitor::{Monitor, monitor};
+use crate::net::{FactorDbClient, ResourceLimits};
 use arcstr::ArcStr;
 use async_backtrace::framed;
 use channel::PushbackReceiver;
@@ -28,10 +28,10 @@ use compact_str::CompactString;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
 use log::{error, info, warn};
-use net::{RealFactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
+use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -39,17 +39,17 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU128, NonZeroU32};
+use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{channel, OwnedPermit, PermitIterator, Sender};
-use tokio::sync::{oneshot, Mutex, OnceCell};
+use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
+use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, task};
 
 const MAX_START: u128 = 100_000;
@@ -169,9 +169,7 @@ async fn check_composite(
         return true;
     }
     let checks_triggered = if http
-        .try_get_and_decode(
-            format!("https://factordb.com/sequences.php?check={id}").into(),
-        )
+        .try_get_and_decode(format!("https://factordb.com/sequences.php?check={id}").into())
         .await
         .is_some()
     {
@@ -183,9 +181,7 @@ async fn check_composite(
     // First, convert the composite to digits
     let ProcessedStatusApiResponse {
         factors, status, ..
-    } = http
-        .known_factors_as_digits(Id(id), false, true)
-        .await;
+    } = http.known_factors_as_digits(Id(id), false, true).await;
     if factors.is_empty() {
         if status.is_known_fully_factored() {
             warn!("{id}: Already fully factored");
@@ -296,9 +292,7 @@ async fn get_prp_remaining_bases(
             status,
             factors: nm1_factors,
             ..
-        } = http
-            .known_factors_as_digits(Id(nm1_id), false, false)
-            .await;
+        } = http.known_factors_as_digits(Id(nm1_id), false, false).await;
         match nm1_factors.len() {
             0 => {
                 if status == Some(FullyFactored) {
@@ -323,9 +317,7 @@ async fn get_prp_remaining_bases(
             status,
             factors: np1_factors,
             ..
-        } = http
-            .known_factors_as_digits(Id(np1_id), false, false)
-            .await;
+        } = http.known_factors_as_digits(Id(np1_id), false, false).await;
         match np1_factors.len() {
             0 => {
                 if status == Some(FullyFactored) {
@@ -654,8 +646,7 @@ async fn try_handle_unknown(
     id: u128,
     next_attempt: &mut Instant,
 ) -> UnknownPrpCheckResult {
-    let url =
-        format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker").into();
+    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker").into();
     let result = http.retrying_get_and_decode(url, RETRY_DELAY).await;
     if let Some(status) = u_status_regex.captures_iter(&result).next() {
         match status.get(1) {
@@ -929,12 +920,13 @@ async fn main() -> anyhow::Result<()> {
     );
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
-    let mut c_buffer_task: JoinHandle<()> = task::spawn(async_backtrace::location!().frame(async move {
-        queue_composites(&http_clone, &c_sender_clone, c_digits)
-            .await
-            .await
-            .unwrap();
-    }));
+    let mut c_buffer_task: JoinHandle<()> =
+        task::spawn(async_backtrace::location!().frame(async move {
+            queue_composites(&http_clone, &c_sender_clone, c_digits)
+                .await
+                .await
+                .unwrap();
+        }));
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1036,8 +1028,7 @@ async fn try_queue_unknowns<'a>(
             .unwrap()
     });
     let u_start = rng.random_range(0..=MAX_START);
-    let u_search_url =
-        format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
+    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
     let Some(results_text) = http.try_get_and_decode(u_search_url).await else {
         return Err(());
     };

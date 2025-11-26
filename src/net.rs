@@ -1,4 +1,3 @@
-use tokio::task::spawn_blocking;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -14,6 +13,7 @@ use crate::{
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use anyhow::Error;
 use arcstr::ArcStr;
+use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use compact_str::{CompactString, ToCompactString};
 use curl::easy::{Easy2, Handler, WriteError};
@@ -37,8 +37,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use async_backtrace::framed;
 use tokio::sync::{Mutex, Semaphore};
+use tokio::task::spawn_blocking;
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
 
@@ -83,10 +83,7 @@ pub trait FactorDbClient {
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
-    fn read_ids_and_exprs<'a>(
-        &self,
-        haystack: &'a str,
-    ) -> impl Iterator<Item = (u128, &'a str)>;
+    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)>;
     async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr>;
     async fn known_factors_as_digits(
         &mut self,
@@ -94,20 +91,14 @@ pub trait FactorDbClient {
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
-    fn cached_factors(
-        &self,
-        id: NumberSpecifier<&str, &str>,
-    ) -> Option<ProcessedStatusApiResponse>;
+    fn cached_factors(&self, id: NumberSpecifier<&str, &str>)
+    -> Option<ProcessedStatusApiResponse>;
     async fn try_report_factor(
         &self,
         u_id: NumberSpecifier<&str, &str>,
         factor: Factor<&str, &str>,
     ) -> ReportFactorResult;
-    async fn report_numeric_factor(
-        &self,
-        u_id: u128,
-        factor: u128,
-    ) -> ReportFactorResult;
+    async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult;
 }
 
 #[derive(Clone)]
@@ -257,20 +248,24 @@ impl RealFactorDbClient {
         let result = if url.len() > REQWEST_MAX_URL_LEN {
             let curl_client = Arc::clone(&self.curl_client);
             let url = url.clone();
-            async_backtrace::location!().frame(spawn_blocking(move || {
-                let mut curl = curl_client.blocking_lock();
-                curl.get(true)
-                    .and_then(|_| curl.url(&url))
-                    .and_then(|_| curl.perform())
-                    .map_err(anyhow::Error::from)
-                    .and_then(|_| {
-                        let response_code = curl.response_code()?;
-                        if response_code != 200 {
-                            error!("Error reading {url}: HTTP response code {response_code}");
-                        }
-                        Ok(String::from_utf8(curl.get_mut().take_all())?)
-                    })
-            })).await.map_err(Error::from).and_then(|r| r)
+            async_backtrace::location!()
+                .frame(spawn_blocking(move || {
+                    let mut curl = curl_client.blocking_lock();
+                    curl.get(true)
+                        .and_then(|_| curl.url(&url))
+                        .and_then(|_| curl.perform())
+                        .map_err(anyhow::Error::from)
+                        .and_then(|_| {
+                            let response_code = curl.response_code()?;
+                            if response_code != 200 {
+                                error!("Error reading {url}: HTTP response code {response_code}");
+                            }
+                            Ok(String::from_utf8(curl.get_mut().take_all())?)
+                        })
+                }))
+                .await
+                .map_err(Error::from)
+                .and_then(|r| r)
         } else {
             let result = self
                 .http
@@ -282,7 +277,7 @@ impl RealFactorDbClient {
                 Ok(response) => response.text().await,
                 Err(e) => Err(e),
             }
-                .map_err(|e| anyhow::Error::from(e.without_url()))
+            .map_err(|e| anyhow::Error::from(e.without_url()))
         };
         drop(permit);
         match result {
@@ -445,10 +440,7 @@ impl FactorDbClient for RealFactorDbClient {
             .await
     }
 
-    fn read_ids_and_exprs<'a>(
-        &self,
-        haystack: &'a str,
-    ) -> impl Iterator<Item = (u128, &'a str)> {
+    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)> {
         self.id_and_expr_regex
             .captures_iter(haystack)
             .flat_map(move |capture| {
@@ -497,7 +489,10 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
-    fn cached_factors(&self, mut id: NumberSpecifier<&str, &str>) -> Option<ProcessedStatusApiResponse> {
+    fn cached_factors(
+        &self,
+        mut id: NumberSpecifier<&str, &str>,
+    ) -> Option<ProcessedStatusApiResponse> {
         if let Id(entry_id) = id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
@@ -517,15 +512,13 @@ impl FactorDbClient for RealFactorDbClient {
             });
         }
         match id {
-            Id(id) => {
-                self.by_id_cache.get(&id).cloned()
-            }
+            Id(id) => self.by_id_cache.get(&id).cloned(),
             Expression(Factor::Expression(expr)) => {
                 let expr = expr.to_compact_string();
                 info!("Factor cache hit for {expr}");
                 self.by_expr_cache.get(&expr).cloned()
             }
-            _ => None
+            _ => None,
         }
     }
 
@@ -564,7 +557,8 @@ impl FactorDbClient for RealFactorDbClient {
                     }
                     expr_key = Some(expr);
                 }
-                let url = format!("https://factordb.com/api?query={}", encode(&expr.as_str())).into();
+                let url =
+                    format!("https://factordb.com/api?query={}", encode(&expr.as_str())).into();
                 self.try_get_and_decode(url).await.ok_or(None)
             }
         };
@@ -650,8 +644,7 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache
-                    .insert(expr, processed.clone());
+                self.by_expr_cache.insert(expr, processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -708,15 +701,9 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[framed]
-    async fn report_numeric_factor(
-        &self,
-        u_id: u128,
-        factor: u128,
-    ) -> ReportFactorResult {
+    async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult {
         for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-            let result = self
-                .try_report_factor(Id(u_id), Numeric(factor))
-                .await;
+            let result = self.try_report_factor(Id(u_id), Numeric(factor)).await;
             if result != OtherError {
                 return result;
             }

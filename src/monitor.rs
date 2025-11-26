@@ -1,16 +1,16 @@
 // Adapted from: https://github.com/tokio-rs/mini-redis/blob/e186482ca00f8d884ddcbe20417f3654d03315a4/src/shutdown.rs
 
+use async_backtrace::{framed, taskdump_tree};
 use log::{error, info, warn};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::time::Duration;
-use async_backtrace::{framed, taskdump_tree};
 use tokio::signal::ctrl_c;
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 use tokio::sync::oneshot;
+use tokio::time::{Instant, sleep_until};
 use tokio::{select, signal};
-use tokio::time::{sleep_until, Instant};
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
@@ -128,7 +128,10 @@ pub async fn monitor(shutdown_sender: Sender<()>, installed_sender: oneshot::Sen
     loop {
         sleep_until(next_backtrace).await;
         info!("Task backtraces:\n{}", taskdump_tree(false));
-        info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+        info!(
+            "Task backtraces with all tasks idle:\n{}",
+            taskdump_tree(true)
+        );
         next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
     }
 }

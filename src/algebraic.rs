@@ -1347,8 +1347,14 @@ impl FactorFinder {
                             let Ok(power) = captures[2].parse::<u128>() else {
                                 return (0, u128::MAX);
                             };
-                            let (base_lower, base_upper) = self.estimate_log10_internal(&Factor::<&str, &str>::from(&captures[1]));
-                            (base_lower.saturating_mul(power), base_upper.saturating_mul(power))
+                            let (base_lower, base_upper) =
+                                self.estimate_log10_internal(&Factor::<&str, &str>::from(
+                                    &captures[1],
+                                ));
+                            (
+                                base_lower.saturating_mul(power),
+                                base_upper.saturating_mul(power),
+                            )
                         }
                         DIV_INDEX => {
                             // division
@@ -1520,7 +1526,11 @@ impl FactorFinder {
                             let c_raw = if let Some(c_match) = captures.get(4) {
                                 SignedFactor::from(c_match.as_str())
                             } else {
-                                let n = captures[2].parse::<u128>().unwrap_or(MAX_REPEATS).min(MAX_REPEATS) as usize;
+                                let n = captures[2]
+                                    .parse::<u128>()
+                                    .unwrap_or(MAX_REPEATS)
+                                    .min(MAX_REPEATS)
+                                    as usize;
                                 factors.extend(repeat_n(self.find_factors(&a), n).flatten());
                                 factors.extend(self.find_factors(&b));
                                 return factors;
@@ -1754,8 +1764,12 @@ impl FactorFinder {
                             self.find_factors(&Factor::<&str, &str>::from(&captures[1]))
                         }
                         POWER_INDEX => {
-                            let power = captures[2].parse::<u128>().unwrap_or(MAX_REPEATS).min(MAX_REPEATS) as usize;
-                            let base_factors = self.find_factors(&Factor::<&str, &str>::from(&captures[1]));
+                            let power = captures[2]
+                                .parse::<u128>()
+                                .unwrap_or(MAX_REPEATS)
+                                .min(MAX_REPEATS) as usize;
+                            let base_factors =
+                                self.find_factors(&Factor::<&str, &str>::from(&captures[1]));
                             repeat_n(base_factors, power).flatten().collect()
                         }
                         DIV_INDEX => {
@@ -1970,7 +1984,11 @@ impl NumberStatusExt for Option<NumberStatus> {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection, multiset_union, power_multiset, OwnedFactor};
+    use crate::algebraic::{
+        Factor, FactorFinder, OwnedFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
+        fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection,
+        multiset_union, power_multiset,
+    };
     use itertools::Itertools;
     use std::iter::repeat_n;
 
@@ -2087,7 +2105,10 @@ mod tests {
     fn test_power() {
         let finder = FactorFinder::new();
         let factors = finder.find_factors::<&str, &str>(&"(2^7-1)^2".into());
-        assert_eq!(factors, Vec::<OwnedFactor>::from([Numeric(127), Numeric(127)]));
+        assert_eq!(
+            factors,
+            Vec::<OwnedFactor>::from([Numeric(127), Numeric(127)])
+        );
     }
 
     #[test]
