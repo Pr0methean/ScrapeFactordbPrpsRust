@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -37,8 +38,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::{Mutex, Semaphore};
-use tokio::task::spawn_blocking;
+use tokio::sync::{Semaphore};
+use tokio::task::{block_in_place};
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
 
@@ -49,6 +50,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const E2E_TIMEOUT: Duration = Duration::from_secs(60);
 
 const REQWEST_MAX_URL_LEN: usize = (u16::MAX - 1) as usize;
+
+thread_local! {
+    static CURL_CLIENT: RefCell<Easy2<Collector>> = RefCell::new(Easy2::new(Collector(Vec::new())));
+}
 
 struct Collector(Vec<u8>);
 
@@ -111,7 +116,6 @@ pub struct RealFactorDbClient {
     request_semaphore: Arc<Semaphore>,
     all_threads_blocked_until: Arc<AtomicInstant>,
     shutdown_receiver: Monitor,
-    curl_client: Arc<Mutex<Easy2<Collector>>>,
     id_and_expr_regex: Arc<Regex>,
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
@@ -161,23 +165,24 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                     .await
                     .map_err(|e| Error::from(e.without_url())),
                 Err(url) => {
-                    let mut curl = self.client.curl_client.lock().await;
-                    if let Some(form) = self.form {
-                        curl.post_fields_copy(form.as_bytes())?;
-                    }
-                    let response_text = curl
-                        .post(true)
-                        .and_then(|_| curl.url(url))
-                        .and_then(|_| curl.perform())
-                        .map_err(anyhow::Error::from)
-                        .and_then(|_| {
-                            let response_code = curl.response_code()?;
-                            if response_code != 200 {
-                                error!("Error reading {url}: HTTP response code {response_code}")
-                            }
-                            Ok(String::from_utf8(curl.get_mut().take_all())?)
-                        });
-                    Ok(response_text?)
+                    block_in_place(|| CURL_CLIENT.with_borrow_mut(|curl| {
+                        if let Some(form) = self.form {
+                            curl.post_fields_copy(form.as_bytes())?;
+                        }
+                        let response_text = curl
+                            .post(true)
+                            .and_then(|_| curl.url(url))
+                            .and_then(|_| curl.perform())
+                            .map_err(anyhow::Error::from)
+                            .and_then(|_| {
+                                let response_code = curl.response_code()?;
+                                if response_code != 200 {
+                                    error!("Error reading {url}: HTTP response code {response_code}")
+                                }
+                                Ok(String::from_utf8(curl.get_mut().take_all())?)
+                            });
+                            Ok(response_text?)
+                        }))
                 }
             },
             Err(e) => Err(e.into()),
@@ -231,7 +236,6 @@ impl RealFactorDbClient {
             request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
             all_threads_blocked_until: AtomicInstant::now().into(),
             shutdown_receiver,
-            curl_client: Mutex::new(Easy2::new(Collector(Vec::new()))).into(),
             id_and_expr_regex: id_and_expr_regex.into(),
             digits_fallback_regex: digits_fallback_regex.into(),
             expression_form_regex: expression_form_regex.into(),
@@ -246,26 +250,22 @@ impl RealFactorDbClient {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
-            let curl_client = Arc::clone(&self.curl_client);
-            let url = url.clone();
-            async_backtrace::location!()
-                .frame(spawn_blocking(move || {
-                    let mut curl = curl_client.blocking_lock();
-                    curl.get(true)
-                        .and_then(|_| curl.url(&url))
-                        .and_then(|_| curl.perform())
-                        .map_err(anyhow::Error::from)
-                        .and_then(|_| {
-                            let response_code = curl.response_code()?;
-                            if response_code != 200 {
-                                error!("Error reading {url}: HTTP response code {response_code}");
-                            }
-                            Ok(String::from_utf8(curl.get_mut().take_all())?)
-                        })
-                }))
-                .await
-                .map_err(Error::from)
-                .and_then(|r| r)
+            block_in_place(|| CURL_CLIENT.with_borrow_mut(|curl| {
+                curl.get(true)
+                    .and_then(|_| curl.url(&url))
+                    .and_then(|_| curl.perform())
+                    .map_err(anyhow::Error::from)
+                    .and_then(|_| {
+                        let response_code = curl.response_code()?;
+                        if response_code != 200 {
+                            error!("Error reading {url}: HTTP response code {response_code}");
+                        }
+                        let response_body = curl.get_mut().take_all();
+                        curl.reset();
+                        Ok(String::from_utf8(response_body)?)
+                    })
+            }))
+            .map_err(Error::from)
         } else {
             let result = self
                 .http
