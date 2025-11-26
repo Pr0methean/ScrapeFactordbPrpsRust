@@ -820,6 +820,7 @@ async fn queue_composites(
     }
     info!("Buffering {} more C's", c_buffered.len());
     let c_sender = c_sender.clone();
+    let c_buffered = c_buffered.into_boxed_slice();
     task::spawn(async_backtrace::location!().frame(async move {
         let count = c_buffered.len();
         let mut c_sent = 0;
