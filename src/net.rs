@@ -1,3 +1,4 @@
+use reqwest::Response;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -11,7 +12,6 @@ use crate::{
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
-use anyhow::Error;
 use hipstr::HipStr;
 use async_backtrace::framed;
 use atomic_time::AtomicInstant;
@@ -25,8 +25,7 @@ use quick_cache::unsync::Cache;
 use quick_cache::unsync::DefaultLifecycle;
 use quick_cache::{DefaultHashBuilder, UnitWeighter};
 use regex::{Regex, RegexBuilder};
-use reqwest::{Client, RequestBuilder};
-use serde::Serialize;
+use reqwest::{Client};
 use serde_json::from_str;
 use std::io::Write;
 use std::mem::swap;
@@ -37,6 +36,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
+use futures_util::TryFutureExt;
 use tokio::sync::Semaphore;
 use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep, sleep_until};
@@ -123,72 +123,9 @@ pub struct RealFactorDbClient {
     expression_form_cache: BasicCache<u128, HipStr<'static>>,
 }
 
-pub struct ThrottlingRequestBuilder<'a> {
-    inner: Result<RequestBuilder, &'a str>,
-    client: &'a RealFactorDbClient,
-    form: Option<HipStr<'static>>,
-}
-
 pub struct ResourceLimits {
     pub cpu_tenths_spent: usize,
     pub resets_at: Instant,
-}
-
-impl<'a> ThrottlingRequestBuilder<'a> {
-    pub fn form<T: Serialize + ?Sized>(self, payload: &T) -> Result<Self, Error> {
-        match self.inner {
-            Ok(request_builder) => Ok(ThrottlingRequestBuilder {
-                inner: Ok(request_builder.form(payload)),
-                client: self.client,
-                form: None,
-            }),
-            Err(_) => Ok(ThrottlingRequestBuilder {
-                inner: self.inner,
-                client: self.client,
-                form: Some(serde_urlencoded::to_string(payload)?.into()),
-            }),
-        }
-    }
-
-    #[framed]
-    pub async fn send(self) -> Result<String, Error> {
-        sleep_until(self.client.all_threads_blocked_until.load(Acquire).into()).await;
-        self.client.rate_limiter.until_ready().await;
-        match self.client.request_semaphore.acquire().await {
-            Ok(_permit) => match self.inner {
-                Ok(request_builder) => request_builder
-                    .send()
-                    .await
-                    .map_err(|e| Error::from(e.without_url()))?
-                    .text()
-                    .await
-                    .map_err(|e| Error::from(e.without_url())),
-                Err(url) => block_in_place(|| {
-                    CURL_CLIENT.with_borrow_mut(|curl| {
-                        if let Some(form) = self.form {
-                            curl.post_fields_copy(form.as_bytes())?;
-                        }
-                        curl.post(true)
-                            .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
-                            .and_then(|_| curl.timeout(E2E_TIMEOUT))
-                            .and_then(|_| curl.url(url))
-                            .and_then(|_| curl.perform())
-                            .map_err(anyhow::Error::from)
-                            .and_then(|_| {
-                                let response_code = curl.response_code()?;
-                                if response_code != 200 {
-                                    error!(
-                                        "Error reading {url}: HTTP response code {response_code}"
-                                    )
-                                }
-                                Ok(curl.get_mut().take_all())
-                            })
-                    })
-                }).and_then(|response_body| Ok(String::from_utf8(response_body)?)),
-            },
-            Err(e) => Err(e.into()),
-        }
-    }
 }
 
 impl RealFactorDbClient {
@@ -316,18 +253,6 @@ impl RealFactorDbClient {
         let alt_url = alt_url_supplier();
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
         Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
-    }
-
-    pub fn post<'a>(&'a self, url: &'a str) -> ThrottlingRequestBuilder<'a> {
-        ThrottlingRequestBuilder {
-            inner: if url.len() <= REQWEST_MAX_URL_LEN {
-                Ok(self.http.post(url))
-            } else {
-                Err(url)
-            },
-            client: self,
-            form: None,
-        }
     }
 }
 
@@ -666,21 +591,15 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(Factor::Expression(x)) => (None, Some(x)),
             Id(id) => (Some(id), None),
         };
-        let request_builder =
-            match self
-                .post("https://factordb.com/reportfactor.php")
+        let semaphore = self.request_semaphore.acquire().await.unwrap();
+        let response = self.http.post("https://factordb.com/reportfactor.php")
                 .form(&FactorSubmission {
                     id,
                     number,
                     factor: &factor.as_str(),
-                }) {
-                Ok(builder) => builder,
-                Err(e) => {
-                    error!("Error building request: {e}");
-                    return OtherError;
-                }
-            };
-        match request_builder.send().await {
+                }).send().and_then(Response::text).await;
+        drop(semaphore);
+        match response {
             Ok(text) => {
                 info!("{u_id}: reported a factor of {factor}; response: {text}",);
                 if text.contains("Error") {
