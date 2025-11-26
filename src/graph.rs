@@ -439,6 +439,16 @@ impl NumberFacts {
     pub(crate) fn needs_update(&self) -> bool {
         self.factors_known_to_factordb.needs_update()
     }
+
+    /// True if add_factors_to_graph won't do anything (other than pick up factors someone else has
+    /// submitted).
+    #[inline(always)]
+    pub(crate) fn is_fully_processed(&self) -> bool {
+        !self.needs_update()
+        && self.checked_for_listed_algebraic
+        && self.expression_form_checked_in_factor_finder
+        && self.checked_in_factor_finder
+    }
     fn marked_stale(self) -> Self {
         if self.is_final() {
             return self;
@@ -479,9 +489,9 @@ impl NumberFacts {
                 },
             },
             checked_in_factor_finder: self.checked_in_factor_finder
-                || other.checked_in_factor_finder,
+                && other.checked_in_factor_finder,
             expression_form_checked_in_factor_finder: self.expression_form_checked_in_factor_finder
-                || other.expression_form_checked_in_factor_finder,
+                && other.expression_form_checked_in_factor_finder,
         }
     }
 }
@@ -583,12 +593,14 @@ pub async fn find_and_submit_factors(
     }
     let mut factor_found = false;
     let mut accepted_factors = 0;
+    let mut any_unprocessed = false;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
         factor_found |= !add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
             .await
             .is_empty();
+        any_unprocessed |= !data.number_facts_map.get(&factor_vid).unwrap().is_fully_processed();
     }
-    if !factor_found {
+    if !factor_found && !any_unprocessed {
         info!("{id}: No factors to submit");
         return false;
     }
@@ -638,12 +650,10 @@ pub async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 rule_out_divisibility(&mut data, factor_vid, root_vid);
-                if !add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
-                    .await
-                    .is_empty()
-                {
-                    any_failed_retryably = true;
-                }
+                add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
+                    .await;
+                any_failed_retryably |=
+                    !data.number_facts_map.get(&factor_vid).unwrap().is_fully_processed();
             }
             OtherError => {
                 any_failed_retryably = true;
