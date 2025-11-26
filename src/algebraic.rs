@@ -2067,6 +2067,23 @@ mod tests {
     }
 
     #[test]
+    fn test_addition_chain() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors::<&str, &str>(&"7^5432+3*7^4321+7^321+7^21".into());
+        assert!(factors.contains(&Numeric(2)));
+        assert!(factors.contains(&Numeric(7)));
+        let factors = finder.find_factors::<&str, &str>(&"7^5432+3*7^4321+7^321+7^21+1".into());
+        assert!(!factors.contains(&Numeric(2)));
+        assert!(!factors.contains(&Numeric(7)));
+        let factors = finder.find_factors::<&str, &str>(&"3*7^5432+7^4321+7^321+1".into());
+        assert!(factors.contains(&Numeric(2)));
+        assert!(!factors.contains(&Numeric(7)));
+        let factors = finder.find_factors::<&str, &str>(&"7^5432-7^4321-3*7^321-1".into());
+        assert!(factors.contains(&Numeric(2)));
+        assert!(!factors.contains(&Numeric(7)));
+    }
+
+    #[test]
     fn test_power() {
         let finder = FactorFinder::new();
         let factors = finder.find_factors::<&str, &str>(&"(2^7-1)^2".into());
