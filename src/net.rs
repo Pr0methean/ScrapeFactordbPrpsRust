@@ -270,7 +270,7 @@ impl RealFactorDbClient {
                         }
                         Ok(String::from_utf8(curl.get_mut().take_all())?)
                     })
-            })).await.map_err(Error::from).and_then(|r| r.map_err(Error::from))
+            })).await.map_err(Error::from).and_then(|r| r)
         } else {
             let result = self
                 .http

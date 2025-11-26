@@ -107,12 +107,12 @@ pub async fn monitor(shutdown_sender: Sender<()>, installed_sender: oneshot::Sen
     let mut next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
     loop {
         select! {
-            _ = sleep_until(next_backtrace.clone()) => {
+            _ = sleep_until(next_backtrace) => {
                 info!("Task backtraces:\n{}", taskdump_tree(false));
                 info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
                 next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
             }
-            _ = (&mut sigterm).recv() => {
+            _ = sigterm.recv() => {
                 warn!("Received SIGTERM; signaling tasks to exit");
                 break;
             },

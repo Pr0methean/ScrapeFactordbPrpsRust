@@ -153,9 +153,9 @@ pub fn get_edge_mut(
     source: VertexId,
     dest: VertexId,
 ) -> Option<&mut Divisibility> {
-    Some(data.divisibility_graph.edge_mut(data.divisibility_graph.edge_id_any(
+    data.divisibility_graph.edge_mut(data.divisibility_graph.edge_id_any(
         to_real_vertex_id(source, &data.deleted_synonyms),
-        to_real_vertex_id(dest, &data.deleted_synonyms))?)?)
+        to_real_vertex_id(dest, &data.deleted_synonyms))?)
 }
 
 pub fn add_factor_node(
@@ -1102,7 +1102,7 @@ fn mark_fully_factored(
         .collect::<Box<[_]>>()
         .into_iter()
     {
-        let edge = get_edge(&data, other_vid, vid);
+        let edge = get_edge(data, other_vid, vid);
         if matches!(edge, Some(Direct) | Some(Transitive)) {
             mark_fully_factored(other_vid, data);
         } else if no_other_factors {
