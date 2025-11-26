@@ -45,7 +45,7 @@ use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{OwnedPermit, PermitIterator, Sender, channel};
+use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
@@ -903,7 +903,7 @@ async fn main() -> anyhow::Result<()> {
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
     let mut max_concurrent_requests = 2usize;
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
-    let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
+    let (mut u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
     if std::env::var("CI").is_ok() {
@@ -963,9 +963,7 @@ async fn main() -> anyhow::Result<()> {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
                     return;
                 }
-                u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                    let _ = try_queue_unknowns(&mut u_http, u_digits, &mut u_permits.unwrap(), &mut u_filter, &u_factor_finder).await;
-                }
+                _ = try_queue_unknowns(&mut u_http, u_digits, &mut u_sender, &mut u_filter, &u_factor_finder) => {}
             }
         }
     }));
@@ -1029,7 +1027,7 @@ async fn main() -> anyhow::Result<()> {
 async fn try_queue_unknowns<'a>(
     http: &mut impl FactorDbClient,
     u_digits: Option<NonZeroU128>,
-    u_permits: &mut PermitIterator<'a, u128>,
+    u_sender: &mut Sender<u128>,
     u_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
 ) -> Result<(), ()> {
@@ -1044,9 +1042,9 @@ async fn try_queue_unknowns<'a>(
         return Err(());
     };
     info!("U search results retrieved");
-    let ids = http.read_ids_and_exprs(&results_text);
+    let ids = http.read_ids_and_exprs(&results_text).collect::<Vec<_>>().into_iter();
     let mut ids_found = false;
-    for ((u_id, digits_or_expr), u_permit) in ids.zip(u_permits).collect::<Vec<_>>().into_iter() {
+    for (u_id, digits_or_expr) in ids {
         ids_found = true;
         if u_filter.contains(&u_id) {
             warn!("{u_id}: Skipping duplicate U");
@@ -1056,8 +1054,11 @@ async fn try_queue_unknowns<'a>(
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
             let _ = u_filter.add(&u_id);
-            u_permit.send(u_id);
-            info!("{u_id}: Queued U");
+            if u_sender.send(u_id).await.is_ok() {
+                info!("{u_id}: Queued U");
+            } else {
+                return Err(());
+            }
         }
     }
     if ids_found {
