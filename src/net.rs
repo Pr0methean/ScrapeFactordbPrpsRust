@@ -516,15 +516,16 @@ impl FactorDbClient for RealFactorDbClient {
                 id: Numeric::<&str, &str>(n).known_id(),
             });
         }
-        match id {
+        let cached = match id {
             Id(id) => self.by_id_cache.get(&id).cloned(),
-            Expression(Factor::Expression(expr)) => {
-                let expr = expr.to_compact_string();
-                info!("Factor cache hit for {expr}");
-                self.by_expr_cache.get(&expr).cloned()
-            }
+            Expression(Factor::Expression(expr)) =>
+                self.by_expr_cache.get(&expr.to_compact_string()).cloned(),
             _ => None,
+        };
+        if cached.is_some() {
+            info!("Factor cache hit for {id}");
         }
+        cached
     }
 
     #[inline]
@@ -555,11 +556,6 @@ impl FactorDbClient for RealFactorDbClient {
             }
             Expression(ref expr) => {
                 if let Factor::Expression(expr) = expr {
-                    let expr = expr.to_compact_string();
-                    info!("Factor cache hit for {expr}");
-                    if let Some(response) = self.by_expr_cache.get(&expr) {
-                        return response.clone();
-                    }
                     expr_key = Some(expr);
                 }
                 let url =
@@ -649,7 +645,7 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache.insert(expr, processed.clone());
+                self.by_expr_cache.insert(expr.to_compact_string(), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
