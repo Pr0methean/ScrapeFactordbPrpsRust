@@ -169,7 +169,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                         if let Some(form) = self.form {
                             curl.post_fields_copy(form.as_bytes())?;
                         }
-                        let response_text = curl
+                        curl
                             .post(true)
                             .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
                             .and_then(|_| curl.timeout(E2E_TIMEOUT))
@@ -182,8 +182,7 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                                     error!("Error reading {url}: HTTP response code {response_code}")
                                 }
                                 Ok(String::from_utf8(curl.get_mut().take_all())?)
-                            });
-                            Ok(response_text?)
+                            })
                         }))
                 }
             },
@@ -268,9 +267,7 @@ impl RealFactorDbClient {
                         curl.reset();
                         Ok(String::from_utf8(response_body)?)
                     })
-            }))
-            .map_err(Error::from)
-        } else {
+            }))} else {
             let result = self
                 .http
                 .get(url.as_str())
