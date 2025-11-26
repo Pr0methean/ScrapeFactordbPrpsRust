@@ -845,8 +845,13 @@ async fn queue_composites(
     }
 }
 
-// One worker thread for do_checks(), one for main(), one for c_buffer_task, one for handle_signals
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+// To reliably prevent starvation, we allocate one worker thread for each of:
+// - do_checks()
+// - main()
+// - c_buffer_task
+// - try_queue_unknowns()
+// - handle_signals
+#[tokio::main(flavor = "multi_thread", worker_threads = 5)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
@@ -913,7 +918,7 @@ async fn main() -> anyhow::Result<()> {
         max_concurrent_requests = 3;
     }
     let factor_finder = FactorFinder::new();
-    let mut http = RealFactorDbClient::new(
+    let http = RealFactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
         shutdown_receiver.clone(),
@@ -949,6 +954,23 @@ async fn main() -> anyhow::Result<()> {
         factor_finder.clone(),
         shutdown_receiver.clone(),
     )));
+    let mut u_shutdown_receiver = shutdown_receiver.clone();
+    let mut u_http = http.clone();
+    let u_factor_finder = factor_finder.clone();
+    task::spawn(async_backtrace::location!().frame(async move {
+        loop {
+            select! {
+                biased;
+                _ = u_shutdown_receiver.recv() => {
+                    warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                    return;
+                }
+                u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
+                    let _ = try_queue_unknowns(&mut u_http, u_digits, &mut u_permits.unwrap(), &mut u_filter, &u_factor_finder).await;
+                }
+            }
+        }
+    }));
     'queue_tasks: loop {
         let mut new_c_buffer_task = false;
         let select_start = Instant::now();
@@ -991,20 +1013,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                     prp_permit.send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
-                    if let Ok(mut u_permits) = u_sender.try_reserve_many(U_RESULTS_PER_PAGE) {
-                        let _ = try_queue_unknowns(&mut http, u_digits, &mut u_permits, &mut u_filter, &factor_finder).await;
-
-                    }
                 }
                 prp_start += PRP_RESULTS_PER_PAGE;
                 if prp_start > MAX_START {
                     info!("Restarting PRP search: reached maximum starting index");
                     prp_start = 0;
                 }
-            }
-            u_permits = u_sender.reserve_many(U_RESULTS_PER_PAGE) => {
-                info!("Ready to search for U's after {:?}", Instant::now() - select_start);
-                let _ = try_queue_unknowns(&mut http, u_digits, &mut u_permits?, &mut u_filter, &factor_finder).await;
             }
         }
         if new_c_buffer_task {
@@ -1021,13 +1035,12 @@ async fn try_queue_unknowns<'a>(
     u_filter: &mut CuckooFilter<DefaultHasher>,
     factor_finder: &FactorFinder,
 ) -> Result<(), ()> {
-    let mut rng = rng();
     let digits = u_digits.unwrap_or_else(|| {
-        rng.random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
+        rng().random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
             .try_into()
             .unwrap()
     });
-    let u_start = rng.random_range(0..=MAX_START);
+    let u_start = rng().random_range(0..=MAX_START);
     let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
     let Some(results_text) = http.try_get_and_decode(u_search_url).await else {
         return Err(());
