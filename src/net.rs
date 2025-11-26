@@ -475,6 +475,9 @@ impl FactorDbClient for RealFactorDbClient {
     #[inline]
     #[framed]
     async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<ArcStr> {
+        if entry_id <= MAX_ID_EQUAL_TO_VALUE {
+            return Some(entry_id.into());
+        }
         if let Some(response) = self.expression_form_cache.get(&entry_id) {
             info!("Expression-form cache hit for {entry_id}");
             return Some(response.clone());
