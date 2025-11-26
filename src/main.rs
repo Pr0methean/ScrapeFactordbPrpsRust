@@ -782,68 +782,62 @@ async fn queue_composites(
             .unwrap()
     });
     info!("Retrieving {digits}-digit C's starting from {start}");
-    let mut results_per_page = C_RESULTS_PER_PAGE;
-    let mut composites_page = None;
-    while composites_page.is_none() && results_per_page > 0 {
-        composites_page = http.try_get_and_decode(
-            format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}").into()
-        ).await;
-        if composites_page.is_none() {
-            results_per_page >>= 1;
-            sleep(SEARCH_RETRY_DELAY).await;
-        }
-    }
-    info!("{results_per_page} C search results retrieved");
-    let Some(composites_page) = composites_page else {
-        return task::spawn(async {});
-    };
-    let mut c_tasks: Box<[_]> = http
-        .read_ids_and_exprs(&composites_page)
-        .map(|(id, expr)| CompositeCheckTask {
-            id,
-            digits_or_expr: expr.into(),
-        })
-        .collect();
-    c_tasks.shuffle(&mut rng());
-    let c_initial = c_tasks.len();
-    let c_buffered: Box<[_]> = c_tasks
-        .into_iter()
-        .flat_map(|c_task| match c_sender.try_send(c_task) {
-            Ok(()) => None,
-            Err(Closed(_)) => None,
-            Err(Full(c_task)) => Some(c_task),
-        })
-        .collect();
-    let c_sent = c_initial - c_buffered.len();
-    if c_buffered.is_empty() {
-        info!("Sent {c_sent} C's to channel");
-        task::spawn(async {})
-    } else {
-        info!(
-            "Sent {c_sent} C's to channel; buffering {} more",
-            c_buffered.len()
-        );
-        let c_sender = c_sender.clone();
-        task::spawn(async_backtrace::location!().frame(async move {
-            let count = c_buffered.len();
-            let mut c_sent = 0;
-            for c_task in c_buffered {
-                let id = c_task.id;
-                if let Err(e) = c_sender.send(c_task).await {
-                    error!("{id}: Dropping C because we failed to send it to channel: {e}");
-                } else {
-                    c_sent += 1;
-                }
-                if c_sent == 1 {
-                    info!("Sent first of {count} buffered C's to channel");
-                }
+    let mut c_buffered = Vec::with_capacity(C_RESULTS_PER_PAGE);
+    while c_buffered.is_empty() {
+        let mut results_per_page = C_RESULTS_PER_PAGE;
+        let mut composites_page = None;
+        while composites_page.is_none() && results_per_page > 0 {
+            composites_page = http.try_get_and_decode(
+                format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}").into()
+            ).await;
+            if composites_page.is_none() {
+                results_per_page >>= 1;
+                sleep(SEARCH_RETRY_DELAY).await;
             }
-            info!("Sent {c_sent} buffered C's to channel");
-        }))
+        }
+        info!("{results_per_page} C search results retrieved");
+        let Some(composites_page) = composites_page else {
+            return task::spawn(async {});
+        };
+        let mut c_tasks: Box<[_]> = http
+            .read_ids_and_exprs(&composites_page)
+            .map(|(id, expr)| CompositeCheckTask {
+                id,
+                digits_or_expr: expr.into(),
+            })
+            .collect();
+        c_tasks.shuffle(&mut rng());
+        let c_initial = c_tasks.len();
+        c_buffered.extend(c_tasks
+            .into_iter()
+            .flat_map(|c_task| match c_sender.try_send(c_task) {
+                Ok(()) => None,
+                Err(Closed(_)) => None,
+                Err(Full(c_task)) => Some(c_task),
+            }));
+        let c_sent = c_initial - c_buffered.len();
+        info!("Sent {c_sent} C's to channel");
     }
+    info!("Buffering {} more C's", c_buffered.len());
+    let c_sender = c_sender.clone();
+    task::spawn(async_backtrace::location!().frame(async move {
+        let count = c_buffered.len();
+        let mut c_sent = 0;
+        for c_task in c_buffered {
+            let id = c_task.id;
+            if let Err(e) = c_sender.send(c_task).await {
+                error!("{id}: Dropping C because we failed to send it to channel: {e}");
+            } else {
+                c_sent += 1;
+            }
+            if c_sent == 1 {
+                info!("Sent first of {count} buffered C's to channel");
+            }
+        }
+        info!("Sent {c_sent} buffered C's to channel");
+    }))
 }
 
-// One thread for each semaphore permit, plus one for handle_signals
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
