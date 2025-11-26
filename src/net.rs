@@ -1,4 +1,3 @@
-use core::cell::RefCell;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -17,6 +16,7 @@ use arcstr::ArcStr;
 use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use compact_str::{CompactString, ToCompactString};
+use core::cell::RefCell;
 use curl::easy::{Easy2, Handler, WriteError};
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
@@ -38,8 +38,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::{Semaphore};
-use tokio::task::{block_in_place};
+use tokio::sync::Semaphore;
+use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
 
@@ -164,13 +164,12 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                     .text()
                     .await
                     .map_err(|e| Error::from(e.without_url())),
-                Err(url) => {
-                    block_in_place(|| CURL_CLIENT.with_borrow_mut(|curl| {
+                Err(url) => block_in_place(|| {
+                    CURL_CLIENT.with_borrow_mut(|curl| {
                         if let Some(form) = self.form {
                             curl.post_fields_copy(form.as_bytes())?;
                         }
-                        curl
-                            .post(true)
+                        curl.post(true)
                             .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
                             .and_then(|_| curl.timeout(E2E_TIMEOUT))
                             .and_then(|_| curl.url(url))
@@ -179,12 +178,14 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                             .and_then(|_| {
                                 let response_code = curl.response_code()?;
                                 if response_code != 200 {
-                                    error!("Error reading {url}: HTTP response code {response_code}")
+                                    error!(
+                                        "Error reading {url}: HTTP response code {response_code}"
+                                    )
                                 }
                                 Ok(String::from_utf8(curl.get_mut().take_all())?)
                             })
-                        }))
-                }
+                    })
+                }),
             },
             Err(e) => Err(e.into()),
         }
@@ -251,23 +252,26 @@ impl RealFactorDbClient {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
-            block_in_place(|| CURL_CLIENT.with_borrow_mut(|curl| {
-                curl.get(true)
-                    .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
-                    .and_then(|_| curl.timeout(E2E_TIMEOUT))
-                    .and_then(|_| curl.url(&url))
-                    .and_then(|_| curl.perform())
-                    .map_err(anyhow::Error::from)
-                    .and_then(|_| {
-                        let response_code = curl.response_code()?;
-                        if response_code != 200 {
-                            error!("Error reading {url}: HTTP response code {response_code}");
-                        }
-                        let response_body = curl.get_mut().take_all();
-                        curl.reset();
-                        Ok(String::from_utf8(response_body)?)
-                    })
-            }))} else {
+            block_in_place(|| {
+                CURL_CLIENT.with_borrow_mut(|curl| {
+                    curl.get(true)
+                        .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
+                        .and_then(|_| curl.timeout(E2E_TIMEOUT))
+                        .and_then(|_| curl.url(&url))
+                        .and_then(|_| curl.perform())
+                        .map_err(anyhow::Error::from)
+                        .and_then(|_| {
+                            let response_code = curl.response_code()?;
+                            if response_code != 200 {
+                                error!("Error reading {url}: HTTP response code {response_code}");
+                            }
+                            let response_body = curl.get_mut().take_all();
+                            curl.reset();
+                            Ok(String::from_utf8(response_body)?)
+                        })
+                })
+            })
+        } else {
             let result = self
                 .http
                 .get(url.as_str())
