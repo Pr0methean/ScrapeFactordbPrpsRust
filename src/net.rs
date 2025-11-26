@@ -181,10 +181,10 @@ impl<'a> ThrottlingRequestBuilder<'a> {
                                         "Error reading {url}: HTTP response code {response_code}"
                                     )
                                 }
-                                Ok(String::from_utf8(curl.get_mut().take_all())?)
+                                Ok(curl.get_mut().take_all())
                             })
                     })
-                }),
+                }).and_then(|response_body| Ok(String::from_utf8(response_body)?)),
             },
             Err(e) => Err(e.into()),
         }
@@ -266,10 +266,10 @@ impl RealFactorDbClient {
                             }
                             let response_body = curl.get_mut().take_all();
                             curl.reset();
-                            Ok(String::from_utf8(response_body)?)
+                            Ok(response_body)
                         })
                 })
-            })
+            }).and_then(|response_body| Ok(String::from_utf8(response_body)?))
         } else {
             let result = self
                 .http
