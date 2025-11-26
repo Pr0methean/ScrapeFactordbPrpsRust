@@ -678,6 +678,7 @@ pub async fn find_and_submit_factors(
     //     cofactors, so we need to report it to *all* of them to ensure FactorDB knows its full
     //     exponent.
     let mut iters_without_progress = 0;
+    let mut node_count = 1; // print graph stats on first loop iteration
     // Sort backwards so that we try to submit largest factors first
     let mut factors_to_submit = data.divisibility_graph
         .vertices()
@@ -690,44 +691,46 @@ pub async fn find_and_submit_factors(
         .expect("Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
     {
-        let node_count = data.divisibility_graph.vertex_count();
-        let edge_count = data.divisibility_graph.edge_count();
-        let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
-        if edge_count == complete_graph_edge_count
-            || factors_to_submit.is_empty()
-            || iters_without_progress >= node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
-        {
-            info!("{id}: {accepted_factors} factors accepted");
-            // Graph is fully connected, meaning none are left to try
-            return accepted_factors > 0;
-        }
-        let (direct_divisors, non_factors) = data.divisibility_graph
-            .edges()
-            .map(|e| match *e.attr {
-                Direct => (1, 0),
-                NotFactor => (0, 1),
-                _ => (0, 0),
-            })
-            .reduce(|(x1, y1), (x2, y2)| (x1 + x2, y1 + y2))
-            .unwrap_or((0, 0));
-        info!(
-            "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges \
-            ({:.2}% fully connected). {direct_divisors} confirmed-known divides relations, \
-            {non_factors} ruled out. \
-        {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
-            edge_count as f64 * 100.0 / complete_graph_edge_count as f64,
-            data.number_facts_map
-                .iter()
-                .filter(|(_, facts)| facts.is_known_fully_factored())
-                .count(),
-            data.number_facts_map
-                .iter()
-                .filter(|(_, facts)| facts.entry_id.is_some())
-                .count()
-        );
         while let Some(factor_vid) = factors_to_submit.pop_front()
             && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
         {
+            if iters_without_progress.is_multiple_of(node_count) {
+                    node_count = data.divisibility_graph.vertex_count();
+                    let edge_count = data.divisibility_graph.edge_count();
+                    let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
+                    if edge_count == complete_graph_edge_count
+                        || factors_to_submit.is_empty()
+                        || iters_without_progress >= node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
+                    {
+                        info!("{id}: {accepted_factors} factors accepted");
+                        // Graph is fully connected, meaning none are left to try
+                        return accepted_factors > 0;
+                    }
+                    let (direct_divisors, non_factors) = data.divisibility_graph
+                        .edges()
+                        .map(|e| match *e.attr {
+                            Direct => (1, 0),
+                            NotFactor => (0, 1),
+                            _ => (0, 0),
+                        })
+                        .reduce(|(x1, y1), (x2, y2)| (x1 + x2, y1 + y2))
+                        .unwrap_or((0, 0));
+                    info!(
+                "{id}: Divisibility graph has {node_count} vertices and {edge_count} edges \
+                ({:.2}% fully connected). {direct_divisors} confirmed-known divides relations, \
+                {non_factors} ruled out. \
+            {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
+                edge_count as f64 * 100.0 / complete_graph_edge_count as f64,
+                data.number_facts_map
+                    .iter()
+                    .filter(|(_, facts)| facts.is_known_fully_factored())
+                    .count(),
+                data.number_facts_map
+                    .iter()
+                    .filter(|(_, facts)| facts.entry_id.is_some())
+                    .count()
+            );
+            }
             iters_without_progress += 1;
             if is_known_factor(&data, factor_vid, root_vid)
                 && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for a number not entered in number_facts_map").lower_bound_log10
