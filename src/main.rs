@@ -843,13 +843,8 @@ async fn queue_composites(
     }
 }
 
-// To reliably prevent starvation, we allocate one worker thread for each of:
-// - do_checks()
-// - main()
-// - c_buffer_task
-// - try_queue_unknowns()
-// - handle_signals
-#[tokio::main(flavor = "multi_thread", worker_threads = 5)]
+// One thread for each semaphore permit, plus one for handle_signals
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
