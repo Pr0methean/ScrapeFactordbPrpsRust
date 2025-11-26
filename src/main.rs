@@ -844,7 +844,7 @@ async fn queue_composites(
 }
 
 // One thread for each semaphore permit, plus one for handle_signals
-#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
