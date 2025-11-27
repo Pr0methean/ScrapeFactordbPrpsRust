@@ -2,7 +2,7 @@ use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{
+use crate::algAebraic::{
     Factor, FactorFinder, NumberStatus, NumberStatusExt, OwnedFactor, ProcessedStatusApiResponse,
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
@@ -180,8 +180,8 @@ pub fn add_factor_node(
             // add_factor_node on subfactors to generate the initial number_facts_map entry
             v.attr.as_ref() == factor
                 || (entry_id.is_some()
-                    && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms)
-                        .is_some_and(|facts| facts.entry_id == entry_id))
+                && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms)
+                .is_some_and(|facts| facts.entry_id == entry_id))
         })
         .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
@@ -445,9 +445,9 @@ impl NumberFacts {
     #[inline(always)]
     pub(crate) fn is_fully_processed(&self) -> bool {
         !self.needs_update()
-        && self.checked_for_listed_algebraic
-        && self.expression_form_checked_in_factor_finder
-        && self.checked_in_factor_finder
+            && self.checked_for_listed_algebraic
+            && self.expression_form_checked_in_factor_finder
+            && self.checked_in_factor_finder
     }
     fn marked_stale(self) -> Self {
         if self.is_final() {
@@ -622,9 +622,9 @@ pub async fn find_and_submit_factors(
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
             && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
-                .expect("Tried to check for entry_id for a number not entered in number_facts_map")
-                .entry_id
-                .is_none()
+            .expect("Tried to check for entry_id for a number not entered in number_facts_map")
+            .entry_id
+            .is_none()
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
@@ -686,8 +686,8 @@ pub async fn find_and_submit_factors(
         .collect::<VecDeque<_>>();
     'graph_iter: while !factors_to_submit.is_empty()
         && !facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms)
-            .expect("Reached 'graph_iter when root not entered in number_facts_map")
-            .is_known_fully_factored()
+        .expect("Reached 'graph_iter when root not entered in number_facts_map")
+        .is_known_fully_factored()
     {
         while let Some(factor_vid) = factors_to_submit.pop_front()
             && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
@@ -733,7 +733,7 @@ pub async fn find_and_submit_factors(
             iters_without_progress += 1;
             if is_known_factor(&data, factor_vid, root_vid)
                 && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for a number not entered in number_facts_map").lower_bound_log10
-                    > facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for entry_id for a number not entered in number_facts_map").upper_bound_log10 / 2
+                > facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for entry_id for a number not entered in number_facts_map").upper_bound_l[...]
             {
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
@@ -803,7 +803,7 @@ pub async fn find_and_submit_factors(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller or equal or fails last-digit test"
                     );
-                    rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
+                    rule_out_divisibility(data, factor_vid, cofactor_vid);
                     continue;
                 }
                 // u128s are already fully factored
@@ -850,8 +850,8 @@ pub async fn find_and_submit_factors(
                                     get_vertex(&data.divisibility_graph, *known_factor_vid, &data.deleted_synonyms),
                                 ) && cofactor_facts.lower_bound_log10
                                     <= facts_of(&data.number_facts_map, *known_factor_vid, &data.deleted_synonyms)
-                                        .expect("known_factor_statuses included a number not entered in number_facts_map")
-                                        .upper_bound_log10
+                                    .expect("known_factor_statuses included a number not entered in number_facts_map")
+                                    .upper_bound_log10
                             });
                     if possible_factors.is_empty() {
                         // No possible path from factor to cofactor
@@ -896,7 +896,7 @@ pub async fn find_and_submit_factors(
                     .as_str_non_u128()
                     .is_some_and(|expr| expr.contains("..."))
                     && facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
-                            .expect("Tried to check for entry_id for a cofactor not entered in number_facts_map")
+                    .expect("Tried to check for entry_id for a cofactor not entered in number_facts_map")
                     .entry_id.is_none()
                 {
                     debug!(
@@ -953,30 +953,30 @@ pub async fn find_and_submit_factors(
                                 root_vid,
                                 factor_vid,
                             )
-                            .await
-                            .into_iter()
-                            .sorted_by(|v1, v2| {
-                                compare(
-                                    &data.number_facts_map,
-                                    &VertexRef {
-                                        id: *v2,
-                                        attr: get_vertex(
-                                            &data.divisibility_graph,
-                                            *v2,
-                                            &data.deleted_synonyms,
-                                        ),
-                                    },
-                                    &VertexRef {
-                                        id: *v1,
-                                        attr: get_vertex(
-                                            &data.divisibility_graph,
-                                            *v1,
-                                            &data.deleted_synonyms,
-                                        ),
-                                    },
-                                    &data.deleted_synonyms,
-                                )
-                            }),
+                                .await
+                                .into_iter()
+                                .sorted_by(|v1, v2| {
+                                    compare(
+                                        &data.number_facts_map,
+                                        &VertexRef {
+                                            id: *v2,
+                                            attr: get_vertex(
+                                                &data.divisibility_graph,
+                                                *v2,
+                                                &data.deleted_synonyms,
+                                            ),
+                                        },
+                                        &VertexRef {
+                                            id: *v1,
+                                            attr: get_vertex(
+                                                &data.divisibility_graph,
+                                                *v1,
+                                                &data.deleted_synonyms,
+                                            ),
+                                        },
+                                        &data.deleted_synonyms,
+                                    )
+                                }),
                         );
                         let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
                             .expect("Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
@@ -996,8 +996,8 @@ pub async fn find_and_submit_factors(
                             root_vid,
                             cofactor_vid,
                         )
-                        .await
-                        .is_empty()
+                            .await
+                            .is_empty()
                         {
                             iters_without_progress = 0;
                         }
@@ -1193,7 +1193,7 @@ async fn add_factors_to_graph(
             let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into();
             let result = http.try_get_and_decode(url).await;
             if let Some(result) = result
-                && let Some(listed_algebraic) = result.split("Is factor of").next()
+                && let Some((listed_algebraic, _rest)) = result.split_once("Is factor of")
             {
                 facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms).checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(&listed_algebraic);
@@ -1427,7 +1427,7 @@ fn test_find_and_submit() {
             &factor_finder,
             true,
         )
-        .await
+            .await
     });
     runtime.shutdown_background();
 }
