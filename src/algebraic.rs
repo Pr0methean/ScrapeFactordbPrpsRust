@@ -1780,7 +1780,7 @@ impl FactorFinder {
                                             factors
                                                 .extend(Self::find_factors_of_u128(subset_product));
                                         }
-                                        if c > 0 && (n / subset_product).is_multiple_of(2) {
+                                        if c > 0 && n.is_multiple_of(2 * subset_product) {
                                             continue;
                                         }
                                         if n % subset_product == 0
