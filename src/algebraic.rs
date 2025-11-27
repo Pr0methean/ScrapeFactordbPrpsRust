@@ -1150,7 +1150,7 @@ impl FactorFinder {
     #[inline(always)]
     pub fn new() -> FactorFinder {
         // Simple expression
-        const E: &str = "([^()+\\-*\\/\\^]+|\\([^()]+\\))";
+        const E: &str = "([^()+\\-*\\/\\^]+|\\([^()]+\\)|\\([^()]*\\([^()]+\\)[^()]*\\)|\\([^()]*\\([^()]*\\([^()]+\\)[^()]*\\)[^()]*\\))";
 
         let regexes_as_set = RegexSet::new([
             "^lucas\\((.*)\\)$",
@@ -1716,8 +1716,8 @@ impl FactorFinder {
                             let c_abs = self.find_factors(c_raw.abs());
                             let gcd_ac = self.find_common_factors(&a, c_raw.abs(), false);
                             let n: Factor<&str, &str> = Factor::from(&captures[2]);
-                            if let Numeric(a) = a
-                                && let Numeric(n) = n
+                            if let Some(a) = self.evaluate_as_u128(&a)
+                                && let Some(n) = self.evaluate_as_u128(&n)
                             {
                                 let b_reduced: Vec<OwnedFactor> = multiset_difference(b, &gcd_bc);
                                 let c_reduced: Vec<OwnedFactor> =
@@ -1763,7 +1763,6 @@ impl FactorFinder {
                                         factors_of_n.iter().collect::<Vec<&OwnedFactor>>();
                                     for factor_subset in power_multiset(&mut factors_of_n) {
                                         if factor_subset.len() == factors_of_n_count
-                                            || factor_subset.is_empty()
                                         {
                                             continue;
                                         }
@@ -1818,7 +1817,11 @@ impl FactorFinder {
                                                         "".to_string()
                                                     }
                                                 );
-                                                factors.push(factor_expr.into());
+                                                if factor_expr.as_str() != expr.as_ref() {
+                                                    let factor = factor_expr.into();
+                                                    factors.extend(self.find_factors(&factor));
+                                                    factors.push(factor);
+                                                }
                                             }
                                         }
                                     }
@@ -2294,16 +2297,14 @@ mod tests {
         let finder = FactorFinder::new();
         finder.find_factors(&expr);
         finder.estimate_log10_internal(&expr);
+        finder.evaluate_as_u128(&expr);
     }
 
     #[test]
     fn test_stack_depth_2() {
         const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
-        // lucas_factors(PRIMORIAL, true);
-        println!(
-            "{}",
-            fibonacci_factors(PRIMORIAL, true).into_iter().join(",")
-        );
+        lucas_factors(PRIMORIAL, true);
+        fibonacci_factors(PRIMORIAL, true);
     }
 
     #[test]
@@ -2313,6 +2314,16 @@ mod tests {
         // lucas_factors(PRIMORIAL, true);
         assert!(
             factors.contains(&Numeric(13))
+        );
+    }
+
+    #[test]
+    fn test_nested_parens() {
+        let factors = FactorFinder::new()
+            .find_factors(&format!("12^((2^7-1)^2)-1").into());
+        println!("{factors:?}");
+        assert!(
+            factors.contains(&Numeric(11))
         );
     }
 
