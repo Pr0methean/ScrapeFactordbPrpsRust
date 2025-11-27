@@ -1246,23 +1246,19 @@ async fn add_factors_to_graph(
     {
         let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         if expression_form != factor.as_str() {
+            let expression_form = expression_form.clone();
+            let added_via_equiv = merge_equivalent_expressions(factor_finder, data, Some(root_vid), factor_vid, expression_form.clone().into(), http);
+            added.extend(added_via_equiv);
             let factors = factor_finder
-                .find_unique_factors(&Factor::from(expression_form.clone()));
-            drop(expression_form);
-            added.extend(factors
-                    .into_iter()
-                    .map(|new_factor| {
-                        add_factor_node(
-                            data,
-                            new_factor.as_ref(),
-                            factor_finder,
-                            Some(root_vid),
-                            new_factor.known_id(),
-                            http,
-                        )
-                    })
-                    .flat_map(|(vid, added)| if added { Some(vid) } else { None }),
-            );
+                .find_unique_factors(&Factor::from(expression_form));
+            added.extend(factors.into_iter().flat_map(|factor| {
+                let (vertex_id, added) = add_factor_node(data, factor.as_ref(), factor_finder, Some(root_vid), None, http);
+                if added {
+                    Some(vertex_id)
+                } else {
+                    None
+                }
+            }));
         }
         let facts = facts_of_mut(
             &mut data.number_facts_map,
