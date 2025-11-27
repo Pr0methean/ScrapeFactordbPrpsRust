@@ -2,7 +2,7 @@ use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algAebraic::{
+use crate::algebraic::{
     Factor, FactorFinder, NumberStatus, NumberStatusExt, OwnedFactor, ProcessedStatusApiResponse,
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
@@ -733,7 +733,7 @@ pub async fn find_and_submit_factors(
             iters_without_progress += 1;
             if is_known_factor(&data, factor_vid, root_vid)
                 && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for a number not entered in number_facts_map").lower_bound_log10
-                > facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for entry_id for a number not entered in number_facts_map").upper_bound_l[...]
+                > facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms).expect("Tried to compare log10 bounds for entry_id for a number not entered in number_facts_map").upper_bound_log10
             {
                 // Already a known factor of root, and can't be a factor through any remaining path due to size
                 continue;
@@ -803,7 +803,7 @@ pub async fn find_and_submit_factors(
                         "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                         smaller or equal or fails last-digit test"
                     );
-                    rule_out_divisibility(data, factor_vid, cofactor_vid);
+                    rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     continue;
                 }
                 // u128s are already fully factored
@@ -1193,7 +1193,8 @@ async fn add_factors_to_graph(
             let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into();
             let result = http.try_get_and_decode(url).await;
             if let Some(result) = result
-                && let Some((listed_algebraic, _rest)) = result.split_once("Is factor of")
+                && let Some((_before, listed_algebraic_and_rest)) = result.split_once("Algebraic factors")
+                && let Some((listed_algebraic, _rest)) = listed_algebraic_and_rest.split_once("Is factor of")
             {
                 facts_of_mut(&mut data.number_facts_map, factor_vid, &data.deleted_synonyms).checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(&listed_algebraic);

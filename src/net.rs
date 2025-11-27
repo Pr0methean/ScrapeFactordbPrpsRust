@@ -431,9 +431,9 @@ impl FactorDbClient for RealFactorDbClient {
             let factors = FactorFinder::find_factors_of_u128(n).into_boxed_slice();
             return Some(ProcessedStatusApiResponse {
                 status: Some(if factors.len() > 1 {
-                    Prime
-                } else {
                     FullyFactored
+                } else {
+                    Prime
                 }),
                 factors,
                 id: Numeric::<&str, &str>(n).known_id(),
