@@ -22,6 +22,7 @@ use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
+use const_format::formatcp;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -1147,17 +1148,20 @@ const MAX_REPEATS: u128 = 16;
 impl FactorFinder {
     #[inline(always)]
     pub fn new() -> FactorFinder {
+        // Simple expression
+        const E: &str = "([^()+\\-*\\/\\^]+|\\([^()]+\\))";
+
         let regexes_as_set = RegexSet::new([
-            "^lucas\\(([0-9]+)\\)$",
-            "^I\\(([0-9]+)\\)$",
-            "^([0-9]+)\\^([0-9]+)(\\*[0-9]+)?([+-][0-9]+)?$",
-            "^([0-9]+)\\^([0-9]+)([+-])([0-9]+)\\^([0-9]+)$",
-            "^([0-9]+)!$",
-            "^([0-9]+)#$",
+            "^lucas\\((.*)\\)$",
+            "^I(.*)$",
+            formatcp!("^{E}\\^{E}(?:\\*{E})?(?:([+-]){E})?$"),
+            formatcp!("^{E}\\^{E}([+-]){E}\\^{E}$"),
+            "^(.*)!$",
+            "^(.*)#$",
             "^([0-9]+)$",
             "^([0-9]+\\.\\.+[0-9]+)$",
-            "^\\(([^()]+)\\)$",
-            "^([^()/+-]+|\\([^()]+\\))\\^([0-9]+)$",
+            "^\\((.*)\\)$",
+            formatcp!("^{E}\\^{E}$"),
             "^(.*)/([^()/+-]+|\\([^()]+\\))$",
             "^(.*)\\*([^()\\*+-]+|\\([^()]+\\))$",
             "^([^()]+|\\([^()]+\\))([-+])(.*)$",
@@ -1206,6 +1210,9 @@ impl FactorFinder {
                 ((len - 1) as u128, len as u128)
             }
             Factor::Expression(expr) => {
+                if let Some(n) = self.evaluate_as_u128(&Factor::<T, &U>::Expression(expr)) {
+                    return self.estimate_log10_internal(&Factor::<&str,&str>::Numeric(n));
+                }
                 if let Some(index) = self
                     .regexes_as_set
                     .matches(expr.as_ref())
@@ -1242,10 +1249,10 @@ impl FactorFinder {
                                 captures[2].parse::<u128>(),
                                 captures
                                     .get(3)
-                                    .map(|b| b.as_str()[1..].parse::<u128>())
+                                    .map(|b| b.as_str().parse::<u128>())
                                     .unwrap_or(Ok(1)),
                                 captures
-                                    .get(4)
+                                    .get(5)
                                     .map(|c| c.as_str().parse::<i128>())
                                     .unwrap_or(Ok(0)),
                             ) else {
@@ -1320,7 +1327,7 @@ impl FactorFinder {
                                 log_factorial_upper_bound.ceil() as u128,
                             )
                         }
-                        5 => {
+                        PRIMORIAL_INDEX => {
                             // primorial
                             let Ok(input) = captures[1].parse::<u128>() else {
                                 warn!("Could not parse input to a factorial: {}", &captures[1]);
@@ -1489,6 +1496,152 @@ impl FactorFinder {
         }
     }
 
+    fn evaluate_as_u128<T: AsRef<str>, U: AsRef<str> + Display>(
+        &self,
+        expr: &Factor<T, U>,
+    ) -> Option<u128> {
+        match expr {
+            Numeric(n) => Some(*n),
+            Factor::BigNumber(_) => None,
+            Factor::Expression(expr) => {
+                let index = self.regexes_as_set.matches(expr.as_ref()).into_iter().next()?;
+                let captures = self.regexes[index].captures(expr.as_ref()).unwrap();
+                match index {
+                    LUCAS_INDEX => {
+                        let term = self.evaluate_as_u128::<&str,&str>(&captures[1].into())?;
+                        match term {
+                            0 => Some(2),
+                            1 => Some(1),
+                            185.. => None,
+                            n => {
+                                let mut a = 2u128;
+                                let mut b = 1u128;
+                                let mut result = 0u128;
+
+                                for _ in 2..=n {
+                                    result = a + b;
+                                    a = b;
+                                    b = result;
+                                }
+                                Some(result)
+                            }
+                        }
+                    }
+                    FIBONACCI_INDEX => {
+                        let term = self.evaluate_as_u128::<&str,&str>(&captures[1].into())?;
+                        match term {
+                            0 => Some(0),
+                            1 | 2 => Some(1),
+                            186.. => None,
+                            n => {
+                                let mut a = 1u128;
+                                let mut b = 1u128;
+                                let mut result = 0u128;
+                                for _ in 3..=n {
+                                    result = a + b;
+                                    a = b;
+                                    b = result;
+                                }
+                                Some(result)
+                            }
+                        }
+                    }
+                    ANBC_INDEX => {
+                        let a = self.evaluate_as_u128::<&str,&str>(&captures[1].into())?;
+                        let n = u32::try_from(self.evaluate_as_u128::<&str,&str>(&captures[2].into())?).ok()?;
+                        let b = if let Some(b) = captures.get(3) {
+                            self.evaluate_as_u128::<&str,&str>(&b.as_str().into())?
+                        } else {
+                            1
+                        };
+                        let abs_c = if let Some(c) = captures.get(5) {
+                            self.evaluate_as_u128::<&str,&str>(&c.as_str().into())?
+                        } else {
+                            0
+                        };
+                        let anb = a.checked_pow(n)?.checked_mul(b)?;
+                        if captures.get(4).is_some_and(|c| c.as_str().chars().next() == Some('-')) {
+                            anb.checked_sub(abs_c)
+                        } else {
+                            anb.checked_add(abs_c)
+                        }
+                    }
+                    AXBY_INDEX => {
+                        let a = self.evaluate_as_u128::<&str,&str>(&captures[1].into())?;
+                        let x = u32::try_from(self.evaluate_as_u128::<&str,&str>(&captures[2].into())?).ok()?;
+                        let sign = &captures[3];
+                        let b = self.evaluate_as_u128::<&str,&str>(&captures[4].into())?;
+                        let y = u32::try_from(self.evaluate_as_u128::<&str,&str>(&captures[5].into())?).ok()?;
+                        let ax = a.checked_pow(x)?;
+                        let by = b.checked_pow(y)?;
+                        if sign.chars().next() == Some('-') {
+                            ax.checked_sub(by)
+                        } else {
+                            ax.checked_add(by)
+                        }
+                    }
+                    FACTORIAL_INDEX => {
+                        let term = self.evaluate_as_u128::<&str,&str>(&captures[1].into())?;
+                        match term {
+                            0 | 1 => Some(1),
+                            35.. => None,
+                            x => {
+                                let mut result = 1;
+                                for i in 2..=x {
+                                    result *= i;
+                                }
+                                Some(result)
+                            }
+                        }
+                    }
+                    PRIMORIAL_INDEX => {
+                        let term = self.evaluate_as_u128::<&str,&str>(&captures[1].into())?;
+                        match term {
+                            0 | 1 => Some(1),
+                            103.. => None,
+                            x => {
+                                Some(SMALL_PRIMES.iter().copied().map(u128::from).take_while(|p| *p <= x).product())
+                            }
+                        }
+                    }
+                    RAW_NUMBER_INDEX => {
+                        captures[1].parse().ok()
+                    }
+                    ELIDED_NUMBER_INDEX => None,
+                    PARENS_INDEX => {
+                        self.evaluate_as_u128::<&str,&str>(&captures[1].into())
+                    }
+                    POWER_INDEX => {
+                        self.evaluate_as_u128::<&str,&str>(&captures[1].into())?.checked_pow(
+                            u32::try_from(self.evaluate_as_u128::<&str,&str>(&captures[2].into())?).ok()?
+                        )
+                    }
+                    DIV_INDEX => {
+                        self.evaluate_as_u128::<&str,&str>(&captures[1].into())?.checked_div_exact(
+                            self.evaluate_as_u128::<&str,&str>(&captures[2].into())?
+                        )
+                    }
+                    MUL_INDEX => {
+                        self.evaluate_as_u128::<&str,&str>(&captures[1].into())?.checked_mul(
+                            self.evaluate_as_u128::<&str,&str>(&captures[2].into())?
+                        )
+                    }
+                    ADD_SUB_INDEX => {
+                        let left = self.evaluate_as_u128::<&str,&str>(&captures[1].into())?;
+                        let right = self.evaluate_as_u128::<&str,&str>(&captures[3].into())?;
+                        let sign = &captures[2];
+                        if sign.chars().next() == Some('-') {
+                            left.checked_sub(right)
+                        } else {
+                            left.checked_add(right)
+                        }
+                    }
+                    _ => unsafe { unreachable_unchecked() }
+                }
+            }
+        }
+    }
+
     #[inline(always)]
     fn find_factors<T: AsRef<str>, U: AsRef<str> + Display>(
         &self,
@@ -1499,6 +1652,9 @@ impl FactorFinder {
             Numeric(n) => Self::find_factors_of_u128(*n),
             Factor::BigNumber(expr) => Self::factor_big_num(expr),
             Factor::Expression(expr) => {
+                if let Some(n) = self.evaluate_as_u128(&Factor::<T, &U>::Expression(expr)) {
+                    return Self::find_factors_of_u128(n);
+                }
                 if let Some(index) = self
                     .regexes_as_set
                     .matches(expr.as_ref())
@@ -1509,7 +1665,7 @@ impl FactorFinder {
                     match index {
                         LUCAS_INDEX => {
                             // Lucas number
-                            let Ok(term_number) = captures[1].parse::<u128>() else {
+                            let Some(term_number) = self.evaluate_as_u128::<&str,&str>(&captures[1].into()) else {
                                 warn!(
                                     "Could not parse term number of a Lucas number: {}",
                                     &captures[1]
@@ -1520,7 +1676,7 @@ impl FactorFinder {
                         }
                         FIBONACCI_INDEX => {
                             // Fibonacci number
-                            let Ok(term_number) = captures[1].parse::<u128>() else {
+                            let Some(term_number) = self.evaluate_as_u128::<&str,&str>(&captures[1].into()) else {
                                 warn!(
                                     "Could not parse term number of a Fibonacci number: {}",
                                     &captures[1]
@@ -1532,13 +1688,18 @@ impl FactorFinder {
                         ANBC_INDEX => {
                             // a^n*b + c
                             let mut factors = Vec::new();
-                            let a = Factor::from(&captures[1]);
+                            let a = Factor::<&str,&str>::from(&captures[1]);
                             let mut b = Numeric(1u128);
                             if let Some(b_match) = captures.get(3) {
-                                b = Factor::from(&b_match.as_str()[1..]);
+                                b = Factor::<&str,&str>::from(b_match.as_str());
                             }
-                            let c_raw = if let Some(c_match) = captures.get(4) {
-                                SignedFactor::from(c_match.as_str())
+                            let c_raw: SignedFactor<&str,&str> = if let Some(c_match) = captures.get(5)
+                            && let Some(sign) = captures.get(4) {
+                                match sign.as_str() {
+                                    "-" => SignedFactor::Negative(c_match.as_str().into()),
+                                    "+" => SignedFactor::Positive(c_match.as_str().into()),
+                                    _ => unreachable!()
+                                }
                             } else {
                                 let n = captures[2]
                                     .parse::<u128>()
@@ -2147,11 +2308,11 @@ mod tests {
     #[test]
     fn test_parse() {
         const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
+        let factors = FactorFinder::new()
+            .find_factors(&format!("I({PRIMORIAL})").into());
         // lucas_factors(PRIMORIAL, true);
         assert!(
-            FactorFinder::new()
-                .find_factors(&format!("I({PRIMORIAL})").into())
-                .contains(&Numeric(13))
+            factors.contains(&Numeric(13))
         );
     }
 
@@ -2312,6 +2473,14 @@ mod tests {
             finder.estimate_log10_internal::<&str, &str>(&Factor::Expression("3^5000-4^2001"));
         assert!(lower == 2385 || lower == 2384);
         assert!(upper == 2386 || upper == 2387);
+    }
+
+    #[test]
+    fn test_evaluate_as_u128() {
+        let finder = FactorFinder::new();
+        assert_eq!(finder.evaluate_as_u128::<&str,&str>(&Factor::Expression("2^127-1")), Some(i128::MAX as u128));
+        assert_eq!(finder.evaluate_as_u128::<&str,&str>(&Factor::Expression("(5^6+1)^2-1")), Some(244171875));
+        assert_eq!(finder.evaluate_as_u128::<&str,&str>(&Factor::Expression("3^3+4^4+5^5")), Some(3408));
     }
 
     #[test]

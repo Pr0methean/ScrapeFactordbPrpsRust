@@ -2,6 +2,7 @@
 #![feature(duration_constructors_lite)]
 #![feature(float_gamma)]
 #![feature(deque_extend_front)]
+#![feature(exact_div)]
 extern crate alloc;
 extern crate core;
 
