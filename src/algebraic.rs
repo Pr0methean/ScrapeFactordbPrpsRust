@@ -1699,7 +1699,7 @@ impl FactorFinder {
                                 match sign.as_str() {
                                     "-" => SignedFactor::Negative(c_match.as_str().into()),
                                     "+" => SignedFactor::Positive(c_match.as_str().into()),
-                                    _ => unreachable!()
+                                    _ => unsafe { unreachable_unchecked() }
                                 }
                             } else {
                                 let n = captures[2]
