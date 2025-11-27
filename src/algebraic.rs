@@ -626,7 +626,7 @@ impl<'a> From<&'a str> for Factor<&'a str, &'a str> {
     }
 }
 
-impl<'a> From<HipStr<'a>> for Factor<HipStr<'a>,HipStr<'a>> {
+impl<'a> From<HipStr<'a>> for Factor<HipStr<'a>, HipStr<'a>> {
     #[inline(always)]
     fn from(value: HipStr<'a>) -> Self {
         match value.parse() {

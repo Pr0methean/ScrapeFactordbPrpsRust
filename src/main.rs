@@ -21,11 +21,11 @@ use crate::algebraic::NumberStatusExt;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
 use crate::monitor::{Monitor, monitor};
 use crate::net::{FactorDbClient, ResourceLimits};
-use hipstr::HipStr;
 use async_backtrace::framed;
 use channel::PushbackReceiver;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
+use hipstr::HipStr;
 use log::{error, info, warn};
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use primitive_types::U256;
@@ -808,13 +808,15 @@ async fn queue_composites(
             .collect();
         c_tasks.shuffle(&mut rng());
         let c_initial = c_tasks.len();
-        c_buffered.extend(c_tasks
-            .into_iter()
-            .flat_map(|c_task| match c_sender.try_send(c_task) {
-                Ok(()) => None,
-                Err(Closed(_)) => None,
-                Err(Full(c_task)) => Some(c_task),
-            }));
+        c_buffered.extend(
+            c_tasks
+                .into_iter()
+                .flat_map(|c_task| match c_sender.try_send(c_task) {
+                    Ok(()) => None,
+                    Err(Closed(_)) => None,
+                    Err(Full(c_task)) => Some(c_task),
+                }),
+        );
         let c_sent = c_initial - c_buffered.len();
         info!("Sent {c_sent} C's to channel");
     }
@@ -1022,7 +1024,8 @@ async fn try_queue_unknowns<'a>(
     factor_finder: &FactorFinder,
 ) -> Result<(), ()> {
     let digits = u_digits.unwrap_or_else(|| {
-        rng().random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
+        rng()
+            .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
             .try_into()
             .unwrap()
     });
@@ -1032,7 +1035,10 @@ async fn try_queue_unknowns<'a>(
         return Err(());
     };
     info!("U search results retrieved");
-    let ids = http.read_ids_and_exprs(&results_text).collect::<Vec<_>>().into_iter();
+    let ids = http
+        .read_ids_and_exprs(&results_text)
+        .collect::<Vec<_>>()
+        .into_iter();
     let mut ids_found = false;
     for (u_id, digits_or_expr) in ids {
         ids_found = true;

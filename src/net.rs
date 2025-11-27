@@ -1,4 +1,3 @@
-use reqwest::Response;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -12,20 +11,22 @@ use crate::{
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
-use hipstr::HipStr;
 use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use core::cell::RefCell;
 use curl::easy::{Easy2, Handler, WriteError};
+use futures_util::TryFutureExt;
 use governor::middleware::StateInformationMiddleware;
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
+use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use quick_cache::unsync::Cache;
 use quick_cache::unsync::DefaultLifecycle;
 use quick_cache::{DefaultHashBuilder, UnitWeighter};
 use regex::{Regex, RegexBuilder};
-use reqwest::{Client};
+use reqwest::Client;
+use reqwest::Response;
 use serde_json::from_str;
 use std::io::Write;
 use std::mem::swap;
@@ -36,7 +37,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use futures_util::TryFutureExt;
 use tokio::sync::Semaphore;
 use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep, sleep_until};
@@ -81,7 +81,11 @@ pub trait FactorDbClient {
     ) -> Option<ResourceLimits>;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    async fn retrying_get_and_decode(&self, url: HipStr<'_>, retry_delay: Duration) -> HipStr<'static>;
+    async fn retrying_get_and_decode(
+        &self,
+        url: HipStr<'_>,
+        retry_delay: Duration,
+    ) -> HipStr<'static>;
     async fn try_get_and_decode(&self, url: HipStr<'_>) -> Option<HipStr<'static>>;
     async fn try_get_resource_limits(
         &self,
@@ -310,7 +314,11 @@ impl FactorDbClient for RealFactorDbClient {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     #[framed]
-    async fn retrying_get_and_decode(&self, url: HipStr<'_>, retry_delay: Duration) -> HipStr<'static> {
+    async fn retrying_get_and_decode(
+        &self,
+        url: HipStr<'_>,
+        retry_delay: Duration,
+    ) -> HipStr<'static> {
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url.clone()).await {
                 return value;
@@ -440,10 +448,16 @@ impl FactorDbClient for RealFactorDbClient {
             });
         }
         let cached = match id {
-            Id(id) => self.by_id_cache.get(&id).or_else(||
-                self.expression_form_cache.get(&id).and_then(|expr| self.by_expr_cache.get(expr.as_str()))).cloned(),
-            Expression(Factor::Expression(expr)) =>
-                self.by_expr_cache.get(expr).cloned(),
+            Id(id) => self
+                .by_id_cache
+                .get(&id)
+                .or_else(|| {
+                    self.expression_form_cache
+                        .get(&id)
+                        .and_then(|expr| self.by_expr_cache.get(expr.as_str()))
+                })
+                .cloned(),
+            Expression(Factor::Expression(expr)) => self.by_expr_cache.get(expr).cloned(),
             _ => None,
         };
         if cached.is_some() {
@@ -569,7 +583,8 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache.insert(HipStr::from(*expr), processed.clone());
+                self.by_expr_cache
+                    .insert(HipStr::from(*expr), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -592,12 +607,17 @@ impl FactorDbClient for RealFactorDbClient {
         };
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
-        let response = self.http.post("https://factordb.com/reportfactor.php")
-                .form(&FactorSubmission {
-                    id,
-                    number,
-                    factor: &factor.as_str(),
-                }).send().and_then(Response::text).await;
+        let response = self
+            .http
+            .post("https://factordb.com/reportfactor.php")
+            .form(&FactorSubmission {
+                id,
+                number,
+                factor: &factor.as_str(),
+            })
+            .send()
+            .and_then(Response::text)
+            .await;
         drop(permit);
         match response {
             Ok(text) => {

@@ -180,8 +180,8 @@ pub fn add_factor_node(
             // add_factor_node on subfactors to generate the initial number_facts_map entry
             v.attr.as_ref() == factor
                 || (entry_id.is_some()
-                && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms)
-                .is_some_and(|facts| facts.entry_id == entry_id))
+                    && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms)
+                        .is_some_and(|facts| facts.entry_id == entry_id))
         })
         .partition::<Vec<_>, _>(|v| v.attr.as_ref() == factor);
     let existing_vertex = existing_vertex.first().map(|v| v.id);
@@ -598,7 +598,11 @@ pub async fn find_and_submit_factors(
         factor_found |= !add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
             .await
             .is_empty();
-        any_unprocessed |= !data.number_facts_map.get(&factor_vid).unwrap().is_fully_processed();
+        any_unprocessed |= !data
+            .number_facts_map
+            .get(&factor_vid)
+            .unwrap()
+            .is_fully_processed();
     }
     if !factor_found && !any_unprocessed {
         info!("{id}: No factors to submit");
@@ -622,9 +626,9 @@ pub async fn find_and_submit_factors(
             .as_str_non_u128()
             .is_some_and(|expr| expr.contains("..."))
             && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
-            .expect("Tried to check for entry_id for a number not entered in number_facts_map")
-            .entry_id
-            .is_none()
+                .expect("Tried to check for entry_id for a number not entered in number_facts_map")
+                .entry_id
+                .is_none()
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
@@ -650,10 +654,12 @@ pub async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 rule_out_divisibility(&mut data, factor_vid, root_vid);
-                add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
-                    .await;
-                any_failed_retryably |=
-                    !data.number_facts_map.get(&factor_vid).unwrap().is_fully_processed();
+                add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid).await;
+                any_failed_retryably |= !data
+                    .number_facts_map
+                    .get(&factor_vid)
+                    .unwrap()
+                    .is_fully_processed();
             }
             OtherError => {
                 any_failed_retryably = true;
@@ -686,8 +692,8 @@ pub async fn find_and_submit_factors(
         .collect::<VecDeque<_>>();
     'graph_iter: while !factors_to_submit.is_empty()
         && !facts_of(&data.number_facts_map, root_vid, &data.deleted_synonyms)
-        .expect("Reached 'graph_iter when root not entered in number_facts_map")
-        .is_known_fully_factored()
+            .expect("Reached 'graph_iter when root not entered in number_facts_map")
+            .is_known_fully_factored()
     {
         while let Some(factor_vid) = factors_to_submit.pop_front()
             && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
@@ -953,30 +959,30 @@ pub async fn find_and_submit_factors(
                                 root_vid,
                                 factor_vid,
                             )
-                                .await
-                                .into_iter()
-                                .sorted_by(|v1, v2| {
-                                    compare(
-                                        &data.number_facts_map,
-                                        &VertexRef {
-                                            id: *v2,
-                                            attr: get_vertex(
-                                                &data.divisibility_graph,
-                                                *v2,
-                                                &data.deleted_synonyms,
-                                            ),
-                                        },
-                                        &VertexRef {
-                                            id: *v1,
-                                            attr: get_vertex(
-                                                &data.divisibility_graph,
-                                                *v1,
-                                                &data.deleted_synonyms,
-                                            ),
-                                        },
-                                        &data.deleted_synonyms,
-                                    )
-                                }),
+                            .await
+                            .into_iter()
+                            .sorted_by(|v1, v2| {
+                                compare(
+                                    &data.number_facts_map,
+                                    &VertexRef {
+                                        id: *v2,
+                                        attr: get_vertex(
+                                            &data.divisibility_graph,
+                                            *v2,
+                                            &data.deleted_synonyms,
+                                        ),
+                                    },
+                                    &VertexRef {
+                                        id: *v1,
+                                        attr: get_vertex(
+                                            &data.divisibility_graph,
+                                            *v1,
+                                            &data.deleted_synonyms,
+                                        ),
+                                    },
+                                    &data.deleted_synonyms,
+                                )
+                            }),
                         );
                         let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
                             .expect("Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
@@ -996,8 +1002,8 @@ pub async fn find_and_submit_factors(
                             root_vid,
                             cofactor_vid,
                         )
-                            .await
-                            .is_empty()
+                        .await
+                        .is_empty()
                         {
                             iters_without_progress = 0;
                         }
@@ -1248,17 +1254,26 @@ async fn add_factors_to_graph(
         let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         if expression_form != factor.as_str() {
             let expression_form = expression_form.clone();
-            let added_via_equiv = merge_equivalent_expressions(factor_finder, data, Some(root_vid), factor_vid, expression_form.clone().into(), http);
+            let added_via_equiv = merge_equivalent_expressions(
+                factor_finder,
+                data,
+                Some(root_vid),
+                factor_vid,
+                expression_form.clone().into(),
+                http,
+            );
             added.extend(added_via_equiv);
-            let factors = factor_finder
-                .find_unique_factors(&Factor::from(expression_form));
+            let factors = factor_finder.find_unique_factors(&Factor::from(expression_form));
             added.extend(factors.into_iter().flat_map(|factor| {
-                let (vertex_id, added) = add_factor_node(data, factor.as_ref(), factor_finder, Some(root_vid), None, http);
-                if added {
-                    Some(vertex_id)
-                } else {
-                    None
-                }
+                let (vertex_id, added) = add_factor_node(
+                    data,
+                    factor.as_ref(),
+                    factor_finder,
+                    Some(root_vid),
+                    None,
+                    http,
+                );
+                if added { Some(vertex_id) } else { None }
             }));
         }
         let facts = facts_of_mut(
@@ -1428,7 +1443,7 @@ fn test_find_and_submit() {
             &factor_finder,
             true,
         )
-            .await
+        .await
     });
     runtime.shutdown_background();
 }
