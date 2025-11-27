@@ -1129,11 +1129,12 @@ fn modinv(a: u128, m: u128) -> Option<u128> {
 
 // Offsets within the regex slice
 const LUCAS_INDEX: usize = 0;
-const FIBONACCI_INDEX: usize = 1;
-const ANBC_INDEX: usize = 2;
-const AXBY_INDEX: usize = 3;
-const FACTORIAL_INDEX: usize = 4;
-const PRIMORIAL_INDEX: usize = 5;
+
+const FACTORIAL_INDEX: usize = 1;
+const PRIMORIAL_INDEX: usize = 2;
+const FIBONACCI_INDEX: usize = 3;
+const ANBC_INDEX: usize = 4;
+const AXBY_INDEX: usize = 5;
 const RAW_NUMBER_INDEX: usize = 6;
 const ELIDED_NUMBER_INDEX: usize = 7;
 const PARENS_INDEX: usize = 8;
@@ -1153,11 +1154,11 @@ impl FactorFinder {
 
         let regexes_as_set = RegexSet::new([
             "^lucas\\((.*)\\)$",
+            "^(.*)!$",
+            "^(.*)#$",
             "^I(.*)$",
             formatcp!("^{E}\\^{E}(?:\\*{E})?(?:([+-]){E})?$"),
             formatcp!("^{E}\\^{E}([+-]){E}\\^{E}$"),
-            "^(.*)!$",
-            "^(.*)#$",
             "^([0-9]+)$",
             "^([0-9]+\\.\\.+[0-9]+)$",
             "^\\((.*)\\)$",
@@ -2307,9 +2308,8 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
         let factors = FactorFinder::new()
-            .find_factors(&format!("I({PRIMORIAL})").into());
+            .find_factors(&format!("I(17#)").into());
         // lucas_factors(PRIMORIAL, true);
         assert!(
             factors.contains(&Numeric(13))
