@@ -557,6 +557,7 @@ pub enum Factor {
 }
 
 impl Factor {
+    #[inline(always)]
     pub fn known_id(&self) -> Option<u128> {
         if let Numeric(n) = self
             && *n <= MAX_ID_EQUAL_TO_VALUE
@@ -566,6 +567,7 @@ impl Factor {
             None
         }
     }
+    #[inline(always)]
     pub fn as_u128(&self) -> Option<u128> {
         match self {
             Numeric(n) => Some(*n),
@@ -661,6 +663,7 @@ impl Ord for Factor {
 }
 
 impl Factor {
+    #[inline(always)]
     pub fn as_str(&self) -> HipStr<'static> {
         match self {
             Numeric(n) => n.to_string().into(),
@@ -669,6 +672,7 @@ impl Factor {
         }
     }
 
+    #[inline(always)]
     pub fn as_str_non_u128(&self) -> Option<HipStr<'static>> {
         match self {
             Numeric(_) => None,
@@ -677,6 +681,7 @@ impl Factor {
         }
     }
 
+    #[inline(always)]
     fn last_digit(&self) -> Option<u8> {
         match self {
             Factor::Expression(_) => None,
@@ -687,6 +692,7 @@ impl Factor {
         }
     }
 
+    #[inline]
     pub fn may_be_proper_divisor_of(
         &self,
         other: &Factor,
@@ -967,6 +973,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
 }
 
 /// Modular inverse using extended Euclidean algorithm
+#[inline]
 fn modinv(a: u128, m: u128) -> Option<u128> {
     let (mut t, mut newt) = (0i128, 1i128);
     let (mut r, mut newr) = (m as i128, a as i128);
@@ -1046,7 +1053,7 @@ impl FactorFinder {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Factor> {
         debug_assert_ne!(input, 0);
         factorize128(input)
@@ -2055,10 +2062,7 @@ impl FactorFinder {
         if let Some(num1) = self.evaluate_as_u128(&expr1)
             && let Some(num2) = self.evaluate_as_u128(&expr2)
         {
-            factorize128(num1.gcd(&num2))
-                .into_iter()
-                .flat_map(|(factor, power)| repeat_n(Numeric(factor), power))
-                .collect()
+            Self::find_factors_of_u128(num1.gcd(&num2))
         } else {
             let expr1_factors = self.find_factors(expr1);
             if expr1_factors.is_empty() && !for_add_or_sub {
