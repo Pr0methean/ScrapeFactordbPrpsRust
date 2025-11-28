@@ -249,204 +249,6 @@ pub fn write_bignum(f: &mut Formatter, e: &HipStr<'static>) -> fmt::Result {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-#[framed]
-async fn get_prp_remaining_bases(
-    id: u128,
-    http: &mut impl FactorDbClient,
-    bases_regex: &Regex,
-    nm1_regex: &Regex,
-    np1_regex: &Regex,
-    c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
-    c_filter: &mut CuckooFilter<DefaultHasher>,
-    factor_finder: &FactorFinder,
-) -> Result<U256, ()> {
-    let mut bases_left = U256::MAX - 3;
-    let bases_text = http
-        .retrying_get_and_decode(
-            format!("https://factordb.com/frame_prime.php?id={id}").into(),
-            RETRY_DELAY,
-        )
-        .await;
-    if bases_text.contains("Proven") {
-        info!("{id}: No longer PRP");
-    }
-    let mut nm1_id_if_available = None;
-    let mut nm1_known_to_divide_2 = false;
-    let mut nm1_known_to_divide_3 = false;
-    let mut np1_id_if_available = None;
-    let mut np1_known_to_divide_2 = false;
-    let mut np1_known_to_divide_3 = false;
-    if let Some(captures) = nm1_regex.captures(&bases_text) {
-        let nm1_id = captures[1].parse::<u128>().unwrap();
-        nm1_id_if_available = Some(nm1_id);
-        let ProcessedStatusApiResponse {
-            status,
-            factors: nm1_factors,
-            ..
-        } = http.known_factors_as_digits(Id(nm1_id), false, false).await;
-        match nm1_factors.len() {
-            0 => {
-                if status == Some(FullyFactored) {
-                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                    prove_by_nm1(id, http).await;
-                    return Ok(U256::from(0));
-                }
-            }
-            _ => {
-                nm1_known_to_divide_2 = nm1_factors[0].as_u128() == Some(2);
-                nm1_known_to_divide_3 = nm1_factors[0].as_u128() == Some(3)
-                    || nm1_factors.get(1).and_then(Factor::as_u128) == Some(3);
-            }
-        }
-    } else {
-        error!("{id}: N-1 ID not found: {bases_text}");
-    }
-    if let Some(captures) = np1_regex.captures(&bases_text) {
-        let np1_id = captures[1].parse::<u128>().unwrap();
-        np1_id_if_available = Some(np1_id);
-        let ProcessedStatusApiResponse {
-            status,
-            factors: np1_factors,
-            ..
-        } = http.known_factors_as_digits(Id(np1_id), false, false).await;
-        match np1_factors.len() {
-            0 => {
-                if status == Some(FullyFactored) {
-                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                    prove_by_np1(id, http).await;
-                    return Ok(U256::from(0));
-                }
-            }
-            _ => {
-                np1_known_to_divide_2 = np1_factors[0].as_u128() == Some(2);
-                np1_known_to_divide_3 = np1_factors[0].as_u128() == Some(3)
-                    || np1_factors.get(1).and_then(Factor::as_u128) == Some(3);
-            }
-        }
-    } else {
-        error!("{id}: N+1 ID not found: {bases_text}");
-    }
-    if let Some(nm1_id) = nm1_id_if_available
-        && !nm1_known_to_divide_2
-    {
-        // N wouldn't be PRP if it was even, so N-1 must be even
-        match http.report_numeric_factor(nm1_id, 2).await {
-            AlreadyFullyFactored => {
-                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                prove_by_nm1(id, http).await;
-                return Ok(U256::from(0));
-            }
-            Accepted => {}
-            _ => {
-                error!("{id}: PRP, but factor of 2 was rejected for N-1 (id {nm1_id})");
-            }
-        }
-    }
-    if let Some(np1_id) = np1_id_if_available
-        && !np1_known_to_divide_2
-    {
-        // N wouldn't be PRP if it was even, so N+1 must be even
-        match http.report_numeric_factor(np1_id, 2).await {
-            AlreadyFullyFactored => {
-                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                prove_by_np1(id, http).await;
-                return Ok(U256::from(0));
-            }
-            Accepted => {}
-            _ => {
-                error!("{id}: PRP, but factor of 2 was rejected for N+1 (id {np1_id})");
-            }
-        }
-    }
-    if let Some(nm1_id) = nm1_id_if_available
-        && let Some(np1_id) = np1_id_if_available
-    {
-        if !nm1_known_to_divide_3 && !np1_known_to_divide_3 {
-            // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-            match http.report_numeric_factor(nm1_id, 3).await {
-                AlreadyFullyFactored => {
-                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                    prove_by_nm1(id, http).await;
-                    return Ok(U256::from(0));
-                }
-                Accepted => {}
-                _ => match http.report_numeric_factor(np1_id, 3).await {
-                    AlreadyFullyFactored => {
-                        info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                        prove_by_np1(id, http).await;
-                        return Ok(U256::from(0));
-                    }
-                    Accepted => {}
-                    _ => {
-                        error!(
-                            "{id}: PRP, but factor of 3 was rejected for both N-1 (id {nm1_id}) and N+1 (id {np1_id})"
-                        );
-                    }
-                },
-            }
-        }
-        for id in [nm1_id, np1_id] {
-            for factor in http
-                .known_factors_as_digits(Id(id), false, true)
-                .await
-                .factors
-                .into_iter()
-            {
-                if factor.as_str_non_u128().is_some() {
-                    graph::find_and_submit_factors(http, id, factor.as_str(), factor_finder, true)
-                        .await;
-                }
-            }
-        }
-    }
-    let status_text = http
-        .retrying_get_and_decode(
-            format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}").into(),
-            RETRY_DELAY,
-        )
-        .await;
-    if !status_text.contains("&lt;") {
-        error!("{id}: Failed to decode status for PRP: {status_text}");
-        composites_while_waiting(
-            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-            http,
-            c_receiver,
-            c_filter,
-            factor_finder,
-        )
-        .await;
-        return Err(());
-    }
-    if status_text.contains(" is prime") || !status_text.contains("PRP") {
-        info!("{id}: No longer PRP");
-        return Ok(U256::from(0));
-    }
-    if let Some(bases) = bases_regex.captures(&bases_text) {
-        for base in bases[1].split(", ") {
-            let Ok(base) = base.parse::<u8>() else {
-                error!("Invalid PRP-check base: {:?}", base);
-                continue;
-            };
-            bases_left &= !(U256::from(1) << base);
-        }
-        info!(
-            "{id}: {} bases left to check",
-            bases_left
-                .0
-                .iter()
-                .copied()
-                .map(u64::count_ones)
-                .sum::<u32>()
-        );
-    } else {
-        info!("{id}: no bases checked yet");
-    }
-    if bases_left == U256::from(0) {
-        info!("{id}: all bases already checked");
-    }
-    Ok(bases_left)
-}
 
 #[inline(always)]
 #[framed]
@@ -758,23 +560,20 @@ async fn main() -> anyhow::Result<()> {
             &do_checks_factor_finder,
         )
             .await;
-        let mut successful_select_end = Instant::now();
         loop {
+            info!("do_checks: Polling for next task");
             select! {
                 _ = do_checks_shutdown_receiver.recv() => {
                     warn!("do_checks received shutdown signal; exiting");
                     return;
                 }
                 _ = sleep_until(next_unknown_attempt) => {
-                    let Some((id, task_return_permit)) = retry.take().inspect(|_| {
-                        info!("Ready to retry a U after {:?}", Instant::now() - successful_select_end);
-                    }).or_else(||
-                        u_receiver.try_recv().inspect(|_| {
-                            info!("Ready to check a U after {:?}", Instant::now() - successful_select_end);
-                        }))
+                    let Some((id, task_return_permit)) = retry.take().or_else(||
+                        u_receiver.try_recv())
                     else {
                         continue;
                     };
+                    info!("{id}: Ready to check a U");
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker").into();
                     let result = do_checks_http.retrying_get_and_decode(url, RETRY_DELAY).await;
                     if let Some(status) = u_status_regex.captures_iter(&result).next() {
@@ -819,25 +618,209 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 (id, task_return_permit) = prp_receiver.recv() => {
-                    info!("Ready to check a PRP after {:?}", Instant::now() - successful_select_end);
+                    info!("{id}: Ready to check a PRP");
                     let mut stopped_early = false;
-                    let Ok(bases_left) = get_prp_remaining_bases(
-                        id,
-                        &mut do_checks_http,
-                        &bases_regex,
-                        &nm1_regex,
-                        &np1_regex,
-                        &mut c_receiver,
-                        &mut c_filter,
-                        &do_checks_factor_finder,
-                    )
-                    .await
-                    else {
+                    let mut bases_left = U256::MAX - 3;
+                    let bases_text = do_checks_http
+                        .retrying_get_and_decode(
+                            format!("https://factordb.com/frame_prime.php?id={id}").into(),
+                            RETRY_DELAY,
+                        )
+                        .await;
+                    if bases_text.contains("Proven") {
+                        info!("{id}: No longer PRP");
+                        continue;
+                    }
+                    let mut nm1_id_if_available = None;
+                    let mut nm1_known_to_divide_2 = false;
+                    let mut nm1_known_to_divide_3 = false;
+                    let mut np1_id_if_available = None;
+                    let mut np1_known_to_divide_2 = false;
+                    let mut np1_known_to_divide_3 = false;
+                    let mut updated_nm1_factors = None;
+                    if let Some(captures) = nm1_regex.captures(&bases_text) {
+                        let nm1_id = captures[1].parse::<u128>().unwrap();
+                        nm1_id_if_available = Some(nm1_id);
+                        let ProcessedStatusApiResponse {
+                            status,
+                            factors: nm1_factors,
+                            ..
+                        } = do_checks_http.known_factors_as_digits(Id(nm1_id), false, false).await;
+                        match nm1_factors.len() {
+                            0 => {
+                                if status == Some(FullyFactored) {
+                                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+                                    prove_by_nm1(id, &do_checks_http).await;
+                                    continue;
+                                }
+                            }
+                            _ => {
+                                nm1_known_to_divide_2 = nm1_factors[0].as_u128() == Some(2);
+                                nm1_known_to_divide_3 = nm1_factors[0].as_u128() == Some(3)
+                                    || nm1_factors.get(1).and_then(Factor::as_u128) == Some(3);
+                                updated_nm1_factors = Some(nm1_factors);
+                            }
+                        }
+                    } else {
+                        error!("{id}: N-1 ID not found: {bases_text}");
+                    }
+                    let mut updated_np1_factors = None;
+                    if let Some(captures) = np1_regex.captures(&bases_text) {
+                        let np1_id = captures[1].parse::<u128>().unwrap();
+                        np1_id_if_available = Some(np1_id);
+                        let ProcessedStatusApiResponse {
+                            status,
+                            factors: np1_factors,
+                            ..
+                        } = do_checks_http.known_factors_as_digits(Id(np1_id), false, false).await;
+                        match np1_factors.len() {
+                            0 => {
+                                if status == Some(FullyFactored) {
+                                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                                    prove_by_np1(id, &do_checks_http).await;
+                                    continue;
+                                }
+                            }
+                            _ => {
+                                np1_known_to_divide_2 = np1_factors[0].as_u128() == Some(2);
+                                np1_known_to_divide_3 = np1_factors[0].as_u128() == Some(3)
+                                    || np1_factors.get(1).and_then(Factor::as_u128) == Some(3);
+                                updated_np1_factors = Some(np1_factors);
+                            }
+                        }
+                    } else {
+                        error!("{id}: N+1 ID not found: {bases_text}");
+                    }
+                    if let Some(nm1_id) = nm1_id_if_available
+                        && !nm1_known_to_divide_2
+                    {
+                        // N wouldn't be PRP if it was even, so N-1 must be even
+                        match do_checks_http.report_numeric_factor(nm1_id, 2).await {
+                            AlreadyFullyFactored => {
+                                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+                                prove_by_nm1(id, &do_checks_http).await;
+                                continue;
+                            }
+                            Accepted => {
+                                updated_nm1_factors = None; // Should update after successfully submitting a factor
+                            }
+                            _ => {
+                                error!("{id}: PRP, but factor of 2 was rejected for N-1 (id {nm1_id})");
+                            }
+                        }
+                    }
+                    if let Some(np1_id) = np1_id_if_available
+                        && !np1_known_to_divide_2
+                    {
+                        // N wouldn't be PRP if it was even, so N+1 must be even
+                        match do_checks_http.report_numeric_factor(np1_id, 2).await {
+                            AlreadyFullyFactored => {
+                                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                                prove_by_np1(id, &do_checks_http).await;
+                                continue;
+                            }
+                            Accepted => {
+                                updated_np1_factors = None; // Should update after successfully submitting a factor
+                            }
+                            _ => {
+                                error!("{id}: PRP, but factor of 2 was rejected for N+1 (id {np1_id})");
+                            }
+                        }
+                    }
+                    if let Some(nm1_id) = nm1_id_if_available
+                        && let Some(np1_id) = np1_id_if_available
+                    {
+                        if !nm1_known_to_divide_3 && !np1_known_to_divide_3 {
+                            // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
+                            match do_checks_http.report_numeric_factor(nm1_id, 3).await {
+                                AlreadyFullyFactored => {
+                                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
+                                    prove_by_nm1(id, &do_checks_http).await;
+                                    continue;
+                                }
+                                Accepted => {
+                                    updated_nm1_factors = None; // Should update after successfully submitting a factor
+                                }
+                                _ => match do_checks_http.report_numeric_factor(np1_id, 3).await {
+                                    AlreadyFullyFactored => {
+                                        info!("{id}: N+1 (ID {np1_id}) is fully factored!");
+                                        prove_by_np1(id, &do_checks_http).await;
+                                        continue;
+                                    }
+                                    Accepted => {
+                                        updated_np1_factors = None; // Should update after successfully submitting a factor
+                                    }
+                                    _ => {
+                                        error!(
+                                            "{id}: PRP, but factor of 3 was rejected for both N-1 (id {nm1_id}) and N+1 (id {np1_id})"
+                                        );
+                                    }
+                                },
+                            }
+                        }
+                        for (id, factors) in [(nm1_id, updated_nm1_factors), (np1_id, updated_np1_factors)] {
+                            let factors = if let Some(factors) = factors {
+                                factors
+                            } else {
+                                do_checks_http
+                                .known_factors_as_digits(Id(id), false, true)
+                                .await
+                                .factors
+                            };
+                            for factor in factors {
+                                if factor.as_str_non_u128().is_some() {
+                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.as_str(), &do_checks_factor_finder, true)
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                    let status_text = do_checks_http
+                        .retrying_get_and_decode(
+                            format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}").into(),
+                            RETRY_DELAY,
+                        )
+                        .await;
+                    if !status_text.contains("&lt;") {
+                        error!("{id}: Failed to decode status for PRP: {status_text}");
+                        composites_while_waiting(
+                            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
+                            &mut do_checks_http,
+                            &mut c_receiver,
+                            &mut c_filter,
+                            &do_checks_factor_finder,
+                        )
+                        .await;
                         task_return_permit.send(id);
                         info!("{id}: Requeued PRP");
                         continue;
-                    };
+                    }
+                    if status_text.contains(" is prime") || !status_text.contains("PRP") {
+                        info!("{id}: No longer PRP");
+                        continue;
+                    }
+                    if let Some(bases) = bases_regex.captures(&bases_text) {
+                        for base in bases[1].split(", ") {
+                            let Ok(base) = base.parse::<u8>() else {
+                                error!("Invalid PRP-check base: {:?}", base);
+                                continue;
+                            };
+                            bases_left &= !(U256::from(1) << base);
+                        }
+                        info!(
+                            "{id}: {} bases left to check",
+                            bases_left
+                                .0
+                                .iter()
+                                .copied()
+                                .map(u64::count_ones)
+                                .sum::<u32>()
+                        );
+                    } else {
+                        info!("{id}: no bases checked yet");
+                    }
                     if bases_left == U256::from(0) {
+                        info!("{id}: all bases already checked");
                         continue;
                     }
                     for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
@@ -889,12 +872,11 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 c_task = c_receiver.recv() => {
-                    info!("Ready to check a C after {:?}", Instant::now() - successful_select_end);
                     let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
+                    info!("{id}: Ready to check a C");
                     check_composite(&mut do_checks_http, &mut c_filter, &do_checks_factor_finder, id, digits_or_expr, return_permit).await;
                 }
             }
-            successful_select_end = Instant::now();
         }
     }));
 
