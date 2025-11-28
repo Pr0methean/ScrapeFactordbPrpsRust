@@ -3,7 +3,6 @@
 #![feature(float_gamma)]
 #![feature(deque_extend_front)]
 #![feature(exact_div)]
-#![feature(never_type)]
 extern crate alloc;
 extern crate core;
 
@@ -114,8 +113,8 @@ struct NumberStatusApiResponse {
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
     id: Option<u128>,
-    number: Option<&'a str>,
-    factor: &'a str,
+    number: Option<&'a HipStr<'static>>,
+    factor: &'a HipStr<'static>,
 }
 
 #[framed]
@@ -235,12 +234,12 @@ async fn check_composite(
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-enum NumberSpecifier<T: AsRef<str>, U: AsRef<str>> {
+enum NumberSpecifier {
     Id(u128),
-    Expression(Factor<T, U>),
+    Expression(Factor),
 }
 
-impl<T: AsRef<str>, U: AsRef<str>> Display for NumberSpecifier<T, U> {
+impl Display for NumberSpecifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Id(id) => write!(f, "ID {}", id),
@@ -249,7 +248,7 @@ impl<T: AsRef<str>, U: AsRef<str>> Display for NumberSpecifier<T, U> {
     }
 }
 
-pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
+pub fn write_bignum(f: &mut Formatter, e: &HipStr<'static>) -> fmt::Result {
     let len = e.len();
     if len < 300 {
         f.write_str(e)
@@ -403,7 +402,7 @@ async fn get_prp_remaining_bases(
                 .into_iter()
             {
                 if factor.as_str_non_u128().is_some() {
-                    graph::find_and_submit_factors(http, id, &factor.as_str(), factor_finder, true)
+                    graph::find_and_submit_factors(http, id, factor.as_str(), factor_finder, true)
                         .await;
                 }
             }
@@ -1048,7 +1047,7 @@ async fn try_queue_unknowns<'a>(
             warn!("{u_id}: Skipping duplicate U");
             continue;
         }
-        if graph::find_and_submit_factors(http, u_id, digits_or_expr, factor_finder, false).await {
+        if graph::find_and_submit_factors(http, u_id, digits_or_expr.into(), factor_finder, false).await {
             info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
         } else {
             let _ = u_filter.add(&u_id);

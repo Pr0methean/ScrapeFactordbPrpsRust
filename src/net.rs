@@ -95,16 +95,16 @@ pub trait FactorDbClient {
     async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<HipStr<'static>>;
     async fn known_factors_as_digits(
         &mut self,
-        id: NumberSpecifier<&str, &str>,
+        id: NumberSpecifier,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
-    fn cached_factors(&self, id: NumberSpecifier<&str, &str>)
+    fn cached_factors(&self, id: NumberSpecifier)
     -> Option<ProcessedStatusApiResponse>;
     async fn try_report_factor(
         &self,
-        u_id: NumberSpecifier<&str, &str>,
-        factor: Factor<&str, &str>,
+        u_id: NumberSpecifier,
+        factor: &Factor,
     ) -> ReportFactorResult;
     async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult;
 }
@@ -427,7 +427,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[inline]
     fn cached_factors(
         &self,
-        mut id: NumberSpecifier<&str, &str>,
+        mut id: NumberSpecifier,
     ) -> Option<ProcessedStatusApiResponse> {
         if let Id(entry_id) = id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
@@ -444,7 +444,7 @@ impl FactorDbClient for RealFactorDbClient {
                     Prime
                 }),
                 factors,
-                id: Numeric::<!,!>(n).known_id(),
+                id: Numeric(n).known_id(),
             });
         }
         let cached = match id {
@@ -457,7 +457,7 @@ impl FactorDbClient for RealFactorDbClient {
                         .and_then(|expr| self.by_expr_cache.get(expr.as_str()))
                 })
                 .cloned(),
-            Expression(Factor::Expression(expr)) => self.by_expr_cache.get(expr).cloned(),
+            Expression(Factor::Expression(ref expr)) => self.by_expr_cache.get(expr).cloned(),
             _ => None,
         };
         if cached.is_some() {
@@ -470,7 +470,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn known_factors_as_digits(
         &mut self,
-        id: NumberSpecifier<&str, &str>,
+        id: NumberSpecifier,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
@@ -584,7 +584,7 @@ impl FactorDbClient for RealFactorDbClient {
             }
             if let Some(expr) = expr_key {
                 self.by_expr_cache
-                    .insert(HipStr::from(*expr), processed.clone());
+                    .insert(expr.clone(), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -596,13 +596,13 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn try_report_factor(
         &self,
-        u_id: NumberSpecifier<&str, &str>,
-        factor: Factor<&str, &str>,
+        u_id: NumberSpecifier,
+        factor: &Factor,
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
             Expression(Numeric(_)) => return AlreadyFullyFactored,
-            Expression(Factor::BigNumber(x)) => (None, Some(x)),
-            Expression(Factor::Expression(x)) => (None, Some(x)),
+            Expression(Factor::BigNumber(ref x)) => (None, Some(x)),
+            Expression(Factor::Expression(ref x)) => (None, Some(x)),
             Id(id) => (Some(id), None),
         };
         self.rate_limiter.until_ready().await;
@@ -643,7 +643,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult {
         for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
-            let result = self.try_report_factor(Id(u_id), Numeric(factor)).await;
+            let result = self.try_report_factor(Id(u_id), &Numeric(factor)).await;
             if result != OtherError {
                 return result;
             }
