@@ -1057,6 +1057,17 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<OwnedFactor> {
     }
 }
 
+#[inline(always)]
+fn mod_euclid(a: i128, b: u128) -> u128 {
+    if a >= 0 {
+        (a as u128) % b
+    } else {
+        let r = (!a as u128) % b;
+        b - r - 1
+    }
+}
+
+
 #[inline]
 fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T>> {
     let mut result = Vec::new();
@@ -1151,6 +1162,8 @@ impl FactorFinder {
     pub fn new() -> FactorFinder {
         // Simple expression
         const E: &str = "([^()+\\-*\\/\\^]+|\\([^()]+\\)|\\([^()]*\\([^()]+\\)[^()]*\\)|\\([^()]*\\([^()]*\\([^()]+\\)[^()]*\\)[^()]*\\))";
+        const E_ALLOW_POW: &str = "([^()+\\-*\\/]+|\\([^()]+\\)|\\([^()]*\\([^()]+\\)[^()]*\\)|\\([^()]*\\([^()]*\\([^()]+\\)[^()]*\\)[^()]*\\))";
+        const E_ALLOW_ALL: &str = "([^()]+|\\([^()]+\\)|\\([^()]*\\([^()]+\\)[^()]*\\)|\\([^()]*\\([^()]*\\([^()]+\\)[^()]*\\)[^()]*\\))";
 
         let regexes_as_set = RegexSet::new([
             "^lucas\\((.*)\\)$",
@@ -1158,14 +1171,14 @@ impl FactorFinder {
             "^(.*)#$",
             "^I(.*)$",
             formatcp!("^{E}\\^{E}(?:\\*{E})?(?:([+-]){E})?$"),
-            formatcp!("^{E}\\^{E}([+-]){E}\\^{E}$"),
+            formatcp!("^{E}\\^{E_ALLOW_POW}([+-]){E}\\^{E_ALLOW_POW}$"),
             "^([0-9]+)$",
             "^([0-9]+\\.\\.+[0-9]+)$",
             "^\\((.*)\\)$",
-            formatcp!("^{E}\\^{E}$"),
+            formatcp!("^{E}\\^{E_ALLOW_POW}$"),
             "^(.*)/([^()/+-]+|\\([^()]+\\))$",
             "^(.*)\\*([^()\\*+-]+|\\([^()]+\\))$",
-            "^([^()]+|\\([^()]+\\))([-+])(.*)$",
+            formatcp!("^{E_ALLOW_ALL}([-+])(.*)$"),
         ])
         .unwrap();
         let regexes = regexes_as_set
@@ -1712,20 +1725,25 @@ impl FactorFinder {
                                 return factors;
                             };
                             let gcd_bc = self.find_common_factors(&b, c_raw.abs(), false);
-                            let b = self.find_factors(&b);
-                            let c_abs = self.find_factors(c_raw.abs());
+                            let b_factors = self.find_factors(&b);
+                            let abs_c = self.find_factors(c_raw.abs());
                             let gcd_ac = self.find_common_factors(&a, c_raw.abs(), false);
                             let n: Factor<&str, &str> = Factor::from(&captures[2]);
                             if let Some(a) = self.evaluate_as_u128(&a)
                                 && let Some(n) = self.evaluate_as_u128(&n)
                             {
-                                let b_reduced: Vec<OwnedFactor> = multiset_difference(b, &gcd_bc);
+                                let b_reduced: Vec<OwnedFactor> = multiset_difference(b_factors, &gcd_bc);
                                 let c_reduced: Vec<OwnedFactor> =
-                                    multiset_difference(c_abs, &gcd_bc);
+                                    multiset_difference(abs_c, &gcd_bc);
                                 factors.extend(multiset_union(gcd_ac, gcd_bc));
                                 if let Some(b) = checked_product_u128(b_reduced.as_slice())
-                                    && let Some(abs_c) = checked_product_u128(c_reduced.as_slice())
+                                    && let Some(abs_c_u128) = checked_product_u128(c_reduced.as_slice())
                                 {
+                                    if !a.is_multiple_of(2)
+                                        && !b.is_multiple_of(2)
+                                        && !abs_c_u128.is_multiple_of(2) {
+                                        factors.push(Numeric(2));
+                                    }
                                     let anb_u128 = n
                                         .try_into()
                                         .ok()
@@ -1733,13 +1751,13 @@ impl FactorFinder {
                                         .and_then(|an| an.checked_mul(b));
                                     let (c, anbc_u128) = if let SignedFactor::Negative(_) = c_raw {
                                         (
-                                            0i128.checked_sub_unsigned(abs_c),
-                                            anb_u128.and_then(|anb| anb.checked_sub(abs_c)),
+                                            0i128.checked_sub_unsigned(abs_c_u128),
+                                            anb_u128.and_then(|anb| anb.checked_sub(abs_c_u128)),
                                         )
                                     } else {
                                         (
-                                            0i128.checked_add_unsigned(abs_c),
-                                            anb_u128.and_then(|anb| anb.checked_add(abs_c)),
+                                            0i128.checked_add_unsigned(abs_c_u128),
+                                            anb_u128.and_then(|anb| anb.checked_add(abs_c_u128)),
                                         )
                                     };
                                     if let Some(anbc) = anbc_u128 {
@@ -1757,68 +1775,82 @@ impl FactorFinder {
                                     let Some(c) = c else {
                                         return factors;
                                     };
-                                    let factors_of_n = Self::find_factors_of_u128(n);
-                                    let factors_of_n_count = factors_of_n.len();
-                                    let mut factors_of_n =
-                                        factors_of_n.iter().collect::<Vec<&OwnedFactor>>();
-                                    for factor_subset in power_multiset(&mut factors_of_n) {
-                                        if factor_subset.len() == factors_of_n_count
+                                    let mut factors_of_n = factorize128(n);
+                                    let power_of_2 = if c > 0 {
+                                        factors_of_n.remove(&2).unwrap_or(0) as u32
+                                    } else {
+                                        0
+                                    };
+                                    let mut odd_factors_of_n = factors_of_n
+                                        .into_iter()
+                                        .flat_map(|(key, value)| repeat_n(key, value))
+                                        .collect::<Vec<u128>>();
+                                    let odd_factors_of_n_count = odd_factors_of_n.len();
+                                    for factor_subset in power_multiset(&mut odd_factors_of_n) {
+                                        if factor_subset.len() == odd_factors_of_n_count
                                         {
                                             continue;
                                         }
-                                        let Some(subset_product) =
-                                            checked_product_u128(factor_subset.as_slice())
-                                        else {
-                                            continue;
-                                        };
-                                        if (a.powm(n, &subset_product).mulm(b, &subset_product)
-                                            as i128
-                                            + c)
-                                            % (subset_product as i128)
-                                            == 0
+                                        let subset_product = factor_subset.into_iter().product::<u128>() << power_of_2;
+                                        if let Some(modulus) = a.powm(n, &subset_product).mulm(b, &subset_product).checked_add(mod_euclid(c, subset_product))
+                                            && modulus.is_multiple_of(subset_product)
                                         {
                                             factors
                                                 .extend(Self::find_factors_of_u128(subset_product));
                                         }
-                                        if c > 0 && n.is_multiple_of(2 * subset_product) {
-                                            continue;
-                                        }
-                                        if n % subset_product == 0
-                                            && (c > 0 || !subset_product.is_multiple_of(2))
-                                            && let Ok(prime_for_root) = subset_product.try_into()
-                                            && let Some(root_c) = c.nth_root_exact(prime_for_root)
+                                        if let Ok(prime_for_root) = (n / subset_product).try_into()
+                                            && (c < 0 || !(n / subset_product).is_multiple_of(2))
+                                            && let Some(root_c) = abs_c_u128.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                         {
-                                            if let Some(factor_u128) = a
-                                                .checked_pow(prime_for_root)
-                                                .and_then(|an| an.checked_mul(b))
-                                                .and_then(|anb| anb.checked_add_signed(c))
+                                            let even_ratio = (n / subset_product).is_multiple_of(2);
+                                            let (anb_plus_c, anb_minus_c) = if let Ok(subset_product_u32) = subset_product.try_into()
+                                                && let Some(anb) = a
+                                                .checked_pow(subset_product_u32)
+                                                .and_then(|an| an.checked_mul(root_b))
                                             {
-                                                factors.extend(Self::find_factors_of_u128(
-                                                    factor_u128,
-                                                ));
+                                                let anb_plus_c = if c >= 0 && !even_ratio || c <= 0 && even_ratio {
+                                                    Some(anb.checked_add(root_c).map(OwnedFactor::Numeric)
+                                                        .unwrap_or_else(|| OwnedFactor::Expression(format!("{anb}+{root_c}").into())))
+                                                } else {
+                                                    None
+                                                };
+                                                let anb_minus_c = if c < 0 {
+                                                    Some(anb.checked_sub(root_c).map(OwnedFactor::Numeric)
+                                                        .unwrap_or_else(|| OwnedFactor::Expression(format!("{anb}-{root_c}").into())))
+                                                } else {
+                                                    None
+                                                };
+                                                (anb_plus_c, anb_minus_c)
                                             } else {
-                                                let factor_expr = format!(
-                                                    "{}{}{}{}",
+                                                let anb = format!(
+                                                    "{}{}{}",
                                                     a,
-                                                    if n / subset_product > 1 {
-                                                        format!("^{}", n / subset_product)
+                                                    if subset_product > 1 {
+                                                        Cow::Owned(format!("^{}", subset_product))
                                                     } else {
-                                                        "".to_string()
+                                                        Cow::Borrowed("")
                                                     },
                                                     if root_b > 1 {
-                                                        format!("*{}", root_b)
+                                                        Cow::Owned(format!("*{}", root_b))
                                                     } else {
-                                                        "".to_string()
+                                                        Cow::Borrowed("")
                                                     },
-                                                    if root_c != 0 {
-                                                        format!("{:+}", root_c)
-                                                    } else {
-                                                        "".to_string()
-                                                    }
                                                 );
-                                                if factor_expr.as_str() != expr.as_ref() {
-                                                    let factor = factor_expr.into();
+                                                let anb_plus_c = if c >= 0 && !even_ratio || c <= 0 && even_ratio {
+                                                    Some(OwnedFactor::Expression(format!("{anb}+{root_c}").into()))
+                                                } else {
+                                                    None
+                                                };
+                                                let anb_minus_c = if c < 0 {
+                                                    Some(OwnedFactor::Expression(format!("{anb}-{root_c}").into()))
+                                                } else {
+                                                    None
+                                                };
+                                                (anb_plus_c, anb_minus_c)
+                                            };
+                                            for factor in anb_plus_c.into_iter().chain(anb_minus_c.into_iter()) {
+                                                if factor.as_str_non_u128() != Some(expr.as_ref()) {
                                                     factors.extend(self.find_factors(&factor));
                                                     factors.push(factor);
                                                 }
@@ -2163,11 +2195,7 @@ impl NumberStatusExt for Option<NumberStatus> {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{
-        Factor, FactorFinder, OwnedFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
-        fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection,
-        multiset_union, power_multiset,
-    };
+    use crate::algebraic::{Factor, FactorFinder, OwnedFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection, multiset_union, power_multiset, mod_euclid};
     use itertools::Itertools;
     use std::iter::repeat_n;
 
@@ -2203,7 +2231,18 @@ mod tests {
         let expr = format!("{}^24-1", u128::MAX);
         let factors = finder.find_factors(&expr.into());
         println!("{}", factors.iter().join(", "));
+        assert!(factors.contains(&format!("{}^12-1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^12+1", u128::MAX).into()));
         assert!(factors.contains(&format!("{}^8-1", u128::MAX).into()));
+        assert!(!factors.contains(&format!("{}^8+1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^6+1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^6-1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^4+1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^4-1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^3+1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^3-1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^2+1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^2-1", u128::MAX).into()));
     }
 
     #[test]
@@ -2506,5 +2545,19 @@ mod tests {
         assert!(!may_be_proper_divisor_of("12345", "54321"));
         assert!(!may_be_proper_divisor_of("12345", "12345"));
         assert!(!may_be_proper_divisor_of("54321", "12345"));
+    }
+
+    #[test]
+    fn test_mod_euclid() {
+        assert_eq!(mod_euclid(        1,        10),                  1);
+        assert_eq!(mod_euclid(       -1,        10),                  9);
+        assert_eq!(mod_euclid(       11,        10),                  1);
+        assert_eq!(mod_euclid(      -11,        10),                  9);
+        assert_eq!(mod_euclid(i128::MAX,         1),                  0);
+        assert_eq!(mod_euclid(        0,         1),                  0);
+        assert_eq!(mod_euclid(i128::MIN,         1),                  0);
+        assert_eq!(mod_euclid(i128::MAX, u128::MAX),  i128::MAX as u128);
+        assert_eq!(mod_euclid(        0, u128::MAX),                  0);
+        assert_eq!(mod_euclid(i128::MIN, u128::MAX),  i128::MAX as u128);
     }
 }
