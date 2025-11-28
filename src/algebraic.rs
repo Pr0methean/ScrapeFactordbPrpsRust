@@ -1359,7 +1359,7 @@ impl FactorFinder {
         &self,
         expr: &Factor,
     ) -> (u128, u128) {
-        let (lbound, ubound) = self.estimate_log10_internal(&expr);
+        let (lbound, ubound) = self.estimate_log10_internal(expr);
         if lbound > ubound {
             error!(
                 "{expr}: estimate_log10 produced inconsistent bounds: lower bound {lbound}, upper bound {ubound}"
@@ -1434,7 +1434,7 @@ impl FactorFinder {
                             0
                         };
                         let anb = a.checked_pow(n)?.checked_mul(b)?;
-                        if captures.get(4).is_some_and(|c| c.as_str().chars().next() == Some('-')) {
+                        if captures.get(4).is_some_and(|c| c.as_str().starts_with('-')) {
                             anb.checked_sub(abs_c)
                         } else {
                             anb.checked_add(abs_c)
@@ -1448,7 +1448,7 @@ impl FactorFinder {
                         let y = u32::try_from(self.evaluate_as_u128(&captures[5].into())?).ok()?;
                         let ax = a.checked_pow(x)?;
                         let by = b.checked_pow(y)?;
-                        if sign.chars().next() == Some('-') {
+                        if sign.starts_with('-') {
                             ax.checked_sub(by)
                         } else {
                             ax.checked_add(by)
@@ -1504,7 +1504,7 @@ impl FactorFinder {
                         let left = self.evaluate_as_u128(&captures[1].into())?;
                         let right = self.evaluate_as_u128(&captures[3].into())?;
                         let sign = &captures[2];
-                        if sign.chars().next() == Some('-') {
+                        if sign.starts_with('-') {
                             left.checked_sub(right)
                         } else {
                             left.checked_add(right)
