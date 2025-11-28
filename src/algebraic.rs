@@ -1196,6 +1196,7 @@ impl FactorFinder {
 
     #[inline]
     pub(crate) fn find_factors_of_u128<T: Clone, U: Clone>(input: u128) -> Vec<Factor<T, U>> {
+        debug_assert_ne!(input, 0);
         factorize128(input)
             .into_iter()
             .flat_map(|(factor, power)| repeat_n(Numeric(factor), power))
@@ -1809,7 +1810,7 @@ impl FactorFinder {
                                                 .checked_pow(subset_product_u32)
                                                 .and_then(|an| an.checked_mul(root_b))
                                             {
-                                                let anb_plus_c = if c >= 0 && !even_ratio || c <= 0 && even_ratio {
+                                                let anb_plus_c = if (c >= 0 && !even_ratio) || (c <= 0 && even_ratio) {
                                                     Some(anb.checked_add(root_c).map(OwnedFactor::Numeric)
                                                         .unwrap_or_else(|| OwnedFactor::Expression(format!("{anb}+{root_c}").into())))
                                                 } else {
@@ -1837,7 +1838,7 @@ impl FactorFinder {
                                                         Cow::Borrowed("")
                                                     },
                                                 );
-                                                let anb_plus_c = if c >= 0 && !even_ratio || c <= 0 && even_ratio {
+                                                let anb_plus_c = if (c >= 0 && !even_ratio) || (c <= 0 && even_ratio) {
                                                     Some(OwnedFactor::Expression(format!("{anb}+{root_c}").into()))
                                                 } else {
                                                     None
@@ -1874,7 +1875,8 @@ impl FactorFinder {
                             ) else {
                                 return vec![];
                             };
-                            if x != y {
+                            let gcd = x.gcd(&y);
+                            if gcd == 1 {
                                 return self.find_common_factors(
                                     &if x > 1 {
                                         format!("{a}^{x}").into()
@@ -1890,26 +1892,27 @@ impl FactorFinder {
                                 );
                             }
                             let mut factors = Vec::new();
-                            for p in SMALL_PRIMES {
-                                let p = p as u128;
-                                // Compute a*b^{-1} mod p
-                                let b_inv = modinv(b % p, p);
-                                if b_inv.is_none() {
-                                    continue;
-                                }
-                                let g = (a % p * b_inv.unwrap()) % p;
+                            if x == y {
+                                for p in SMALL_PRIMES {
+                                    let p = p as u128;
+                                    // Compute a*b^{-1} mod p
+                                    let b_inv = modinv(b % p, p);
+                                    if b_inv.is_none() {
+                                        continue;
+                                    }
+                                    let g = (a % p * b_inv.unwrap()) % p;
 
-                                // Compute g^x mod p
-                                let gx = g.powm(x, &p);
+                                    // Compute g^x mod p
+                                    let gx = g.powm(x, &p);
 
-                                let add_check = match sign {
-                                    "+" => gx == p - 1,
-                                    "-" => gx == 1,
-                                    _ => unsafe { unreachable_unchecked() },
-                                };
-
-                                if add_check {
-                                    factors.push(Numeric(p));
+                                    let add_check = match sign {
+                                        "+" => gx == p - 1,
+                                        "-" => gx == 1,
+                                        _ => unsafe { unreachable_unchecked() },
+                                    };
+                                    if add_check {
+                                        factors.push(Numeric(p));
+                                    }
                                 }
                             }
                             if let Some(apb) = if sign == "-" {
@@ -1918,6 +1921,67 @@ impl FactorFinder {
                                 a.checked_add(b)
                             } {
                                 factors.extend(Self::find_factors_of_u128(apb));
+                            }
+                            let mut factors_of_gcd = factorize128(gcd);
+                            let power_of_2 = if sign == "+" {
+                                factors_of_gcd.remove(&2).unwrap_or(0) as u32
+                            } else {
+                                0
+                            };
+                            let mut odd_factors_of_gcd = factors_of_gcd
+                                .into_iter()
+                                .flat_map(|(key, value)| repeat_n(key, value))
+                                .collect::<Vec<u128>>();
+                            let odd_factors_of_n_count = odd_factors_of_gcd.len();
+                            let x_ratio = x / gcd;
+                            let y_ratio = y / gcd;
+                            for factor_subset in power_multiset(&mut odd_factors_of_gcd) {
+                                if factor_subset.len() == odd_factors_of_n_count
+                                {
+                                    continue;
+                                }
+                                let subset_product = factor_subset.into_iter().product::<u128>() << power_of_2;
+                                let even_ratio = (gcd / subset_product).is_multiple_of(2);
+                                let x = x_ratio * subset_product;
+                                let y = y_ratio * subset_product;
+                                let (ax_plus_by, ax_minus_by) = if let Ok(x_u32) = x.try_into() && let Ok(y_u32) = y.try_into()
+                                    && let Some(ax) = a
+                                    .checked_pow(x_u32)
+                                    && let Some(by) = b
+                                    .checked_pow(y_u32)
+                                {
+                                    let ax_plus_by = if (sign == "+" && !even_ratio) || (sign == "-" && even_ratio) {
+                                        Some(ax.checked_add(by).map(OwnedFactor::Numeric)
+                                            .unwrap_or_else(|| OwnedFactor::Expression(format!("{ax}+{by}").into())))
+                                    } else {
+                                        None
+                                    };
+                                    let ax_minus_by = if sign == "-" {
+                                        Some(ax.checked_sub(by).map(OwnedFactor::Numeric)
+                                            .unwrap_or_else(|| OwnedFactor::Expression(format!("{ax}-{by}").into())))
+                                    } else {
+                                        None
+                                    };
+                                    (ax_plus_by, ax_minus_by)
+                                } else {
+                                    let ax_plus_by = if (sign == "+" && !even_ratio) || (sign == "-" && even_ratio) {
+                                        Some(OwnedFactor::Expression(format!("{a}^{x}+{b}^{y}").into()))
+                                    } else {
+                                        None
+                                    };
+                                    let ax_minus_by = if sign == "-" {
+                                        Some(OwnedFactor::Expression(format!("{a}^{x}-{b}^{y}").into()))
+                                    } else {
+                                        None
+                                    };
+                                    (ax_plus_by, ax_minus_by)
+                                };
+                                for factor in ax_plus_by.into_iter().chain(ax_minus_by.into_iter()) {
+                                    if factor.as_str_non_u128() != Some(expr.as_ref()) {
+                                        factors.extend(self.find_factors(&factor));
+                                        factors.push(factor);
+                                    }
+                                }
                             }
                             factors
                         }
@@ -2253,18 +2317,28 @@ mod tests {
     }
 
     #[test]
-    fn test_abxy() {
+    fn test_axby() {
         let finder = FactorFinder::new();
-        let factors = finder.find_factors::<&str, &str>(&"1297^40000-901^40000".into());
+        let factors = finder.find_factors::<&str, &str>(&"1297^400-901^400".into());
+        println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
-        let factors = finder.find_factors::<&str, &str>(&"1297^39998-901^39998".into());
+        assert!(factors.contains(&Factor::Expression("1297^100-901^100".into())));
+        assert!(factors.contains(&Factor::Expression("1297^80-901^80".into())));
+        assert!(factors.contains(&Factor::Expression("1297^100+901^100".into())));
+        assert!(!factors.contains(&Factor::Expression("1297^80+901^80".into())));
+        let factors = finder.find_factors::<&str, &str>(&"1297^390-901^390".into());
+        println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
         assert!(!factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
+        assert!(factors.contains(&Factor::Expression("1297^130-901^130".into())));
+        assert!(factors.contains(&Factor::Expression("1297^195-901^195".into())));
+        assert!(!factors.contains(&Factor::Expression("1297^130+901^130".into())));
+        assert!(factors.contains(&Factor::Expression("1297^195+901^195".into())));
     }
 
     #[test]
