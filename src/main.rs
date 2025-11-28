@@ -900,7 +900,7 @@ async fn main() -> anyhow::Result<()> {
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
     let mut max_concurrent_requests = 2usize;
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
-    let (mut u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
+    let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
     let c_receiver = PushbackReceiver::new(c_raw_receiver, &c_sender);
     if std::env::var("CI").is_ok() {
@@ -939,7 +939,6 @@ async fn main() -> anyhow::Result<()> {
         })
         .await;
     let mut prp_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
-    let mut u_filter = CuckooFilter::with_capacity(4096);
     installed_receiver.await?;
     task::spawn(async_backtrace::location!().frame(do_checks(
         PushbackReceiver::new(prp_receiver, &prp_sender),
@@ -953,14 +952,43 @@ async fn main() -> anyhow::Result<()> {
     let mut u_http = http.clone();
     let u_factor_finder = factor_finder.clone();
     task::spawn(async_backtrace::location!().frame(async move {
+        let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
-            select! {
-                biased;
-                _ = u_shutdown_receiver.recv() => {
+            if u_shutdown_receiver.check_for_shutdown() {
+                warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                return;
+            }
+            let digits = u_digits.unwrap_or_else(|| rng()
+                .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
+                .try_into()
+                .unwrap());
+            let u_start = rng().random_range(0..=MAX_START);
+            let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
+            let Some(results_text) = u_http.try_get_and_decode(u_search_url).await else {
+                continue;
+            };
+            info!("U search results retrieved");
+            let ids = u_http
+                .read_ids_and_exprs(&results_text)
+                .collect::<Vec<_>>()
+                .into_iter();
+            for (u_id, digits_or_expr) in ids {
+                if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
                     return;
                 }
-                _ = try_queue_unknowns(&mut u_http, u_digits, &mut u_sender, &mut u_filter, &u_factor_finder) => {}
+                if u_filter.contains(&u_id) {
+                    warn!("{u_id}: Skipping duplicate U");
+                    continue;
+                }
+                if graph::find_and_submit_factors(&mut u_http, u_id, digits_or_expr.into(), &u_factor_finder, false).await {
+                    info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
+                } else {
+                    let _ = u_filter.add(&u_id);
+                    if u_sender.send(u_id).await.is_ok() {
+                        info!("{u_id}: Queued U");
+                    }
+                }
             }
         }
     }));
@@ -1017,57 +1045,6 @@ async fn main() -> anyhow::Result<()> {
         if new_c_buffer_task {
             c_buffer_task = queue_composites(&http, &c_sender, c_digits).await;
         }
-    }
-}
-
-#[framed]
-async fn try_queue_unknowns<'a>(
-    http: &mut impl FactorDbClient,
-    u_digits: Option<NonZeroU128>,
-    u_sender: &mut Sender<u128>,
-    u_filter: &mut CuckooFilter<DefaultHasher>,
-    factor_finder: &FactorFinder,
-) -> Result<(), ()> {
-    let digits = u_digits.unwrap_or_else(|| {
-        rng()
-            .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
-            .try_into()
-            .unwrap()
-    });
-    let u_start = rng().random_range(0..=MAX_START);
-    let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
-    let Some(results_text) = http.try_get_and_decode(u_search_url).await else {
-        return Err(());
-    };
-    info!("U search results retrieved");
-    let ids = http
-        .read_ids_and_exprs(&results_text)
-        .collect::<Vec<_>>()
-        .into_iter();
-    let mut ids_found = false;
-    for (u_id, digits_or_expr) in ids {
-        ids_found = true;
-        if u_filter.contains(&u_id) {
-            warn!("{u_id}: Skipping duplicate U");
-            continue;
-        }
-        if graph::find_and_submit_factors(http, u_id, digits_or_expr.into(), factor_finder, false).await {
-            info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-        } else {
-            let _ = u_filter.add(&u_id);
-            if u_sender.send(u_id).await.is_ok() {
-                info!("{u_id}: Queued U");
-            } else {
-                return Err(());
-            }
-        }
-    }
-    if ids_found {
-        Ok(())
-    } else {
-        error!("Couldn't parse IDs from search result: {results_text}");
-        sleep(RETRY_DELAY).await; // Can't do composites_while_waiting because we're on main thread, and child thread owns c_receiver
-        Err(())
     }
 }
 
