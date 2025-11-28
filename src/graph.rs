@@ -1,4 +1,3 @@
-use hipstr::HipStr;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -18,6 +17,7 @@ use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::storage::{AdjMatrix, Stable};
+use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use replace_with::replace_with_or_abort;
@@ -191,21 +191,22 @@ pub fn add_factor_node(
         .or_else(|| matching_vertices.first().copied())
         .map(|x| (x, false))
         .unwrap_or_else(|| {
-            let factor_vid = data
-                .divisibility_graph
-                .add_vertex(factor.clone());
+            let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
             let eval_as_u128 = factor_finder.evaluate_as_u128(&factor);
             let specifier = as_specifier(factor_vid, data, None);
-            let cached = http.cached_factors(specifier)
-                .or(eval_as_u128.map(|eval| {
-                    let factors = FactorFinder::find_factors_of_u128(eval);
-                    ProcessedStatusApiResponse {
-                        status: Some(if factors.len() == 1 { Prime } else { FullyFactored }),
-                        factors: factors.into_boxed_slice(),
-                        id: Numeric(eval).known_id()
-                    }
-                }));
+            let cached = http.cached_factors(specifier).or(eval_as_u128.map(|eval| {
+                let factors = FactorFinder::find_factors_of_u128(eval);
+                ProcessedStatusApiResponse {
+                    status: Some(if factors.len() == 1 {
+                        Prime
+                    } else {
+                        FullyFactored
+                    }),
+                    factors: factors.into_boxed_slice(),
+                    id: Numeric(eval).known_id(),
+                }
+            }));
 
             // Only full factorizations are cached or obtained via evaluate_as_u128.
             let has_cached = cached.is_some();
@@ -218,14 +219,7 @@ pub fn add_factor_node(
                         (factor_vid, false)
                     } else {
                         let entry_id = subfactor.known_id();
-                        add_factor_node(
-                            data,
-                            subfactor,
-                            factor_finder,
-                            root_vid,
-                            entry_id,
-                            http,
-                        )
+                        add_factor_node(data, subfactor, factor_finder, root_vid, entry_id, http)
                     };
                     cached_subfactors.push(subfactor_vid);
                 }
@@ -246,7 +240,7 @@ pub fn add_factor_node(
                     checked_for_listed_algebraic: has_cached,
                     checked_in_factor_finder: has_cached,
                     expression_form_checked_in_factor_finder: has_cached,
-                }
+                },
             );
             (factor_vid, true)
         });
@@ -1282,14 +1276,8 @@ async fn add_factors_to_graph(
             added.extend(added_via_equiv);
             let factors = factor_finder.find_unique_factors(Factor::from(expression_form.as_str()));
             added.extend(factors.into_iter().flat_map(|factor| {
-                let (vertex_id, added) = add_factor_node(
-                    data,
-                    factor,
-                    factor_finder,
-                    Some(root_vid),
-                    None,
-                    http,
-                );
+                let (vertex_id, added) =
+                    add_factor_node(data, factor, factor_finder, Some(root_vid), None, http);
                 if added { Some(vertex_id) } else { None }
             }));
         }
@@ -1383,11 +1371,9 @@ fn add_factor_finder_factor_vertices_to_graph(
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     factor_finder
-        .find_unique_factors(get_vertex(
-            &data.divisibility_graph,
-            factor_vid,
-            &data.deleted_synonyms,
-        ).clone())
+        .find_unique_factors(
+            get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms).clone(),
+        )
         .into_iter()
         .map(|new_factor| {
             let entry_id = if new_factor
@@ -1397,14 +1383,7 @@ fn add_factor_finder_factor_vertices_to_graph(
             } else {
                 new_factor.known_id()
             };
-            add_factor_node(
-                data,
-                new_factor,
-                factor_finder,
-                root_vid,
-                entry_id,
-                http,
-            )
+            add_factor_node(data, new_factor, factor_finder, root_vid, entry_id, http)
         })
         .flat_map(|(vid, added)| if added { Some(vid) } else { None })
         .collect()

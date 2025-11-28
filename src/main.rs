@@ -12,15 +12,15 @@ mod graph;
 mod monitor;
 mod net;
 
-use async_backtrace::taskdump_tree;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::NumberStatusExt;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
-use crate::monitor::{Monitor};
+use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, ResourceLimits};
 use async_backtrace::framed;
+use async_backtrace::taskdump_tree;
 use channel::PushbackReceiver;
 use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
@@ -43,13 +43,13 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
-use tokio::signal::ctrl_c;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -250,7 +250,6 @@ pub fn write_bignum(f: &mut Formatter, e: &HipStr<'static>) -> fmt::Result {
         write!(f, "{}...{}<{}>", &e[..20], &e[(len - 5)..], len)
     }
 }
-
 
 #[inline(always)]
 #[framed]
@@ -945,12 +944,15 @@ async fn main() -> anyhow::Result<()> {
                 warn!("try_queue_unknowns thread received shutdown signal; exiting");
                 return;
             }
-            let digits = u_digits.unwrap_or_else(|| rng()
-                .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
-                .try_into()
-                .unwrap());
+            let digits = u_digits.unwrap_or_else(|| {
+                rng()
+                    .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
+                    .try_into()
+                    .unwrap()
+            });
             let u_start = rng().random_range(0..=MAX_START);
-            let u_search_url = format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
+            let u_search_url =
+                format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
             let Some(results_text) = u_http.try_get_and_decode(u_search_url).await else {
                 continue;
             };
@@ -968,7 +970,15 @@ async fn main() -> anyhow::Result<()> {
                     warn!("{u_id}: Skipping duplicate U");
                     continue;
                 }
-                if graph::find_and_submit_factors(&mut u_http, u_id, digits_or_expr.into(), &u_factor_finder, false).await {
+                if graph::find_and_submit_factors(
+                    &mut u_http,
+                    u_id,
+                    digits_or_expr.into(),
+                    &u_factor_finder,
+                    false,
+                )
+                .await
+                {
                     info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
                 } else {
                     let _ = u_filter.add(&u_id);

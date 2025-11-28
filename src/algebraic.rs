@@ -1,5 +1,6 @@
 use crate::algebraic::Factor::Numeric;
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
+use const_format::formatcp;
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -17,11 +18,10 @@ use std::collections::BTreeMap;
 use std::f64::consts::LN_10;
 use std::f64::consts::LOG10_2;
 use std::fmt::{Display, Formatter};
-use std::hash::{Hash};
+use std::hash::Hash;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
-use const_format::formatcp;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -580,7 +580,6 @@ impl Factor {
     fn is_expression(&self) -> bool {
         matches!(self, Factor::Expression(_))
     }
-
 }
 
 impl From<u128> for Factor {
@@ -607,7 +606,7 @@ macro_rules! factor_from_str {
                 }
             }
         }
-    }
+    };
 }
 
 factor_from_str!(&str);
@@ -625,8 +624,7 @@ impl Display for Factor {
     }
 }
 
-impl PartialOrd<Factor> for Factor
-{
+impl PartialOrd<Factor> for Factor {
     #[inline(always)]
     fn partial_cmp(&self, other: &Factor) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -645,18 +643,12 @@ impl Ord for Factor {
             Factor::Expression(s) => match other {
                 Numeric(_) => Ordering::Greater,
                 Factor::BigNumber(_) => Ordering::Greater,
-                Factor::Expression(o) => s
-                    .len()
-                    .cmp(&o.len())
-                    .then_with(|| s.cmp(o)),
+                Factor::Expression(o) => s.len().cmp(&o.len()).then_with(|| s.cmp(o)),
             },
             Factor::BigNumber(s) => match other {
                 Numeric(_) => Ordering::Greater,
                 Factor::Expression(_) => Ordering::Less,
-                Factor::BigNumber(o) => s
-                    .len()
-                    .cmp(&o.len())
-                    .then_with(|| s.cmp(o)),
+                Factor::BigNumber(o) => s.len().cmp(&o.len()).then_with(|| s.cmp(o)),
             },
         }
     }
@@ -685,18 +677,13 @@ impl Factor {
     fn last_digit(&self) -> Option<u8> {
         match self {
             Factor::Expression(_) => None,
-            Factor::BigNumber(n) => {
-                Some(n.chars().last().unwrap().to_digit(10).unwrap() as u8)
-            }
+            Factor::BigNumber(n) => Some(n.chars().last().unwrap().to_digit(10).unwrap() as u8),
             Numeric(n) => Some((n % 10) as u8),
         }
     }
 
     #[inline]
-    pub fn may_be_proper_divisor_of(
-        &self,
-        other: &Factor,
-    ) -> bool {
+    pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
         if let Numeric(n) = self
             && let Numeric(o) = other
         {
@@ -925,7 +912,6 @@ fn mod_euclid(a: i128, b: u128) -> u128 {
     }
 }
 
-
 #[inline]
 fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T>> {
     let mut result = Vec::new();
@@ -1063,10 +1049,7 @@ impl FactorFinder {
     }
 
     #[inline(always)]
-    fn estimate_log10_internal(
-        &self,
-        expr: &Factor,
-    ) -> (u128, u128) {
+    fn estimate_log10_internal(&self, expr: &Factor) -> (u128, u128) {
         debug!("estimate_log10_internal: {expr}");
         match expr {
             Numeric(n) => {
@@ -1243,9 +1226,7 @@ impl FactorFinder {
                                 return (0, u128::MAX);
                             };
                             let (base_lower, base_upper) =
-                                self.estimate_log10_internal(&Factor::from(
-                                    &captures[1],
-                                ));
+                                self.estimate_log10_internal(&Factor::from(&captures[1]));
                             (
                                 base_lower.saturating_mul(power),
                                 base_upper.saturating_mul(power),
@@ -1253,17 +1234,16 @@ impl FactorFinder {
                         }
                         DIV_INDEX => {
                             // division
-                            let (mut denom_lower, mut denom_upper) = self
-                                .estimate_log10_internal(&Factor::from(&captures[2]));
+                            let (mut denom_lower, mut denom_upper) =
+                                self.estimate_log10_internal(&Factor::from(&captures[2]));
                             let mut remaining_end: usize;
                             let mut remaining = &captures[1];
                             let all_remaining = remaining;
                             while let Some(inner_captures) =
                                 self.regexes[DIV_INDEX].captures(remaining)
                             {
-                                let (term_lower, term_upper) = self.estimate_log10_internal(
-                                    &Factor::from(&inner_captures[2]),
-                                );
+                                let (term_lower, term_upper) =
+                                    self.estimate_log10_internal(&Factor::from(&inner_captures[2]));
                                 denom_lower = denom_lower.saturating_add(term_lower);
                                 denom_upper =
                                     denom_upper.saturating_add(term_upper.saturating_add(1));
@@ -1271,26 +1251,23 @@ impl FactorFinder {
                                 remaining = &all_remaining[..remaining_end];
                             }
                             let (num_lower, num_upper) =
-                                self.estimate_log10_internal(&Factor::from(
-                                    remaining,
-                                ));
+                                self.estimate_log10_internal(&Factor::from(remaining));
                             let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
                             let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
                             (lower, upper)
                         }
                         MUL_INDEX => {
                             // multiplication
-                            let (mut product_lower, mut product_upper) = self
-                                .estimate_log10_internal(&Factor::from(&captures[2]));
+                            let (mut product_lower, mut product_upper) =
+                                self.estimate_log10_internal(&Factor::from(&captures[2]));
                             let mut remaining_end: usize;
                             let mut remaining = &captures[1];
                             let all_remaining = remaining;
                             while let Some(inner_captures) =
                                 self.regexes[MUL_INDEX].captures(remaining)
                             {
-                                let (term_lower, term_upper) = self.estimate_log10_internal(
-                                    &Factor::from(&inner_captures[2]),
-                                );
+                                let (term_lower, term_upper) =
+                                    self.estimate_log10_internal(&Factor::from(&inner_captures[2]));
                                 product_lower = product_lower.saturating_add(term_lower);
                                 product_upper =
                                     product_upper.saturating_add(term_upper).saturating_add(1);
@@ -1298,9 +1275,7 @@ impl FactorFinder {
                                 remaining = &all_remaining[..remaining_end];
                             }
                             let (term_lower, term_upper) =
-                                self.estimate_log10_internal(&Factor::from(
-                                    remaining,
-                                ));
+                                self.estimate_log10_internal(&Factor::from(remaining));
                             product_lower = product_lower.saturating_add(term_lower);
                             product_upper =
                                 product_upper.saturating_add(term_upper).saturating_add(1);
@@ -1309,11 +1284,9 @@ impl FactorFinder {
                         ADD_SUB_INDEX => {
                             // addition/subtraction
                             let (left_lower, left_upper) =
-                                self.estimate_log10_internal(&Factor::from(
-                                    &captures[1],
-                                ));
-                            let (right_lower, right_upper) = self
-                                .estimate_log10_internal(&Factor::from(&captures[3]));
+                                self.estimate_log10_internal(&Factor::from(&captures[1]));
+                            let (right_lower, right_upper) =
+                                self.estimate_log10_internal(&Factor::from(&captures[3]));
                             Self::addsub_log10(
                                 &captures[2],
                                 left_lower as f64,
@@ -1355,10 +1328,7 @@ impl FactorFinder {
         (combined_lower as u128, combined_upper.ceil() as u128)
     }
 
-    pub(crate) fn estimate_log10(
-        &self,
-        expr: &Factor,
-    ) -> (u128, u128) {
+    pub(crate) fn estimate_log10(&self, expr: &Factor) -> (u128, u128) {
         let (lbound, ubound) = self.estimate_log10_internal(expr);
         if lbound > ubound {
             error!(
@@ -1370,15 +1340,16 @@ impl FactorFinder {
         }
     }
 
-    pub(crate) fn evaluate_as_u128(
-        &self,
-        expr: &Factor,
-    ) -> Option<u128> {
+    pub(crate) fn evaluate_as_u128(&self, expr: &Factor) -> Option<u128> {
         match expr {
             Numeric(n) => Some(*n),
             Factor::BigNumber(_) => None,
             Factor::Expression(expr) => {
-                let index = self.regexes_as_set.matches(expr.as_ref()).into_iter().next()?;
+                let index = self
+                    .regexes_as_set
+                    .matches(expr.as_ref())
+                    .into_iter()
+                    .next()?;
                 let captures = self.regexes[index].captures(expr.as_ref()).unwrap();
                 match index {
                     LUCAS_INDEX => {
@@ -1473,33 +1444,28 @@ impl FactorFinder {
                         match term {
                             0 | 1 => Some(1),
                             103.. => None,
-                            x => {
-                                Some(SMALL_PRIMES.iter().copied().map(u128::from).take_while(|p| *p <= x).product())
-                            }
+                            x => Some(
+                                SMALL_PRIMES
+                                    .iter()
+                                    .copied()
+                                    .map(u128::from)
+                                    .take_while(|p| *p <= x)
+                                    .product(),
+                            ),
                         }
                     }
-                    RAW_NUMBER_INDEX => {
-                        captures[1].parse().ok()
-                    }
+                    RAW_NUMBER_INDEX => captures[1].parse().ok(),
                     ELIDED_NUMBER_INDEX => None,
-                    PARENS_INDEX => {
-                        self.evaluate_as_u128(&captures[1].into())
-                    }
-                    POWER_INDEX => {
-                        self.evaluate_as_u128(&captures[1].into())?.checked_pow(
-                            u32::try_from(self.evaluate_as_u128(&captures[2].into())?).ok()?
-                        )
-                    }
-                    DIV_INDEX => {
-                        self.evaluate_as_u128(&captures[1].into())?.checked_div_exact(
-                            self.evaluate_as_u128(&captures[2].into())?
-                        )
-                    }
-                    MUL_INDEX => {
-                        self.evaluate_as_u128(&captures[1].into())?.checked_mul(
-                            self.evaluate_as_u128(&captures[2].into())?
-                        )
-                    }
+                    PARENS_INDEX => self.evaluate_as_u128(&captures[1].into()),
+                    POWER_INDEX => self.evaluate_as_u128(&captures[1].into())?.checked_pow(
+                        u32::try_from(self.evaluate_as_u128(&captures[2].into())?).ok()?,
+                    ),
+                    DIV_INDEX => self
+                        .evaluate_as_u128(&captures[1].into())?
+                        .checked_div_exact(self.evaluate_as_u128(&captures[2].into())?),
+                    MUL_INDEX => self
+                        .evaluate_as_u128(&captures[1].into())?
+                        .checked_mul(self.evaluate_as_u128(&captures[2].into())?),
                     ADD_SUB_INDEX => {
                         let left = self.evaluate_as_u128(&captures[1].into())?;
                         let right = self.evaluate_as_u128(&captures[3].into())?;
@@ -1510,17 +1476,14 @@ impl FactorFinder {
                             left.checked_add(right)
                         }
                     }
-                    _ => unsafe { unreachable_unchecked() }
+                    _ => unsafe { unreachable_unchecked() },
                 }
             }
         }
     }
 
     #[inline(always)]
-    fn find_factors(
-        &self,
-        expr: Factor,
-    ) -> Vec<Factor> {
+    fn find_factors(&self, expr: Factor) -> Vec<Factor> {
         info!("find_factors: {expr}");
         match expr {
             Numeric(n) => Self::find_factors_of_u128(n),
@@ -1539,7 +1502,8 @@ impl FactorFinder {
                     match index {
                         LUCAS_INDEX => {
                             // Lucas number
-                            let Some(term_number) = self.evaluate_as_u128(&captures[1].into()) else {
+                            let Some(term_number) = self.evaluate_as_u128(&captures[1].into())
+                            else {
                                 warn!(
                                     "Could not parse term number of a Lucas number: {}",
                                     &captures[1]
@@ -1550,7 +1514,8 @@ impl FactorFinder {
                         }
                         FIBONACCI_INDEX => {
                             // Fibonacci number
-                            let Some(term_number) = self.evaluate_as_u128(&captures[1].into()) else {
+                            let Some(term_number) = self.evaluate_as_u128(&captures[1].into())
+                            else {
                                 warn!(
                                     "Could not parse term number of a Fibonacci number: {}",
                                     &captures[1]
@@ -1582,27 +1547,31 @@ impl FactorFinder {
                             let c_neg = match &captures[4] {
                                 "-" => true,
                                 "+" => false,
-                                _ => unsafe { unreachable_unchecked() }
+                                _ => unsafe { unreachable_unchecked() },
                             };
-                            let gcd_bc = self.find_common_factors(b.clone(), c_raw_abs.clone(), false);
+                            let gcd_bc =
+                                self.find_common_factors(b.clone(), c_raw_abs.clone(), false);
                             let b_factors = self.find_factors(b);
-                            let gcd_ac = self.find_common_factors(a.clone(), c_raw_abs.clone(), false);
+                            let gcd_ac =
+                                self.find_common_factors(a.clone(), c_raw_abs.clone(), false);
                             let abs_c = self.find_factors(c_raw_abs);
                             let n = Factor::from(&captures[2]);
                             drop(captures);
                             if let Some(a) = self.evaluate_as_u128(&a)
                                 && let Some(n) = self.evaluate_as_u128(&n)
                             {
-                                let b_reduced: Vec<Factor> = multiset_difference(b_factors, &gcd_bc);
-                                let c_reduced: Vec<Factor> =
-                                    multiset_difference(abs_c, &gcd_bc);
+                                let b_reduced: Vec<Factor> =
+                                    multiset_difference(b_factors, &gcd_bc);
+                                let c_reduced: Vec<Factor> = multiset_difference(abs_c, &gcd_bc);
                                 factors.extend(multiset_union(gcd_ac, gcd_bc));
                                 if let Some(b) = checked_product_u128(b_reduced.as_slice())
-                                    && let Some(abs_c_u128) = checked_product_u128(c_reduced.as_slice())
+                                    && let Some(abs_c_u128) =
+                                        checked_product_u128(c_reduced.as_slice())
                                 {
                                     if !a.is_multiple_of(2)
                                         && !b.is_multiple_of(2)
-                                        && !abs_c_u128.is_multiple_of(2) {
+                                        && !abs_c_u128.is_multiple_of(2)
+                                    {
                                         factors.push(Numeric(2));
                                     }
                                     let anb_u128 = n
@@ -1649,12 +1618,16 @@ impl FactorFinder {
                                     let odd_factors_of_n_count = odd_factors_of_n.len();
                                     let expr = Factor::Expression(expr.clone());
                                     for factor_subset in power_multiset(&mut odd_factors_of_n) {
-                                        if factor_subset.len() == odd_factors_of_n_count
-                                        {
+                                        if factor_subset.len() == odd_factors_of_n_count {
                                             continue;
                                         }
-                                        let subset_product = factor_subset.into_iter().product::<u128>() << power_of_2;
-                                        if let Some(modulus) = a.powm(n, &subset_product).mulm(b, &subset_product).checked_add(mod_euclid(c, subset_product))
+                                        let subset_product =
+                                            factor_subset.into_iter().product::<u128>()
+                                                << power_of_2;
+                                        if let Some(modulus) = a
+                                            .powm(n, &subset_product)
+                                            .mulm(b, &subset_product)
+                                            .checked_add(mod_euclid(c, subset_product))
                                             && modulus.is_multiple_of(subset_product)
                                         {
                                             factors
@@ -1662,58 +1635,89 @@ impl FactorFinder {
                                         }
                                         if let Ok(prime_for_root) = (n / subset_product).try_into()
                                             && (c < 0 || !(n / subset_product).is_multiple_of(2))
-                                            && let Some(root_c) = abs_c_u128.nth_root_exact(prime_for_root)
+                                            && let Some(root_c) =
+                                                abs_c_u128.nth_root_exact(prime_for_root)
                                             && let Some(root_b) = b.nth_root_exact(prime_for_root)
                                         {
                                             let even_ratio = (n / subset_product).is_multiple_of(2);
-                                            let (anb_plus_c, anb_minus_c) = if let Ok(subset_product_u32) = subset_product.try_into()
-                                                && let Some(anb) = a
-                                                .checked_pow(subset_product_u32)
-                                                .and_then(|an| an.checked_mul(root_b))
+                                            let (anb_plus_c, anb_minus_c) =
+                                                if let Ok(subset_product_u32) =
+                                                    subset_product.try_into()
+                                                    && let Some(anb) = a
+                                                        .checked_pow(subset_product_u32)
+                                                        .and_then(|an| an.checked_mul(root_b))
+                                                {
+                                                    let anb_plus_c = if (c >= 0 && !even_ratio)
+                                                        || (c <= 0 && even_ratio)
+                                                    {
+                                                        Some(
+                                                            anb.checked_add(root_c)
+                                                                .map(Numeric)
+                                                                .unwrap_or_else(|| {
+                                                                    Factor::Expression(
+                                                                        format!("{anb}+{root_c}")
+                                                                            .into(),
+                                                                    )
+                                                                }),
+                                                        )
+                                                    } else {
+                                                        None
+                                                    };
+                                                    let anb_minus_c = if c < 0 {
+                                                        Some(
+                                                            anb.checked_sub(root_c)
+                                                                .map(Numeric)
+                                                                .unwrap_or_else(|| {
+                                                                    Factor::Expression(
+                                                                        format!("{anb}-{root_c}")
+                                                                            .into(),
+                                                                    )
+                                                                }),
+                                                        )
+                                                    } else {
+                                                        None
+                                                    };
+                                                    (anb_plus_c, anb_minus_c)
+                                                } else {
+                                                    let anb = format!(
+                                                        "{}{}{}",
+                                                        a,
+                                                        if subset_product > 1 {
+                                                            Owned(format!("^{}", subset_product))
+                                                        } else {
+                                                            Borrowed("")
+                                                        },
+                                                        if root_b > 1 {
+                                                            Owned(format!("*{}", root_b))
+                                                        } else {
+                                                            Borrowed("")
+                                                        },
+                                                    );
+                                                    let anb_plus_c = if (c >= 0 && !even_ratio)
+                                                        || (c <= 0 && even_ratio)
+                                                    {
+                                                        Some(Factor::Expression(
+                                                            format!("{anb}+{root_c}").into(),
+                                                        ))
+                                                    } else {
+                                                        None
+                                                    };
+                                                    let anb_minus_c = if c < 0 {
+                                                        Some(Factor::Expression(
+                                                            format!("{anb}-{root_c}").into(),
+                                                        ))
+                                                    } else {
+                                                        None
+                                                    };
+                                                    (anb_plus_c, anb_minus_c)
+                                                };
+                                            for factor in anb_plus_c
+                                                .into_iter()
+                                                .chain(anb_minus_c.into_iter())
                                             {
-                                                let anb_plus_c = if (c >= 0 && !even_ratio) || (c <= 0 && even_ratio) {
-                                                    Some(anb.checked_add(root_c).map(Numeric)
-                                                        .unwrap_or_else(|| Factor::Expression(format!("{anb}+{root_c}").into())))
-                                                } else {
-                                                    None
-                                                };
-                                                let anb_minus_c = if c < 0 {
-                                                    Some(anb.checked_sub(root_c).map(Numeric)
-                                                        .unwrap_or_else(|| Factor::Expression(format!("{anb}-{root_c}").into())))
-                                                } else {
-                                                    None
-                                                };
-                                                (anb_plus_c, anb_minus_c)
-                                            } else {
-                                                let anb = format!(
-                                                    "{}{}{}",
-                                                    a,
-                                                    if subset_product > 1 {
-                                                        Owned(format!("^{}", subset_product))
-                                                    } else {
-                                                        Borrowed("")
-                                                    },
-                                                    if root_b > 1 {
-                                                        Owned(format!("*{}", root_b))
-                                                    } else {
-                                                        Borrowed("")
-                                                    },
-                                                );
-                                                let anb_plus_c = if (c >= 0 && !even_ratio) || (c <= 0 && even_ratio) {
-                                                    Some(Factor::Expression(format!("{anb}+{root_c}").into()))
-                                                } else {
-                                                    None
-                                                };
-                                                let anb_minus_c = if c < 0 {
-                                                    Some(Factor::Expression(format!("{anb}-{root_c}").into()))
-                                                } else {
-                                                    None
-                                                };
-                                                (anb_plus_c, anb_minus_c)
-                                            };
-                                            for factor in anb_plus_c.into_iter().chain(anb_minus_c.into_iter()) {
                                                 if factor != expr {
-                                                    factors.extend(self.find_factors(factor.clone()));
+                                                    factors
+                                                        .extend(self.find_factors(factor.clone()));
                                                     factors.push(factor);
                                                 }
                                             }
@@ -1739,7 +1743,7 @@ impl FactorFinder {
                             let c_neg = match &captures[4] {
                                 "-" => true,
                                 "+" => false,
-                                _ => unsafe { unreachable_unchecked() }
+                                _ => unsafe { unreachable_unchecked() },
                             };
                             let gcd = x.gcd(&y);
                             if gcd == 1 {
@@ -1763,11 +1767,7 @@ impl FactorFinder {
                                 } else {
                                     Numeric(b)
                                 };
-                                return self.find_common_factors(
-                                    ax,
-                                    by,
-                                    true,
-                                );
+                                return self.find_common_factors(ax, by, true);
                             }
                             let mut factors = Vec::new();
                             if x == y {
@@ -1814,35 +1814,39 @@ impl FactorFinder {
                             let x_ratio = x / gcd;
                             let y_ratio = y / gcd;
                             for factor_subset in power_multiset(&mut odd_factors_of_gcd) {
-                                if factor_subset.len() == odd_factors_of_n_count
-                                {
+                                if factor_subset.len() == odd_factors_of_n_count {
                                     continue;
                                 }
-                                let subset_product = factor_subset.into_iter().product::<u128>() << power_of_2;
+                                let subset_product =
+                                    factor_subset.into_iter().product::<u128>() << power_of_2;
                                 let even_ratio = (gcd / subset_product).is_multiple_of(2);
                                 let x = x_ratio * subset_product;
                                 let y = y_ratio * subset_product;
-                                let (ax_plus_by, ax_minus_by) = if let Ok(x_u32) = x.try_into() && let Ok(y_u32) = y.try_into()
-                                    && let Some(ax) = a
-                                    .checked_pow(x_u32)
-                                    && let Some(by) = b
-                                    .checked_pow(y_u32)
+                                let (ax_plus_by, ax_minus_by) = if let Ok(x_u32) = x.try_into()
+                                    && let Ok(y_u32) = y.try_into()
+                                    && let Some(ax) = a.checked_pow(x_u32)
+                                    && let Some(by) = b.checked_pow(y_u32)
                                 {
-                                    let ax_plus_by = if (!c_neg && !even_ratio) || (c_neg && even_ratio) {
-                                        Some(ax.checked_add(by).map(Numeric)
-                                            .unwrap_or_else(|| Factor::Expression(format!("{ax}+{by}").into())))
-                                    } else {
-                                        None
-                                    };
+                                    let ax_plus_by =
+                                        if (!c_neg && !even_ratio) || (c_neg && even_ratio) {
+                                            Some(ax.checked_add(by).map(Numeric).unwrap_or_else(
+                                                || Factor::Expression(format!("{ax}+{by}").into()),
+                                            ))
+                                        } else {
+                                            None
+                                        };
                                     let ax_minus_by = if c_neg {
-                                        Some(ax.checked_sub(by).map(Numeric)
-                                            .unwrap_or_else(|| Factor::Expression(format!("{ax}-{by}").into())))
+                                        Some(ax.checked_sub(by).map(Numeric).unwrap_or_else(|| {
+                                            Factor::Expression(format!("{ax}-{by}").into())
+                                        }))
                                     } else {
                                         None
                                     };
                                     (ax_plus_by, ax_minus_by)
                                 } else {
-                                    let ax_plus_by = if (!c_neg && !even_ratio) || (c_neg && even_ratio) {
+                                    let ax_plus_by = if (!c_neg && !even_ratio)
+                                        || (c_neg && even_ratio)
+                                    {
                                         Some(Factor::Expression(format!("{a}^{x}+{b}^{y}").into()))
                                     } else {
                                         None
@@ -1855,7 +1859,8 @@ impl FactorFinder {
                                     (ax_plus_by, ax_minus_by)
                                 };
                                 let expr = Factor::Expression(expr.clone());
-                                for factor in ax_plus_by.into_iter().chain(ax_minus_by.into_iter()) {
+                                for factor in ax_plus_by.into_iter().chain(ax_minus_by.into_iter())
+                                {
                                     if factor != expr {
                                         factors.extend(self.find_factors(factor.clone()));
                                         factors.push(factor);
@@ -1922,14 +1927,12 @@ impl FactorFinder {
                                 .parse::<u128>()
                                 .unwrap_or(MAX_REPEATS)
                                 .min(MAX_REPEATS) as usize;
-                            let base_factors =
-                                self.find_factors(Factor::from(&captures[1]));
+                            let base_factors = self.find_factors(Factor::from(&captures[1]));
                             repeat_n(base_factors, power).flatten().collect()
                         }
                         DIV_INDEX => {
                             // division
-                            let mut denom_factors =
-                                self.find_factors(Factor::from(&captures[2]));
+                            let mut denom_factors = self.find_factors(Factor::from(&captures[2]));
                             let mut remaining_end: usize;
                             let mut remaining = &captures[1];
                             let all_remaining = remaining;
@@ -1953,8 +1956,7 @@ impl FactorFinder {
                         }
                         MUL_INDEX => {
                             // multiplication
-                            let mut factors =
-                                self.find_factors(Factor::from(&captures[2]));
+                            let mut factors = self.find_factors(Factor::from(&captures[2]));
                             let mut remaining_end: usize;
                             let mut remaining = &captures[1];
                             let all_remaining = remaining;
@@ -2082,10 +2084,7 @@ impl FactorFinder {
 
     /// Returns all unique, nontrivial factors we can find.
     #[inline(always)]
-    pub fn find_unique_factors(
-        &self,
-        expr: Factor,
-    ) -> Box<[Factor]> {
+    pub fn find_unique_factors(&self, expr: Factor) -> Box<[Factor]> {
         let mut factors = self.find_factors(expr.clone());
         factors.retain(|f| f.as_u128() != Some(1) && f.may_be_proper_divisor_of(&expr));
         factors.sort();
@@ -2135,7 +2134,11 @@ impl NumberStatusExt for Option<NumberStatus> {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection, multiset_union, power_multiset, mod_euclid};
+    use crate::algebraic::{
+        Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
+        lucas_factors, mod_euclid, modinv, multiset_difference, multiset_intersection,
+        multiset_union, power_multiset,
+    };
     use itertools::Itertools;
     use std::iter::repeat_n;
 
@@ -2273,10 +2276,7 @@ mod tests {
     fn test_power() {
         let finder = FactorFinder::new();
         let factors = finder.find_factors("(2^7-1)^2".into());
-        assert_eq!(
-            factors,
-            Vec::<Factor>::from([Numeric(127), Numeric(127)])
-        );
+        assert_eq!(factors, Vec::<Factor>::from([Numeric(127), Numeric(127)]));
     }
 
     #[test]
@@ -2298,22 +2298,16 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let factors = FactorFinder::new()
-            .find_factors("I(17#)".into());
+        let factors = FactorFinder::new().find_factors("I(17#)".into());
         // lucas_factors(PRIMORIAL, true);
-        assert!(
-            factors.contains(&Numeric(13))
-        );
+        assert!(factors.contains(&Numeric(13)));
     }
 
     #[test]
     fn test_nested_parens() {
-        let factors = FactorFinder::new()
-            .find_factors("12^((2^7-1)^2)-1".into());
+        let factors = FactorFinder::new().find_factors("12^((2^7-1)^2)-1".into());
         println!("{factors:?}");
-        assert!(
-            factors.contains(&Numeric(11))
-        );
+        assert!(factors.contains(&Numeric(11)));
     }
 
     #[test]
@@ -2428,45 +2422,37 @@ mod tests {
         ));
         assert_eq!(lower, 49);
         assert!(upper == 49 || upper == 50);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("2^607-1".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("2^607-1".into()));
         assert_eq!(lower, 182);
         assert_eq!(upper, 183);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("10^200-1".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("10^200-1".into()));
         assert_eq!(lower, 199);
         assert!(upper == 200 || upper == 201);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("10^200+1".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("10^200+1".into()));
         assert!(lower == 199 || lower == 200);
         assert_eq!(upper, 201);
         let (lower, upper) =
             finder.estimate_log10_internal(&Factor::Expression("10^200*31-1".into()));
         assert!(lower == 200 || lower == 201);
         assert_eq!(upper, 202);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("100!".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("100!".into()));
         assert_eq!(lower, 157);
         assert_eq!(upper, 158);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("100#".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("100#".into()));
         assert!(lower <= 36);
         assert!(upper >= 37);
         assert!(upper <= 44);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("20+30".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("20+30".into()));
         assert_eq!(lower, 1);
         assert!(upper == 2 || upper == 3);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("30-19".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("30-19".into()));
         assert!(lower <= 1);
         assert_eq!(upper, 2);
-        let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("11*11".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("11*11".into()));
         assert_eq!(lower, 2);
         assert!(upper >= 3);
-        let (lower, upper) = finder
-            .estimate_log10_internal(&Factor::Expression("(2^769-1)/1591805393".into()));
+        let (lower, upper) =
+            finder.estimate_log10_internal(&Factor::Expression("(2^769-1)/1591805393".into()));
         assert!(lower >= 220 && lower <= 222);
         assert!(upper >= 223 && upper <= 225);
         let (lower, upper) =
@@ -2478,16 +2464,24 @@ mod tests {
     #[test]
     fn test_evaluate_as_u128() {
         let finder = FactorFinder::new();
-        assert_eq!(finder.evaluate_as_u128(&Factor::Expression("2^127-1".into())), Some(i128::MAX as u128));
-        assert_eq!(finder.evaluate_as_u128(&Factor::Expression("(5^6+1)^2-1".into())), Some(244171875));
-        assert_eq!(finder.evaluate_as_u128(&Factor::Expression("3^3+4^4+5^5".into())), Some(3408));
+        assert_eq!(
+            finder.evaluate_as_u128(&Factor::Expression("2^127-1".into())),
+            Some(i128::MAX as u128)
+        );
+        assert_eq!(
+            finder.evaluate_as_u128(&Factor::Expression("(5^6+1)^2-1".into())),
+            Some(244171875)
+        );
+        assert_eq!(
+            finder.evaluate_as_u128(&Factor::Expression("3^3+4^4+5^5".into())),
+            Some(3408)
+        );
     }
 
     #[test]
     fn test_may_be_proper_divisor_of() {
         fn may_be_proper_divisor_of(left: &str, right: &str) -> bool {
-            Factor::from(left)
-                .may_be_proper_divisor_of(&Factor::from(right))
+            Factor::from(left).may_be_proper_divisor_of(&Factor::from(right))
         }
         assert!(may_be_proper_divisor_of("123", "369^2"));
         assert!(!may_be_proper_divisor_of("2", "34567"));
@@ -2499,15 +2493,15 @@ mod tests {
 
     #[test]
     fn test_mod_euclid() {
-        assert_eq!(mod_euclid(        1,        10),                  1);
-        assert_eq!(mod_euclid(       -1,        10),                  9);
-        assert_eq!(mod_euclid(       11,        10),                  1);
-        assert_eq!(mod_euclid(      -11,        10),                  9);
-        assert_eq!(mod_euclid(i128::MAX,         1),                  0);
-        assert_eq!(mod_euclid(        0,         1),                  0);
-        assert_eq!(mod_euclid(i128::MIN,         1),                  0);
-        assert_eq!(mod_euclid(i128::MAX, u128::MAX),  i128::MAX as u128);
-        assert_eq!(mod_euclid(        0, u128::MAX),                  0);
-        assert_eq!(mod_euclid(i128::MIN, u128::MAX),  i128::MAX as u128);
+        assert_eq!(mod_euclid(1, 10), 1);
+        assert_eq!(mod_euclid(-1, 10), 9);
+        assert_eq!(mod_euclid(11, 10), 1);
+        assert_eq!(mod_euclid(-11, 10), 9);
+        assert_eq!(mod_euclid(i128::MAX, 1), 0);
+        assert_eq!(mod_euclid(0, 1), 0);
+        assert_eq!(mod_euclid(i128::MIN, 1), 0);
+        assert_eq!(mod_euclid(i128::MAX, u128::MAX), i128::MAX as u128);
+        assert_eq!(mod_euclid(0, u128::MAX), 0);
+        assert_eq!(mod_euclid(i128::MIN, u128::MAX), i128::MAX as u128);
     }
 }

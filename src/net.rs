@@ -99,13 +99,9 @@ pub trait FactorDbClient {
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
-    fn cached_factors(&self, id: NumberSpecifier)
-    -> Option<ProcessedStatusApiResponse>;
-    async fn try_report_factor(
-        &self,
-        u_id: NumberSpecifier,
-        factor: &Factor,
-    ) -> ReportFactorResult;
+    fn cached_factors(&self, id: NumberSpecifier) -> Option<ProcessedStatusApiResponse>;
+    async fn try_report_factor(&self, u_id: NumberSpecifier, factor: &Factor)
+    -> ReportFactorResult;
     async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult;
 }
 
@@ -425,10 +421,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
-    fn cached_factors(
-        &self,
-        mut id: NumberSpecifier,
-    ) -> Option<ProcessedStatusApiResponse> {
+    fn cached_factors(&self, mut id: NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
         if let Id(entry_id) = id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
@@ -583,8 +576,7 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache
-                    .insert(expr.clone(), processed.clone());
+                self.by_expr_cache.insert(expr.clone(), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
