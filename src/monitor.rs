@@ -6,16 +6,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 
-/// A Monitor performs two tasks:
-/// 1. Periodically prints the async backtraces of running tasks, so that any
-///    deadlock can be diagnosed.
-/// 2. Listens for the server shutdown signal.
-///
 /// Shutdown is signalled using a `broadcast::Receiver`. Only a single value is
 /// ever sent. Once a value has been sent via the broadcast channel, the server
 /// should shut down.
 ///
-/// The `Shutdown` struct listens for the signal and tracks that the signal has
+/// The `Monitor` struct listens for the signal and tracks that the signal has
 /// been received. Callers may query for whether the shutdown signal has been
 /// received or not.
 #[derive(Debug)]
