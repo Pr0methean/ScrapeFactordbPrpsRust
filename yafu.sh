@@ -13,10 +13,9 @@ while read -r num; do
   if [ "$num" == "" ]; then
     continue
   fi
-  exec 9>"/tmp/factordb-composites/${num:0:255}"
+  shasum=$(sha512sum <<< "$num")
+  exec 9>"/tmp/factordb-composites/$shasum"
   if flock -xn 9; then
-      let real_digits="${#num}"
-      let "max_factor_digits = real_digits / 2 + 2"
       declare factor
       start_time="$(date +%s%N)"
       while read -r factor; do (
@@ -40,7 +39,7 @@ while read -r num; do
         echo "Factoring ${num} with yafu" >&2
         ./yafu -threads 4 -R -qssave "./qs" -session "./session" -logfile "./log" -o "./nfs" -pscreen -inmem 2000000000 <<<"factor(${num})" 2>&1 \
           | tee "./out" \
-          | grep -i '\(P[0-9]\+\|factor\) = ' | grep -o '= [0-9]\+' | grep -o '[0-9]\+' | grep -o "^[0-9]\{1,$max_factor_digits\}$" \
+          | grep -i '\(P[0-9]\+\|factor\) = ' | grep -o '= [0-9]\+' | grep -o '[0-9]\+' \
           | awk '!x[$0]++'
         if grep -q '^P[0-9]' "./out"; then
           end_time=$(date +%s%N)
