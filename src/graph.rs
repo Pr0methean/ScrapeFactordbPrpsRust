@@ -194,8 +194,21 @@ pub fn add_factor_node(
                 .divisibility_graph
                 .add_vertex(OwnedFactor::from(&factor));
             let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
+            let eval_as_u128 = factor_finder.evaluate_as_u128(&factor);
             let specifier = as_specifier(factor_vid, data, None);
-            let cached = http.cached_factors(specifier);
+            let cached = http.cached_factors(specifier)
+                .or(eval_as_u128.map(|eval| {
+                    let factors = FactorFinder::find_factors_of_u128(eval);
+                    ProcessedStatusApiResponse {
+                        status: Some(if factors.len() == 1 { Prime } else { FullyFactored }),
+                        factors: factors.into_boxed_slice(),
+                        id: Numeric::<!,!>(eval).known_id()
+                    }
+                }));
+
+            // Only full factorizations are cached or obtained via evaluate_as_u128.
+            let has_cached = cached.is_some();
+
             let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
                 entry_id = entry_id.or(cached.id);
                 let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
@@ -218,18 +231,20 @@ pub fn add_factor_node(
             } else {
                 (None, NotQueried)
             };
+
             data.number_facts_map.insert(
                 factor_vid,
                 NumberFacts {
                     last_known_status,
                     factors_known_to_factordb,
+                    eval_as_u128,
                     lower_bound_log10,
                     upper_bound_log10,
                     entry_id,
-                    checked_for_listed_algebraic: false,
-                    checked_in_factor_finder: false,
-                    expression_form_checked_in_factor_finder: false,
-                },
+                    checked_for_listed_algebraic: has_cached,
+                    checked_in_factor_finder: has_cached,
+                    expression_form_checked_in_factor_finder: has_cached,
+                }
             );
             (factor_vid, true)
         });
@@ -373,6 +388,7 @@ impl FactorsKnownToFactorDb {
 pub struct NumberFacts {
     last_known_status: Option<NumberStatus>,
     factors_known_to_factordb: FactorsKnownToFactorDb,
+    eval_as_u128: Option<u128>,
     lower_bound_log10: u128,
     upper_bound_log10: u128,
     pub(crate) entry_id: Option<u128>,
@@ -466,6 +482,7 @@ impl NumberFacts {
         NumberFacts {
             lower_bound_log10: self.lower_bound_log10.max(other.lower_bound_log10),
             upper_bound_log10: self.upper_bound_log10.min(other.upper_bound_log10),
+            eval_as_u128: self.eval_as_u128.or(other.eval_as_u128),
             entry_id: self.entry_id.or(other.entry_id),
             checked_for_listed_algebraic: self.checked_for_listed_algebraic
                 || other.checked_for_listed_algebraic,

@@ -567,6 +567,18 @@ impl<T, U> Factor<T, U> {
             None
         }
     }
+    pub fn as_u128(&self) -> Option<u128> {
+        match self {
+            Numeric(n) => Some(*n),
+            Factor::Expression(_) => None,
+            Factor::BigNumber(_) => None,
+        }
+    }
+
+    #[inline(always)]
+    fn is_expression(&self) -> bool {
+        matches!(self, Factor::Expression(_))
+    }
 }
 
 pub type OwnedFactor = Factor<HipStr<'static>, HipStr<'static>>;
@@ -790,11 +802,6 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
         }
     }
 
-    #[inline(always)]
-    fn is_expression(&self) -> bool {
-        matches!(self, Factor::Expression(_))
-    }
-
     pub fn may_be_proper_divisor_of<V: AsRef<str>, W: AsRef<str>>(
         &self,
         other: &Factor<V, W>,
@@ -830,16 +837,6 @@ impl<T: AsRef<str>, U: AsRef<str>> Factor<T, U> {
                 _ => unsafe { unreachable_unchecked() },
             }
             .contains(&other_last_digit)
-        }
-    }
-}
-
-impl<T, U> Factor<T, U> {
-    pub fn as_u128(&self) -> Option<u128> {
-        match self {
-            Numeric(n) => Some(*n),
-            Factor::Expression(_) => None,
-            Factor::BigNumber(_) => None,
         }
     }
 }
@@ -1226,7 +1223,7 @@ impl FactorFinder {
             }
             Factor::Expression(expr) => {
                 if let Some(n) = self.evaluate_as_u128(&Factor::<T, &U>::Expression(expr)) {
-                    return self.estimate_log10_internal(&Factor::<&str,&str>::Numeric(n));
+                    return self.estimate_log10_internal::<&str,&str>(&Numeric(n));
                 }
                 if let Some(index) = self
                     .regexes_as_set
@@ -1511,7 +1508,7 @@ impl FactorFinder {
         }
     }
 
-    fn evaluate_as_u128<T: AsRef<str>, U: AsRef<str> + Display>(
+    pub(crate) fn evaluate_as_u128<T: AsRef<str>, U: AsRef<str> + Display>(
         &self,
         expr: &Factor<T, U>,
     ) -> Option<u128> {
@@ -1811,13 +1808,13 @@ impl FactorFinder {
                                                 .and_then(|an| an.checked_mul(root_b))
                                             {
                                                 let anb_plus_c = if (c >= 0 && !even_ratio) || (c <= 0 && even_ratio) {
-                                                    Some(anb.checked_add(root_c).map(OwnedFactor::Numeric)
+                                                    Some(anb.checked_add(root_c).map(Numeric)
                                                         .unwrap_or_else(|| OwnedFactor::Expression(format!("{anb}+{root_c}").into())))
                                                 } else {
                                                     None
                                                 };
                                                 let anb_minus_c = if c < 0 {
-                                                    Some(anb.checked_sub(root_c).map(OwnedFactor::Numeric)
+                                                    Some(anb.checked_sub(root_c).map(Numeric)
                                                         .unwrap_or_else(|| OwnedFactor::Expression(format!("{anb}-{root_c}").into())))
                                                 } else {
                                                     None
@@ -1828,14 +1825,14 @@ impl FactorFinder {
                                                     "{}{}{}",
                                                     a,
                                                     if subset_product > 1 {
-                                                        Cow::Owned(format!("^{}", subset_product))
+                                                        Owned(format!("^{}", subset_product))
                                                     } else {
-                                                        Cow::Borrowed("")
+                                                        Borrowed("")
                                                     },
                                                     if root_b > 1 {
-                                                        Cow::Owned(format!("*{}", root_b))
+                                                        Owned(format!("*{}", root_b))
                                                     } else {
-                                                        Cow::Borrowed("")
+                                                        Borrowed("")
                                                     },
                                                 );
                                                 let anb_plus_c = if (c >= 0 && !even_ratio) || (c <= 0 && even_ratio) {
@@ -1951,13 +1948,13 @@ impl FactorFinder {
                                     .checked_pow(y_u32)
                                 {
                                     let ax_plus_by = if (sign == "+" && !even_ratio) || (sign == "-" && even_ratio) {
-                                        Some(ax.checked_add(by).map(OwnedFactor::Numeric)
+                                        Some(ax.checked_add(by).map(Numeric)
                                             .unwrap_or_else(|| OwnedFactor::Expression(format!("{ax}+{by}").into())))
                                     } else {
                                         None
                                     };
                                     let ax_minus_by = if sign == "-" {
-                                        Some(ax.checked_sub(by).map(OwnedFactor::Numeric)
+                                        Some(ax.checked_sub(by).map(Numeric)
                                             .unwrap_or_else(|| OwnedFactor::Expression(format!("{ax}-{by}").into())))
                                     } else {
                                         None
@@ -2180,10 +2177,10 @@ impl FactorFinder {
         expr2: &Factor<T, U>,
         for_add_or_sub: bool,
     ) -> Vec<OwnedFactor> {
-        if let Numeric(num1) = expr1
-            && let Numeric(num2) = expr2
+        if let Some(num1) = self.evaluate_as_u128(expr1)
+            && let Some(num2) = self.evaluate_as_u128(expr2)
         {
-            factorize128(num1.gcd(num2))
+            factorize128(num1.gcd(&num2))
                 .into_iter()
                 .flat_map(|(factor, power)| repeat_n(Numeric(factor), power))
                 .collect()
@@ -2423,7 +2420,7 @@ mod tests {
     #[test]
     fn test_parse() {
         let factors = FactorFinder::new()
-            .find_factors(&format!("I(17#)").into());
+            .find_factors::<&str,&str>(&"I(17#)".into());
         // lucas_factors(PRIMORIAL, true);
         assert!(
             factors.contains(&Numeric(13))
@@ -2433,7 +2430,7 @@ mod tests {
     #[test]
     fn test_nested_parens() {
         let factors = FactorFinder::new()
-            .find_factors(&format!("12^((2^7-1)^2)-1").into());
+            .find_factors::<&str,&str>(&"12^((2^7-1)^2)-1".into());
         println!("{factors:?}");
         assert!(
             factors.contains(&Numeric(11))

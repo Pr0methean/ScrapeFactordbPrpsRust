@@ -3,6 +3,7 @@
 #![feature(float_gamma)]
 #![feature(deque_extend_front)]
 #![feature(exact_div)]
+#![feature(never_type)]
 extern crate alloc;
 extern crate core;
 
