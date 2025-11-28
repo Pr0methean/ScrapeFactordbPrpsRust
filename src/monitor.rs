@@ -1,18 +1,10 @@
 // Adapted from: https://github.com/tokio-rs/mini-redis/blob/e186482ca00f8d884ddcbe20417f3654d03315a4/src/shutdown.rs
 
-use async_backtrace::{framed, taskdump_tree};
-use log::{error, info, warn};
+use async_backtrace::{framed};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::time::Duration;
-use tokio::signal::ctrl_c;
 use tokio::sync::broadcast::{Receiver, Sender, channel};
-use tokio::sync::oneshot;
-use tokio::time::{Instant, sleep_until};
-use tokio::{select, signal};
-
-const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
 /// A Monitor performs two tasks:
 /// 1. Periodically prints the async backtraces of running tasks, so that any

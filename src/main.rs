@@ -12,12 +12,13 @@ mod graph;
 mod monitor;
 mod net;
 
+use async_backtrace::taskdump_tree;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::NumberStatusExt;
 use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
-use crate::monitor::{Monitor, monitor};
+use crate::monitor::{Monitor};
 use crate::net::{FactorDbClient, ResourceLimits};
 use async_backtrace::framed;
 use channel::PushbackReceiver;
@@ -437,6 +438,8 @@ async fn queue_composites(
     }))
 }
 
+const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
@@ -462,7 +465,7 @@ async fn main() -> anyhow::Result<()> {
             // Create a channel that will never receive a signal
             let (_sender, sigterm) = oneshot::channel();
         }
-        let mut next_backtrace = Instant::now() + crate::monitor::STACK_TRACES_INTERVAL;
+        let mut next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
         loop {
             select! {
                 _ = sleep_until(next_backtrace) => {
@@ -490,7 +493,7 @@ async fn main() -> anyhow::Result<()> {
                 "Task backtraces with all tasks idle:\n{}",
                 taskdump_tree(true)
             );
-            next_backtrace = Instant::now() + crate::monitor::STACK_TRACES_INTERVAL;
+            next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
         }
     });
 
