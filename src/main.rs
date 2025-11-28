@@ -240,6 +240,7 @@ enum NumberSpecifier {
 }
 
 impl Display for NumberSpecifier {
+    #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Id(id) => write!(f, "ID {}", id),
@@ -248,6 +249,7 @@ impl Display for NumberSpecifier {
     }
 }
 
+#[inline(always)]
 pub fn write_bignum(f: &mut Formatter, e: &HipStr<'static>) -> fmt::Result {
     let len = e.len();
     if len < 300 {
@@ -456,6 +458,7 @@ async fn get_prp_remaining_bases(
     Ok(bases_left)
 }
 
+#[inline(always)]
 #[framed]
 async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
     let _ = http
@@ -466,6 +469,7 @@ async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
         .await;
 }
 
+#[inline(always)]
 #[framed]
 async fn prove_by_nm1(id: u128, http: &impl FactorDbClient) {
     let _ = http
@@ -485,7 +489,7 @@ const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[framed]
-#[inline]
+#[inline(always)]
 async fn do_checks(
     mut prp_receiver: PushbackReceiver<u128>,
     mut u_receiver: PushbackReceiver<u128>,
