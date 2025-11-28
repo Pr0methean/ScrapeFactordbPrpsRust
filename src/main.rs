@@ -47,7 +47,8 @@ use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
-use tokio::{select, task};
+use tokio::{select, signal, task};
+use tokio::signal::ctrl_c;
 
 const MAX_START: u128 = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
@@ -442,7 +443,57 @@ async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
-    task::spawn(monitor(shutdown_sender, installed_sender));
+
+    // Monitoring task: print backtraces periodically, handle shutdown signals
+    task::spawn(async move {
+        let mut sigint = Box::pin(ctrl_c());
+        info!("Signal handlers installed");
+        installed_sender
+            .send(())
+            .expect("Error signaling main task that signal handlers are installed");
+        let mut sigterm;
+        #[cfg(unix)]
+        {
+            sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to create SIGTERM signal stream");
+        }
+        #[cfg(not(unix))]
+        {
+            // Create a channel that will never receive a signal
+            let (_sender, sigterm) = oneshot::channel();
+        }
+        let mut next_backtrace = Instant::now() + crate::monitor::STACK_TRACES_INTERVAL;
+        loop {
+            select! {
+                _ = sleep_until(next_backtrace) => {
+                    info!("Task backtraces:\n{}", taskdump_tree(false));
+                    info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+                    next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+                }
+                _ = sigterm.recv() => {
+                    warn!("Received SIGTERM; signaling tasks to exit");
+                    break;
+                },
+                _ = &mut sigint => {
+                    warn!("Received SIGINT; signaling tasks to exit");
+                    break;
+                }
+            }
+        }
+        if let Err(e) = shutdown_sender.send(()) {
+            error!("Error sending shutdown signal: {e}");
+        }
+        loop {
+            sleep_until(next_backtrace).await;
+            info!("Task backtraces:\n{}", taskdump_tree(false));
+            info!(
+                "Task backtraces with all tasks idle:\n{}",
+                taskdump_tree(true)
+            );
+            next_backtrace = Instant::now() + crate::monitor::STACK_TRACES_INTERVAL;
+        }
+    });
+
     unsafe {
         backtrace_on_stack_overflow::enable();
     }
