@@ -695,8 +695,11 @@ impl Factor {
         if self.is_expression() || other.is_expression() {
             let self_str = self.as_str();
             let other_str = other.as_str();
-            !(self_str.starts_with(&*other_str)
-                && self_str.get(other_str.len()..=other_str.len()) == Some("/"))
+            !(other_str.starts_with(&*self_str)
+                && other_str.get(self_str.len()..=self_str.len()) == Some("/"))
+            && !(other_str.starts_with('(')
+                && other_str[1..=self_str.len()] == self_str
+                && other_str[self_str.len()+1..=self_str.len()+2] == *")/")
         } else {
             if self > other {
                 return false;
@@ -2512,6 +2515,8 @@ mod tests {
         assert!(!may_be_proper_divisor_of("12345", "54321"));
         assert!(!may_be_proper_divisor_of("12345", "12345"));
         assert!(!may_be_proper_divisor_of("54321", "12345"));
+        assert!(!may_be_proper_divisor_of("123456789123456789123456789123456789123456789", "123456789123456789123456789123456789123456789/3"));
+        assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
     }
 
     #[test]
