@@ -1760,7 +1760,7 @@ impl FactorFinder {
                             };
                             let (a, x) = factor_power(a, x);
                             let (b, y) = factor_power(b, y);
-                            let c_neg = match &captures[4] {
+                            let c_neg = match sign {
                                 "-" => true,
                                 "+" => false,
                                 _ => unsafe { unreachable_unchecked() },
