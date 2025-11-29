@@ -698,8 +698,8 @@ impl Factor {
             !(other_str.starts_with(&*self_str)
                 && other_str.get(self_str.len()..=self_str.len()) == Some("/"))
             && !(other_str.starts_with('(')
-                && other_str[1..=self_str.len()] == self_str
-                && other_str[self_str.len()+1..=self_str.len()+2] == *")/")
+                && other_str.get(1..=self_str.len()) == Some(&*self_str)
+                && other_str.get(self_str.len()+1..=self_str.len()+2) == Some(")/"))
         } else {
             if self > other {
                 return false;
@@ -2008,7 +2008,7 @@ impl FactorFinder {
         }
     }
 
-    fn factor_big_num<'a>(expr: HipStr<'a>) -> Vec<Factor> {
+    fn factor_big_num(expr: HipStr) -> Vec<Factor> {
         let mut factors = Vec::new();
         let mut expr_short = expr.as_str();
         while expr_short != "0"
