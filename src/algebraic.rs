@@ -1097,38 +1097,29 @@ impl FactorFinder {
                     match index {
                         FIBONACCI_INDEX | LUCAS_INDEX => {
                             // Fibonacci or Lucas number
-                            let Ok(term_number) = captures[1].parse::<u128>() else {
+                            let Some(term_number) = self.evaluate_as_u128(&captures[1].into()) else {
                                 warn!(
                                     "Could not parse term number of a Lucas number: {}",
                                     &captures[1]
                                 );
                                 return (0, u128::MAX);
                             };
-                            if term_number <= 2 {
-                                return if index == 0 && term_number != 1 {
-                                    // factordb defines lucas(0) as 2 and lucas(2) as 3
-                                    (0, 1)
-                                } else {
-                                    (0, 0) // factordb defines I(0) as 0 and
-                                    // I(1), I(2) and lucas(1) as 1
-                                };
-                            }
                             let est_log = term_number as f64 * 0.20898;
                             (est_log.floor() as u128, est_log.ceil() as u128 + 1)
                         }
                         ANBC_INDEX => {
                             // a^n*b+c
-                            let (Ok(a), Ok(n), Ok(b), Ok(c)) = (
-                                captures[1].parse::<u128>(),
-                                captures[2].parse::<u128>(),
-                                captures
-                                    .get(3)
-                                    .map(|b| b.as_str().parse::<u128>())
-                                    .unwrap_or(Ok(1)),
-                                captures
-                                    .get(5)
-                                    .map(|c| c.as_str().parse::<i128>())
-                                    .unwrap_or(Ok(0)),
+                            let (Some(a), Some(n), Some(b), Some(c)) = (
+                                self.evaluate_as_u128(&captures[1].into()),
+                            self.evaluate_as_u128(&captures[2].into()),
+                                match captures.get(3) {
+                                    Some(b) => self.evaluate_as_u128(&b.as_str().into()),
+                                    None => Some(1),
+                                },
+                                match captures.get(5) {
+                                    Some(c) => self.evaluate_as_u128(&c.as_str().into()),
+                                    None => Some(0),
+                                },
                             ) else {
                                 warn!("Could not parse a^n*b+c expression: {expr}",);
                                 return (0, u128::MAX);
@@ -1158,12 +1149,12 @@ impl FactorFinder {
                         }
                         AXBY_INDEX => {
                             // a^x +/- b^y
-                            let (Ok(a), Ok(x), sign, Ok(b), Ok(y)) = (
-                                captures[1].parse::<u128>(),
-                                captures[2].parse::<u128>(),
+                            let (Some(a), Some(x), sign, Some(b), Some(y)) = (
+                                self.evaluate_as_u128(&captures[1].into()),
+                                self.evaluate_as_u128(&captures[2].into()),
                                 &captures[3],
-                                captures[4].parse::<u128>(),
-                                captures[5].parse::<u128>(),
+                                self.evaluate_as_u128(&captures[4].into()),
+                                self.evaluate_as_u128(&captures[5].into()),
                             ) else {
                                 return (0, u128::MAX);
                             };
@@ -1185,7 +1176,7 @@ impl FactorFinder {
                         }
                         FACTORIAL_INDEX => {
                             // factorial
-                            let Ok(input) = captures[1].parse::<u128>() else {
+                            let Some(input) = self.evaluate_as_u128(&captures[1].into()) else {
                                 warn!("Could not parse input to a factorial: {}", &captures[1]);
                                 return (0, u128::MAX);
                             };
@@ -1203,7 +1194,7 @@ impl FactorFinder {
                         }
                         PRIMORIAL_INDEX => {
                             // primorial
-                            let Ok(input) = captures[1].parse::<u128>() else {
+                            let Some(input) = self.evaluate_as_u128(&captures[1].into()) else {
                                 warn!("Could not parse input to a factorial: {}", &captures[1]);
                                 return (0, u128::MAX);
                             };
@@ -1239,7 +1230,7 @@ impl FactorFinder {
                             self.estimate_log10_internal(&Factor::from(&captures[1]))
                         }
                         POWER_INDEX => {
-                            let Ok(power) = captures[2].parse::<u128>() else {
+                            let Some(power) = self.evaluate_as_u128(&captures[2].into()) else {
                                 return (0, u128::MAX);
                             };
                             let (base_lower, base_upper) =
@@ -1552,8 +1543,7 @@ impl FactorFinder {
                             let c_raw_abs: Factor = if let Some(c_match) = captures.get(5) {
                                 c_match.as_str().into()
                             } else {
-                                let n = captures[2]
-                                    .parse::<u128>()
+                                let n = self.evaluate_as_u128(&captures[2].into())
                                     .unwrap_or(MAX_REPEATS)
                                     .min(MAX_REPEATS)
                                     as usize;
@@ -1749,12 +1739,12 @@ impl FactorFinder {
                         }
                         AXBY_INDEX => {
                             //a^x +/- b^y
-                            let (Ok(a), Ok(x), sign, Ok(b), Ok(y)) = (
-                                captures[1].parse::<u128>(),
-                                captures[2].parse::<u128>(),
+                            let (Some(a), Some(x), sign, Some(b), Some(y)) = (
+                                self.evaluate_as_u128(&captures[1].into()),
+                                self.evaluate_as_u128(&captures[2].into()),
                                 &captures[3],
-                                captures[4].parse::<u128>(),
-                                captures[5].parse::<u128>(),
+                                self.evaluate_as_u128(&captures[4].into()),
+                                self.evaluate_as_u128(&captures[5].into()),
                             ) else {
                                 return vec![];
                             };
@@ -1891,7 +1881,7 @@ impl FactorFinder {
                         }
                         FACTORIAL_INDEX => {
                             // factorial
-                            let Ok(input) = captures[1].parse::<u128>() else {
+                            let Some(input) = self.evaluate_as_u128(&captures[1].into()) else {
                                 warn!(
                                     "Could not parse input to factorial function: {}",
                                     &captures[1]
@@ -1906,7 +1896,7 @@ impl FactorFinder {
                         }
                         PRIMORIAL_INDEX => {
                             // primorial
-                            let Ok(input) = captures[1].parse::<u128>() else {
+                            let Some(input) = self.evaluate_as_u128(&captures[1].into()) else {
                                 warn!(
                                     "Could not parse input to primorial function: {}",
                                     &captures[1]
@@ -1943,8 +1933,7 @@ impl FactorFinder {
                             self.find_factors(Factor::from(&captures[1]))
                         }
                         POWER_INDEX => {
-                            let power = captures[2]
-                                .parse::<u128>()
+                            let power = self.evaluate_as_u128(&captures[2].into())
                                 .unwrap_or(MAX_REPEATS)
                                 .min(MAX_REPEATS) as usize;
                             let base_factors = self.find_factors(Factor::from(&captures[1]));
@@ -2153,7 +2142,7 @@ impl NumberStatusExt for Option<NumberStatus> {
 
 #[cfg(test)]
 mod tests {
-    use crate::algebraic::Factor::Numeric;
+    use crate::algebraic::Factor::{Expression, Numeric};
     use crate::algebraic::{Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, mod_euclid, modinv, multiset_difference, multiset_intersection, multiset_union, power_multiset, factor_power};
     use itertools::Itertools;
     use std::iter::repeat_n;
@@ -2182,6 +2171,15 @@ mod tests {
         assert!(!factors.contains(&7.into()));
         assert!(!factors.contains(&11.into()));
         assert!(!factors.contains(&101.into()));
+    }
+
+    #[test]
+    fn test_anbc_3() {
+        let finder = FactorFinder::new();
+        let factors = finder.find_factors("6^1337*5-15".into());
+
+        assert!(factors.contains(&3.into())); // common factor of a^x and c
+        assert!(factors.contains(&5.into())); // common factor of b and c
     }
 
     #[test]
@@ -2220,20 +2218,27 @@ mod tests {
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
-        assert!(factors.contains(&Factor::Expression("1297^100-901^100".into())));
-        assert!(factors.contains(&Factor::Expression("1297^80-901^80".into())));
-        assert!(factors.contains(&Factor::Expression("1297^100+901^100".into())));
-        assert!(!factors.contains(&Factor::Expression("1297^80+901^80".into())));
+        assert!(factors.contains(&Expression("1297^100-901^100".into())));
+        assert!(factors.contains(&Expression("1297^80-901^80".into())));
+        assert!(factors.contains(&Expression("1297^100+901^100".into())));
+        assert!(!factors.contains(&Expression("1297^80+901^80".into())));
         let factors = finder.find_factors("1297^390-901^390".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
         assert!(!factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
-        assert!(factors.contains(&Factor::Expression("1297^130-901^130".into())));
-        assert!(factors.contains(&Factor::Expression("1297^195-901^195".into())));
-        assert!(!factors.contains(&Factor::Expression("1297^130+901^130".into())));
-        assert!(factors.contains(&Factor::Expression("1297^195+901^195".into())));
+        assert!(factors.contains(&Expression("1297^130-901^130".into())));
+        assert!(factors.contains(&Expression("1297^195-901^195".into())));
+        assert!(!factors.contains(&Expression("1297^130+901^130".into())));
+        assert!(factors.contains(&Expression("1297^195+901^195".into())));
+        finder.find_factors("1297^1234-901^1".into());
+        assert!(factors.contains(&Numeric(2)));
+        assert!(factors.contains(&Numeric(3)));
+
+        // These expressions are negative but should not crash
+        finder.find_factors("1297^1-901^123".into());
+        finder.find_factors("901^1-1297^1".into());
     }
 
     #[test]
@@ -2298,7 +2303,7 @@ mod tests {
     #[test]
     fn test_stack_depth() {
         let expr = repeat_n("(2^9+1)", 65536).join("*");
-        let expr = Factor::Expression(expr.into());
+        let expr = Expression(expr.into());
         let finder = FactorFinder::new();
         finder.estimate_log10_internal(&expr);
         finder.evaluate_as_u128(&expr);
@@ -2422,8 +2427,10 @@ mod tests {
     fn test_multiset_difference() {
         let multiset_1 = vec![2, 2, 3, 3, 5, 7];
         let multiset_2 = vec![2, 3, 3, 3, 5, 11];
-        let difference: Vec<i32> = multiset_difference(multiset_1, &multiset_2);
+        let difference: Vec<i32> = multiset_difference(multiset_1.clone(), &multiset_2);
         assert_eq!(difference, vec![2, 7]);
+        assert!(multiset_difference(vec![], &multiset_2).is_empty());
+        assert!(multiset_difference(multiset_1.clone(), &multiset_1).is_empty());
     }
 
     #[test]
@@ -2448,41 +2455,47 @@ mod tests {
         ));
         assert_eq!(lower, 49);
         assert!(upper == 49 || upper == 50);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("2^607-1".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("I1234".into()));
+        assert_eq!(lower, 257);
+        assert!(upper == 258 || upper == 259);
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("lucas(1234)".into()));
+        assert_eq!(lower, 257);
+        assert!(upper == 258 || upper == 259);
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("2^607-1".into()));
         assert_eq!(lower, 182);
         assert_eq!(upper, 183);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("10^200-1".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("10^200-1".into()));
         assert_eq!(lower, 199);
         assert!(upper == 200 || upper == 201);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("10^200+1".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("10^200+1".into()));
         assert!(lower == 199 || lower == 200);
         assert_eq!(upper, 201);
         let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("10^200*31-1".into()));
+            finder.estimate_log10_internal(&Expression("10^200*31-1".into()));
         assert!(lower == 200 || lower == 201);
         assert_eq!(upper, 202);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("100!".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("100!".into()));
         assert_eq!(lower, 157);
         assert_eq!(upper, 158);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("100#".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("100#".into()));
         assert!(lower <= 36);
         assert!(upper >= 37);
         assert!(upper <= 44);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("20+30".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("20+30".into()));
         assert_eq!(lower, 1);
         assert!(upper == 2 || upper == 3);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("30-19".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("30-19".into()));
         assert!(lower <= 1);
         assert_eq!(upper, 2);
-        let (lower, upper) = finder.estimate_log10_internal(&Factor::Expression("11*11".into()));
+        let (lower, upper) = finder.estimate_log10_internal(&Expression("11*11".into()));
         assert_eq!(lower, 2);
         assert!(upper >= 3);
         let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("(2^769-1)/1591805393".into()));
+            finder.estimate_log10_internal(&Expression("(2^769-1)/1591805393".into()));
         assert!(lower >= 220 && lower <= 222);
         assert!(upper >= 223 && upper <= 225);
         let (lower, upper) =
-            finder.estimate_log10_internal(&Factor::Expression("3^5000-4^2001".into()));
+            finder.estimate_log10_internal(&Expression("3^5000-4^2001".into()));
         assert!(lower == 2385 || lower == 2384);
         assert!(upper == 2386 || upper == 2387);
     }
@@ -2491,15 +2504,15 @@ mod tests {
     fn test_evaluate_as_u128() {
         let finder = FactorFinder::new();
         assert_eq!(
-            finder.evaluate_as_u128(&Factor::Expression("2^127-1".into())),
+            finder.evaluate_as_u128(&Expression("2^127-1".into())),
             Some(i128::MAX as u128)
         );
         assert_eq!(
-            finder.evaluate_as_u128(&Factor::Expression("(5^6+1)^2-1".into())),
+            finder.evaluate_as_u128(&Expression("(5^6+1)^2-1".into())),
             Some(244171875)
         );
         assert_eq!(
-            finder.evaluate_as_u128(&Factor::Expression("3^3+4^4+5^5".into())),
+            finder.evaluate_as_u128(&Expression("3^3+4^4+5^5".into())),
             Some(3408)
         );
     }
