@@ -605,6 +605,7 @@ pub async fn find_and_submit_factors(
         let root_facts = facts_of_mut(&mut data.number_facts_map, root_vid, &data.deleted_synonyms);
         root_facts.factors_known_to_factordb = UpToDate(vec![root_vid]);
     }
+    digits_or_expr_full.push(root_vid);
     let mut factor_found = false;
     let mut accepted_factors = 0;
     let mut any_unprocessed = false;
