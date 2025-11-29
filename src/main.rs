@@ -595,7 +595,6 @@ async fn main() -> anyhow::Result<()> {
         info!("do_checks task starting");
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let mut next_unknown_attempt = Instant::now();
-        let mut retry = None;
         let cert_regex = Regex::new("(Verified|Processing)").unwrap();
         let many_digits_regex =
             Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
@@ -621,8 +620,7 @@ async fn main() -> anyhow::Result<()> {
                     return;
                 }
                 _ = sleep_until(next_unknown_attempt) => {
-                    let Some((id, task_return_permit)) = retry.take().or_else(||
-                        u_receiver.try_recv())
+                    let Some((id, task_return_permit)) = u_receiver.try_recv()
                     else {
                         continue;
                     };
@@ -648,13 +646,8 @@ async fn main() -> anyhow::Result<()> {
                                 "Please wait" => {
                                     warn!("{id}: Got 'please wait' for U");
                                     next_unknown_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
-                                    if retry.is_none() {
-                                        retry = Some((id, task_return_permit));
-                                        info!("{id}: put U in retry buffer");
-                                    } else {
-                                        task_return_permit.send(id);
-                                        info!("{id}: Requeued U");
-                                    }
+                                    task_return_permit.send(id);
+                                    info!("{id}: Requeued U");
                                 }
                                 _ => {
                                     warn!("{id}: U is already being checked");
