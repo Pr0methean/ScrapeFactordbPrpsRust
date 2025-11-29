@@ -1002,6 +1002,20 @@ const ADD_SUB_INDEX: usize = 12;
 // Maximum number of times a factor will be repeated when raised to a power, to limit memory usage.
 const MAX_REPEATS: u128 = 16;
 
+fn factor_power(a: u128, n: u128) -> (u128, u128) {
+    // A u128 can't be a 128th or higher power
+    for prime in [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+        101, 103, 107, 109, 113, 127] {
+        if let Some(root) = a.nth_root_exact(prime as u32) {
+            return match n.checked_mul(prime as u128) {
+                Some(product) => factor_power(root, product),
+                None => (a, n)
+            };
+        }
+    }
+    (a, n)
+}
+
 impl FactorFinder {
     #[inline(always)]
     pub fn new() -> FactorFinder {
@@ -1560,6 +1574,7 @@ impl FactorFinder {
                             if let Some(a) = self.evaluate_as_u128(&a)
                                 && let Some(n) = self.evaluate_as_u128(&n)
                             {
+                                let (a, n) = factor_power(a, n);
                                 let b_reduced: Vec<Factor> =
                                     multiset_difference(b_factors, &gcd_bc);
                                 let c_reduced: Vec<Factor> = multiset_difference(abs_c, &gcd_bc);
@@ -1740,6 +1755,8 @@ impl FactorFinder {
                             ) else {
                                 return vec![];
                             };
+                            let (a, x) = factor_power(a, x);
+                            let (b, y) = factor_power(b, y);
                             let c_neg = match &captures[4] {
                                 "-" => true,
                                 "+" => false,
@@ -2134,11 +2151,7 @@ impl NumberStatusExt for Option<NumberStatus> {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{
-        Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors,
-        lucas_factors, mod_euclid, modinv, multiset_difference, multiset_intersection,
-        multiset_union, power_multiset,
-    };
+    use crate::algebraic::{Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, fibonacci_factors, lucas_factors, mod_euclid, modinv, multiset_difference, multiset_intersection, multiset_union, power_multiset, factor_power};
     use itertools::Itertools;
     use std::iter::repeat_n;
 
@@ -2308,6 +2321,16 @@ mod tests {
         let factors = FactorFinder::new().find_factors("12^((2^7-1)^2)-1".into());
         println!("{factors:?}");
         assert!(factors.contains(&Numeric(11)));
+    }
+
+    #[test]
+    fn test_factor_power() {
+        assert_eq!(factor_power(5474401089420219382077155933569751763, 16), (3, 16*77));
+        // (3^77)^16+1
+        let factors = FactorFinder::new().find_factors("5474401089420219382077155933569751763^16+1".into());
+        // factors of 3^16+1
+        assert!(factors.contains(&Numeric(2)));
+        assert!(factors.contains(&Numeric(21523361)));
     }
 
     #[test]
