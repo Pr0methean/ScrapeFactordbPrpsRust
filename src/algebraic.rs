@@ -20,7 +20,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
-use std::mem::{replace, swap, take};
+use std::mem::{swap, take};
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -560,11 +560,11 @@ pub enum Factor {
         subtract: bool,
     },
     Multiply {
-        terms: Vec<Box<Factor>>,
+        terms: Vec<Factor>,
     },
     Divide {
         left: Box<Factor>,
-        right: Vec<Box<Factor>>,
+        right: Vec<Factor>,
     },
     Power {
         base: Box<Factor>,
@@ -587,40 +587,40 @@ peg::parser! {
     pub rule number() -> Factor
       = n:$(['0'..='9']+) { n.parse::<u128>().map(Factor::Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
 
-    pub rule muldiv_term() -> Box<Factor> = precedence!{
-      x:@ "^" y:(@) { Factor::Power { base: x, exponent: y }.into() }
+    pub rule muldiv_term() -> Factor = precedence!{
+      x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
       --
-      x:@ "!" { Factor::Factorial(x).into() }
-      x:@ "#" { Factor::Primorial(x).into() }
+      x:@ "!" { Factor::Factorial(x.into()) }
+      x:@ "#" { Factor::Primorial(x.into()) }
       --
-      "I" x:@ { Factor::Fibonacci(x).into() }
+      "I" x:@ { Factor::Fibonacci(x.into()) }
       --
-      "lucas(" x:arithmetic() ")" { Factor::Lucas(x).into() }
+      "lucas(" x:arithmetic() ")" { Factor::Lucas(x.into()) }
       --
       n:number() { n.into() }
       --
-      n:$(['0'..='9']+ ".." ['0'..='9']+) { Factor::ElidedNumber(n.into()).into() }
+      n:$(['0'..='9']+ ".." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
       --
       "(" e:arithmetic() ")" { e }
     }
 
-    pub rule div_term() -> Box<Factor> = precedence!{
-        x:(muldiv_term() **<2,> "*") { Box::new(Factor::Multiply { terms: x }) }
+    pub rule div_term() -> Factor = precedence!{
+        x:(muldiv_term() **<2,> "*") { Factor::Multiply { terms: x } }
         --
         x:muldiv_term() { x }
     }
 
     #[cache_left_rec]
-    pub rule arithmetic() -> Box<Factor> = precedence!{
-      x:(@) "+" y:@ { Factor::AddSub { left: x, right: y, subtract: false }.into() }
-      x:(@) "-" y:@ { Factor::AddSub { left: x, right: y, subtract: true }.into() }
+    pub rule arithmetic() -> Factor = precedence!{
+      x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
+      x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
       --
       x:(div_term()) "/" y:(div_term() ++ "/") { let mut x = x;
-        if let Factor::Divide { ref mut right, .. } = *x {
+        if let Factor::Divide { ref mut right, .. } = x {
             right.extend(y.into_iter());
             x
         } else {
-            Box::new(Factor::Divide { left: x, right: y })
+            Factor::Divide { left: x.into(), right: y }
         }
       }
       --
@@ -717,7 +717,7 @@ impl Factor {
                 let mut new_terms = VecDeque::from(terms);
                 new_terms.reserve(depth);
                 while let Some(new_term) = new_terms.pop_front() {
-                    match *new_term {
+                    match new_term {
                         Factor::Multiply { terms } => new_terms.extend_front(terms),
                         _ => flattened_terms.push(new_term),
                     }
@@ -1247,14 +1247,14 @@ impl FactorFinder {
             Factor::Multiply { ref mut terms } => {
                 let mut divisor_u128 = self.evaluate_as_u128(&divisor);
                 for (index, term) in terms.iter_mut().enumerate() {
-                    if **term == divisor {
+                    if *term == divisor {
                         terms.remove(index);
                         return Ok(self.simplify(Factor::Multiply { terms: std::mem::take(terms) }));
                     }
                     if let Some(divisor) = &mut divisor_u128 && let Some(term_u128) = self.evaluate_as_u128(term) {
                         let gcd = term_u128.gcd(divisor);
                         if gcd > 1 {
-                            **term = (term_u128 / gcd).into();
+                            *term = (term_u128 / gcd).into();
                             *divisor /= gcd;
                             if *divisor == 1 {
                                 return Ok(self.simplify(Factor::Multiply { terms: std::mem::take(terms) }));
@@ -1365,7 +1365,7 @@ impl FactorFinder {
             Factor::Multiply { terms } => {
                 let new_terms = terms
                     .iter()
-                    .map(|term| self.nth_root_exact(term, root).map(Box::new))
+                    .map(|term| self.nth_root_exact(term, root))
                     .collect::<Option<Vec<_>>>()?;
                 return Some(Factor::Multiply { terms: new_terms });
             }
@@ -1373,7 +1373,7 @@ impl FactorFinder {
                 let new_left = self.nth_root_exact(left, root)?;
                 let new_right = right
                     .iter()
-                    .map(|term| self.nth_root_exact(term, root).map(Box::new))
+                    .map(|term| self.nth_root_exact(term, root))
                     .collect::<Option<Vec<_>>>()?;
                 return Some(Factor::Divide {
                     left: new_left.into(),
@@ -1754,19 +1754,19 @@ impl FactorFinder {
         match expr {
             Factor::Multiply { terms } => {
                 let new_terms: Vec<Factor> = terms.into_iter()
-                    .filter(|term| **term != Numeric(1))
-                    .map(|term| self.simplify(*term))
+                    .filter(|term| *term != Numeric(1))
+                    .map(|term| self.simplify(term))
                     .collect();
                 match new_terms.len() {
                     0 => Factor::Numeric(1),
                     1 => new_terms.into_iter().next().unwrap(),
-                    _ => Factor::Multiply { terms: new_terms.into_iter().map(Box::new).collect() }
+                    _ => Factor::Multiply { terms: new_terms.into_iter().collect() }
                 }
             }
             Factor::Divide { left, right } => {
                 let new_left = self.simplify(*left);
                 let mut new_right: Vec<Factor> = right.into_iter()
-                    .map(|term| self.simplify(*term))
+                    .map(|term| self.simplify(term))
                     .filter(|term| *term != Numeric(1))
                     .collect();
                 if let Some((index, _)) = new_right.iter().enumerate().find(|(_, term)| **term == new_left) {
@@ -1775,7 +1775,7 @@ impl FactorFinder {
                 if new_right.is_empty() {
                     new_left
                 } else {
-                    Factor::Divide { left: new_left.into(), right: new_right.into_iter().map(Box::new).collect() }
+                    Factor::Divide { left: new_left.into(), right: new_right.into_iter().collect() }
                 }
             }
             Factor::Power { base, exponent } => {
@@ -2386,7 +2386,7 @@ impl FactorFinder {
                 // division
                 let mut factors = self.find_factors(*left.clone());
                 for term in right.iter().cloned() {
-                    let denom_factors = self.find_factors(*term);
+                    let denom_factors = self.find_factors(term);
                     factors = multiset_difference(factors, &denom_factors);
                     if factors.is_empty() {
                         return vec![];
@@ -2398,9 +2398,9 @@ impl FactorFinder {
                 // multiplication
                 let mut factors = Vec::new();
                 for term in terms.iter() {
-                    let term_factors = self.find_factors(*term.clone());
+                    let term_factors = self.find_factors(term.clone());
                     if term_factors.is_empty() {
-                        factors.push(*term.clone());
+                        factors.push(term.clone());
                     } else {
                         factors.extend(term_factors);
                     }
