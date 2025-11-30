@@ -1121,6 +1121,9 @@ fn modinv(a: u128, m: u128) -> Option<u128> {
 const MAX_REPEATS: u128 = 16;
 
 fn factor_power(a: u128, n: u128) -> (u128, u128) {
+    if a == 1 {
+        return (1, 0);
+    }
     // A u128 can't be a 128th or higher power
     for prime in [
         2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89,
@@ -1178,8 +1181,20 @@ impl FactorFinder {
         let mut new_left = self.simplify(left.clone());
         let mut new_right = self.simplify(right.clone());
         for term in [&mut new_left, &mut new_right] {
-            if let Factor::Power { exponent, .. } = term
-                && let Some(exponent_u128) = self.evaluate_as_u128(exponent)
+            let exponent_u128 = match term {
+                Factor::Power { exponent, .. } => self.evaluate_as_u128(exponent),
+                Factor::Numeric(a) => {
+                    let (a, n) = factor_power(*a, 1);
+                    if n > 1 {
+                        *term = Factor::Power {base: Numeric(a).into(), exponent: Numeric(n).into() };
+                        Some(n)
+                    } else {
+                        None
+                    }
+                }
+                _ => None
+            };
+            if let Some(exponent_u128) = exponent_u128
             {
                 factorize128(exponent_u128).into_iter().for_each(|(factor, factor_exponent)| {
                     possible_factors.insert(factor, factor_exponent.max(possible_factors.get(&factor).copied().unwrap_or(0)));
@@ -1199,7 +1214,9 @@ impl FactorFinder {
             if factors.is_empty() {
                 continue;
             }
-            let product = factors.into_iter().product::<u128>();
+            let Some(Some(product)) = factors.into_iter().try_reduce(u128::checked_mul) else {
+                continue;
+            };
             if let Some(left_root) = self.nth_root_exact(&new_left, product)
                 && let Some(right_root) = self.nth_root_exact(&new_right, product) {
                 if subtract && product.is_multiple_of(2) {
@@ -1591,7 +1608,7 @@ impl FactorFinder {
         right_upper: f64,
     ) -> (u128, u128) {
         let combined_lower = if subtract {
-            if right_lower >= left_lower - LOG10_2 {
+            if right_upper >= left_lower - LOG10_2 {
                 0.0
             } else {
                 left_lower - LOG10_2
@@ -1651,7 +1668,7 @@ impl FactorFinder {
                     Some(if left > right {
                         diff.rem_euclid(modulus)
                     } else {
-                        modulus - diff.rem_euclid(modulus)
+                        (modulus - diff.rem_euclid(modulus)) % modulus
                     })
                 } else {
                     Some((left + right) % modulus)
@@ -1766,12 +1783,16 @@ impl FactorFinder {
             Factor::Power { base, exponent } => {
                 let mut new_base = self.simplify(*base);
                 let mut new_exponent = self.simplify(*exponent);
-                if let Some(new_base_u128) = self.evaluate_as_u128(&new_base)
-                    && let Some(new_exponent_u128) = self.evaluate_as_u128(&new_exponent) {
-                    let (factored_base_u128, factored_exponent_u128) = factor_power(new_base_u128, new_exponent_u128);
-                    if factored_exponent_u128 != new_exponent_u128 {
-                        new_base = Numeric(factored_base_u128);
-                        new_exponent = Numeric(factored_exponent_u128);
+                if let Some(new_base_u128) = self.evaluate_as_u128(&new_base) {
+                    if new_base_u128 == 1 {
+                        return Numeric(1);
+                    }
+                    if let Some(new_exponent_u128) = self.evaluate_as_u128(&new_exponent) {
+                        let (factored_base_u128, factored_exponent_u128) = factor_power(new_base_u128, new_exponent_u128);
+                        if factored_exponent_u128 != new_exponent_u128 {
+                            new_base = Numeric(factored_base_u128);
+                            new_exponent = Numeric(factored_exponent_u128);
+                        }
                     }
                 }
                 match new_exponent {
@@ -1786,6 +1807,11 @@ impl FactorFinder {
                     _ => expr
                 }
             }
+            Factor::AddSub { left, right, subtract } => Factor::AddSub {
+                left: self.simplify(*left).into(),
+                right: self.simplify(*right).into(),
+                subtract
+            },
             _ => expr
         }
     }
@@ -2385,12 +2411,16 @@ impl FactorFinder {
                 ref right,
                 subtract
             } => {
-                let mut factors = self.find_common_factors(*left.clone(), *right.clone());
+                let mut common_factors = self.find_common_factors(*left.clone(), *right.clone());
                 for prime in SMALL_PRIMES {
                     if self.evaluate_modulo_as_u128(&expr, prime as u128) == Some(0) {
-                        factors.push(Numeric(prime as u128));
+                        common_factors.push(Numeric(prime as u128));
                     }
                 }
+                common_factors.sort();
+                common_factors.dedup();
+                let mut factors: Vec<_> = common_factors.iter().flat_map(|factor| self.div_exact(expr.clone(), factor.clone()).ok()).collect();
+                factors.extend(common_factors.into_iter());
                 factors.extend(self.to_like_powers(left, right, subtract));
                 factors
             }
@@ -2536,7 +2566,7 @@ mod tests {
         let factors = finder.find_factors(expr.into());
         println!("{}", factors.iter().join(", "));
         assert!(factors.contains(&3.into()));
-        assert!(factors.contains(&format!("{}^3+1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^9+1", u128::MAX).into()));
     }
 
     #[test]
@@ -2546,10 +2576,10 @@ mod tests {
         println!("{}", factors.iter().join(", "));
 
         // Should contain 6^8+1
-        assert!(factors.contains(&17.into()));
-        assert!(factors.contains(&98801.into()));
+        assert!(factors.contains(&(6u128.pow(8) + 1).into()));
 
         // Shouldn't contain 6^5+1
+        assert!(!factors.contains(&(6u128.pow(5) + 1).into()));
         assert!(!factors.contains(&7.into()));
         assert!(!factors.contains(&11.into()));
         assert!(!factors.contains(&101.into()));
@@ -2676,7 +2706,7 @@ mod tests {
     #[test]
     fn test_addition_chain() {
         let finder = FactorFinder::new();
-        /*let factors = finder.find_factors("7^5432+3*7^4321+7^321+7^21".into());
+        let factors = finder.find_factors("7^5432+3*7^4321+7^321+7^21".into());
         println!("{}", factors.iter().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(7)));
@@ -2685,7 +2715,7 @@ mod tests {
         assert!(!factors.contains(&Numeric(7)));
         let factors = finder.find_factors("3*7^5432+7^4321+7^321+1".into());
         assert!(factors.contains(&Numeric(2)));
-        assert!(!factors.contains(&Numeric(7)));*/
+        assert!(!factors.contains(&Numeric(7)));
         let factors = finder.find_factors("7^5432-7^4321-3*7^321-1".into());
         assert!(factors.contains(&Numeric(2)));
         assert!(!factors.contains(&Numeric(7)));

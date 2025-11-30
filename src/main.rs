@@ -4,6 +4,7 @@
 #![feature(deque_extend_front)]
 #![feature(exact_div)]
 #![feature(str_as_str)]
+#![feature(iterator_try_reduce)]
 extern crate alloc;
 extern crate core;
 
