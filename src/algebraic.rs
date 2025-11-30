@@ -597,7 +597,7 @@ peg::parser! {
       --
       "lucas(" x:arithmetic() ")" { Factor::Lucas(x.into()) }
       --
-      n:number() { n.into() }
+      n:number() { n }
       --
       n:$(['0'..='9']+ ".." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
       --
