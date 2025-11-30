@@ -575,6 +575,7 @@ pub enum Factor {
     Primorial(Box<Factor>),
 }
 
+const MAX_DEPTH_DURING_PARSE: usize = 1 << 12;
 
 peg::parser!{
   pub grammar expression_parser() for str {
@@ -586,9 +587,9 @@ peg::parser!{
       x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
       x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
       --
-      x:(@) "*" y:@ { Factor::Multiply { terms: vec![x.into(), y.into()] }.flatten() }
+      x:(@) "*" y:@ { Factor::Multiply { terms: vec![Box::new(x).flatten(MAX_DEPTH_DURING_PARSE), Box::new(y).flatten(MAX_DEPTH_DURING_PARSE)] } }
       --
-      x:(@) "/" y:@ { Factor::Divide { left: x.into(), right: vec![y.into()] }.flatten() }
+      x:(@) "/" y:@ { Factor::Divide { left: Box::new(x).flatten(MAX_DEPTH_DURING_PARSE), right: vec![Box::new(y).flatten(MAX_DEPTH_DURING_PARSE)] } }
       --
       x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
       --
@@ -650,27 +651,43 @@ impl Factor {
         }
     }
 
-    #[inline(always)]
-    fn flatten(self) -> Factor {
+    fn muldiv_depth(&self, max: usize) -> usize {
+        if max == 0 {
+            return 0;
+        }
         match self {
+            Factor::Multiply { terms } => 1 + terms.iter().map(|term| term.muldiv_depth(max - 1)).max().unwrap_or(0),
+            Factor::Divide { left, right } => 1 + right.iter().map(|term| term.muldiv_depth(max - 1)).max().unwrap_or(0).max(left.muldiv_depth(max - 1)),
+            _ => 0
+        }
+    }
+
+    #[inline(always)]
+    fn flatten(self: Box<Self>, max_depth: usize) -> Box<Factor> {
+        let depth = self.muldiv_depth(max_depth);
+        if depth < max_depth {
+            return self;
+        }
+        match *self {
             Factor::Divide { mut left, mut right } => {
                 while let Factor::Divide { left: left_left, right: mut mid } = *left {
                     mid.extend(right.into_iter());
                     right = mid;
                     left = left_left;
                 }
-                Factor::Divide { left, right }
+                Box::new(Factor::Divide { left, right })
             }
             Factor::Multiply { terms } => {
-                let mut flattened_terms = Vec::with_capacity(2 * terms.len());
+                let mut flattened_terms = Vec::with_capacity(terms.len() + depth);
                 let mut new_terms = VecDeque::from(terms);
+                new_terms.reserve(depth);
                 while let Some(new_term) = new_terms.pop_front() {
                     match *new_term {
                         Factor::Multiply {terms} => new_terms.extend_front(terms),
                         _ => flattened_terms.push(new_term)
                     }
                 }
-                Factor::Multiply { terms: flattened_terms }
+                Box::new(Factor::Multiply { terms: flattened_terms })
             }
             _ => self
         }
@@ -738,6 +755,7 @@ macro_rules! factor_from_str {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
+                .map(|factor| *Box::new(factor).flatten(2))
                 .unwrap_or_else(|_| Factor::UnknownExpression(value.into()))
             }
         }
