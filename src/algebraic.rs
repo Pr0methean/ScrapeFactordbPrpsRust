@@ -1,4 +1,3 @@
-use alloc::borrow::Cow;
 use crate::algebraic::Factor::{AddSub, Numeric};
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
 use Vec;
@@ -23,8 +22,6 @@ use std::hash::Hash;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::{replace, swap, take};
-
-const LOG10_3_ROUNDED_DOWN: f64 = 0.4771212547196624354;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -650,11 +647,6 @@ impl Factor {
             Numeric(n) => Some(*n),
             _ => None,
         }
-    }
-
-    #[inline(always)]
-    fn is_expression(&self) -> bool {
-        !matches!(self, Factor::Numeric(_) | Factor::BigNumber(_))
     }
 
     #[inline(always)]
