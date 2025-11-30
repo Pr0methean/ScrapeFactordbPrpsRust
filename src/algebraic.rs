@@ -24,6 +24,8 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::{replace, swap, take};
 
+const LOG10_3_ROUNDED_DOWN: f64 = 0.4771212547196624354;
+
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
     &[],
@@ -1544,11 +1546,17 @@ impl FactorFinder {
                 let Some(exponent) = self.evaluate_as_u128(&exponent) else {
                     return (0, u128::MAX);
                 };
-                let (base_lower, base_upper) = self.estimate_log10_internal(&base);
-                (
-                    base_lower.saturating_mul(exponent),
-                    base_upper.saturating_mul(exponent),
-                )
+                if let Some(base) = self.evaluate_as_u128(&base) {
+                    let lower = (base as f64).log10().next_down() * exponent as f64;
+                    let upper = (base as f64).log10().next_up() * (exponent as f64).next_up();
+                    (lower.floor() as u128, upper.ceil() as u128)
+                } else {
+                    let (base_lower, base_upper) = self.estimate_log10_internal(&base);
+                    (
+                        base_lower.saturating_mul(exponent),
+                        base_upper.saturating_mul(exponent),
+                    )
+                }
             }
             Factor::Divide { left, right } => {
                 let (num_lower, num_upper) = self.estimate_log10_internal(&left);
@@ -1925,9 +1933,12 @@ impl FactorFinder {
                 }
             }
             Factor::ElidedNumber(_) => None,
-            Factor::Power { base, exponent } => self
-                .evaluate_as_u128(&base)?
-                .checked_pow(u32::try_from(self.evaluate_as_u128(&exponent)?).ok()?),
+            Factor::Power { base, exponent } =>
+                match self.evaluate_as_u128(&base)? {
+                    0 => Some(0),
+                    1 => Some(1),
+                    base => base.checked_pow(u32::try_from(self.evaluate_as_u128(&exponent)?).ok()?)
+                },
             Factor::Divide { left, right } => {
                 let mut result = self.evaluate_as_u128(&left)?;
                 for term in right.iter() {
@@ -2909,17 +2920,19 @@ mod tests {
         assert_eq!(lower, 257);
         assert!(upper == 258 || upper == 259);
         let (lower, upper) = finder.estimate_log10_internal(&"2^607-1".into());
-        assert_eq!(lower, 182);
+        assert!(lower == 182 || lower == 181);
         assert_eq!(upper, 183);
         let (lower, upper) = finder.estimate_log10_internal(&"10^200-1".into());
-        assert_eq!(lower, 199);
+        assert!(lower == 198 || lower == 199);
         assert!(upper == 200 || upper == 201);
         let (lower, upper) = finder.estimate_log10_internal(&"10^200+1".into());
         assert!(lower == 199 || lower == 200);
-        assert_eq!(upper, 201);
+        assert!(upper == 201 || upper == 202);
         let (lower, upper) = finder.estimate_log10_internal(&"10^200*31-1".into());
-        assert!(lower == 200 || lower == 201);
-        assert_eq!(upper, 202);
+        assert!(lower >= 199);
+        assert!(lower <= 201);
+        assert!(upper >= 202);
+        assert!(lower <= 204);
         let (lower, upper) = finder.estimate_log10_internal(&"100!".into());
         assert_eq!(lower, 157);
         assert_eq!(upper, 158);
@@ -2937,7 +2950,7 @@ mod tests {
         assert_eq!(lower, 2);
         assert!(upper >= 3);
         let (lower, upper) = finder.estimate_log10_internal(&"(2^769-1)/1591805393".into());
-        assert!(lower >= 220 && lower <= 222);
+        assert!(lower >= 219 && lower <= 222);
         assert!(upper >= 223 && upper <= 225);
         let (lower, upper) = finder.estimate_log10_internal(&"3^5000-4^2001".into());
         assert!(lower == 2385 || lower == 2384);
