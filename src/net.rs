@@ -4,7 +4,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
-use crate::algebraic::{FactorFinder, NumberStatusExt, ProcessedStatusApiResponse};
+use crate::algebraic::{find_factors_of_u128, NumberStatusExt, ProcessedStatusApiResponse};
 use crate::monitor::Monitor;
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
@@ -429,7 +429,7 @@ impl FactorDbClient for RealFactorDbClient {
         }
         if let Expression(Numeric(n)) = id {
             debug!("Specially handling numeric expression {n}");
-            let factors = FactorFinder::find_factors_of_u128(n).into_boxed_slice();
+            let factors = find_factors_of_u128(n).into_boxed_slice();
             return Some(ProcessedStatusApiResponse {
                 status: Some(if factors.len() > 1 {
                     FullyFactored

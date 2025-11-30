@@ -18,13 +18,12 @@ use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::NumberStatus::FullyFactored;
 use crate::algebraic::NumberStatusExt;
-use crate::algebraic::{Factor, FactorFinder, ProcessedStatusApiResponse};
+use crate::algebraic::{Factor, ProcessedStatusApiResponse};
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, ResourceLimits};
 use async_backtrace::framed;
 use async_backtrace::taskdump_tree;
 use channel::PushbackReceiver;
-use const_format::formatcp;
 use cuckoofilter::CuckooFilter;
 use hipstr::HipStr;
 use log::{error, info, warn};
@@ -69,8 +68,6 @@ const C_MAX_DIGITS: u128 = 300;
 
 const U_MIN_DIGITS: u128 = 2001;
 const U_MAX_DIGITS: u128 = 199_999;
-const U_SEARCH_URL_BASE: &str =
-    formatcp!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start=");
 const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 5;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
@@ -117,7 +114,6 @@ async fn composites_while_waiting(
     http: &mut impl FactorDbClient,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
-    factor_finder: &FactorFinder,
 ) {
     let Some(mut remaining) = end.checked_duration_since(Instant::now()) else {
         return;
@@ -133,7 +129,6 @@ async fn composites_while_waiting(
         check_composite(
             http,
             c_filter,
-            factor_finder,
             id,
             digits_or_expr,
             return_permit,
@@ -153,7 +148,6 @@ async fn composites_while_waiting(
 async fn check_composite(
     http: &mut impl FactorDbClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
-    factor_finder: &FactorFinder,
     id: u128,
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
@@ -190,7 +184,7 @@ async fn check_composite(
         let mut factors_to_dispatch = Vec::with_capacity(factors.len());
         for factor in factors {
             if let Some(factor_str) = factor.as_str_non_u128() {
-                if graph::find_and_submit_factors(http, id, factor_str, factor_finder, true).await {
+                if graph::find_and_submit_factors(http, id, factor_str, true).await {
                     factors_submitted = true;
                 } else {
                     factors_to_dispatch.push(factor);
@@ -290,7 +284,6 @@ async fn throttle_if_necessary(
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
     c_filter: &mut CuckooFilter<DefaultHasher>,
-    factor_finder: &FactorFinder,
 ) -> bool {
     *bases_before_next_cpu_check -= 1;
     if *bases_before_next_cpu_check != 0 {
@@ -302,7 +295,6 @@ async fn throttle_if_necessary(
             http,
             c_receiver,
             c_filter,
-            factor_finder,
         )
         .await; // allow for delay in CPU accounting
     }
@@ -339,7 +331,7 @@ async fn throttle_if_necessary(
             warn!("Throttling won't end before program exit; exiting now");
             exit(0);
         }
-        composites_while_waiting(resets_at, http, c_receiver, c_filter, factor_finder).await;
+        composites_while_waiting(resets_at, http, c_receiver, c_filter).await;
         *bases_before_next_cpu_check = MAX_BASES_BETWEEN_RESOURCE_CHECKS;
         CPU_TENTHS_SPENT_LAST_CHECK.store(0, Release);
     } else {
@@ -498,9 +490,6 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    unsafe {
-        backtrace_on_stack_overflow::enable();
-    }
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
@@ -557,7 +546,6 @@ async fn main() -> anyhow::Result<()> {
             .await;
         max_concurrent_requests = 3;
     }
-    let factor_finder = FactorFinder::new();
     let http = RealFactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
@@ -591,7 +579,6 @@ async fn main() -> anyhow::Result<()> {
     let mut prp_receiver = PushbackReceiver::new(prp_receiver, &prp_sender);
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
     let mut do_checks_http = http.clone();
-    let do_checks_factor_finder = factor_finder.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
     task::spawn(async_backtrace::location!().frame(async move {
         info!("do_checks task starting");
@@ -611,7 +598,6 @@ async fn main() -> anyhow::Result<()> {
             &mut bases_before_next_cpu_check,
             false,
             &mut c_filter,
-            &do_checks_factor_finder,
         )
             .await;
         loop {
@@ -817,7 +803,7 @@ async fn main() -> anyhow::Result<()> {
                             };
                             for factor in factors {
                                 if factor.as_str_non_u128().is_some() {
-                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.as_str(), &do_checks_factor_finder, true)
+                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.as_str(), true)
                                         .await;
                                 }
                             }
@@ -836,7 +822,6 @@ async fn main() -> anyhow::Result<()> {
                             &mut do_checks_http,
                             &mut c_receiver,
                             &mut c_filter,
-                            &do_checks_factor_finder,
                         )
                         .await;
                         task_return_permit.send(id);
@@ -885,7 +870,6 @@ async fn main() -> anyhow::Result<()> {
                                 &mut do_checks_http,
                                 &mut c_receiver,
                                 &mut c_filter,
-                                &do_checks_factor_finder,
                             )
                             .await;
                             break;
@@ -896,7 +880,6 @@ async fn main() -> anyhow::Result<()> {
                             &mut bases_before_next_cpu_check,
                             true,
                             &mut c_filter,
-                            &do_checks_factor_finder,
                         )
                         .await;
                         if cert_regex.is_match(&text) {
@@ -922,7 +905,7 @@ async fn main() -> anyhow::Result<()> {
                 c_task = c_receiver.recv() => {
                     let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
                     info!("{id}: Ready to check a C");
-                    check_composite(&mut do_checks_http, &mut c_filter, &do_checks_factor_finder, id, digits_or_expr, return_permit).await;
+                    check_composite(&mut do_checks_http, &mut c_filter, id, digits_or_expr, return_permit).await;
                 }
             }
         }
@@ -931,7 +914,6 @@ async fn main() -> anyhow::Result<()> {
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
     let mut u_http = http.clone();
-    let u_factor_finder = factor_finder.clone();
     task::spawn(async_backtrace::location!().frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
@@ -947,7 +929,7 @@ async fn main() -> anyhow::Result<()> {
             });
             let u_start = rng().random_range(0..=MAX_START);
             let u_search_url =
-                format!("{U_SEARCH_URL_BASE}{u_start}&mindig={}", digits.get()).into();
+                format!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start={u_start}&mindig={}", digits.get()).into();
             let Some(results_text) = u_http.try_get_and_decode(u_search_url).await else {
                 continue;
             };
@@ -969,7 +951,6 @@ async fn main() -> anyhow::Result<()> {
                     &mut u_http,
                     u_id,
                     digits_or_expr.into(),
-                    &u_factor_finder,
                     false,
                 )
                 .await

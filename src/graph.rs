@@ -2,9 +2,7 @@ use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{
-    Factor, FactorFinder, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse,
-};
+use crate::algebraic::{estimate_log10, evaluate_as_u128, find_factors_of_u128, find_unique_factors, Factor, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse};
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
 use crate::net::FactorDbClient;
@@ -168,7 +166,6 @@ pub fn get_edge_mut(
 pub fn add_factor_node(
     data: &mut FactorData,
     factor: Factor,
-    factor_finder: &FactorFinder,
     root_vid: Option<VertexId>,
     mut entry_id: Option<u128>,
     http: &impl FactorDbClient,
@@ -192,11 +189,11 @@ pub fn add_factor_node(
         .map(|x| (x, false))
         .unwrap_or_else(|| {
             let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
-            let (lower_bound_log10, upper_bound_log10) = factor_finder.estimate_log10(&factor);
-            let eval_as_u128 = factor_finder.evaluate_as_u128(&factor);
+            let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
+            let eval_as_u128 = evaluate_as_u128(&factor);
             let specifier = as_specifier(factor_vid, data, None);
             let cached = http.cached_factors(specifier).or(eval_as_u128.map(|eval| {
-                let factors = FactorFinder::find_factors_of_u128(eval);
+                let factors = find_factors_of_u128(eval);
                 ProcessedStatusApiResponse {
                     status: Some(if factors.len() == 1 {
                         Prime
@@ -219,7 +216,7 @@ pub fn add_factor_node(
                         (factor_vid, false)
                     } else {
                         let entry_id = subfactor.known_id();
-                        add_factor_node(data, subfactor, factor_finder, root_vid, entry_id, http)
+                        add_factor_node(data, subfactor, root_vid, entry_id, http)
                     };
                     cached_subfactors.push(subfactor_vid);
                 }
@@ -246,7 +243,6 @@ pub fn add_factor_node(
         });
     if *get_vertex(&data.divisibility_graph, merge_dest, &data.deleted_synonyms) != factor {
         merge_equivalent_expressions(
-            factor_finder,
             data,
             root_vid,
             merge_dest,
@@ -275,7 +271,7 @@ pub fn add_factor_node(
         data.deleted_synonyms.insert(matching_vid, merge_dest);
         let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
         let old_facts = data.number_facts_map.remove(&matching_vid).unwrap();
-        merge_equivalent_expressions(factor_finder, data, root_vid, merge_dest, old_factor, http);
+        merge_equivalent_expressions(data, root_vid, merge_dest, old_factor, http);
         replace_with_or_abort(
             facts_of_mut(
                 &mut data.number_facts_map,
@@ -514,7 +510,6 @@ pub async fn find_and_submit_factors(
     http: &mut impl FactorDbClient,
     id: u128,
     digits_or_expr: HipStr<'static>,
-    factor_finder: &FactorFinder,
     skip_looking_up_known: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
@@ -527,7 +522,6 @@ pub async fn find_and_submit_factors(
         add_factor_node(
             &mut data,
             Factor::from(digits_or_expr.clone()),
-            factor_finder,
             None,
             Some(id),
             http,
@@ -546,7 +540,6 @@ pub async fn find_and_submit_factors(
             0 => add_factor_node(
                 &mut data,
                 Factor::from(digits_or_expr.clone()),
-                factor_finder,
                 None,
                 Some(id),
                 http,
@@ -555,7 +548,6 @@ pub async fn find_and_submit_factors(
                 let (root_node, _) = add_factor_node(
                     &mut data,
                     Factor::from(digits_or_expr.clone()),
-                    factor_finder,
                     None,
                     Some(id),
                     http,
@@ -569,7 +561,6 @@ pub async fn find_and_submit_factors(
                             let (factor_vid, added) = add_factor_node(
                                 &mut data,
                                 known_factor,
-                                factor_finder,
                                 Some(root_node),
                                 entry_id,
                                 http,
@@ -610,7 +601,7 @@ pub async fn find_and_submit_factors(
     let mut accepted_factors = 0;
     let mut any_unprocessed = false;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
-        factor_found |= !add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
+        factor_found |= !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
             .await
             .is_empty();
         any_unprocessed |= !data
@@ -670,7 +661,7 @@ pub async fn find_and_submit_factors(
             DoesNotDivide => {
                 rule_out_divisibility(&mut data, factor_vid, root_vid);
                 any_failed_retryably |=
-                    !add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
+                    !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
                         .await
                         .is_empty();
             }
@@ -966,7 +957,6 @@ pub async fn find_and_submit_factors(
                         factors_to_submit.extend_front(
                             add_factors_to_graph(
                                 http,
-                                factor_finder,
                                 &mut data,
                                 root_vid,
                                 factor_vid,
@@ -1009,7 +999,6 @@ pub async fn find_and_submit_factors(
                         submission_errors = true;
                         if !add_factors_to_graph(
                             http,
-                            factor_finder,
                             &mut data,
                             root_vid,
                             cofactor_vid,
@@ -1117,7 +1106,6 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
 #[framed]
 async fn add_factors_to_graph(
     http: &mut impl FactorDbClient,
-    factor_finder: &FactorFinder,
     data: &mut FactorData,
     root_vid: VertexId,
     factor_vid: VertexId,
@@ -1143,7 +1131,6 @@ async fn add_factors_to_graph(
             let known_factor = known_factors.iter().next().unwrap();
             if *known_factor != *factor {
                 merge_equivalent_expressions(
-                    factor_finder,
                     data,
                     Some(root_vid),
                     factor_vid,
@@ -1159,7 +1146,6 @@ async fn add_factors_to_graph(
                 let (known_factor_vid, is_new) = add_factor_node(
                     data,
                     known_factor,
-                    factor_finder,
                     Some(root_vid),
                     entry_id,
                     http,
@@ -1222,7 +1208,6 @@ async fn add_factors_to_graph(
                     let (subfactor_vid, is_new) = add_factor_node(
                         data,
                         factor,
-                        factor_finder,
                         Some(factor_vid),
                         Some(subfactor_entry_id),
                         http,
@@ -1242,7 +1227,6 @@ async fn add_factors_to_graph(
         .expect("Tried to check checked_in_factor_finder in add_factors_to_graph when not entered in number_facts_map");
     if !facts.checked_in_factor_finder {
         added.extend(add_factor_finder_factor_vertices_to_graph(
-            factor_finder,
             data,
             Some(root_vid),
             factor_vid,
@@ -1265,7 +1249,6 @@ async fn add_factors_to_graph(
         if expression_form != *factor {
             let expression_form = expression_form.clone();
             let added_via_equiv = merge_equivalent_expressions(
-                factor_finder,
                 data,
                 Some(root_vid),
                 factor_vid,
@@ -1273,10 +1256,10 @@ async fn add_factors_to_graph(
                 http,
             );
             added.extend(added_via_equiv);
-            let factors = factor_finder.find_unique_factors(Factor::from(expression_form.as_str()));
+            let factors = find_unique_factors(Factor::from(expression_form.as_str()));
             added.extend(factors.into_iter().flat_map(|factor| {
                 let (vertex_id, added) =
-                    add_factor_node(data, factor, factor_finder, Some(root_vid), None, http);
+                    add_factor_node(data, factor, Some(root_vid), None, http);
                 if added { Some(vertex_id) } else { None }
             }));
         }
@@ -1292,7 +1275,6 @@ async fn add_factors_to_graph(
 }
 
 fn merge_equivalent_expressions(
-    factor_finder: &FactorFinder,
     data: &mut FactorData,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
@@ -1322,7 +1304,6 @@ fn merge_equivalent_expressions(
         let mut new_factor_vids = facts.factors_known_to_factordb.to_vec();
         if !replace(&mut facts.checked_in_factor_finder, true) {
             new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
-                factor_finder,
                 data,
                 root_vid,
                 factor_vid,
@@ -1331,7 +1312,7 @@ fn merge_equivalent_expressions(
             ));
         }
         let (new_lower_bound_log10, new_upper_bound_log10) =
-            factor_finder.estimate_log10(&equivalent);
+            estimate_log10(&equivalent);
         let facts = facts_of_mut(
             &mut data.number_facts_map,
             factor_vid,
@@ -1350,7 +1331,6 @@ fn merge_equivalent_expressions(
         // New expression may allow factor_finder to find factors it couldn't before
         let entry_id = facts.entry_id;
         new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
-            factor_finder,
             data,
             root_vid,
             factor_vid,
@@ -1362,15 +1342,13 @@ fn merge_equivalent_expressions(
 }
 
 fn add_factor_finder_factor_vertices_to_graph(
-    factor_finder: &FactorFinder,
     data: &mut FactorData,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
     entry_id: Option<u128>,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
-    factor_finder
-        .find_unique_factors(
+    find_unique_factors(
             get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms).clone(),
         )
         .into_iter()
@@ -1382,7 +1360,7 @@ fn add_factor_finder_factor_vertices_to_graph(
             } else {
                 new_factor.known_id()
             };
-            add_factor_node(data, new_factor, factor_finder, root_vid, entry_id, http)
+            add_factor_node(data, new_factor, root_vid, entry_id, http)
         })
         .flat_map(|(vid, added)| if added { Some(vid) } else { None })
         .collect()
@@ -1430,12 +1408,10 @@ fn test_find_and_submit() {
             .await;
         let (_channel, shutdown) = Monitor::new();
         let mut http = RealFactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
-        let factor_finder = FactorFinder::new();
         find_and_submit_factors(
             &mut http,
             11_000_000_004_420_33401,
             format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19).into(),
-            &factor_finder,
             true,
         )
         .await
