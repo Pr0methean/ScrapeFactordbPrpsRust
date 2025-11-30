@@ -36,3 +36,4 @@ nonzero = "0.2"
 async-backtrace = "0.2"
 hipstr = { version = "0.8", default-features = false, features = ["serde"] }
 futures-util = "0.3"
+peg = "0.8"

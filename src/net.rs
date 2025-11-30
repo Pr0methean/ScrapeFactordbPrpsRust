@@ -92,7 +92,7 @@ pub trait FactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<HipStr<'static>>;
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Factor>;
     async fn known_factors_as_digits(
         &mut self,
         id: NumberSpecifier,
@@ -119,8 +119,8 @@ pub struct RealFactorDbClient {
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
     by_id_cache: BasicCache<u128, ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<HipStr<'static>, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<u128, HipStr<'static>>,
+    by_expr_cache: BasicCache<Factor, ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<u128, Factor>,
 }
 
 pub struct ResourceLimits {
@@ -398,7 +398,7 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<HipStr<'static>> {
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Factor> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
             return Some(entry_id.to_string().into());
         }
@@ -409,7 +409,7 @@ impl FactorDbClient for RealFactorDbClient {
         let response = self
             .try_get_and_decode(format!("https://factordb.com/index.php?id={entry_id}").into())
             .await?;
-        let expression_form: HipStr = self
+        let expression_form: Factor = self
             .expression_form_regex
             .captures(&response)?
             .get(1)?
@@ -447,11 +447,10 @@ impl FactorDbClient for RealFactorDbClient {
                 .or_else(|| {
                     self.expression_form_cache
                         .get(&id)
-                        .and_then(|expr| self.by_expr_cache.get(expr.as_str()))
+                        .and_then(|expr| self.by_expr_cache.get(expr))
                 })
                 .cloned(),
-            Expression(Factor::Expression(ref expr)) => self.by_expr_cache.get(expr).cloned(),
-            _ => None,
+            Expression(ref expr) => self.by_expr_cache.get(expr).cloned(),
         };
         if cached.is_some() {
             info!("Factor cache hit for {id}");
@@ -486,9 +485,7 @@ impl FactorDbClient for RealFactorDbClient {
                 }
             }
             Expression(ref expr) => {
-                if let Factor::Expression(expr) = expr {
-                    expr_key = Some(expr);
-                }
+                expr_key = Some(expr);
                 let url =
                     format!("https://factordb.com/api?query={}", encode(&expr.as_str())).into();
                 self.try_get_and_decode(url).await.ok_or(None)
@@ -593,8 +590,8 @@ impl FactorDbClient for RealFactorDbClient {
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
             Expression(Numeric(_)) => return AlreadyFullyFactored,
-            Expression(Factor::BigNumber(ref x)) => (None, Some(x)),
-            Expression(Factor::Expression(ref x)) => (None, Some(x)),
+            Expression(Factor::BigNumber(ref x)) => (None, Some(x.clone())),
+            Expression(ref x) => (None, Some(x.to_string().into())),
             Id(id) => (Some(id), None),
         };
         self.rate_limiter.until_ready().await;
@@ -604,7 +601,7 @@ impl FactorDbClient for RealFactorDbClient {
             .post("https://factordb.com/reportfactor.php")
             .form(&FactorSubmission {
                 id,
-                number,
+                number: number.as_ref(),
                 factor: &factor.as_str(),
             })
             .send()

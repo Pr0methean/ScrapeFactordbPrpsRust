@@ -1259,7 +1259,7 @@ async fn add_factors_to_graph(
         && let Some(expression_form) = http.try_get_expression_form(entry_id).await
     {
         let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
-        if expression_form != factor.as_str() {
+        if expression_form != *factor {
             let expression_form = expression_form.clone();
             let added_via_equiv = merge_equivalent_expressions(
                 factor_finder,
