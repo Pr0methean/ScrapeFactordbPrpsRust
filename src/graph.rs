@@ -669,7 +669,10 @@ pub async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 rule_out_divisibility(&mut data, factor_vid, root_vid);
-                any_failed_retryably |= !add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid).await.is_empty();
+                any_failed_retryably |=
+                    !add_factors_to_graph(http, factor_finder, &mut data, root_vid, factor_vid)
+                        .await
+                        .is_empty();
             }
             OtherError => {
                 any_failed_retryably = true;

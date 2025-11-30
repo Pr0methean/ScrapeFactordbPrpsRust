@@ -1179,19 +1179,27 @@ impl FactorFinder {
                 Factor::Numeric(a) => {
                     let (a, n) = factor_power(*a, 1);
                     if n > 1 {
-                        *term = Factor::Power {base: Numeric(a).into(), exponent: Numeric(n).into() };
+                        *term = Factor::Power {
+                            base: Numeric(a).into(),
+                            exponent: Numeric(n).into(),
+                        };
                         Some(n)
                     } else {
                         None
                     }
                 }
-                _ => None
+                _ => None,
             };
-            if let Some(exponent_u128) = exponent_u128
-            {
-                factorize128(exponent_u128).into_iter().for_each(|(factor, factor_exponent)| {
-                    possible_factors.insert(factor, factor_exponent.max(possible_factors.get(&factor).copied().unwrap_or(0)));
-                })
+            if let Some(exponent_u128) = exponent_u128 {
+                factorize128(exponent_u128)
+                    .into_iter()
+                    .for_each(|(factor, factor_exponent)| {
+                        possible_factors.insert(
+                            factor,
+                            factor_exponent
+                                .max(possible_factors.get(&factor).copied().unwrap_or(0)),
+                        );
+                    })
             }
         }
         if !subtract {
@@ -1200,7 +1208,10 @@ impl FactorFinder {
         if possible_factors.is_empty() {
             return vec![];
         }
-        let mut possible_factors: Vec<_> = possible_factors.into_iter().flat_map(|(factor, factor_exponent)| repeat_n(factor, factor_exponent)).collect();
+        let mut possible_factors: Vec<_> = possible_factors
+            .into_iter()
+            .flat_map(|(factor, factor_exponent)| repeat_n(factor, factor_exponent))
+            .collect();
         let factor_subsets = power_multiset(&mut possible_factors);
         let mut results = Vec::with_capacity((factor_subsets.len() - 1) * 2);
         for factors in factor_subsets {
@@ -1211,11 +1222,20 @@ impl FactorFinder {
                 continue;
             };
             if let Some(left_root) = self.nth_root_exact(&new_left, product)
-                && let Some(right_root) = self.nth_root_exact(&new_right, product) {
+                && let Some(right_root) = self.nth_root_exact(&new_right, product)
+            {
                 if subtract && product.is_multiple_of(2) {
-                    results.push(self.simplify(Factor::AddSub { left: left_root.clone().into(), right: right_root.clone().into(), subtract: false }));
+                    results.push(self.simplify(Factor::AddSub {
+                        left: left_root.clone().into(),
+                        right: right_root.clone().into(),
+                        subtract: false,
+                    }));
                 }
-                results.push(self.simplify(Factor::AddSub { left: left_root.into(), right: right_root.into(), subtract }));
+                results.push(self.simplify(Factor::AddSub {
+                    left: left_root.into(),
+                    right: right_root.into(),
+                    subtract,
+                }));
             }
         }
         results
@@ -1226,53 +1246,88 @@ impl FactorFinder {
             return Ok(Numeric(1));
         }
         if let Some(product_u128) = self.evaluate_as_u128(&product)
-        && let Some(divisor_u128) = self.evaluate_as_u128(&divisor) {
-            return product_u128.div_exact(divisor_u128).map(Numeric).ok_or(Numeric(product_u128));
+            && let Some(divisor_u128) = self.evaluate_as_u128(&divisor)
+        {
+            return product_u128
+                .div_exact(divisor_u128)
+                .map(Numeric)
+                .ok_or(Numeric(product_u128));
         }
         match product {
-            Factor::Power { base, ref mut exponent } => {
+            Factor::Power {
+                base,
+                ref mut exponent,
+            } => {
                 if *base == divisor {
                     return Ok(self.simplify(Factor::Power {
                         base,
-                        exponent:
-                            self.simplify(AddSub { left: take(exponent), right: Numeric(1).into(), subtract: true }).into()
+                        exponent: self
+                            .simplify(AddSub {
+                                left: take(exponent),
+                                right: Numeric(1).into(),
+                                subtract: true,
+                            })
+                            .into(),
                     }));
                 } else if let Some(exponent) = self.evaluate_as_u128(exponent)
                     && let Some(divisor_root) = self.nth_root_exact(&divisor, exponent)
-                    && let Ok(divided_base) = self.div_exact(*base.clone(), divisor_root) {
-                        return Ok(self.simplify(Factor::Power { base: divided_base.into(), exponent: Box::new(exponent.into()) }));
-                    }
-                return Err(Factor::Power {base, exponent: take(exponent)});
+                    && let Ok(divided_base) = self.div_exact(*base.clone(), divisor_root)
+                {
+                    return Ok(self.simplify(Factor::Power {
+                        base: divided_base.into(),
+                        exponent: Box::new(exponent.into()),
+                    }));
+                }
+                return Err(Factor::Power {
+                    base,
+                    exponent: take(exponent),
+                });
             }
             Factor::Multiply { ref mut terms } => {
                 let mut divisor_u128 = self.evaluate_as_u128(&divisor);
                 for (index, term) in terms.iter_mut().enumerate() {
                     if *term == divisor {
                         terms.remove(index);
-                        return Ok(self.simplify(Factor::Multiply { terms: std::mem::take(terms) }));
+                        return Ok(self.simplify(Factor::Multiply {
+                            terms: std::mem::take(terms),
+                        }));
                     }
-                    if let Some(divisor) = &mut divisor_u128 && let Some(term_u128) = self.evaluate_as_u128(term) {
+                    if let Some(divisor) = &mut divisor_u128
+                        && let Some(term_u128) = self.evaluate_as_u128(term)
+                    {
                         let gcd = term_u128.gcd(divisor);
                         if gcd > 1 {
                             *term = (term_u128 / gcd).into();
                             *divisor /= gcd;
                             if *divisor == 1 {
-                                return Ok(self.simplify(Factor::Multiply { terms: std::mem::take(terms) }));
+                                return Ok(self.simplify(Factor::Multiply {
+                                    terms: std::mem::take(terms),
+                                }));
                             }
                         }
                     }
                 }
             }
-            Factor::Divide { ref left, ref mut right } => {
+            Factor::Divide {
+                ref left,
+                ref mut right,
+            } => {
                 let right = std::mem::take(right);
                 return match self.div_exact(*left.clone(), divisor) {
-                    Ok(new_left) =>
-                        Ok(self.simplify(Factor::Divide { left: new_left.into(), right })),
-                    Err(left) => Err(Factor::Divide { left: left.into(), right })
-                }
+                    Ok(new_left) => Ok(self.simplify(Factor::Divide {
+                        left: new_left.into(),
+                        right,
+                    })),
+                    Err(left) => Err(Factor::Divide {
+                        left: left.into(),
+                        right,
+                    }),
+                };
             }
             Factor::Factorial(ref term) => {
-                if let Some(divisor) = self.evaluate_as_u128(&divisor) && let Some(term) = self.evaluate_as_u128(term) {
+                if let Some(divisor) = self.evaluate_as_u128(&divisor)
+                    && let Some(term) = self.evaluate_as_u128(term)
+                {
                     let mut new_term = term;
                     while let Some(divisor) = divisor.div_exact(new_term) {
                         new_term -= 1;
@@ -1283,10 +1338,16 @@ impl FactorFinder {
                 }
             }
             Factor::Primorial(ref term) => {
-                if let Some(mut divisor) = self.evaluate_as_u128(&divisor) && let Some(term) = self.evaluate_as_u128(term) {
+                if let Some(mut divisor) = self.evaluate_as_u128(&divisor)
+                    && let Some(term) = self.evaluate_as_u128(term)
+                {
                     let mut new_term = term;
                     while self.sieve.is_prime(&new_term, None) == No
-                        || divisor.div_exact(new_term).inspect(|new_divisor| divisor = *new_divisor).is_some() {
+                        || divisor
+                            .div_exact(new_term)
+                            .inspect(|new_divisor| divisor = *new_divisor)
+                            .is_some()
+                    {
                         new_term -= 1;
                         if divisor == 1 {
                             return Ok(self.simplify(Factor::Primorial(Numeric(new_term).into())));
@@ -1315,26 +1376,36 @@ impl FactorFinder {
                         }
                         Some(d.into())
                     }
-                    _ => None
+                    _ => None,
                 };
                 if reduced && let Some(d_reduced) = d_reduced {
                     return self.div_exact(n_reduced.into(), d_reduced);
                 }
             }
-            AddSub { left, right, subtract } => {
+            AddSub {
+                left,
+                right,
+                subtract,
+            } => {
                 return match self.div_exact(*left.clone(), divisor.clone()) {
                     Ok(new_left) => match self.div_exact(*right, divisor) {
-                        Ok(new_right) => {
-                            Ok(self.simplify(Factor::AddSub { left: new_left.into(), right: new_right.into(), subtract }))
-                        }
-                        Err(right) => {
-                            Err(AddSub { left, right: right.into(), subtract })
-                        }
-                    }
-                    Err(left) => {
-                        Err(AddSub { left: left.into(), right, subtract })
-                    }
-                }
+                        Ok(new_right) => Ok(self.simplify(Factor::AddSub {
+                            left: new_left.into(),
+                            right: new_right.into(),
+                            subtract,
+                        })),
+                        Err(right) => Err(AddSub {
+                            left,
+                            right: right.into(),
+                            subtract,
+                        }),
+                    },
+                    Err(left) => Err(AddSub {
+                        left: left.into(),
+                        right,
+                        subtract,
+                    }),
+                };
             }
             _ => {}
         }
@@ -1352,16 +1423,16 @@ impl FactorFinder {
             return Some(factor_u128.nth_root_exact(root.try_into().ok()?)?.into());
         }
         match factor {
-            Factor::Power { base, exponent } =>  {
+            Factor::Power { base, exponent } => {
                 return Some(Factor::Power {
                     base: base.clone(),
                     exponent: match self.evaluate_as_u128(exponent) {
-                        Some(exponent_u128) =>
-                            exponent_u128.div_exact(root)?.into(),
-                        None => self.div_exact(*exponent.clone(), Numeric(root)).ok()?
-                    }.into()
+                        Some(exponent_u128) => exponent_u128.div_exact(root)?.into(),
+                        None => self.div_exact(*exponent.clone(), Numeric(root)).ok()?,
+                    }
+                    .into(),
                 });
-            },
+            }
             Factor::Multiply { terms } => {
                 let new_terms = terms
                     .iter()
@@ -1753,29 +1824,40 @@ impl FactorFinder {
         }
         match expr {
             Factor::Multiply { terms } => {
-                let new_terms: Vec<Factor> = terms.into_iter()
+                let new_terms: Vec<Factor> = terms
+                    .into_iter()
                     .filter(|term| *term != Numeric(1))
                     .map(|term| self.simplify(term))
                     .collect();
                 match new_terms.len() {
                     0 => Factor::Numeric(1),
                     1 => new_terms.into_iter().next().unwrap(),
-                    _ => Factor::Multiply { terms: new_terms.into_iter().collect() }
+                    _ => Factor::Multiply {
+                        terms: new_terms.into_iter().collect(),
+                    },
                 }
             }
             Factor::Divide { left, right } => {
                 let new_left = self.simplify(*left);
-                let mut new_right: Vec<Factor> = right.into_iter()
+                let mut new_right: Vec<Factor> = right
+                    .into_iter()
                     .map(|term| self.simplify(term))
                     .filter(|term| *term != Numeric(1))
                     .collect();
-                if let Some((index, _)) = new_right.iter().enumerate().find(|(_, term)| **term == new_left) {
+                if let Some((index, _)) = new_right
+                    .iter()
+                    .enumerate()
+                    .find(|(_, term)| **term == new_left)
+                {
                     new_right.remove(index);
                 }
                 if new_right.is_empty() {
                     new_left
                 } else {
-                    Factor::Divide { left: new_left.into(), right: new_right.into_iter().collect() }
+                    Factor::Divide {
+                        left: new_left.into(),
+                        right: new_right.into_iter().collect(),
+                    }
                 }
             }
             Factor::Power { base, exponent } => {
@@ -1786,7 +1868,8 @@ impl FactorFinder {
                         return Numeric(1);
                     }
                     if let Some(new_exponent_u128) = self.evaluate_as_u128(&new_exponent) {
-                        let (factored_base_u128, factored_exponent_u128) = factor_power(new_base_u128, new_exponent_u128);
+                        let (factored_base_u128, factored_exponent_u128) =
+                            factor_power(new_base_u128, new_exponent_u128);
                         if factored_exponent_u128 != new_exponent_u128 {
                             new_base = Numeric(factored_base_u128);
                             new_exponent = Numeric(factored_exponent_u128);
@@ -1796,21 +1879,26 @@ impl FactorFinder {
                 match new_exponent {
                     Numeric(0) => Numeric(1),
                     Numeric(1) => new_base,
-                    _ => Factor::Power { base: new_base.into(), exponent: new_exponent.into() }
+                    _ => Factor::Power {
+                        base: new_base.into(),
+                        exponent: new_exponent.into(),
+                    },
                 }
             }
-            Factor::Factorial(ref term) | Factor::Primorial(ref term) => {
-                match **term {
-                    Numeric(0) | Numeric(1) => Numeric(1),
-                    _ => expr
-                }
-            }
-            Factor::AddSub { left, right, subtract } => Factor::AddSub {
+            Factor::Factorial(ref term) | Factor::Primorial(ref term) => match **term {
+                Numeric(0) | Numeric(1) => Numeric(1),
+                _ => expr,
+            },
+            Factor::AddSub {
+                left,
+                right,
+                subtract,
+            } => Factor::AddSub {
                 left: self.simplify(*left).into(),
                 right: self.simplify(*right).into(),
-                subtract
+                subtract,
             },
-            _ => expr
+            _ => expr,
         }
     }
 
@@ -1923,12 +2011,11 @@ impl FactorFinder {
                 }
             }
             Factor::ElidedNumber(_) => None,
-            Factor::Power { base, exponent } =>
-                match self.evaluate_as_u128(base)? {
-                    0 => Some(0),
-                    1 => Some(1),
-                    base => base.checked_pow(u32::try_from(self.evaluate_as_u128(exponent)?).ok()?)
-                },
+            Factor::Power { base, exponent } => match self.evaluate_as_u128(base)? {
+                0 => Some(0),
+                1 => Some(1),
+                base => base.checked_pow(u32::try_from(self.evaluate_as_u128(exponent)?).ok()?),
+            },
             Factor::Divide { left, right } => {
                 let mut result = self.evaluate_as_u128(left)?;
                 for term in right.iter() {
@@ -2410,7 +2497,7 @@ impl FactorFinder {
             Factor::AddSub {
                 ref left,
                 ref right,
-                subtract
+                subtract,
             } => {
                 let mut common_factors = self.find_common_factors(*left.clone(), *right.clone());
                 for prime in SMALL_PRIMES {
@@ -2420,7 +2507,10 @@ impl FactorFinder {
                 }
                 common_factors.sort();
                 common_factors.dedup();
-                let mut factors: Vec<_> = common_factors.iter().flat_map(|factor| self.div_exact(expr.clone(), factor.clone()).ok()).collect();
+                let mut factors: Vec<_> = common_factors
+                    .iter()
+                    .flat_map(|factor| self.div_exact(expr.clone(), factor.clone()).ok())
+                    .collect();
                 factors.extend(common_factors);
                 factors.extend(self.to_like_powers(left, right, subtract));
                 factors
@@ -2554,8 +2644,8 @@ mod tests {
     use crate::algebraic::Factor::Numeric;
     use crate::algebraic::{
         Factor, FactorFinder, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power,
-        fibonacci_factors, lucas_factors, modinv, multiset_difference,
-        multiset_intersection, multiset_union, power_multiset,
+        fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection,
+        multiset_union, power_multiset,
     };
     use itertools::Itertools;
     use std::iter::repeat_n;
