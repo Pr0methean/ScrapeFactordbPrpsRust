@@ -1266,7 +1266,7 @@ async fn add_factors_to_graph(
                 data,
                 Some(root_vid),
                 factor_vid,
-                expression_form.clone().into(),
+                expression_form.clone(),
                 http,
             );
             added.extend(added_via_equiv);
