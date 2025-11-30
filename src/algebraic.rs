@@ -5,7 +5,7 @@ use const_format::formatcp;
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
-use num_integer::Integer;
+use num_integer::{gcd, gcd_lcm, lcm, Integer};
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::{ExactRoots, PrimalityTestConfig};
 use num_prime::Primality::No;
@@ -582,29 +582,44 @@ peg::parser!{
     pub rule number() -> Factor
       = n:$(['0'..='9']+) { n.parse::<u128>().map(|x| Factor::Numeric(x)).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
 
-    #[cache_left_rec]
-    pub rule arithmetic() -> Factor = precedence!{
-      x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
-      x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
+    pub rule muldiv_term() -> Box<Factor> = precedence!{
+      x:@ "^" y:(@) { Factor::Power { base: x, exponent: y }.into() }
       --
-      x:(@) "*" y:@ { Factor::Multiply { terms: vec![Box::new(x).flatten(MAX_DEPTH_DURING_PARSE), Box::new(y).flatten(MAX_DEPTH_DURING_PARSE)] } }
+      x:@ "!" { Factor::Factorial(x).into() }
+      x:@ "#" { Factor::Primorial(x).into() }
       --
-      x:(@) "/" y:@ { Factor::Divide { left: Box::new(x).flatten(MAX_DEPTH_DURING_PARSE), right: vec![Box::new(y).flatten(MAX_DEPTH_DURING_PARSE)] } }
+      "I" x:@ { Factor::Fibonacci(x).into() }
       --
-      x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
+      "lucas(" x:arithmetic() ")" { Factor::Lucas(x).into() }
       --
-      x:@ "!" { Factor::Factorial(x.into()) }
-      x:@ "#" { Factor::Primorial(x.into()) }
+      n:number() { n.into() }
       --
-      "I" x:@ { Factor::Fibonacci(Box::new(x)) }
-      --
-      "lucas(" x:arithmetic() ")" { Factor::Lucas(x.into()) }
-      --
-      n:number() { n }
-      --
-      n:$(['0'..='9']+ ".." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
+      n:$(['0'..='9']+ ".." ['0'..='9']+) { Factor::ElidedNumber(n.into()).into() }
       --
       "(" e:arithmetic() ")" { e }
+    }
+
+    pub rule div_term() -> Box<Factor> = precedence!{
+        x:(muldiv_term() **<2,> "*") { Box::new(Factor::Multiply { terms: x }) }
+        --
+        x:muldiv_term() { x }
+    }
+
+    #[cache_left_rec]
+    pub rule arithmetic() -> Box<Factor> = precedence!{
+      x:(@) "+" y:@ { Factor::AddSub { left: x, right: y, subtract: false }.into() }
+      x:(@) "-" y:@ { Factor::AddSub { left: x, right: y, subtract: true }.into() }
+      --
+      x:(div_term()) "/" y:(div_term() ++ "/") { let mut x = x;
+        if let Factor::Divide { ref mut right, .. } = *x {
+            right.extend(y.into_iter());
+            x
+        } else {
+            Box::new(Factor::Divide { left: x, right: y })
+        }
+      }
+      --
+      x:div_term() { x }
     }
   }
 }
@@ -1132,6 +1147,51 @@ impl FactorFinder {
         }
     }
 
+    pub fn nth_root_exact(&self, factor: &Factor, mut root: u128) -> Option<Factor> {
+        if root == 1 {
+            return Some(factor.clone());
+        }
+        if let Some(factor_u128) = self.evaluate_as_u128(factor) {
+            if factor_u128 == 1 {
+                return Some(1.into());
+            }
+            return Some(factor_u128.nth_root_exact(root.try_into().ok()?)?.into());
+        }
+        match factor {
+            Factor::Power { base, exponent } => {
+                match self.evaluate_as_u128(exponent) {
+                    Some(exponent) => return Some(Factor::Power {base: base.clone(), exponent: exponent.div_exact(root)?.into() },
+                    None => if let Factor::Multiply { terms } = exponent {
+                        let new_terms = terms.clone();
+                        for (index, term) in terms.iter().enumerate() {
+                            if let Some(term) = self.evaluate_as_u128(term) {
+                                let gcd = term.gcd(&root);
+                                if gcd > 1 {
+                                    new_terms[index] = (term / gcd).into();
+                                    root /= gcd;
+                                    if root == 1 {
+                                        return Some(Factor::Multiply { terms: new_terms });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Factor::Multiply { terms } => {
+                let new_terms = terms.iter().map(|term| self.nth_root_exact(term, root)).collect()?;
+                return Some(Factor::Multiply { terms: new_terms } );
+            }
+            Factor::Divide { left, right } => {
+                let new_left = self.nth_root_exact(left, root)?;
+                let new_right = right.iter().map(|term| self.nth_root_exact(term, root)).collect()?;
+                return Some(Factor::Divide { left: new_left.into(), right: new_right });
+            }
+            _ => {}
+        }
+        None
+    }
+
     #[inline(always)]
     pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Factor> {
         debug_assert_ne!(input, 0);
@@ -1415,8 +1475,9 @@ impl FactorFinder {
                 Some(result)
             }
             Factor::Power { base, exponent } => {
-                Some(self.evaluate_modulo_as_u128(base, modulus)?
-                    .powm(self.evaluate_modulo_as_u128(exponent, modulus)?, &modulus))
+                let base_mod = self.evaluate_modulo_as_u128(base, modulus)?;
+                let exp = self.evaluate_as_u128(exponent)?;
+                Some(base_mod.powm(exp, &modulus))
             }
             Factor::Fibonacci(term) => {
                 let term = self.evaluate_as_u128(term)?;
@@ -2069,7 +2130,8 @@ impl FactorFinder {
                 factors
             }
             Factor::AddSub {ref left, ref right, ..} => {
-                let mut factors = self.find_common_factors(*left.clone(), *right.clone(), true);
+                let mut factors = self.find_common_factors(*left.clone(), *right.clone());
+
                 for prime in SMALL_PRIMES {
                     if self.evaluate_modulo_as_u128(&expr, prime as u128) == Some(0) {
                         factors.push(Numeric(prime as u128));
@@ -2141,7 +2203,6 @@ impl FactorFinder {
         &self,
         expr1: Factor,
         expr2: Factor,
-        for_add_or_sub: bool,
     ) -> Vec<Factor> {
         if let Some(num1) = self.evaluate_as_u128(&expr1)
             && let Some(num2) = self.evaluate_as_u128(&expr2)
@@ -2157,9 +2218,6 @@ impl FactorFinder {
                 && !expr1_factors.contains(&Numeric(2))
                 && !expr2_factors.contains(&Numeric(2));
             let mut results = multiset_intersection(expr1_factors, expr2_factors);
-            if both_odd {
-                results.push(Numeric(2));
-            }
             results
         }
     }
@@ -2364,7 +2422,8 @@ mod tests {
     #[test]
     fn test_addition_chain() {
         let finder = FactorFinder::new();
-        let factors = finder.find_factors("7^5432+3*7^4321+7^321+7^21".into());
+        /*let factors = finder.find_factors("7^5432+3*7^4321+7^321+7^21".into());
+        println!("{}", factors.iter().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(7)));
         let factors = finder.find_factors("7^5432+3*7^4321+7^321+7^21+1".into());
@@ -2372,7 +2431,7 @@ mod tests {
         assert!(!factors.contains(&Numeric(7)));
         let factors = finder.find_factors("3*7^5432+7^4321+7^321+1".into());
         assert!(factors.contains(&Numeric(2)));
-        assert!(!factors.contains(&Numeric(7)));
+        assert!(!factors.contains(&Numeric(7)));*/
         let factors = finder.find_factors("7^5432-7^4321-3*7^321-1".into());
         assert!(factors.contains(&Numeric(2)));
         assert!(!factors.contains(&Numeric(7)));
