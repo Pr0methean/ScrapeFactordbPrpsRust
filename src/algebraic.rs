@@ -1,4 +1,4 @@
-use crate::algebraic::Factor::{AddSub, Numeric};
+use crate::algebraic::Factor::{AddSub, Multiply, Numeric};
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
 use hipstr::HipStr;
 use itertools::Itertools;
@@ -777,6 +777,7 @@ macro_rules! factor_from_str {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
+                    .map(simplify)
                     .unwrap_or_else(|_| Factor::UnknownExpression(value.into()))
             }
         }
@@ -803,7 +804,7 @@ impl Display for Factor {
                 "({left}){}({right})",
                 if *subtract { '-' } else { '+' }
             )),
-            Factor::Multiply { terms } => {
+            Multiply { terms } => {
                 f.write_fmt(format_args!("({})", terms.iter().join(")*(")))
             }
             Factor::Divide { left, right } => {
@@ -1181,12 +1182,12 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                 })
             };
         }
-        Factor::Multiply { ref mut terms } => {
+        Multiply { ref mut terms } => {
             let mut divisor_u128 = evaluate_as_u128(&divisor);
             for (index, term) in terms.iter_mut().enumerate() {
                 if *term == divisor {
                     terms.remove(index);
-                    return Ok(simplify(Factor::Multiply { terms: take(terms) }));
+                    return Ok(simplify(Multiply { terms: take(terms) }));
                 }
                 if let Some(divisor) = &mut divisor_u128
                     && let Some(term_u128) = evaluate_as_u128(term)
@@ -1196,7 +1197,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                         *term = (term_u128 / gcd).into();
                         *divisor /= gcd;
                         if *divisor == 1 {
-                            return Ok(simplify(Factor::Multiply { terms: take(terms) }));
+                            return Ok(simplify(Multiply { terms: take(terms) }));
                         }
                     }
                 }
@@ -1341,13 +1342,13 @@ pub fn nth_root_exact(factor: Factor, root: u128) -> Result<Factor, Factor> {
                 Err(factor)
             };
         }
-        Factor::Multiply { ref terms } => {
+        Multiply { ref terms } => {
             let new_terms = terms
                 .iter()
                 .map(|term| nth_root_exact(term.clone(), root).ok())
                 .collect::<Option<Vec<_>>>()
                 .ok_or(factor)?;
-            return Ok(Factor::Multiply { terms: new_terms });
+            return Ok(Multiply { terms: new_terms });
         }
         Factor::Divide {
             ref left,
@@ -1481,7 +1482,7 @@ fn estimate_log10_internal(expr: &Factor) -> (u128, u128) {
             let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
             (lower, upper)
         }
-        Factor::Multiply { terms } => {
+        Multiply { terms } => {
             // multiplication
             let (product_lower, product_upper) = terms
                 .iter()
@@ -1578,7 +1579,7 @@ pub(crate) fn evaluate_modulo_as_u128(expr: &Factor, modulus: u128) -> Option<u1
                 Some((left + right) % modulus)
             }
         }
-        Factor::Multiply { terms } => {
+        Multiply { terms } => {
             let mut product: u128 = 1;
             for term in terms.iter() {
                 product = product.checked_mul(evaluate_modulo_as_u128(term, modulus)?)? % modulus;
@@ -1662,11 +1663,11 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
         return Numeric(expr_u128);
     }
     match expr {
-        Factor::Multiply { terms } => {
+        Multiply { terms } => {
             let new_terms: Vec<Factor> = terms
                 .into_iter()
                 .flat_map(|term| {
-                    if let Factor::Multiply { terms } = term {
+                    if let Multiply { terms } = term {
                         terms
                     } else {
                         vec![term]
@@ -1675,11 +1676,12 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                 })
                 .map(simplify)
                 .filter(|term| *term != Numeric(1))
+                .sorted_unstable()
                 .collect();
             match new_terms.len() {
                 0 => Numeric(1),
                 1 => new_terms.into_iter().next().unwrap(),
-                _ => Factor::Multiply {
+                _ => Multiply {
                     terms: new_terms.into_iter().collect(),
                 },
             }
@@ -1702,6 +1704,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                 .into_iter()
                 .map(simplify)
                 .filter(|term| *term != Numeric(1))
+                .sorted_unstable()
                 .collect();
             if let Some((index, _)) = new_right
                 .iter()
@@ -1752,10 +1755,25 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
             left,
             right,
             subtract,
-        } => AddSub {
-            left: simplify(*left).into(),
-            right: simplify(*right).into(),
-            subtract,
+        } => {
+            let mut left = simplify(*left);
+            let mut right = simplify(*right);
+            match left.cmp(&right) {
+                Ordering::Less => {}
+                Ordering::Equal => {
+                    return if subtract {
+                        Numeric(0)
+                    } else {
+                        Multiply { terms: vec![left, Numeric(2)] }
+                    };
+                }
+                Ordering::Greater => {
+                    if !subtract && left > right {
+                        swap(&mut left, &mut right);
+                    }
+                }
+            }
+            AddSub { left: left.into(), right: right.into(), subtract }
         },
         _ => expr,
     }
@@ -1846,7 +1864,7 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
             }
             Some(result)
         }
-        Factor::Multiply { terms } => {
+        Multiply { terms } => {
             let mut result = 1u128;
             for term in terms.iter() {
                 result = result.checked_mul(evaluate_as_u128(term)?)?;
@@ -1991,7 +2009,7 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             }
             left_recursive_factors
         }
-        Factor::Multiply { terms } => {
+        Multiply { terms } => {
             // multiplication
             let mut factors = Vec::new();
             for term in terms.into_iter() {
@@ -2025,7 +2043,6 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
                 to_like_powers_recursive_dedup(left, right, subtract),
                 find_common_factors(*left.clone(), *right.clone()),
             ]);
-            factors.sort();
             let cofactors: Vec<_> = factors
                 .iter()
                 .unique()
