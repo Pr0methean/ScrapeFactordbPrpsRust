@@ -1944,16 +1944,14 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
         Factor::Divide { left, right } => {
             // division
             let mut left_recursive_factors = vec![];
-            let mut left_remaining_factors = find_factors(*left);
-            while let Some(factor) = left_remaining_factors.pop() {
+            let left_remaining_factors = find_factors(*left);
+            let mut left_remaining_factors = count_frequencies(left_remaining_factors);
+            while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
                 let subfactors = find_factors(factor.clone());
-                if !(subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor)) {
-                    left_remaining_factors.extend(
-                        subfactors
-                            .into_iter()
-                            .filter(|subfactor| *subfactor != factor),
-                    );
-                }
+                subfactors
+                    .into_iter()
+                    .filter(|subfactor| *subfactor != factor)
+                    .for_each(|subfactor| *left_remaining_factors.entry(subfactor).or_insert(0) += exponent);
                 left_recursive_factors.push(factor);
             }
             let mut right_remaining_factors = right;
