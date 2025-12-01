@@ -1914,10 +1914,11 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             let base_factors = find_factors(*base.clone());
             repeat_n(base_factors, power).flatten().collect()
         }
-        Factor::Divide { ref left, ref right } => {
+        Factor::Divide { left, right } => {
+            let expr = Factor::Divide { left: left.clone(), right: right.clone() };
             // division
-            let mut factors = find_factors(*left.clone());
-            for term in right.iter().cloned() {
+            let mut factors = find_factors(*left);
+            for term in right.into_iter() {
                 let denom_factors = find_factors(term);
                 factors = multiset_difference(factors, &denom_factors);
                 if factors.is_empty() {
@@ -1929,10 +1930,10 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
         Factor::Multiply { terms } => {
             // multiplication
             let mut factors = Vec::new();
-            for term in terms.iter() {
+            for term in terms.into_iter() {
                 let term_factors = find_factors(term.clone());
                 if term_factors.is_empty() {
-                    factors.push(term.clone());
+                    factors.push(term);
                 } else {
                     factors.extend(term_factors);
                 }
