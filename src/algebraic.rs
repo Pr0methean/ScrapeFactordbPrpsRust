@@ -750,7 +750,7 @@ impl Display for Factor {
             Factor::BigNumber(s) => write_bignum(f, s),
             Factor::UnknownExpression(e) => e.fmt(f),
             Factor::ElidedNumber(e) => e.fmt(f),
-            Factor::AddSub {
+            AddSub {
                 left,
                 right,
                 subtract,
@@ -1055,7 +1055,7 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Fact
     for term in [&mut new_left, &mut new_right] {
         let exponent_u128 = match term {
             Factor::Power { exponent, .. } => evaluate_as_u128(exponent),
-            Factor::Numeric(a) => {
+            Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
                     *term = Factor::Power {
@@ -1103,13 +1103,13 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Fact
             && let Some(right_root) = nth_root_exact(&new_right, product)
         {
             if subtract && product.is_multiple_of(2) {
-                results.push(simplify(Factor::AddSub {
+                results.push(simplify(AddSub {
                     left: left_root.clone().into(),
                     right: right_root.clone().into(),
                     subtract: false,
                 }));
             }
-            results.push(simplify(Factor::AddSub {
+            results.push(simplify(AddSub {
                 left: left_root.into(),
                 right: right_root.into(),
                 subtract,
@@ -1136,29 +1136,35 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
             base,
             ref mut exponent,
         } => {
-            if *base == divisor {
-                return Ok(simplify(Factor::Power {
+            return if *base == divisor {
+                Ok(simplify(Factor::Power {
                     base,
                     exponent: simplify(AddSub {
                         left: take(exponent),
                         right: Numeric(1).into(),
                         subtract: true,
                     })
-                    .into(),
-                }));
+                        .into(),
+                }))
             } else if let Some(exponent) = evaluate_as_u128(exponent)
                 && let Some(divisor_root) = nth_root_exact(&divisor, exponent)
-                && let Ok(divided_base) = div_exact(*base.clone(), divisor_root)
             {
-                return Ok(simplify(Factor::Power {
-                    base: divided_base.into(),
-                    exponent: Box::new(exponent.into()),
-                }));
+                match div_exact(*base, divisor_root) {
+                    Ok(divided_base) => Ok(simplify(Factor::Power {
+                        base: divided_base.into(),
+                        exponent: Box::new(exponent.into()),
+                    })),
+                    Err(base) => Err(Factor::Power {
+                        base: base.into(),
+                        exponent: Box::new(exponent.into()),
+                    })
+                }
+            } else {
+                Err(Factor::Power {
+                    base,
+                    exponent: take(exponent),
+                })
             }
-            return Err(Factor::Power {
-                base,
-                exponent: take(exponent),
-            });
         }
         Factor::Multiply { ref mut terms } => {
             let mut divisor_u128 = evaluate_as_u128(&divisor);
@@ -1166,7 +1172,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                 if *term == divisor {
                     terms.remove(index);
                     return Ok(simplify(Factor::Multiply {
-                        terms: std::mem::take(terms),
+                        terms: take(terms),
                     }));
                 }
                 if let Some(divisor) = &mut divisor_u128
@@ -1178,7 +1184,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                         *divisor /= gcd;
                         if *divisor == 1 {
                             return Ok(simplify(Factor::Multiply {
-                                terms: std::mem::take(terms),
+                                terms: take(terms),
                             }));
                         }
                     }
@@ -1186,11 +1192,12 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
             }
         }
         Factor::Divide {
-            ref left,
+            ref mut left,
             ref mut right,
         } => {
-            let right = std::mem::take(right);
-            return match div_exact(*left.clone(), divisor) {
+            let left = take(left);
+            let right = take(right);
+            return match div_exact(*left, divisor) {
                 Ok(new_left) => Ok(simplify(Factor::Divide {
                     left: new_left.into(),
                     right,
@@ -1266,7 +1273,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
         } => {
             return match div_exact(*left.clone(), divisor.clone()) {
                 Ok(new_left) => match div_exact(*right, divisor) {
-                    Ok(new_right) => Ok(simplify(Factor::AddSub {
+                    Ok(new_right) => Ok(simplify(AddSub {
                         left: new_left.into(),
                         right: new_right.into(),
                         subtract,
@@ -1459,7 +1466,7 @@ fn estimate_log10_internal(expr: &Factor) -> (u128, u128) {
                 .unwrap();
             (product_lower, product_upper)
         }
-        Factor::AddSub {
+        AddSub {
             left,
             right,
             subtract,
@@ -1522,9 +1529,9 @@ pub(crate) fn evaluate_modulo_as_u128(expr: &Factor, modulus: u128) -> Option<u1
         _ => {}
     }
     match expr {
-        Factor::Numeric(n) => Some(n % modulus),
+        Numeric(n) => Some(n % modulus),
         Factor::BigNumber(_) | Factor::ElidedNumber(_) | Factor::UnknownExpression(_) => None,
-        Factor::AddSub {
+        AddSub {
             left,
             right,
             subtract,
@@ -1638,7 +1645,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                 .filter(|term| *term != Numeric(1))
                 .collect();
             match new_terms.len() {
-                0 => Factor::Numeric(1),
+                0 => Numeric(1),
                 1 => new_terms.into_iter().next().unwrap(),
                 _ => Factor::Multiply {
                     terms: new_terms.into_iter().collect(),
@@ -1706,11 +1713,11 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
             Numeric(0) | Numeric(1) => Numeric(1),
             _ => expr,
         },
-        Factor::AddSub {
+        AddSub {
             left,
             right,
             subtract,
-        } => Factor::AddSub {
+        } => AddSub {
             left: simplify(*left).into(),
             right: simplify(*right).into(),
             subtract,
@@ -1811,7 +1818,7 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
             }
             Some(result)
         }
-        Factor::AddSub {
+        AddSub {
             left,
             right,
             subtract,
@@ -1924,13 +1931,13 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             }
             factors
         }
-        Factor::AddSub {
+        AddSub {
             ref left,
             ref right,
             subtract,
         } => {
             let mut common_factors = find_common_factors(*left.clone(), *right.clone());
-            for prime in SMALL_PRIMES {
+                for prime in SMALL_PRIMES {
                 if evaluate_modulo_as_u128(&expr, prime as u128) == Some(0) {
                     common_factors.push(Numeric(prime as u128));
                 }
