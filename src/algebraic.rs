@@ -1305,12 +1305,15 @@ pub fn nth_root_exact(factor: Factor, root: u128) -> Result<Factor, Factor> {
             return Ok(1.into());
         }
         if let Ok(root_u32) = root.try_into() {
-            return Ok(factor_u128.nth_root_exact(root_u32).map(Factor::Numeric).ok_or(factor)?);
+            return factor_u128.nth_root_exact(root_u32).map(Numeric).ok_or(factor);
         }
     }
     match factor {
         Factor::Power { ref base, ref exponent } => {
-            return if let Some(exponent_u32) = evaluate_as_u128(&exponent)
+            if evaluate_as_u128(base) == Some(1) {
+                return Ok(Numeric(1));
+            }
+            return if let Some(exponent_u32) = evaluate_as_u128(exponent)
                 && let Some(reduced_exponent) = exponent_u32.div_exact(root)
             {
                 Ok(Factor::Power {
