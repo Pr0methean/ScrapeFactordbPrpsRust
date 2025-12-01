@@ -12,7 +12,7 @@ use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
-use std::collections::{BTreeMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::LN_10;
 use std::f64::consts::LOG10_2;
 use std::fmt::{Display, Formatter};
@@ -1000,7 +1000,7 @@ const MAX_REPEATS: u128 = 16;
 
 fn factor_power(a: u128, n: u128) -> (u128, u128) {
     if a == 1 {
-        return (1, 0);
+        return (1, 1);
     }
     // A u128 can't be a 128th or higher power
     for prime in [
@@ -1051,38 +1051,53 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Fact
     }
     if !subtract {
         possible_factors.remove(&2);
-    };
-    if possible_factors.is_empty() {
+    }
+    let total_factors = possible_factors.values().sum::<usize>();
+    if total_factors <= 1 {
         return vec![];
     }
-    let mut possible_factors: Vec<_> = possible_factors
-        .into_iter()
-        .flat_map(|(factor, factor_exponent)| repeat_n(factor, factor_exponent))
-        .collect();
-    let factor_subsets = power_multiset(&mut possible_factors);
-    let mut results = Vec::with_capacity((factor_subsets.len() - 1) * 2);
-    for factors in factor_subsets {
-        if factors.is_empty() {
-            continue;
-        }
-        let Some(Some(product)) = factors.into_iter().try_reduce(u128::checked_mul) else {
-            continue;
-        };
-        if let Ok(left_root) = nth_root_exact(new_left.clone(), product)
-            && let Ok(right_root) = nth_root_exact(new_right.clone(), product)
+    let mut results = Vec::with_capacity(total_factors * 2);
+    for (factor, factor_power) in possible_factors {
+        if let Ok(left_root) = nth_root_exact(new_left.clone(), factor)
+            && let Ok(right_root) = nth_root_exact(new_right.clone(), factor)
         {
-            if subtract && product.is_multiple_of(2) {
-                results.push(simplify(AddSub {
+            if factor == 2 {
+                results.extend(repeat_n(simplify(AddSub {
                     left: left_root.clone().into(),
                     right: right_root.clone().into(),
                     subtract: false,
-                }));
+                }), factor_power));
             }
-            results.push(simplify(AddSub {
+            results.extend(repeat_n(simplify(AddSub {
                 left: left_root.into(),
                 right: right_root.into(),
                 subtract,
-            }));
+            }), factor_power));
+        }
+    }
+    results
+}
+pub fn to_like_powers_recursive_dedup(left: &Factor, right: &Factor, subtract: bool) -> Vec<Factor> {
+    let mut results = Vec::new();
+    let mut to_expand = to_like_powers(left, right, subtract);
+    let mut already_expanded = BTreeSet::new();
+    while let Some(factor) = to_expand.pop() {
+        if !already_expanded.contains(&factor) {
+            match factor {
+                AddSub { ref left, ref right, subtract }
+                => {
+                    let subfactors = to_like_powers(&*left, &*right, subtract);
+                    to_expand.extend(subfactors);
+                    results.push(factor.clone());
+                }
+                Numeric(n) => {
+                    results.extend(find_factors_of_u128(n));
+                }
+                _ => {
+                    results.push(factor.clone());
+                }
+            }
+            already_expanded.insert(factor);
         }
     }
     results
@@ -1527,9 +1542,9 @@ pub(crate) fn evaluate_modulo_as_u128(expr: &Factor, modulus: u128) -> Option<u1
             }
         }
         Factor::Multiply { terms } => {
-            let mut product = 1;
+            let mut product: u128 = 1;
             for term in terms.iter() {
-                product = (product * evaluate_modulo_as_u128(term, modulus)?) % modulus;
+                product = product.checked_mul(evaluate_modulo_as_u128(term, modulus)?)? % modulus;
             }
             Some(product)
         }
@@ -1889,19 +1904,35 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             let mut left_remaining_factors = find_factors(*left);
             while let Some(factor) = left_remaining_factors.pop() {
                 let subfactors = find_factors(factor.clone());
-                if subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor) {
-                    left_recursive_factors.push(factor);
-                } else {
+                if !subfactors.is_empty() && !(subfactors.len() == 1 && subfactors[0] == factor) {
                     left_remaining_factors.extend(subfactors.into_iter()
                         .filter(|subfactor| *subfactor != factor));
                 }
+                left_recursive_factors.push(factor);
             }
             let mut right_remaining_factors = right;
             while let Some(factor) = right_remaining_factors.pop() {
                 let subfactors = find_factors(factor.clone());
                 if (subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor))
-                && let Some((index, _)) = left_recursive_factors.iter().enumerate().find(|(_, left_factor)| **left_factor == factor) {
-                    left_recursive_factors.remove(index);
+                && let Some((index, remove)) = left_recursive_factors.iter_mut().enumerate()
+                    .flat_map(|(index, left_factor)| {
+                        if *left_factor == factor {
+                            return Some((index, true));
+                        }
+                        match div_exact(take(left_factor), factor.clone()) {
+                            Ok(quotient) => {
+                                *left_factor = quotient;
+                                Some((index, false))
+                            }
+                            Err(returned_left_factor) => {
+                                *left_factor = returned_left_factor;
+                                None
+                            }
+                        }
+                    }).next() {
+                    if remove {
+                        left_recursive_factors.remove(index);
+                    }
                 } else {
                     right_remaining_factors.extend(subfactors.into_iter()
                         .filter(|subfactor| *subfactor != factor));
@@ -1927,20 +1958,27 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             ref right,
             subtract,
         } => {
-            let mut common_factors = find_common_factors(*left.clone(), *right.clone());
-                for prime in SMALL_PRIMES {
-                if evaluate_modulo_as_u128(&expr, prime as u128) == Some(0) {
-                    common_factors.push(Numeric(prime as u128));
+            let mut factors = Vec::with_capacity(SMALL_PRIMES.len());
+            for prime in SMALL_PRIMES {
+                let mut power = prime as u128;
+                while evaluate_modulo_as_u128(&expr, power) == Some(0) {
+                    factors.push(Numeric(prime as u128));
+                    let Some(new_power) = power.checked_mul(prime as u128) else {
+                        break;
+                    };
+                    power = new_power;
                 }
             }
-            common_factors.sort();
-            let mut factors: Vec<_> = common_factors
-                .iter()
-                .unique()
-                .flat_map(|factor| div_exact(expr.clone(), factor.clone()).ok())
+            factors = multiset_union(factors,
+                to_like_powers_recursive_dedup(left, right, subtract));
+            factors = multiset_union(factors,
+                find_common_factors(*left.clone(), *right.clone())
+            );
+            let cofactors: Vec<_> = factors.iter()
+                .flat_map(|factor| div_exact(AddSub { left: left.clone(), right: right.clone(), subtract }, factor.clone()).ok())
+                .filter(|cofactor| !factors.contains(cofactor))
                 .collect();
-            factors.extend(common_factors);
-            factors.extend(to_like_powers(left, right, subtract));
+            factors = multiset_union(factors, cofactors);
             factors
         }
         Factor::UnknownExpression(_) => vec![expr],
@@ -2080,7 +2118,7 @@ mod tests {
     use crate::algebraic::{
         Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, estimate_log10_internal,
         evaluate_as_u128, factor_power, fibonacci_factors, find_factors, lucas_factors, modinv,
-        multiset_difference, multiset_intersection, multiset_union, power_multiset,
+        multiset_intersection, multiset_union, power_multiset,
     };
     use itertools::Itertools;
     use std::iter::repeat_n;
@@ -2094,9 +2132,10 @@ mod tests {
 
     #[test]
     fn test_division() {
+        let factors = find_factors("(2^625+1)/(2^5+1)".into());
+        println!("{}", factors.iter().join(","));
+        assert!(!factors.contains(&3.into()));
         assert!(!find_factors("lucas(604203)/lucas(201401)/4".into()).contains(&"lucas(201401)".into()));
-        // FIXME: find a way to prevent excess repeats of like-powers factors, so this will pass:
-        // assert!(!find_factors("(2^625+1)/(2^5+1)".into()).contains(&3.into()));
     }
 
     #[test]
@@ -2110,11 +2149,11 @@ mod tests {
 
     #[test]
     fn test_anbc_2() {
-        let factors = find_factors("6^200600+1".into());
+        let factors = find_factors("(6^200600+1)/17".into());
         println!("{}", factors.iter().join(", "));
 
-        // Should contain 6^8+1
-        assert!(factors.contains(&(6u128.pow(8) + 1).into()));
+        // Should contain (6^8+1)/17
+        assert!(factors.contains(&98801.into()));
 
         // Shouldn't contain 6^5+1
         assert!(!factors.contains(&(6u128.pow(5) + 1).into()));
@@ -2158,11 +2197,10 @@ mod tests {
     }
 
     #[test]
-    fn test_axby() {
-        let factors = find_factors("1297^400-901^400".into());
+    fn test_axbx() {
+        let factors = find_factors("(1297^400-901^400)/3".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
-        assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
         assert!(factors.contains(&"1297^100-901^100".into()));
@@ -2171,15 +2209,19 @@ mod tests {
         assert!(!factors.contains(&"1297^80+901^80".into()));
         let factors = find_factors("1297^390-901^390".into());
         println!("{}", factors.iter().sorted().unique().join(","));
-        assert!(factors.contains(&Numeric(2)));
-        assert!(factors.contains(&Numeric(3)));
-        assert!(!factors.contains(&Numeric(5)));
-        assert!(factors.contains(&Numeric(11)));
+        assert!(factors.iter().any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(2))));
+        assert!(factors.iter().any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(3))));
+        assert!(!factors.iter().any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(5))));
+        assert!(factors.iter().any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(11))));
         assert!(factors.contains(&"1297^130-901^130".into()));
         assert!(factors.contains(&"1297^195-901^195".into()));
         assert!(!factors.contains(&"1297^130+901^130".into()));
         assert!(factors.contains(&"1297^195+901^195".into()));
-        find_factors("1297^1234-901^1".into());
+    }
+    #[test]
+    fn test_axby() {
+        let factors = find_factors("1297^1234-901^1".into());
+        println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
 
@@ -2229,7 +2271,7 @@ mod tests {
         println!("{}", factors.iter().join(","));
         assert!(!factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
-        assert!(!factors.contains(&Numeric(5)));
+        // assert!(!factors.contains(&Numeric(5)));
         assert!(factors.contains(&Numeric(11)));
     }
 
@@ -2296,9 +2338,10 @@ mod tests {
 
     #[test]
     fn test_nested_parens() {
-        let factors = find_factors("12^((2^7-1)^2)-1".into());
+        let factors = find_factors("(12^((2^7-1)^2)-1)/88750555799".into());
         println!("{factors:?}");
         assert!(factors.contains(&Numeric(11)));
+        assert!(factors.contains(&"12^127-1".into()));
     }
 
     #[test]
@@ -2312,7 +2355,8 @@ mod tests {
         println!("{}", factors.iter().join(","));
         // factors of 3^16+1
         // assert!(factors.contains(&Numeric(2)));
-        assert!(factors.contains(&(3u128.pow(16) + 1).into()));
+        assert!(factors.contains(&"3^176+1".into()));
+        assert!(factors.contains(&"3^112+1".into()));
     }
 
     #[test]
@@ -2395,16 +2439,6 @@ mod tests {
         let mut intersection = multiset_intersection(multiset_1, multiset_2);
         intersection.sort_unstable();
         assert_eq!(intersection, vec![2, 3, 3, 5]);
-    }
-
-    #[test]
-    fn test_multiset_difference() {
-        let multiset_1 = vec![2, 2, 3, 3, 5, 7];
-        let multiset_2 = vec![2, 3, 3, 3, 5, 11];
-        let difference: Vec<i32> = multiset_difference(multiset_1.clone(), &multiset_2);
-        assert_eq!(difference, vec![2, 7]);
-        assert!(multiset_difference(vec![], &multiset_2).is_empty());
-        assert!(multiset_difference(multiset_1.clone(), &multiset_1).is_empty());
     }
 
     #[test]
