@@ -1813,42 +1813,6 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
                 }
             }
         }
-        /*
-               ANBC_INDEX => {
-                   let a = evaluate_as_u128(&captures[1].into())?;
-                   let n = u32::try_from(evaluate_as_u128(&captures[2].into())?).ok()?;
-                   let b = if let Some(b) = captures.get(3) {
-                       evaluate_as_u128(&b.as_str().into())?
-                   } else {
-                       1
-                   };
-                   let abs_c = if let Some(c) = captures.get(5) {
-                       evaluate_as_u128(&c.as_str().into())?
-                   } else {
-                       0
-                   };
-                   let anb = a.checked_pow(n)?.checked_mul(b)?;
-                   if captures.get(4).is_some_and(|c| c.as_str().starts_with('-')) {
-                       anb.checked_sub(abs_c)
-                   } else {
-                       anb.checked_add(abs_c)
-                   }
-               }
-               AXBY_INDEX => {
-                   let a = evaluate_as_u128(&captures[1].into())?;
-                   let x = u32::try_from(evaluate_as_u128(&captures[2].into())?).ok()?;
-                   let sign = &captures[3];
-                   let b = evaluate_as_u128(&captures[4].into())?;
-                   let y = u32::try_from(evaluate_as_u128(&captures[5].into())?).ok()?;
-                   let ax = a.checked_pow(x)?;
-                   let by = b.checked_pow(y)?;
-                   if sign.starts_with('-') {
-                       ax.checked_sub(by)
-                   } else {
-                       ax.checked_add(by)
-                   }
-               }
-        */
         Factor::Factorial(term) => {
             let term = evaluate_as_u128(term)?;
             match term {
@@ -1943,356 +1907,6 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             };
             fibonacci_factors(term_number, true)
         }
-        /*
-        ANBC_INDEX => {
-            // a^n*b + c
-            let mut factors = Vec::new();
-            let a = Factor::from(&captures[1]);
-            let mut b = Numeric(1u128);
-            if let Some(b_match) = captures.get(3) {
-                b = Factor::from(b_match.as_str());
-            }
-            let c_raw_abs: Factor = if let Some(c_match) = captures.get(5) {
-                c_match.as_str().into()
-            } else {
-                let n = evaluate_as_u128(&captures[2].into())
-                    .unwrap_or(MAX_REPEATS)
-                    .min(MAX_REPEATS)
-                    as usize;
-                factors.extend(repeat_n(find_factors(a), n).flatten());
-                factors.extend(find_factors(b));
-                return factors;
-            };
-            let c_neg = match &captures[4] {
-                "-" => true,
-                "+" => false,
-                _ => unsafe { unreachable_unchecked() },
-            };
-            let gcd_bc =
-                find_common_factors(b.clone(), c_raw_abs.clone(), false);
-            let b_factors = find_factors(b);
-            let gcd_ac =
-                find_common_factors(a.clone(), c_raw_abs.clone(), false);
-            let abs_c = find_factors(c_raw_abs);
-            let n = Factor::from(&captures[2]);
-            drop(captures);
-            if let Some(a) = evaluate_as_u128(&a)
-                && let Some(n) = evaluate_as_u128(&n)
-            {
-                let (a, n) = factor_power(a, n);
-                let b_reduced: Vec<Factor> =
-                    multiset_difference(b_factors, &gcd_bc);
-                let c_reduced: Vec<Factor> = multiset_difference(abs_c, &gcd_bc);
-                factors.extend(multiset_union(gcd_ac, gcd_bc));
-                if let Some(b) = checked_product_u128(b_reduced.as_slice())
-                    && let Some(abs_c_u128) =
-                        checked_product_u128(c_reduced.as_slice())
-                {
-                    if !a.is_multiple_of(2)
-                        && !b.is_multiple_of(2)
-                        && !abs_c_u128.is_multiple_of(2)
-                    {
-                        factors.push(Numeric(2));
-                    }
-                    let anb_u128 = n
-                        .try_into()
-                        .ok()
-                        .and_then(|n| a.checked_pow(n))
-                        .and_then(|an| an.checked_mul(b));
-                    let (c, anbc_u128) = if c_neg {
-                        (
-                            0i128.checked_sub_unsigned(abs_c_u128),
-                            anb_u128.and_then(|anb| anb.checked_sub(abs_c_u128)),
-                        )
-                    } else {
-                        (
-                            0i128.checked_add_unsigned(abs_c_u128),
-                            anb_u128.and_then(|anb| anb.checked_add(abs_c_u128)),
-                        )
-                    };
-                    if let Some(anbc) = anbc_u128 {
-                        if factors.is_empty() {
-                            info!("Evaluated {expr} as {anbc}");
-                        } else {
-                            info!(
-                                "Evaluated {expr} as {}*{anbc}",
-                                factors.iter().join("*"),
-                            );
-                        }
-                        factors.extend(find_factors_of_u128(anbc));
-                        return factors;
-                    }
-                    let Some(c) = c else {
-                        return factors;
-                    };
-                    let mut factors_of_n = factorize128(n);
-                    let power_of_2 = if c > 0 {
-                        factors_of_n.remove(&2).unwrap_or(0) as u32
-                    } else {
-                        0
-                    };
-                    let mut odd_factors_of_n = factors_of_n
-                        .into_iter()
-                        .flat_map(|(key, value)| repeat_n(key, value))
-                        .collect::<Vec<u128>>();
-                    let odd_factors_of_n_count = odd_factors_of_n.len();
-                    let expr = Factor::Expression(expr.clone());
-                    for factor_subset in power_multiset(&mut odd_factors_of_n) {
-                        if factor_subset.len() == odd_factors_of_n_count {
-                            continue;
-                        }
-                        let subset_product =
-                            factor_subset.into_iter().product::<u128>()
-                                << power_of_2;
-                        if let Some(modulus) = a
-                            .powm(n, &subset_product)
-                            .mulm(b, &subset_product)
-                            .checked_add(mod_euclid(c, subset_product))
-                            && modulus.is_multiple_of(subset_product)
-                        {
-                            factors
-                                .extend(find_factors_of_u128(subset_product));
-                        }
-                        if let Ok(prime_for_root) = (n / subset_product).try_into()
-                            && (c < 0 || !(n / subset_product).is_multiple_of(2))
-                            && let Some(root_c) =
-                                abs_c_u128.nth_root_exact(prime_for_root)
-                            && let Some(root_b) = b.nth_root_exact(prime_for_root)
-                        {
-                            let even_ratio = (n / subset_product).is_multiple_of(2);
-                            let (anb_plus_c, anb_minus_c) =
-                                if let Ok(subset_product_u32) =
-                                    subset_product.try_into()
-                                    && let Some(anb) = a
-                                        .checked_pow(subset_product_u32)
-                                        .and_then(|an| an.checked_mul(root_b))
-                                {
-                                    let anb_plus_c = if (c >= 0 && !even_ratio)
-                                        || (c <= 0 && even_ratio)
-                                    {
-                                        Some(
-                                            anb.checked_add(root_c)
-                                                .map(Numeric)
-                                                .unwrap_or_else(|| {
-                                                    Factor::Expression(
-                                                        format!("{anb}+{root_c}")
-                                                            .into(),
-                                                    )
-                                                }),
-                                        )
-                                    } else {
-                                        None
-                                    };
-                                    let anb_minus_c = if c < 0 {
-                                        Some(
-                                            anb.checked_sub(root_c)
-                                                .map(Numeric)
-                                                .unwrap_or_else(|| {
-                                                    Factor::Expression(
-                                                        format!("{anb}-{root_c}")
-                                                            .into(),
-                                                    )
-                                                }),
-                                        )
-                                    } else {
-                                        None
-                                    };
-                                    (anb_plus_c, anb_minus_c)
-                                } else {
-                                    let anb = format!(
-                                        "{}{}{}",
-                                        a,
-                                        if subset_product > 1 {
-                                            Owned(format!("^{}", subset_product))
-                                        } else {
-                                            Borrowed("")
-                                        },
-                                        if root_b > 1 {
-                                            Owned(format!("*{}", root_b))
-                                        } else {
-                                            Borrowed("")
-                                        },
-                                    );
-                                    let anb_plus_c = if (c >= 0 && !even_ratio)
-                                        || (c <= 0 && even_ratio)
-                                    {
-                                        Some(Factor::Expression(
-                                            format!("{anb}+{root_c}").into(),
-                                        ))
-                                    } else {
-                                        None
-                                    };
-                                    let anb_minus_c = if c < 0 {
-                                        Some(Factor::Expression(
-                                            format!("{anb}-{root_c}").into(),
-                                        ))
-                                    } else {
-                                        None
-                                    };
-                                    (anb_plus_c, anb_minus_c)
-                                };
-                            for factor in anb_plus_c
-                                .into_iter()
-                                .chain(anb_minus_c.into_iter())
-                            {
-                                if factor != expr {
-                                    factors
-                                        .extend(find_factors(factor.clone()));
-                                    factors.push(factor);
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                factors.extend(multiset_union(gcd_ac, gcd_bc));
-            }
-            factors
-        }
-        AXBY_INDEX => {
-            //a^x +/- b^y
-            let (Some(a), Some(x), sign, Some(b), Some(y)) = (
-                evaluate_as_u128(&captures[1].into()),
-                evaluate_as_u128(&captures[2].into()),
-                &captures[3],
-                evaluate_as_u128(&captures[4].into()),
-                evaluate_as_u128(&captures[5].into()),
-            ) else {
-                return vec![];
-            };
-            let (a, x) = factor_power(a, x);
-            let (b, y) = factor_power(b, y);
-            let c_neg = match sign {
-                "-" => true,
-                "+" => false,
-                _ => unsafe { unreachable_unchecked() },
-            };
-            let gcd = x.gcd(&y);
-            if gcd == 1 {
-                let ax_str = if x > 1 {
-                    Some(format!("{a}^{x}"))
-                } else {
-                    None
-                };
-                let by_str = if y > 1 {
-                    Some(format!("{b}^{y}"))
-                } else {
-                    None
-                };
-                let ax = if let Some(ax_str) = ax_str {
-                    Factor::Expression(ax_str.into())
-                } else {
-                    Numeric(a)
-                };
-                let by = if let Some(by_str) = by_str {
-                    Factor::Expression(by_str.into())
-                } else {
-                    Numeric(b)
-                };
-                return find_common_factors(ax, by, true);
-            }
-            let mut factors = Vec::new();
-            if x == y {
-                for p in SMALL_PRIMES {
-                    let p = p as u128;
-                    // Compute a*b^{-1} mod p
-                    let b_inv = modinv(b % p, p);
-                    if b_inv.is_none() {
-                        continue;
-                    }
-                    let g = (a % p * b_inv.unwrap()) % p;
-
-                    // Compute g^x mod p
-                    let gx = g.powm(x, &p);
-
-                    let add_check = match sign {
-                        "+" => gx == p - 1,
-                        "-" => gx == 1,
-                        _ => unsafe { unreachable_unchecked() },
-                    };
-                    if add_check {
-                        factors.push(Numeric(p));
-                    }
-                }
-            }
-            if let Some(apb) = if sign == "-" {
-                a.checked_sub(b)
-            } else {
-                a.checked_add(b)
-            } {
-                factors.extend(find_factors_of_u128(apb));
-            }
-            let mut factors_of_gcd = factorize128(gcd);
-            let power_of_2 = if sign == "+" {
-                factors_of_gcd.remove(&2).unwrap_or(0) as u32
-            } else {
-                0
-            };
-            let mut odd_factors_of_gcd = factors_of_gcd
-                .into_iter()
-                .flat_map(|(key, value)| repeat_n(key, value))
-                .collect::<Vec<u128>>();
-            let odd_factors_of_n_count = odd_factors_of_gcd.len();
-            let x_ratio = x / gcd;
-            let y_ratio = y / gcd;
-            for factor_subset in power_multiset(&mut odd_factors_of_gcd) {
-                if factor_subset.len() == odd_factors_of_n_count {
-                    continue;
-                }
-                let subset_product =
-                    factor_subset.into_iter().product::<u128>() << power_of_2;
-                let even_ratio = (gcd / subset_product).is_multiple_of(2);
-                let x = x_ratio * subset_product;
-                let y = y_ratio * subset_product;
-                let (ax_plus_by, ax_minus_by) = if let Ok(x_u32) = x.try_into()
-                    && let Ok(y_u32) = y.try_into()
-                    && let Some(ax) = a.checked_pow(x_u32)
-                    && let Some(by) = b.checked_pow(y_u32)
-                {
-                    let ax_plus_by =
-                        if (!c_neg && !even_ratio) || (c_neg && even_ratio) {
-                            Some(ax.checked_add(by).map(Numeric).unwrap_or_else(
-                                || Factor::Expression(format!("{ax}+{by}").into()),
-                            ))
-                        } else {
-                            None
-                        };
-                    let ax_minus_by = if c_neg {
-                        Some(ax.checked_sub(by).map(Numeric).unwrap_or_else(|| {
-                            Factor::Expression(format!("{ax}-{by}").into())
-                        }))
-                    } else {
-                        None
-                    };
-                    (ax_plus_by, ax_minus_by)
-                } else {
-                    let ax_plus_by = if (!c_neg && !even_ratio)
-                        || (c_neg && even_ratio)
-                    {
-                        Some(Factor::Expression(format!("{a}^{x}+{b}^{y}").into()))
-                    } else {
-                        None
-                    };
-                    let ax_minus_by = if c_neg {
-                        Some(Factor::Expression(format!("{a}^{x}-{b}^{y}").into()))
-                    } else {
-                        None
-                    };
-                    (ax_plus_by, ax_minus_by)
-                };
-                let expr = Factor::Expression(expr.clone());
-                for factor in ax_plus_by.into_iter().chain(ax_minus_by.into_iter())
-                {
-                    if factor != expr {
-                        factors.extend(find_factors(factor.clone()));
-                        factors.push(factor);
-                    }
-                }
-            }
-            factors
-        }
-
-         */
         Factor::Factorial(ref term) => {
             // factorial
             let Some(input) = evaluate_as_u128(term) else {
@@ -2343,7 +1957,7 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
                 let denom_factors = find_factors(term);
                 factors = multiset_difference(factors, &denom_factors);
                 if factors.is_empty() {
-                    return vec![];
+                    return vec![expr];
                 }
             }
             factors
@@ -2443,9 +2057,15 @@ fn factor_big_num(expr: HipStr) -> Vec<Factor> {
 
 #[inline]
 fn find_common_factors(expr1: Factor, expr2: Factor) -> Vec<Factor> {
-    if let Some(num1) = evaluate_as_u128(&expr1)
-        && let Some(num2) = evaluate_as_u128(&expr2)
-    {
+    let num1 = evaluate_as_u128(&expr1);
+    if num1 == Some(1) {
+        return vec![];
+    }
+    let num2 = evaluate_as_u128(&expr2);
+    if num2 == Some(1) {
+        return vec![];
+    }
+    if let Some(num1) = num1 && let Some(num2) = num2 {
         find_factors_of_u128(num1.gcd(&num2))
     } else {
         let expr1_factors = find_factors(expr1);
@@ -2901,7 +2521,6 @@ mod tests {
         fn may_be_proper_divisor_of(left: &str, right: &str) -> bool {
             Factor::from(left).may_be_proper_divisor_of(&Factor::from(right))
         }
-        /*
         assert!(may_be_proper_divisor_of("123", "369^2"));
         assert!(!may_be_proper_divisor_of("2", "34567"));
         assert!(may_be_proper_divisor_of("2", "345-67"));
@@ -2909,7 +2528,6 @@ mod tests {
         assert!(!may_be_proper_divisor_of("12345", "12345"));
         assert!(!may_be_proper_divisor_of("54321", "12345"));
         assert!(!may_be_proper_divisor_of("123456789123456789123456789123456789123456789", "123456789123456789123456789123456789123456789/3"));
-        */
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
     }
 }
