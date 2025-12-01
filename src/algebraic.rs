@@ -12,7 +12,7 @@ use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap};
 use std::f64::consts::LN_10;
 use std::f64::consts::LOG10_2;
 use std::fmt::{Display, Formatter};
@@ -665,70 +665,6 @@ impl Factor {
         }
     }
 
-    fn muldiv_depth(&self, max: usize) -> usize {
-        if max == 0 {
-            return 0;
-        }
-        match self {
-            Factor::Multiply { terms } => {
-                1 + terms
-                    .iter()
-                    .map(|term| term.muldiv_depth(max - 1))
-                    .max()
-                    .unwrap_or(0)
-            }
-            Factor::Divide { left, right } => {
-                1 + right
-                    .iter()
-                    .map(|term| term.muldiv_depth(max - 1))
-                    .max()
-                    .unwrap_or(0)
-                    .max(left.muldiv_depth(max - 1))
-            }
-            _ => 0,
-        }
-    }
-
-    #[inline(always)]
-    fn flatten(self, max_depth: usize) -> Factor {
-        let depth = self.muldiv_depth(max_depth);
-        if depth < max_depth {
-            return self;
-        }
-        match self {
-            Factor::Divide {
-                mut left,
-                mut right,
-            } => {
-                while let Factor::Divide {
-                    left: left_left,
-                    right: mut mid,
-                } = *left
-                {
-                    mid.extend(right.into_iter());
-                    right = mid;
-                    left = left_left;
-                }
-                Factor::Divide { left, right }
-            }
-            Factor::Multiply { terms } => {
-                let mut flattened_terms = Vec::with_capacity(terms.len() + depth);
-                let mut new_terms = VecDeque::from(terms);
-                new_terms.reserve(depth);
-                while let Some(new_term) = new_terms.pop_front() {
-                    match new_term {
-                        Factor::Multiply { terms } => new_terms.extend_front(terms),
-                        _ => flattened_terms.push(new_term),
-                    }
-                }
-                Factor::Multiply {
-                    terms: flattened_terms,
-                }
-            }
-            _ => self,
-        }
-    }
-
     #[inline(always)]
     fn last_digit(&self) -> Option<u8> {
         match self {
@@ -796,7 +732,6 @@ macro_rules! factor_from_str {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
-                    .map(|factor| *Box::new(factor.flatten(2)))
                     .unwrap_or_else(|_| Factor::UnknownExpression(value.into()))
             }
         }
@@ -1694,8 +1629,13 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
         Factor::Multiply { terms } => {
             let new_terms: Vec<Factor> = terms
                 .into_iter()
-                .filter(|term| *term != Numeric(1))
+                .flat_map(|term| if let Factor::Multiply {terms} = term {
+                    terms
+                } else {
+                    vec![term]
+                }.into_iter())
                 .map(simplify)
+                .filter(|term| *term != Numeric(1))
                 .collect();
             match new_terms.len() {
                 0 => Factor::Numeric(1),
@@ -1705,7 +1645,16 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                 },
             }
         }
-        Factor::Divide { left, right } => {
+        Factor::Divide { mut left, mut right } => {
+            while let Factor::Divide {
+                left: left_left,
+                right: mut mid,
+            } = *left
+            {
+                mid.extend(right.into_iter());
+                right = mid;
+                left = left_left;
+            }
             let new_left = simplify(*left);
             let mut new_right: Vec<Factor> = right
                 .into_iter()
