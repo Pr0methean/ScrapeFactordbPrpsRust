@@ -554,9 +554,7 @@ pub enum Factor {
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
     AddSub {
-        left: Box<Factor>,
-        right: Box<Factor>,
-        subtract: bool,
+        terms: Vec<(Factor, bool)>,
     },
     Multiply {
         terms: Vec<Factor>,
@@ -611,8 +609,23 @@ peg::parser! {
 
     #[cache_left_rec]
     pub rule arithmetic() -> Factor = precedence!{
-      x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
-      x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
+      x:(@) "+" y:@ {
+        if let Factor::AddSub { ref mut terms } = x {
+            terms.push((y, false));
+            x
+        } else {
+            Factor::AddSub { terms: vec![(x, false), (y, false)] }
+        }
+      }
+
+      x:(@) "-" y:@ {
+        if let Factor::AddSub { ref mut terms } = x {
+            terms.push((y, true));
+            x
+        } else {
+            Factor::AddSub { terms: vec![(x, false), (y, true)] }
+        }
+      }
       --
       x:(div_term()) "/" y:(div_term() ++ "/") { let mut x = x;
         if let Factor::Divide { ref mut right, .. } = x {
@@ -750,14 +763,10 @@ impl Display for Factor {
             Factor::BigNumber(s) => write_bignum(f, s),
             Factor::UnknownExpression(e) => e.fmt(f),
             Factor::ElidedNumber(e) => e.fmt(f),
-            AddSub {
-                left,
-                right,
-                subtract,
-            } => f.write_fmt(format_args!(
-                "{left}{}{right}",
-                if *subtract { '-' } else { '+' }
-            )),
+            AddSub { terms
+            } => f.write_str(
+                &terms.map(|(term, subtract)| format!("{}{term}", if subtract { '-' } else { '+'})).collect::<String>()[1..],
+            ),
             Factor::Multiply { terms } => f.write_fmt(format_args!("({})", terms.iter().join("*"))),
             Factor::Divide { left, right } => {
                 f.write_fmt(format_args!("({left}/{})", right.iter().join("/")))
@@ -1104,15 +1113,11 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Fact
         {
             if subtract && product.is_multiple_of(2) {
                 results.push(simplify(AddSub {
-                    left: left_root.clone().into(),
-                    right: right_root.clone().into(),
-                    subtract: false,
+                    terms: vec![(left_root.clone().into(), false), (right_root.clone().into(), false)],
                 }));
             }
             results.push(simplify(AddSub {
-                left: left_root.into(),
-                right: right_root.into(),
-                subtract,
+                terms: vec![(left_root.into(), false), (right_root.into(), subtract)],
             }));
         }
     }
@@ -1140,9 +1145,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                 Ok(simplify(Factor::Power {
                     base,
                     exponent: simplify(AddSub {
-                        left: take(exponent),
-                        right: Numeric(1).into(),
-                        subtract: true,
+                        terms: vec![(take(exponent), false), (Numeric(1), true)]
                     })
                         .into(),
                 }))
@@ -1267,9 +1270,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
             }
         }
         AddSub {
-            left,
-            right,
-            subtract,
+            terms
         } => {
             return match div_exact(*left.clone(), divisor.clone()) {
                 Ok(new_left) => match div_exact(*right, divisor) {
