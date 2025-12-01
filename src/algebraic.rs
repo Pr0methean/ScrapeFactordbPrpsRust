@@ -818,15 +818,6 @@ fn count_frequencies<T: Eq + Ord>(vec: Vec<T>) -> BTreeMap<T, usize> {
 }
 
 #[inline(always)]
-fn count_frequencies_ref<T: Eq + Ord>(vec: &[T]) -> BTreeMap<&T, usize> {
-    let mut counts = BTreeMap::new();
-    for item in vec {
-        *counts.entry(item).or_insert(0) += 1;
-    }
-    counts
-}
-
-#[inline(always)]
 fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
     if vec1.is_empty() || vec2.is_empty() {
         return vec![];
@@ -864,27 +855,6 @@ fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
         .into_iter()
         .flat_map(|(item, count)| repeat_n(item, count))
         .collect()
-}
-
-#[inline(always)]
-fn multiset_difference<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: &[T]) -> Vec<T> {
-    if vec2.is_empty() {
-        return vec1;
-    }
-    if vec1.is_empty() {
-        return vec![];
-    }
-    let mut difference_vec = Vec::with_capacity(vec1.len());
-    let counts1 = count_frequencies(vec1);
-    let counts2 = count_frequencies_ref(vec2);
-
-    for (item, mut count) in counts1 {
-        if let Some(&count2) = counts2.get(&item) {
-            count = count.saturating_sub(count2);
-        }
-        difference_vec.extend(repeat_n(item, count));
-    }
-    difference_vec
 }
 
 #[inline]
@@ -1915,18 +1885,29 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
         }
         Factor::Divide { left, right } => {
             // division
-            let mut left_factors = find_factors(*left);
-            for term in right {
-                if left_factors.is_empty() {
-                    return vec![];
-                }
-                if let Some((index, _)) = left_factors.iter().enumerate().find(|(_, other_term)| **other_term == term) {
-                    left_factors.remove(index);
+            let mut left_recursive_factors = vec![];
+            let mut left_remaining_factors = find_factors(*left);
+            while let Some(factor) = left_remaining_factors.pop() {
+                let subfactors = find_factors(factor.clone());
+                if subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor) {
+                    left_recursive_factors.push(factor);
                 } else {
-                    left_factors = multiset_difference(left_factors, &find_factors(term));
+                    left_remaining_factors.extend(subfactors.into_iter()
+                        .filter(|subfactor| *subfactor != factor));
                 }
             }
-            left_factors
+            let mut right_remaining_factors = right;
+            while let Some(factor) = right_remaining_factors.pop() {
+                let subfactors = find_factors(factor.clone());
+                if (subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor))
+                && let Some((index, _)) = left_recursive_factors.iter().enumerate().find(|(_, left_factor)| **left_factor == factor) {
+                    left_recursive_factors.remove(index);
+                } else {
+                    right_remaining_factors.extend(subfactors.into_iter()
+                        .filter(|subfactor| *subfactor != factor));
+                }
+            }
+            left_recursive_factors
         }
         Factor::Multiply { terms } => {
             // multiplication
@@ -2114,6 +2095,8 @@ mod tests {
     #[test]
     fn test_division() {
         assert!(!find_factors("lucas(604203)/lucas(201401)/4".into()).contains(&"lucas(201401)".into()));
+        // FIXME: find a way to prevent excess repeats of like-powers factors, so this will pass:
+        // assert!(!find_factors("(2^625+1)/(2^5+1)".into()).contains(&3.into()));
     }
 
     #[test]
