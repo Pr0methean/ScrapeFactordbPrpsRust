@@ -1099,8 +1099,8 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Fact
         let Some(Some(product)) = factors.into_iter().try_reduce(u128::checked_mul) else {
             continue;
         };
-        if let Some(left_root) = nth_root_exact(&new_left, product)
-            && let Some(right_root) = nth_root_exact(&new_right, product)
+        if let Ok(left_root) = nth_root_exact(new_left.clone(), product)
+            && let Ok(right_root) = nth_root_exact(new_right.clone(), product)
         {
             if subtract && product.is_multiple_of(2) {
                 results.push(simplify(AddSub {
@@ -1147,7 +1147,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                         .into(),
                 }))
             } else if let Some(exponent) = evaluate_as_u128(exponent)
-                && let Some(divisor_root) = nth_root_exact(&divisor, exponent)
+                && let Ok(divisor_root) = nth_root_exact(divisor, exponent)
             {
                 match div_exact(*base, divisor_root) {
                     Ok(divided_base) => Ok(simplify(Factor::Power {
@@ -1296,48 +1296,53 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
     Err(product)
 }
 
-pub fn nth_root_exact(factor: &Factor, root: u128) -> Option<Factor> {
+pub fn nth_root_exact(factor: Factor, root: u128) -> Result<Factor, Factor> {
     if root == 1 {
-        return Some(factor.clone());
+        return Ok(factor);
     }
-    if let Some(factor_u128) = evaluate_as_u128(factor) {
+    if let Some(factor_u128) = evaluate_as_u128(&factor) {
         if factor_u128 == 1 {
-            return Some(1.into());
+            return Ok(1.into());
         }
-        return Some(factor_u128.nth_root_exact(root.try_into().ok()?)?.into());
+        if let Ok(root_u32) = root.try_into() {
+            return Ok(factor_u128.nth_root_exact(root_u32).map(Factor::Numeric).ok_or(factor)?);
+        }
     }
     match factor {
-        Factor::Power { base, exponent } => {
-            return Some(Factor::Power {
-                base: base.clone(),
-                exponent: match evaluate_as_u128(exponent) {
-                    Some(exponent_u128) => exponent_u128.div_exact(root)?.into(),
-                    None => div_exact(*exponent.clone(), Numeric(root)).ok()?,
-                }
-                .into(),
-            });
+        Factor::Power { ref base, ref exponent } => {
+            return if let Some(exponent_u32) = evaluate_as_u128(&exponent)
+                && let Some(reduced_exponent) = exponent_u32.div_exact(root)
+            {
+                Ok(Factor::Power {
+                    base: base.clone(),
+                    exponent: Box::new(reduced_exponent.into()),
+                })
+            } else {
+                Err(factor)
+            }
         }
-        Factor::Multiply { terms } => {
+        Factor::Multiply { ref terms } => {
             let new_terms = terms
                 .iter()
-                .map(|term| nth_root_exact(term, root))
-                .collect::<Option<Vec<_>>>()?;
-            return Some(Factor::Multiply { terms: new_terms });
+                .map(|term| nth_root_exact(term.clone(), root).ok())
+                .collect::<Option<Vec<_>>>()
+                .ok_or(factor)?;
+            return Ok(Factor::Multiply { terms: new_terms });
         }
-        Factor::Divide { left, right } => {
-            let new_left = nth_root_exact(left, root)?;
+        Factor::Divide { ref left, ref right } => {
+            let new_left = nth_root_exact(*left.clone(), root)?;
             let new_right = right
                 .iter()
-                .map(|term| nth_root_exact(term, root))
-                .collect::<Option<Vec<_>>>()?;
-            return Some(Factor::Divide {
+                .map(|term| nth_root_exact(term.clone(), root).ok())
+                .collect::<Option<Vec<_>>>().ok_or(factor)?;
+            return Ok(Factor::Divide {
                 left: new_left.into(),
                 right: new_right,
             });
         }
         _ => {}
     }
-    None
+    Err(factor)
 }
 
 #[inline(always)]
