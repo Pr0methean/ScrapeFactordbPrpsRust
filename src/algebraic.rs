@@ -1915,17 +1915,15 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             repeat_n(base_factors, power).flatten().collect()
         }
         Factor::Divide { left, right } => {
-            let expr = Factor::Divide { left: left.clone(), right: right.clone() };
             // division
-            let mut factors = find_factors(*left);
-            for term in right.into_iter() {
-                let denom_factors = find_factors(term);
-                factors = multiset_difference(factors, &denom_factors);
-                if factors.is_empty() {
-                    return vec![expr];
+            let mut left_factors = find_factors(*left);
+            for term in right {
+                left_factors = multiset_difference(left_factors, &find_factors(term));
+                if left_factors.is_empty() {
+                    return vec![];
                 }
             }
-            factors
+            left_factors
         }
         Factor::Multiply { terms } => {
             // multiplication
