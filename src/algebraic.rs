@@ -586,44 +586,43 @@ peg::parser! {
     pub rule number() -> Factor
       = n:$(['0'..='9']+) { n.parse::<u128>().map(Factor::Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
 
-    pub rule muldiv_term() -> Factor = precedence!{
+    #[cache_left_rec]
+    pub rule arithmetic() -> Factor = precedence!{
+      x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
+      x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
+      --
+      x:(@) "/" y:@ { let mut x = x;
+        if let Factor::Divide { ref mut right, .. } = x {
+            right.push(y);
+            x
+        } else {
+            Factor::Divide { left: x.into(), right: vec![y] }
+        }
+      }
+      --
+      x:(@) "*" y:@ { let mut x = x;
+        if let Factor::Multiply { ref mut terms, .. } = x {
+            terms.push(y);
+            x
+        } else {
+            Factor::Multiply { terms: vec![x, y] }
+        }
+      }
+      --
       x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
       --
-      x:@ "!" { Factor::Factorial(x.into()) }
-      x:@ "#" { Factor::Primorial(x.into()) }
+      x:@ "!" { Factor::Factorial(Box::new(x)) }
+      x:@ "#" { Factor::Primorial(Box::new(x)) }
       --
-      "I" x:@ { Factor::Fibonacci(x.into()) }
+      "I" x:@ { Factor::Fibonacci(Box::new(x)) }
       --
-      "lucas(" x:arithmetic() ")" { Factor::Lucas(x.into()) }
+      "lucas(" x:arithmetic() ")" { Factor::Lucas(Box::new(x)) }
       --
       n:number() { n }
       --
       n:$(['0'..='9']+ ".." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
       --
       "(" e:arithmetic() ")" { e }
-    }
-
-    pub rule div_term() -> Factor = precedence!{
-        x:(muldiv_term() **<2,> "*") { Factor::Multiply { terms: x } }
-        --
-        x:muldiv_term() { x }
-    }
-
-    #[cache_left_rec]
-    pub rule arithmetic() -> Factor = precedence!{
-      x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
-      x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
-      --
-      x:(div_term()) "/" y:(div_term() ++ "/") { let mut x = x;
-        if let Factor::Divide { ref mut right, .. } = x {
-            right.extend(y.into_iter());
-            x
-        } else {
-            Factor::Divide { left: x.into(), right: y }
-        }
-      }
-      --
-      x:div_term() { x }
     }
   }
 }
@@ -755,12 +754,12 @@ impl Display for Factor {
                 right,
                 subtract,
             } => f.write_fmt(format_args!(
-                "{left}{}{right}",
+                "({left}){}({right})",
                 if *subtract { '-' } else { '+' }
             )),
-            Factor::Multiply { terms } => f.write_fmt(format_args!("({})", terms.iter().join("*"))),
+            Factor::Multiply { terms } => f.write_fmt(format_args!("({})", terms.iter().join(")*("))),
             Factor::Divide { left, right } => {
-                f.write_fmt(format_args!("({left}/{})", right.iter().join("/")))
+                f.write_fmt(format_args!("({left})/({})", right.iter().join(")/(")))
             }
             Factor::Power { base, exponent } => f.write_fmt(format_args!("({base})^({exponent})")),
             Factor::Factorial(input) => f.write_fmt(format_args!("({input}!)")),
@@ -2100,6 +2099,13 @@ mod tests {
     };
     use itertools::Itertools;
     use std::iter::repeat_n;
+
+    #[test]
+    fn test_precedence() {
+        assert_eq!(&Factor::from("(3^7396-928)/3309349849490834480566907-1").to_string(),
+        "((((3)^(7396))-(928))/(3309349849490834480566907))-(1)");
+        assert_eq!(evaluate_as_u128(&"(3^7-6)/727".into()), Some(3));
+    }
 
     #[test]
     fn test_anbc() {
