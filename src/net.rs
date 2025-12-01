@@ -487,7 +487,7 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(ref expr) => {
                 expr_key = Some(expr);
                 let url =
-                    format!("https://factordb.com/api?query={}", encode(&expr.as_str())).into();
+                    format!("https://factordb.com/api?query={}", encode(&expr.to_owned_string())).into();
                 self.try_get_and_decode(url).await.ok_or(None)
             }
         };
@@ -590,8 +590,8 @@ impl FactorDbClient for RealFactorDbClient {
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
             Expression(Numeric(_)) => return AlreadyFullyFactored,
-            Expression(Factor::BigNumber(ref x)) => (None, Some(x.clone())),
-            Expression(ref x) => (None, Some(x.to_string().into())),
+            Expression(Factor::BigNumber(ref x)) => (None, Some(x.to_owned_string())),
+            Expression(ref x) => (None, Some(x.to_owned_string())),
             Id(id) => (Some(id), None),
         };
         self.rate_limiter.until_ready().await;
@@ -601,8 +601,8 @@ impl FactorDbClient for RealFactorDbClient {
             .post("https://factordb.com/reportfactor.php")
             .form(&FactorSubmission {
                 id,
-                number: number.as_ref(),
-                factor: &factor.as_str(),
+                number: number,
+                factor: &factor.to_owned_string(),
             })
             .send()
             .and_then(Response::text)

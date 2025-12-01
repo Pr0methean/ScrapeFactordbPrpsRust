@@ -548,9 +548,48 @@ static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
 ];
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct BigNumber(HipStr<'static>);
+
+impl PartialOrd for BigNumber {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BigNumber {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.len().cmp(&other.0.len()).then_with(|| self.0.cmp(&other.0))
+    }
+}
+
+impl AsRef<str> for BigNumber {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Display for BigNumber {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl BigNumber {
+    pub fn to_owned_string(&self) -> HipStr<'static> {
+        self.0.clone()
+    }
+}
+
+impl <T: Into<HipStr<'static>>> From<T> for BigNumber {
+    fn from(value: T) -> Self {
+        BigNumber(value.into())
+    }
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Factor {
     Numeric(u128),
-    BigNumber(HipStr<'static>),
+    BigNumber(BigNumber),
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
     AddSub {
@@ -647,10 +686,10 @@ impl Factor {
     }
 
     #[inline(always)]
-    pub fn as_str(&self) -> HipStr<'static> {
+    pub fn to_owned_string(&self) -> HipStr<'static> {
         match self {
             Numeric(n) => n.to_string().into(),
-            Factor::BigNumber(s) => s.clone(),
+            Factor::BigNumber(s) => s.0.clone(),
             _ => self.to_string().into(),
         }
     }
@@ -659,7 +698,7 @@ impl Factor {
     pub fn as_str_non_u128(&self) -> Option<HipStr<'static>> {
         match self {
             Numeric(_) => None,
-            Factor::BigNumber(n) => Some(n.clone()),
+            Factor::BigNumber(n) => Some(n.0.clone()),
             _ => Some(self.to_string().into()),
         }
     }
@@ -667,7 +706,7 @@ impl Factor {
     #[inline(always)]
     fn last_digit(&self) -> Option<u8> {
         match self {
-            Factor::BigNumber(n) | Factor::ElidedNumber(n) => {
+            Factor::BigNumber(BigNumber(n)) | Factor::ElidedNumber(n) => {
                 Some(n.chars().last().unwrap().to_digit(10).unwrap() as u8)
             }
             Numeric(n) => Some((n % 10) as u8),
@@ -725,6 +764,13 @@ impl From<u128> for Factor {
     }
 }
 
+impl From<BigNumber> for Factor {
+    #[inline(always)]
+    fn from(value: BigNumber) -> Self {
+        Factor::BigNumber(value)
+    }
+}
+
 macro_rules! factor_from_str {
     ($type:ty) => {
         impl From<$type> for Factor {
@@ -746,7 +792,7 @@ impl Display for Factor {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Numeric(n) => n.fmt(f),
-            Factor::BigNumber(s) => write_bignum(f, s),
+            Factor::BigNumber(s) => write_bignum(f, s.as_ref()),
             Factor::UnknownExpression(e) => e.fmt(f),
             Factor::ElidedNumber(e) => e.fmt(f),
             AddSub {
@@ -768,40 +814,6 @@ impl Display for Factor {
             Factor::Primorial(input) => f.write_fmt(format_args!("({input}#)")),
             Factor::Fibonacci(input) => f.write_fmt(format_args!("I({input})")),
             Factor::Lucas(input) => f.write_fmt(format_args!("lucas({input})")),
-        }
-    }
-}
-
-impl PartialOrd<Factor> for Factor {
-    #[inline(always)]
-    fn partial_cmp(&self, other: &Factor) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Factor {
-    #[inline(always)]
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self {
-            Numeric(n) => match other {
-                Numeric(o) => n.cmp(o),
-                Factor::BigNumber(_) => Ordering::Less,
-                _ => Ordering::Less,
-            },
-            Factor::BigNumber(s) => match other {
-                Numeric(_) => Ordering::Greater,
-                Factor::BigNumber(o) => s.len().cmp(&o.len()).then_with(|| s.cmp(o)),
-                _ => Ordering::Less,
-            },
-            _ => match other {
-                Numeric(_) => Ordering::Greater,
-                Factor::BigNumber(_) => Ordering::Greater,
-                _ => {
-                    let s = self.to_string();
-                    let o = other.to_string();
-                    s.len().cmp(&o.len()).then_with(|| s.cmp(&o))
-                }
-            },
         }
     }
 }
@@ -1239,7 +1251,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
             }
         }
         Factor::BigNumber(ref n) => {
-            let mut n_reduced = n.as_str();
+            let mut n_reduced = n.as_ref();
             let mut reduced = false;
             let d_reduced = match divisor {
                 Numeric(mut d) => {
@@ -1251,7 +1263,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                     Some(Numeric(d))
                 }
                 Factor::BigNumber(d) => {
-                    let mut d_reduced = d.as_str();
+                    let mut d_reduced = d.as_ref();
                     while d_reduced.ends_with('0') && n_reduced.ends_with('0') {
                         reduced = true;
                         d_reduced = &d_reduced[0..(d_reduced.len() - 1)];
@@ -1381,7 +1393,7 @@ fn estimate_log10_internal(expr: &Factor) -> (u128, u128) {
             }
         }
         Factor::BigNumber(expr) => {
-            let len = expr.len();
+            let len = expr.as_ref().len();
             ((len - 1) as u128, len as u128)
         }
         Factor::Fibonacci(x) | Factor::Lucas(x) => {
@@ -2015,8 +2027,10 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
                 to_like_powers_recursive_dedup(left, right, subtract),
                 find_common_factors(*left.clone(), *right.clone()),
             ]);
+            factors.sort();
             let cofactors: Vec<_> = factors
                 .iter()
+                .unique()
                 .flat_map(|factor| {
                     div_exact(
                         AddSub {
@@ -2037,9 +2051,9 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
     }
 }
 
-fn factor_big_num(expr: HipStr) -> Vec<Factor> {
+fn factor_big_num(expr: BigNumber) -> Vec<Factor> {
     let mut factors = Vec::new();
-    let mut expr_short = expr.as_str();
+    let mut expr_short = expr.as_ref();
     while expr_short != "0"
         && let Some(stripped) = expr_short.strip_suffix('0')
     {

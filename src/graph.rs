@@ -1030,7 +1030,7 @@ pub async fn find_and_submit_factors(
             .unwrap()
             .lock()
             .await
-            .write_fmt(format_args!("{id},{}\n", factor.as_str()))
+            .write_fmt(format_args!("{id},{}\n", factor.to_owned_string()))
         {
             Ok(_) => warn!("{id}: wrote {} to failed submissions file", factor),
             Err(e) => error!(
@@ -1238,7 +1238,7 @@ async fn add_factors_to_graph(
                 http,
             );
             added.extend(added_via_equiv);
-            let factors = find_unique_factors(Factor::from(expression_form.as_str()));
+            let factors = find_unique_factors(Factor::from(expression_form.to_owned_string()));
             added.extend(factors.into_iter().flat_map(|factor| {
                 let (vertex_id, added) = add_factor_node(data, factor, Some(root_vid), None, http);
                 if added { Some(vertex_id) } else { None }
@@ -1270,7 +1270,7 @@ fn merge_equivalent_expressions(
             .to_vec()
     } else {
         info!("Merging equivalent expressions {current} and {equivalent}");
-        let current_expr = current.as_str();
+        let current_expr = current.to_owned_string();
         let current_len = if current_expr.contains("...") {
             usize::MAX // replace elided numbers with full ones ASAP
         } else {
@@ -1296,7 +1296,7 @@ fn merge_equivalent_expressions(
         );
         facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
         facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
-        let equivalent_expr = equivalent.as_str();
+        let equivalent_expr = equivalent.to_owned_string();
         if !equivalent_expr.contains("...") && equivalent_expr.len() < current_len {
             let _ = replace(
                 data.divisibility_graph.vertex_mut(factor_vid).unwrap(),

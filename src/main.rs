@@ -105,8 +105,8 @@ struct NumberStatusApiResponse {
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
     id: Option<u128>,
-    number: Option<&'a HipStr<'static>>,
-    factor: &'a HipStr<'static>,
+    number: Option<HipStr<'static>>,
+    factor: &'a str,
 }
 
 #[framed]
@@ -226,13 +226,13 @@ impl Display for NumberSpecifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Id(id) => write!(f, "ID {}", id),
-            Expression(e) => write_bignum(f, &e.as_str()),
+            Expression(e) => write_bignum(f, &e.to_owned_string()),
         }
     }
 }
 
 #[inline(always)]
-pub fn write_bignum(f: &mut Formatter, e: &HipStr<'static>) -> fmt::Result {
+pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
     let len = e.len();
     if len < 300 {
         f.write_str(e)
@@ -794,7 +794,7 @@ async fn main() -> anyhow::Result<()> {
                             };
                             for factor in factors {
                                 if factor.as_str_non_u128().is_some() {
-                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.as_str(), true)
+                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.to_owned_string(), true)
                                         .await;
                                 }
                             }
