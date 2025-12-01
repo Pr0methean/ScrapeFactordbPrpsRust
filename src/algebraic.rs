@@ -1499,7 +1499,7 @@ fn estimate_log10_internal(expr: &Factor) -> (u128, u128) {
             let (num_lower, num_upper) = estimate_log10_internal(left);
             let (denom_lower, denom_upper) = right
                 .iter()
-                .map(|term| estimate_log10_internal(term))
+                .map(estimate_log10_internal)
                 .reduce(|(l1, u1), (l2, u2)| {
                     (
                         l1.saturating_add(l2),
@@ -1515,7 +1515,7 @@ fn estimate_log10_internal(expr: &Factor) -> (u128, u128) {
             // multiplication
             let (product_lower, product_upper) = terms
                 .iter()
-                .map(|term| estimate_log10_internal(term))
+                .map(estimate_log10_internal)
                 .reduce(|(l1, u1), (l2, u2)| {
                     (
                         l1.saturating_add(l2),
@@ -1696,7 +1696,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
             let new_terms: Vec<Factor> = terms
                 .into_iter()
                 .filter(|term| *term != Numeric(1))
-                .map(|term| simplify(term))
+                .map(simplify)
                 .collect();
             match new_terms.len() {
                 0 => Factor::Numeric(1),
@@ -1710,7 +1710,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
             let new_left = simplify(*left);
             let mut new_right: Vec<Factor> = right
                 .into_iter()
-                .map(|term| simplify(term))
+                .map(simplify)
                 .filter(|term| *term != Numeric(1))
                 .collect();
             if let Some((index, _)) = new_right
