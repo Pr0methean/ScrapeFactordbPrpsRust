@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use crate::algebraic::Factor::{AddSub, Numeric};
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
 use hipstr::HipStr;
@@ -11,6 +10,7 @@ use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
+use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, VecDeque};
 use std::f64::consts::LN_10;
@@ -1140,8 +1140,7 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Fact
                 .for_each(|(factor, factor_exponent)| {
                     possible_factors.insert(
                         factor,
-                        factor_exponent
-                            .max(possible_factors.get(&factor).copied().unwrap_or(0)),
+                        factor_exponent.max(possible_factors.get(&factor).copied().unwrap_or(0)),
                     );
                 })
         }
@@ -1206,11 +1205,11 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
                 return Ok(simplify(Factor::Power {
                     base,
                     exponent: simplify(AddSub {
-                            left: take(exponent),
-                            right: Numeric(1).into(),
-                            subtract: true,
-                        })
-                        .into(),
+                        left: take(exponent),
+                        right: Numeric(1).into(),
+                        subtract: true,
+                    })
+                    .into(),
                 }));
             } else if let Some(exponent) = evaluate_as_u128(exponent)
                 && let Some(divisor_root) = nth_root_exact(&divisor, exponent)
@@ -2509,13 +2508,16 @@ impl NumberStatusExt for Option<NumberStatus> {
 #[cfg(test)]
 mod tests {
     use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_difference, multiset_intersection, multiset_union, power_multiset, find_factors, evaluate_as_u128, estimate_log10_internal};
+    use crate::algebraic::{
+        Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, estimate_log10_internal,
+        evaluate_as_u128, factor_power, fibonacci_factors, find_factors, lucas_factors, modinv,
+        multiset_difference, multiset_intersection, multiset_union, power_multiset,
+    };
     use itertools::Itertools;
     use std::iter::repeat_n;
 
     #[test]
     fn test_anbc() {
-        
         let expr = format!("{}^9*3+3", u128::MAX);
         let factors = find_factors(expr.into());
         println!("{}", factors.iter().join(", "));
@@ -2525,7 +2527,6 @@ mod tests {
 
     #[test]
     fn test_anbc_2() {
-        
         let factors = find_factors("6^200600+1".into());
         println!("{}", factors.iter().join(", "));
 
@@ -2541,7 +2542,6 @@ mod tests {
 
     #[test]
     fn test_anbc_3() {
-        
         let factors = find_factors("6^1337*5-15".into());
 
         assert!(factors.contains(&3.into())); // common factor of a^x and c
@@ -2550,7 +2550,6 @@ mod tests {
 
     #[test]
     fn test_anb_minus_c() {
-        
         let expr = format!("{}^24-1", u128::MAX);
         let factors = find_factors(expr.into());
         println!("{}", factors.iter().join(", "));
@@ -2577,7 +2576,6 @@ mod tests {
 
     #[test]
     fn test_axby() {
-        
         let factors = find_factors("1297^400-901^400".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
@@ -2609,14 +2607,12 @@ mod tests {
 
     #[test]
     fn test_chain() {
-        
         let factors = find_factors("2^8+3*5-1".into());
         assert!(factors.contains(&Numeric(2)));
     }
 
     #[test]
     fn test_chain_2() {
-        
         let factors = find_factors("(2^9+1)^2*7^2/361".into());
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(7)));
@@ -2625,7 +2621,6 @@ mod tests {
 
     #[test]
     fn test_mul_chain() {
-        
         let factors = find_factors("2^8*3*5".into());
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
@@ -2634,7 +2629,6 @@ mod tests {
 
     #[test]
     fn test_div_chain() {
-        
         let factors = find_factors("210/2/5".into());
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(7)));
@@ -2644,7 +2638,6 @@ mod tests {
 
     #[test]
     fn test_mixed_chain() {
-        
         let expr = format!(
             "(2^256-1)*(3^200+1)*(10^50)*((12^368-1)^2)/20/1{}",
             &repeat_n('0', 50).collect::<String>()
@@ -2659,7 +2652,6 @@ mod tests {
 
     #[test]
     fn test_addition_chain() {
-        
         let factors = find_factors("7^5432+3*7^4321+7^321+7^21".into());
         println!("{}", factors.iter().join(","));
         assert!(factors.contains(&Numeric(2)));
@@ -2677,7 +2669,6 @@ mod tests {
 
     #[test]
     fn test_power() {
-        
         let factors = find_factors("(2^7-1)^2".into());
         assert_eq!(factors, Vec::<Factor>::from([Numeric(127), Numeric(127)]));
     }
@@ -2685,14 +2676,14 @@ mod tests {
     #[test]
     fn test_power_associativity() {
         let expr = "2^3^4".into();
-        
+
         assert_eq!(evaluate_as_u128(&expr), Some(1 << 81));
     }
 
     #[test]
     fn test_division_associativity() {
         let expr = "20/5/2".into();
-        
+
         assert_eq!(evaluate_as_u128(&expr), Some(2));
     }
 
@@ -2700,7 +2691,7 @@ mod tests {
     fn test_stack_depth() {
         // unsafe { backtrace_on_stack_overflow::enable() };
         let expr = repeat_n("(2^9+1)", 1 << 16).join("*").into();
-        
+
         estimate_log10_internal(&expr);
         evaluate_as_u128(&expr);
         find_factors(expr);
@@ -2734,8 +2725,7 @@ mod tests {
             (3, 16 * 77)
         );
         // (3^77)^16+1
-        let factors =
-            find_factors("5474401089420219382077155933569751763^16+1".into());
+        let factors = find_factors("5474401089420219382077155933569751763^16+1".into());
         println!("{}", factors.iter().join(","));
         // factors of 3^16+1
         // assert!(factors.contains(&Numeric(2)));
@@ -2836,7 +2826,6 @@ mod tests {
 
     #[test]
     fn test_estimate_log10() {
-        
         let (lower, upper) = estimate_log10_internal(&Numeric(99));
         assert_eq!(lower, 1);
         assert_eq!(upper, 2);
@@ -2902,15 +2891,8 @@ mod tests {
 
     #[test]
     fn test_evaluate_as_u128() {
-        
-        assert_eq!(
-            evaluate_as_u128(&"2^127-1".into()),
-            Some(i128::MAX as u128)
-        );
-        assert_eq!(
-            evaluate_as_u128(&"(5^6+1)^2-1".into()),
-            Some(244171875)
-        );
+        assert_eq!(evaluate_as_u128(&"2^127-1".into()), Some(i128::MAX as u128));
+        assert_eq!(evaluate_as_u128(&"(5^6+1)^2-1".into()), Some(244171875));
         assert_eq!(evaluate_as_u128(&"3^3+4^4+5^5".into()), Some(3408));
     }
 

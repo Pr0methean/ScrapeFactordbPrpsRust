@@ -4,7 +4,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
-use crate::algebraic::{find_factors_of_u128, NumberStatusExt, ProcessedStatusApiResponse};
+use crate::algebraic::{NumberStatusExt, ProcessedStatusApiResponse, find_factors_of_u128};
 use crate::monitor::Monitor;
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,

@@ -126,14 +126,7 @@ async fn composites_while_waiting(
             warn!("Timed out waiting for a composite number to check");
             return;
         };
-        check_composite(
-            http,
-            c_filter,
-            id,
-            digits_or_expr,
-            return_permit,
-        )
-        .await;
+        check_composite(http, c_filter, id, digits_or_expr, return_permit).await;
         match end.checked_duration_since(Instant::now()) {
             None => {
                 info!("Out of time while processing composites");

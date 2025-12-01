@@ -2,7 +2,10 @@ use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{estimate_log10, evaluate_as_u128, find_factors_of_u128, find_unique_factors, Factor, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse};
+use crate::algebraic::{
+    Factor, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse, estimate_log10,
+    evaluate_as_u128, find_factors_of_u128, find_unique_factors,
+};
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
 use crate::net::FactorDbClient;
@@ -242,13 +245,7 @@ pub fn add_factor_node(
             (factor_vid, true)
         });
     if *get_vertex(&data.divisibility_graph, merge_dest, &data.deleted_synonyms) != factor {
-        merge_equivalent_expressions(
-            data,
-            root_vid,
-            merge_dest,
-            factor.clone(),
-            http,
-        );
+        merge_equivalent_expressions(data, root_vid, merge_dest, factor.clone(), http);
     }
     for matching_vid in matching_vertices {
         if matching_vid == merge_dest {
@@ -955,36 +952,31 @@ pub async fn find_and_submit_factors(
                     DoesNotDivide => {
                         rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                         factors_to_submit.extend_front(
-                            add_factors_to_graph(
-                                http,
-                                &mut data,
-                                root_vid,
-                                factor_vid,
-                            )
-                            .await
-                            .into_iter()
-                            .sorted_by(|v1, v2| {
-                                compare(
-                                    &data.number_facts_map,
-                                    &VertexRef {
-                                        id: *v2,
-                                        attr: get_vertex(
-                                            &data.divisibility_graph,
-                                            *v2,
-                                            &data.deleted_synonyms,
-                                        ),
-                                    },
-                                    &VertexRef {
-                                        id: *v1,
-                                        attr: get_vertex(
-                                            &data.divisibility_graph,
-                                            *v1,
-                                            &data.deleted_synonyms,
-                                        ),
-                                    },
-                                    &data.deleted_synonyms,
-                                )
-                            }),
+                            add_factors_to_graph(http, &mut data, root_vid, factor_vid)
+                                .await
+                                .into_iter()
+                                .sorted_by(|v1, v2| {
+                                    compare(
+                                        &data.number_facts_map,
+                                        &VertexRef {
+                                            id: *v2,
+                                            attr: get_vertex(
+                                                &data.divisibility_graph,
+                                                *v2,
+                                                &data.deleted_synonyms,
+                                            ),
+                                        },
+                                        &VertexRef {
+                                            id: *v1,
+                                            attr: get_vertex(
+                                                &data.divisibility_graph,
+                                                *v1,
+                                                &data.deleted_synonyms,
+                                            ),
+                                        },
+                                        &data.deleted_synonyms,
+                                    )
+                                }),
                         );
                         let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
                             .expect("Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
@@ -997,14 +989,9 @@ pub async fn find_and_submit_factors(
                     }
                     OtherError => {
                         submission_errors = true;
-                        if !add_factors_to_graph(
-                            http,
-                            &mut data,
-                            root_vid,
-                            cofactor_vid,
-                        )
-                        .await
-                        .is_empty()
+                        if !add_factors_to_graph(http, &mut data, root_vid, cofactor_vid)
+                            .await
+                            .is_empty()
                         {
                             iters_without_progress = 0;
                         }
@@ -1143,13 +1130,8 @@ async fn add_factors_to_graph(
             .into_iter()
             .map(|known_factor| {
                 let entry_id = known_factor.known_id();
-                let (known_factor_vid, is_new) = add_factor_node(
-                    data,
-                    known_factor,
-                    Some(root_vid),
-                    entry_id,
-                    http,
-                );
+                let (known_factor_vid, is_new) =
+                    add_factor_node(data, known_factor, Some(root_vid), entry_id, http);
                 propagate_divisibility(data, known_factor_vid, factor_vid, false);
                 if is_new {
                     added.insert(known_factor_vid);
@@ -1258,8 +1240,7 @@ async fn add_factors_to_graph(
             added.extend(added_via_equiv);
             let factors = find_unique_factors(Factor::from(expression_form.as_str()));
             added.extend(factors.into_iter().flat_map(|factor| {
-                let (vertex_id, added) =
-                    add_factor_node(data, factor, Some(root_vid), None, http);
+                let (vertex_id, added) = add_factor_node(data, factor, Some(root_vid), None, http);
                 if added { Some(vertex_id) } else { None }
             }));
         }
@@ -1304,15 +1285,10 @@ fn merge_equivalent_expressions(
         let mut new_factor_vids = facts.factors_known_to_factordb.to_vec();
         if !replace(&mut facts.checked_in_factor_finder, true) {
             new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
-                data,
-                root_vid,
-                factor_vid,
-                entry_id,
-                http,
+                data, root_vid, factor_vid, entry_id, http,
             ));
         }
-        let (new_lower_bound_log10, new_upper_bound_log10) =
-            estimate_log10(&equivalent);
+        let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
         let facts = facts_of_mut(
             &mut data.number_facts_map,
             factor_vid,
@@ -1331,11 +1307,7 @@ fn merge_equivalent_expressions(
         // New expression may allow factor_finder to find factors it couldn't before
         let entry_id = facts.entry_id;
         new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
-            data,
-            root_vid,
-            factor_vid,
-            entry_id,
-            http,
+            data, root_vid, factor_vid, entry_id, http,
         ));
         new_factor_vids
     }
@@ -1349,21 +1321,21 @@ fn add_factor_finder_factor_vertices_to_graph(
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     find_unique_factors(
-            get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms).clone(),
-        )
-        .into_iter()
-        .map(|new_factor| {
-            let entry_id = if new_factor
-                == *get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms)
-            {
-                entry_id
-            } else {
-                new_factor.known_id()
-            };
-            add_factor_node(data, new_factor, root_vid, entry_id, http)
-        })
-        .flat_map(|(vid, added)| if added { Some(vid) } else { None })
-        .collect()
+        get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms).clone(),
+    )
+    .into_iter()
+    .map(|new_factor| {
+        let entry_id = if new_factor
+            == *get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms)
+        {
+            entry_id
+        } else {
+            new_factor.known_id()
+        };
+        add_factor_node(data, new_factor, root_vid, entry_id, http)
+    })
+    .flat_map(|(vid, added)| if added { Some(vid) } else { None })
+    .collect()
 }
 
 #[inline(always)]
