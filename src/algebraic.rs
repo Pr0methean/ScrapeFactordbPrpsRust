@@ -1086,7 +1086,7 @@ pub fn to_like_powers_recursive_dedup(left: &Factor, right: &Factor, subtract: b
             match factor {
                 AddSub { ref left, ref right, subtract }
                 => {
-                    let subfactors = to_like_powers(&*left, &*right, subtract);
+                    let subfactors = to_like_powers(left, right, subtract);
                     to_expand.extend(subfactors);
                     results.push(factor.clone());
                 }
@@ -1904,7 +1904,7 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             let mut left_remaining_factors = find_factors(*left);
             while let Some(factor) = left_remaining_factors.pop() {
                 let subfactors = find_factors(factor.clone());
-                if !subfactors.is_empty() && !(subfactors.len() == 1 && subfactors[0] == factor) {
+                if !(subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor)) {
                     left_remaining_factors.extend(subfactors.into_iter()
                         .filter(|subfactor| *subfactor != factor));
                 }
