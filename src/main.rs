@@ -25,6 +25,7 @@ use async_backtrace::framed;
 use async_backtrace::taskdump_tree;
 use channel::PushbackReceiver;
 use cuckoofilter::CuckooFilter;
+use futures_util::FutureExt;
 use hipstr::HipStr;
 use log::{error, info, warn};
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
@@ -600,11 +601,8 @@ async fn main() -> anyhow::Result<()> {
                     warn!("do_checks received shutdown signal; exiting");
                     return;
                 }
-                _ = sleep_until(next_unknown_attempt) => {
-                    let Some((id, task_return_permit)) = u_receiver.try_recv()
-                    else {
-                        continue;
-                    };
+                (id, task_return_permit) = sleep_until(next_unknown_attempt).then(|_| u_receiver.recv())
+                => {
                     info!("{id}: Ready to check a U");
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker").into();
                     let result = do_checks_http.retrying_get_and_decode(url, RETRY_DELAY).await;

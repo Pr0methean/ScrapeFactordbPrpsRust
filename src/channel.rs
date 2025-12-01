@@ -97,27 +97,4 @@ impl<T: Debug> PushbackReceiver<T> {
             }
         }
     }
-
-    pub fn try_recv(&mut self) -> Option<(T, OwnedPermit<T>)> {
-        self.redrive_returned();
-        if let Ok(return_permit) = self
-            .return_sender
-            .clone()
-            .try_reserve_owned()
-            .or_else(|_| self.sender.clone().try_reserve_owned())
-        {
-            if let Ok(received) = self.receiver.try_recv() {
-                return Some((received, return_permit));
-            } else if let Ok(received_return) = self.return_receiver.try_recv() {
-                info!(
-                    "Receiving returned item because main channel is empty: {:?}",
-                    received_return
-                );
-                return Some((received_return, return_permit));
-            }
-        }
-        // Without a permit, we can't safely return anything; consuming the returned item first
-        // would lead to a race condition where we might not be able to get the permit.
-        None
-    }
 }
