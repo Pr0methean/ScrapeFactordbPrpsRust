@@ -1108,9 +1108,9 @@ pub fn to_like_powers_recursive_dedup(
     subtract: bool,
 ) -> Vec<Factor> {
     let mut results = Vec::new();
-    let mut to_expand = to_like_powers(left, right, subtract);
+    let mut to_expand = count_frequencies(to_like_powers(left, right, subtract));
     let mut already_expanded = BTreeSet::new();
-    while let Some(factor) = to_expand.pop() {
+    while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
             match factor {
                 AddSub {
@@ -1119,8 +1119,10 @@ pub fn to_like_powers_recursive_dedup(
                     subtract,
                 } => {
                     let subfactors = to_like_powers(left, right, subtract);
-                    to_expand.extend(subfactors);
-                    results.push(factor.clone());
+                    for subfactor in subfactors.into_iter().filter(|subfactor| subfactor != &factor) {
+                        *to_expand.entry(subfactor).or_insert(0) += exponent;
+                    }
+                    results.extend(repeat_n(factor.clone(), exponent));
                 }
                 Numeric(n) => {
                     results.extend(find_factors_of_u128(n));
