@@ -840,20 +840,22 @@ fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec
 }
 
 #[inline(always)]
-fn multiset_union<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
-    if vec1.is_empty() {
-        return vec2;
+fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
+    vecs.retain(|vec| !vec.is_empty());
+    match vecs.len() {
+        0 => return vec![],
+        1 => return vecs.pop().unwrap(),
+        _ => {}
     }
-    if vec2.is_empty() {
-        return vec1;
+    let mut total_counts = BTreeMap::new();
+    for vec in vecs {
+        let counts = count_frequencies(vec);
+        for (item, count) in counts {
+            let total = total_counts.entry(item).or_insert(count);
+            *total = (*total).max(count);
+        }
     }
-    let counts1 = count_frequencies(vec1);
-    let mut counts2 = count_frequencies(vec2);
-    for (item, count1) in counts1.into_iter() {
-        let union_count = counts2.entry(item).or_insert(0);
-        *union_count = (*union_count).max(count1);
-    }
-    counts2
+    total_counts
         .into_iter()
         .flat_map(|(item, count)| repeat_n(item, count))
         .collect()
@@ -875,22 +877,23 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
     } else if !subset_recursion {
         vec![Factor::Fibonacci(Box::new(term.into()))]
     } else {
-        let mut factors = Vec::new();
         let factors_of_term = factorize128(term);
         let mut factors_of_term = factors_of_term
             .into_iter()
             .flat_map(|(key, value)| repeat_n(key, value))
             .collect::<Vec<u128>>();
         let full_set_size = factors_of_term.len();
-        for subset in power_multiset(&mut factors_of_term).into_iter() {
+        let subsets = power_multiset(&mut factors_of_term);
+        let mut subset_factors = Vec::with_capacity(subsets.len());
+        for subset in subsets {
             if subset.len() < full_set_size && !subset.is_empty() {
                 let product: u128 = subset.into_iter().product();
                 if product > 2 {
-                    factors = multiset_union(fibonacci_factors(product, false), factors);
+                    subset_factors.push(fibonacci_factors(product, false));
                 }
             }
         }
-        factors
+        multiset_union(subset_factors)
     }
 }
 
@@ -906,7 +909,6 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
     } else if !subset_recursion {
         vec![Factor::Lucas(Box::new(term.into()))]
     } else {
-        let mut factors = Vec::new();
         let mut factors_of_term = factorize128(term);
         let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
         let mut factors_of_term = factors_of_term
@@ -914,15 +916,17 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
             .flat_map(|(key, value)| repeat_n(key, value))
             .collect::<Vec<u128>>();
         let full_set_size = factors_of_term.len();
-        for subset in power_multiset(&mut factors_of_term).into_iter() {
+        let subsets = power_multiset(&mut factors_of_term);
+        let mut subset_factors = Vec::with_capacity(subsets.len());
+        for subset in subsets {
             if subset.len() < full_set_size && !subset.is_empty() {
                 let product = subset.into_iter().product::<u128>() << power_of_2;
                 if product > 2 {
-                    factors = multiset_union(lucas_factors(product, false), factors);
+                    subset_factors.push(lucas_factors(product, false));
                 }
             }
         }
-        factors
+        multiset_union(subset_factors)
     }
 }
 
@@ -2006,11 +2010,11 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
                     power = new_power;
                 }
             }
-            factors = multiset_union(
+            factors = multiset_union(vec![
                 factors,
                 to_like_powers_recursive_dedup(left, right, subtract),
-            );
-            factors = multiset_union(factors, find_common_factors(*left.clone(), *right.clone()));
+                find_common_factors(*left.clone(), *right.clone()),
+            ]);
             let cofactors: Vec<_> = factors
                 .iter()
                 .flat_map(|factor| {
@@ -2026,7 +2030,7 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
                 })
                 .filter(|cofactor| !factors.contains(cofactor))
                 .collect();
-            factors = multiset_union(factors, cofactors);
+            factors = multiset_union(vec![factors, cofactors]);
             factors
         }
         Factor::UnknownExpression(_) => vec![expr],
@@ -2497,7 +2501,7 @@ mod tests {
     fn test_multiset_union() {
         let multiset_1 = vec![2, 2, 3, 5, 7];
         let multiset_2 = vec![2, 3, 3, 5, 11];
-        let mut union = multiset_union(multiset_1, multiset_2);
+        let mut union = multiset_union(vec![multiset_1, multiset_2]);
         union.sort_unstable();
         assert_eq!(union, vec![2, 2, 3, 3, 5, 7, 11]);
     }
