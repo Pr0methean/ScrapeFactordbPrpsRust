@@ -755,7 +755,7 @@ impl Display for Factor {
                 right,
                 subtract,
             } => f.write_fmt(format_args!(
-                "({left}{}{right})",
+                "{left}{}{right}",
                 if *subtract { '-' } else { '+' }
             )),
             Factor::Multiply { terms } => f.write_fmt(format_args!("({})", terms.iter().join("*"))),
