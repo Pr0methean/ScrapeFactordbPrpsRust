@@ -1950,7 +1950,7 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             let base_factors = find_factors(*base.clone());
             repeat_n(base_factors, power).flatten().collect()
         }
-        Factor::Divide { left, right } => {
+        Factor::Divide { ref left, ref right } => {
             // division
             let mut factors = find_factors(*left.clone());
             for term in right.iter().cloned() {
@@ -1987,9 +1987,9 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
                 }
             }
             common_factors.sort();
-            common_factors.dedup();
             let mut factors: Vec<_> = common_factors
                 .iter()
+                .unique()
                 .flat_map(|factor| div_exact(expr.clone(), factor.clone()).ok())
                 .collect();
             factors.extend(common_factors);
@@ -2016,7 +2016,9 @@ fn factor_big_num(expr: HipStr) -> Vec<Factor> {
         match expr_short.chars().last() {
             Some('5') => factors.push(Numeric(5)),
             Some('2' | '4' | '6' | '8') => factors.push(Numeric(2)),
-            Some('1' | '3' | '7' | '9') => {}
+            Some('1' | '3' | '7' | '9') => {
+                factors.push(expr_short.into());
+            }
             x => {
                 error!("Invalid last digit: {x:?}");
             }
