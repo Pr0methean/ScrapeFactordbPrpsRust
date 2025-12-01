@@ -601,7 +601,7 @@ impl FactorDbClient for RealFactorDbClient {
             .post("https://factordb.com/reportfactor.php")
             .form(&FactorSubmission {
                 id,
-                number: number,
+                number,
                 factor: &factor.to_owned_string(),
             })
             .send()
