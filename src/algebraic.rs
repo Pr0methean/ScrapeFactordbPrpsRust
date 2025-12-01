@@ -1917,9 +1917,13 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
             // division
             let mut left_factors = find_factors(*left);
             for term in right {
-                left_factors = multiset_difference(left_factors, &find_factors(term));
                 if left_factors.is_empty() {
                     return vec![];
+                }
+                if let Some((index, _)) = left_factors.iter().enumerate().find(|(_, other_term)| **other_term == term) {
+                    left_factors.remove(index);
+                } else {
+                    left_factors = multiset_difference(left_factors, &find_factors(term));
                 }
             }
             left_factors
@@ -2105,6 +2109,11 @@ mod tests {
         assert_eq!(&Factor::from("(3^7396-928)/3309349849490834480566907-1").to_string(),
         "((((3)^(7396))-(928))/(3309349849490834480566907))-(1)");
         assert_eq!(evaluate_as_u128(&"(3^7-6)/727".into()), Some(3));
+    }
+
+    #[test]
+    fn test_division() {
+        assert!(!find_factors("lucas(604203)/lucas(201401)/4".into()).contains(&"lucas(201401)".into()));
     }
 
     #[test]
