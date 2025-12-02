@@ -804,6 +804,7 @@ macro_rules! factor_from_str {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
+                    .map(|factor| Rc::unwrap_or_clone(simplify(factor.into())))
                     .unwrap_or_else(|_| Factor::UnknownExpression(value.into()))
             }
         }
@@ -1138,11 +1139,11 @@ pub fn to_like_powers_recursive_dedup(
         if !already_expanded.contains(&factor) {
             match *factor {
                 AddSub {
-                    ref left,
-                    ref right,
+                    left: ref factor_left,
+                    right: ref factor_right,
                     subtract,
                 } => {
-                    let subfactors = to_like_powers(left.clone(), right.clone(), subtract);
+                    let subfactors = to_like_powers(factor_left.clone(), factor_right.clone(), subtract);
                     for subfactor in subfactors
                         .into_iter()
                         .filter(|subfactor| subfactor != &factor)
@@ -1166,14 +1167,16 @@ pub fn to_like_powers_recursive_dedup(
 
 pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>, Rc<Factor>> {
     if product == divisor {
-        return Ok(Numeric(1).into());
+        return Ok(Factor::one());
     }
     if let Some(product_u128) = evaluate_as_u128(&product)
         && let Some(divisor_u128) = evaluate_as_u128(&divisor)
     {
-        if let Some(quotient) = product_u128.div_exact(divisor_u128) {
-            return Ok(Numeric(quotient).into());
-        }
+        return match product_u128
+            .div_exact(divisor_u128) {
+            Some(divided) => Ok(Numeric(divided).into()),
+            None => Err(Numeric(product_u128).into())
+        };
     }
     match *product {
         Factor::Power {
@@ -1189,18 +1192,21 @@ pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>,
                         subtract: true,
                     }.into())
                 }.into()))
-            } else if let Some(exponent) = evaluate_as_u128(&exponent)
-                && let Ok(divisor_root) = nth_root_exact(divisor, exponent)
+            } else if let Some(exponent_u128) = evaluate_as_u128(&exponent)
+                && let Ok(divisor_root) = nth_root_exact(divisor, exponent_u128)
             {
                 match div_exact(base.clone(), divisor_root) {
                     Ok(divided_base) => {
                         Ok(simplify(Factor::Power {
                             base: divided_base,
-                            exponent: Numeric(exponent).into(),
+                            exponent: Numeric(exponent_u128).into(),
                         }.into()))
                     }
                     Err(_) => {
-                        Err(product)
+                        Err(Factor:: Power {
+                            base: base.clone(),
+                            exponent: Numeric(exponent_u128).into(),
+                        }.into())
                     }
                 }
             } else {
