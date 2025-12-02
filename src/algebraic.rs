@@ -650,10 +650,8 @@ peg::parser! {
       --
       x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
       --
-      x:@ "##" { Factor::Primorial(Box::new(Factor::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_u128(&x).unwrap() as u64)).into()))) }
-      --
       x:@ "!" { Factor::Factorial(Box::new(x)) }
-      x:@ y:("#"+) {
+      x:@ y:$("#"+) {
                     let hashes = y.len();
                     let mut output = x;
                     for _ in 0..(hashes >> 1) {
@@ -2464,10 +2462,17 @@ mod tests {
     }
 
     #[test]
-    fn test_double_hash() {
+    fn test_multiple_hashes() {
         assert_eq!(evaluate_as_u128(&"2##".into()), Some(6)); // 2## = 6; (2#)# = 2
         assert_eq!(evaluate_as_u128(&"2###".into()), Some(30)); // 2### = (2##)# = 30; (2#)## = 6
-        assert_eq!(evaluate_as_u128(&"2####".into()), Some(30030)); // 2#### = (2##)## = 30030
+
+        // 2#### = (2##)## = 30030
+        assert_eq!(evaluate_as_u128(&"2####".into()), Some(30030));
+        // (3#)### = 30029#
+        // (3##)## = 113#
+        // (3###)# = 6469693230#
+
+
         println!("{}", find_factors("92##".into()).into_iter().join(","));
     }
 
