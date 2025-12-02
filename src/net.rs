@@ -486,8 +486,11 @@ impl FactorDbClient for RealFactorDbClient {
             }
             Expression(ref expr) => {
                 expr_key = Some(expr);
-                let url =
-                    format!("https://factordb.com/api?query={}", encode(&expr.to_owned_string())).into();
+                let url = format!(
+                    "https://factordb.com/api?query={}",
+                    encode(&expr.to_owned_string())
+                )
+                .into();
                 self.try_get_and_decode(url).await.ok_or(None)
             }
         };

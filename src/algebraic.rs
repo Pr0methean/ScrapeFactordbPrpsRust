@@ -558,7 +558,10 @@ impl PartialOrd for BigNumber {
 
 impl Ord for BigNumber {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.0.len().cmp(&other.0.len()).then_with(|| self.0.cmp(&other.0))
+        self.0
+            .len()
+            .cmp(&other.0.len())
+            .then_with(|| self.0.cmp(&other.0))
     }
 }
 
@@ -580,7 +583,7 @@ impl BigNumber {
     }
 }
 
-impl <T: Into<HipStr<'static>>> From<T> for BigNumber {
+impl<T: Into<HipStr<'static>>> From<T> for BigNumber {
     fn from(value: T) -> Self {
         BigNumber(value.into())
     }
@@ -816,9 +819,7 @@ impl Display for Factor {
                 "({left}){}({right})",
                 if *subtract { '-' } else { '+' }
             )),
-            Multiply { terms } => {
-                f.write_fmt(format_args!("({})", terms.iter().join(")*(")))
-            }
+            Multiply { terms } => f.write_fmt(format_args!("({})", terms.iter().join(")*("))),
             Factor::Divide { left, right } => {
                 f.write_fmt(format_args!("({left})/({})", right.iter().join(")/(")))
             }
@@ -1131,7 +1132,10 @@ pub fn to_like_powers_recursive_dedup(
                     subtract,
                 } => {
                     let subfactors = to_like_powers(left, right, subtract);
-                    for subfactor in subfactors.into_iter().filter(|subfactor| subfactor != &factor) {
+                    for subfactor in subfactors
+                        .into_iter()
+                        .filter(|subfactor| subfactor != &factor)
+                    {
                         *to_expand.entry(subfactor).or_insert(0) += exponent;
                     }
                     results.extend(repeat_n(factor.clone(), exponent));
@@ -1778,7 +1782,9 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                     return if subtract {
                         Numeric(0)
                     } else {
-                        Multiply { terms: vec![left, Numeric(2)] }
+                        Multiply {
+                            terms: vec![left, Numeric(2)],
+                        }
                     };
                 }
                 Ordering::Greater => {
@@ -1787,8 +1793,12 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                     }
                 }
             }
-            AddSub { left: left.into(), right: right.into(), subtract }
-        },
+            AddSub {
+                left: left.into(),
+                right: right.into(),
+                subtract,
+            }
+        }
         _ => expr,
     }
 }
@@ -1983,7 +1993,9 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
                 subfactors
                     .into_iter()
                     .filter(|subfactor| *subfactor != factor)
-                    .for_each(|subfactor| *left_remaining_factors.entry(subfactor).or_insert(0) += exponent);
+                    .for_each(|subfactor| {
+                        *left_remaining_factors.entry(subfactor).or_insert(0) += exponent
+                    });
                 left_recursive_factors.push(factor);
             }
             let mut right_remaining_factors = right;
@@ -2472,7 +2484,6 @@ mod tests {
         // (3##)## = 113#
         // (3###)# = 6469693230#
 
-
         println!("{}", find_factors("92##".into()).into_iter().join(","));
     }
 
@@ -2481,7 +2492,10 @@ mod tests {
         assert_eq!(evaluate_as_u128(&"M7^2".into()), Some(127 * 127));
         assert_eq!(evaluate_as_u128(&"M7*5".into()), Some(127 * 5));
         assert_eq!(evaluate_as_u128(&"M5!".into()), Some((1..=31).product())); // (M5)!
-        assert_eq!(evaluate_as_u128(&"M5#".into()), Some(2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23 * 29 * 31)); // (M5)#
+        assert_eq!(
+            evaluate_as_u128(&"M5#".into()),
+            Some(2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23 * 29 * 31)
+        ); // (M5)#
     }
 
     #[test]
