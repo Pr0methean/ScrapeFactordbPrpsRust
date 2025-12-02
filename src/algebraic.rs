@@ -1684,13 +1684,21 @@ fn pisano(term: u128, mut sequence: Vec<u128>, modulus: u128) -> u128 {
     }
 }
 
+fn factor_to_power(base: Rc<Factor>, exponent: u128) -> Rc<Factor> {
+    match exponent {
+        0 => Factor::one(),
+        1 => base,
+        _ => Factor::Power { base, exponent: Numeric(exponent).into() }.into()
+    }
+}
+
 pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
     if let Some(expr_u128) = evaluate_as_u128(&expr) {
         return Numeric(expr_u128).into();
     }
     match *expr {
         Multiply { ref terms } => {
-            let new_terms: Vec<Rc<Factor>> = terms
+            let new_terms = count_frequencies(terms
                 .iter()
                 .flat_map(|term| {
                     if let Multiply { ref terms } = **term {
@@ -1700,15 +1708,16 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
                     }
                     .into_iter()
                 })
-                .map(simplify)
-                .filter(|term| **term != Numeric(1))
-                .sorted_unstable()
-                .collect();
+                .map(simplify).collect());
+            new_terms.remove(&Factor::one());
             match new_terms.len() {
                 0 => Factor::one(),
-                1 => new_terms.into_iter().next().unwrap(),
+                1 => {
+                    let (factor, power) = new_terms.into_iter().next().unwrap();
+                    factor_to_power(factor, power as u128)
+                },
                 _ => simplify(Multiply {
-                    terms: new_terms.into_iter().collect(),
+                    terms: new_terms.into_iter().map(|(factor, power)| factor_to_power(factor, power as u128)).collect(),
                 }.into()),
             }
         }
