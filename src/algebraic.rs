@@ -1,3 +1,4 @@
+use alloc::alloc::Allocator;
 use crate::algebraic::Factor::{AddSub, Multiply, Numeric};
 use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
 use hipstr::HipStr;
@@ -590,34 +591,34 @@ impl<T: Into<HipStr<'static>>> From<T> for BigNumber {
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum Factor {
+pub enum Factor<A: Allocator> {
     Numeric(u128),
     BigNumber(BigNumber),
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
     AddSub {
-        left: Box<Factor>,
-        right: Box<Factor>,
+        left: Box<Factor<A>,A>,
+        right: Box<Factor<A>,A>,
         subtract: bool,
     },
     Multiply {
-        terms: Vec<Factor>,
+        terms: Vec<Factor<A>,A>,
     },
     Divide {
-        left: Box<Factor>,
-        right: Vec<Factor>,
+        left: Box<Factor<A>,A>,
+        right: Vec<Factor<A>,A>,
     },
     Power {
-        base: Box<Factor>,
-        exponent: Box<Factor>,
+        base: Box<Factor<A>,A>,
+        exponent: Box<Factor<A>,A>,
     },
-    Fibonacci(Box<Factor>),
-    Lucas(Box<Factor>),
-    Factorial(Box<Factor>),
-    Primorial(Box<Factor>),
+    Fibonacci(Box<Factor<A>,A>),
+    Lucas(Box<Factor<A>,A>),
+    Factorial(Box<Factor<A>,A>),
+    Primorial(Box<Factor<A>,A>),
 }
 
-impl Default for Factor {
+impl <A: Allocator> Default for Factor<A> {
     fn default() -> Self {
         Numeric(1)
     }
@@ -625,11 +626,10 @@ impl Default for Factor {
 
 peg::parser! {
   pub grammar expression_parser() for str {
-    pub rule number() -> Factor
+    pub rule number<A: Allocator>() -> Factor<A>
       = n:$(['0'..='9']+) { n.parse::<u128>().map(Factor::Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
 
-    #[cache_left_rec]
-    pub rule arithmetic() -> Factor = precedence!{
+    pub rule arithmetic<A: Allocator>() -> Factor<A> = precedence!{
       x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
       x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
       --
@@ -666,7 +666,7 @@ peg::parser! {
                     output
                 }
       --
-      "M" x:@ { Factor::AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: Box::new(x) }.into(), right: Numeric(1).into(), subtract: true } }
+      "M" x:@ { Factor::AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: x.into() }.into(), right: Numeric(1).into(), subtract: true } }
       --
       "I" x:@ { Factor::Fibonacci(Box::new(x)) }
       --
@@ -681,7 +681,7 @@ peg::parser! {
   }
 }
 
-impl Factor {
+impl <A: Allocator> Factor<A> {
     #[inline(always)]
     pub fn known_id(&self) -> Option<u128> {
         if let Numeric(n) = self
@@ -730,7 +730,7 @@ impl Factor {
     }
 
     #[inline]
-    pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
+    pub fn may_be_proper_divisor_of(&self, other: &Factor<A>) -> bool {
         if let Numeric(n) = self
             && let Numeric(o) = other
         {
@@ -772,14 +772,14 @@ impl Factor {
     }
 }
 
-impl From<u128> for Factor {
+impl <A: Allocator> From<u128> for Factor<A> {
     #[inline(always)]
     fn from(value: u128) -> Self {
         Numeric(value)
     }
 }
 
-impl From<BigNumber> for Factor {
+impl <A: Allocator> From<BigNumber> for Factor<A> {
     #[inline(always)]
     fn from(value: BigNumber) -> Self {
         Factor::BigNumber(value)
@@ -788,7 +788,7 @@ impl From<BigNumber> for Factor {
 
 macro_rules! factor_from_str {
     ($type:ty) => {
-        impl From<$type> for Factor {
+        impl <A: Allocator> From<$type> for Factor<A> {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
@@ -803,7 +803,7 @@ factor_from_str!(&str);
 factor_from_str!(String);
 factor_from_str!(HipStr<'static>);
 
-impl Display for Factor {
+impl <A: Allocator> Display for Factor<A> {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -888,7 +888,7 @@ fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
 }
 
 #[inline]
-fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
+fn fibonacci_factors<A: Allocator>(term: u128, subset_recursion: bool) -> Vec<Factor<A>> {
     debug!("fibonacci_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
         SMALL_FIBONACCI_FACTORS[term as usize]
@@ -924,7 +924,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
 }
 
 #[inline]
-fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Factor> {
+fn lucas_factors<A: Allocator>(term: u128, subset_recursion: bool) -> Vec<Factor<A>> {
     debug!("lucas_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_LUCAS_FACTORS.len() as u128 {
         SMALL_LUCAS_FACTORS[term as usize]
@@ -1049,7 +1049,7 @@ fn factor_power(a: u128, n: u128) -> (u128, u128) {
     (a, n)
 }
 
-pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Factor> {
+pub fn to_like_powers<A: Allocator>(left: &Factor<A>, right: &Factor<A>, subtract: bool) -> Vec<Factor<A>> {
     let mut possible_factors = BTreeMap::new();
     let mut new_left = simplify(left.clone());
     let mut new_right = simplify(right.clone());
@@ -1115,11 +1115,11 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Vec<Fact
     }
     results
 }
-pub fn to_like_powers_recursive_dedup(
-    left: &Factor,
-    right: &Factor,
+pub fn to_like_powers_recursive_dedup<A: Allocator>(
+    left: &Factor<A>,
+    right: &Factor<A>,
     subtract: bool,
-) -> Vec<Factor> {
+) -> Vec<Factor<A>> {
     let mut results = Vec::new();
     let mut to_expand = count_frequencies(to_like_powers(left, right, subtract));
     let mut already_expanded = BTreeSet::new();
@@ -1153,7 +1153,7 @@ pub fn to_like_powers_recursive_dedup(
     results
 }
 
-pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor> {
+pub fn div_exact<A: Allocator>(mut product: Factor<A>, divisor: Factor<A>) -> Result<Factor<A>, Factor<A>> {
     if product == divisor {
         return Ok(Numeric(1));
     }
@@ -1326,7 +1326,7 @@ pub fn div_exact(mut product: Factor, divisor: Factor) -> Result<Factor, Factor>
     Err(product)
 }
 
-pub fn nth_root_exact(factor: Factor, root: u128) -> Result<Factor, Factor> {
+pub fn nth_root_exact<A: Allocator>(factor: Factor<A>, root: u128) -> Result<Factor<A>, Factor<A>> {
     if root == 1 {
         return Ok(factor);
     }
@@ -1389,7 +1389,7 @@ pub fn nth_root_exact(factor: Factor, root: u128) -> Result<Factor, Factor> {
 }
 
 #[inline(always)]
-pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Factor> {
+pub(crate) fn find_factors_of_u128<A: Allocator>(input: u128) -> Vec<Factor<A>> {
     debug_assert_ne!(input, 0);
     factorize128(input)
         .into_iter()
@@ -1398,7 +1398,7 @@ pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Factor> {
 }
 
 #[inline(always)]
-fn estimate_log10_internal(expr: &Factor) -> (u128, u128) {
+fn estimate_log10_internal<A: Allocator>(expr: &Factor<A>) -> (u128, u128) {
     debug!("estimate_log10_internal: {expr}");
     match expr {
         Numeric(n) => {
@@ -1547,7 +1547,7 @@ fn estimate_log10_internal(expr: &Factor) -> (u128, u128) {
     }
 }
 
-pub(crate) fn estimate_log10(expr: &Factor) -> (u128, u128) {
+pub(crate) fn estimate_log10<A: Allocator>(expr: &Factor<A>) -> (u128, u128) {
     let (lbound, ubound) = estimate_log10_internal(expr);
     if lbound > ubound {
         error!(
@@ -1559,7 +1559,7 @@ pub(crate) fn estimate_log10(expr: &Factor) -> (u128, u128) {
     }
 }
 
-pub(crate) fn evaluate_modulo_as_u128(expr: &Factor, modulus: u128) -> Option<u128> {
+pub(crate) fn evaluate_modulo_as_u128<A: Allocator>(expr: &Factor<A>, modulus: u128) -> Option<u128> {
     if let Some(eval) = evaluate_as_u128(expr) {
         return Some(eval % modulus);
     }
@@ -1676,7 +1676,7 @@ fn pisano(term: u128, mut sequence: Vec<u128>, modulus: u128) -> u128 {
     }
 }
 
-pub(crate) fn simplify(expr: Factor) -> Factor {
+pub(crate) fn simplify<A: Allocator>(expr: Factor<A>) -> Factor<A> {
     if let Some(expr_u128) = evaluate_as_u128(&expr) {
         return Numeric(expr_u128);
     }
@@ -1803,7 +1803,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
     }
 }
 
-pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
+pub(crate) fn evaluate_as_u128<A: Allocator>(expr: &Factor<A>) -> Option<u128> {
     match expr {
         Numeric(n) => Some(*n),
         Factor::BigNumber(_) => None,
@@ -1913,7 +1913,7 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
 }
 
 #[inline(always)]
-fn find_factors(expr: Factor) -> Vec<Factor> {
+fn find_factors<A: Allocator>(expr: Factor<A>) -> Vec<Factor<A>> {
     info!("find_factors: {expr}");
     if let Some(n) = evaluate_as_u128(&expr) {
         return find_factors_of_u128(n);
@@ -2092,7 +2092,7 @@ fn find_factors(expr: Factor) -> Vec<Factor> {
     }
 }
 
-fn factor_big_num(expr: BigNumber) -> Vec<Factor> {
+fn factor_big_num<A: Allocator>(expr: BigNumber) -> Vec<Factor<A>> {
     let mut factors = Vec::new();
     let mut expr_short = expr.as_ref();
     while expr_short != "0"
@@ -2150,7 +2150,7 @@ fn factor_big_num(expr: BigNumber) -> Vec<Factor> {
 }
 
 #[inline]
-fn find_common_factors(expr1: Factor, expr2: Factor) -> Vec<Factor> {
+fn find_common_factors<A: Allocator>(expr1: Factor<A>, expr2: Factor<A>) -> Vec<Factor<A>> {
     let num1 = evaluate_as_u128(&expr1);
     if num1 == Some(1) {
         return vec![];
@@ -2175,7 +2175,7 @@ fn find_common_factors(expr1: Factor, expr2: Factor) -> Vec<Factor> {
 
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
-pub fn find_unique_factors(expr: Factor) -> Box<[Factor]> {
+pub fn find_unique_factors<A: Allocator>(expr: Factor<A>) -> Box<[Factor<A>],A> {
     let mut factors = find_factors(expr.clone());
     factors.retain(|f| f.as_u128() != Some(1) && f.may_be_proper_divisor_of(&expr));
     factors.sort();
@@ -2192,9 +2192,9 @@ pub fn find_unique_factors(expr: Factor) -> Box<[Factor]> {
 }
 
 #[derive(Clone, Default, Debug)]
-pub struct ProcessedStatusApiResponse {
+pub struct ProcessedStatusApiResponse<A: Allocator> {
     pub status: Option<NumberStatus>,
-    pub factors: Box<[Factor]>,
+    pub factors: Box<[Factor<A>],A>,
     pub id: Option<u128>,
 }
 
@@ -2223,6 +2223,7 @@ impl NumberStatusExt for Option<NumberStatus> {
 
 #[cfg(test)]
 mod tests {
+    use std::alloc::Global;
     use crate::algebraic::Factor::Numeric;
     use crate::algebraic::{
         Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, estimate_log10_internal,
@@ -2424,7 +2425,7 @@ mod tests {
     #[test]
     fn test_power() {
         let factors = find_factors("(2^7-1)^2".into());
-        assert_eq!(factors, Vec::<Factor>::from([Numeric(127), Numeric(127)]));
+        assert_eq!(factors, Vec::<Factor<Global>>::from([Numeric(127), Numeric(127)]));
     }
 
     #[test]

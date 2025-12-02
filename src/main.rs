@@ -5,6 +5,7 @@
 #![feature(exact_div)]
 #![feature(str_as_str)]
 #![feature(iterator_try_reduce)]
+#![feature(allocator_api)]
 extern crate alloc;
 extern crate core;
 
@@ -14,6 +15,7 @@ mod graph;
 mod monitor;
 mod net;
 
+use alloc::alloc::Allocator;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::NumberStatus::FullyFactored;
@@ -110,9 +112,9 @@ struct FactorSubmission<'a> {
 }
 
 #[framed]
-async fn composites_while_waiting(
+async fn composites_while_waiting<A: Allocator>(
     end: Instant,
-    http: &mut impl FactorDbClient,
+    http: &mut impl FactorDbClient<A>,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
 ) {
@@ -216,12 +218,12 @@ async fn check_composite(
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-enum NumberSpecifier {
+enum NumberSpecifier<A: Allocator> {
     Id(u128),
-    Expression(Factor),
+    Expression(Factor<A>),
 }
 
-impl Display for NumberSpecifier {
+impl <A: Allocator> Display for NumberSpecifier<A> {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

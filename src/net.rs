@@ -1,3 +1,4 @@
+use alloc::alloc::Allocator;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -73,7 +74,7 @@ impl Collector {
 
 type BasicCache<K, V> = Cache<K, V, UnitWeighter, DefaultHashBuilder, DefaultLifecycle<K, V>>;
 
-pub trait FactorDbClient {
+pub trait FactorDbClient<A: Allocator> {
     async fn parse_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
@@ -92,21 +93,21 @@ pub trait FactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Factor>;
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Factor<A>>;
     async fn known_factors_as_digits(
         &mut self,
-        id: NumberSpecifier,
+        id: NumberSpecifier<A>,
         include_ff: bool,
         get_digits_as_fallback: bool,
-    ) -> ProcessedStatusApiResponse;
-    fn cached_factors(&self, id: NumberSpecifier) -> Option<ProcessedStatusApiResponse>;
-    async fn try_report_factor(&self, u_id: NumberSpecifier, factor: &Factor)
+    ) -> ProcessedStatusApiResponse<A>;
+    fn cached_factors(&self, id: NumberSpecifier<A>) -> Option<ProcessedStatusApiResponse<A>>;
+    async fn try_report_factor(&self, u_id: NumberSpecifier<A>, factor: &Factor<A>)
     -> ReportFactorResult;
     async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult;
 }
 
 #[derive(Clone)]
-pub struct RealFactorDbClient {
+pub struct RealFactorDbClient<A: Allocator> {
     resources_regex: Arc<Regex>,
     http: Client,
     rate_limiter: Arc<DefaultDirectRateLimiter<StateInformationMiddleware>>,
@@ -118,9 +119,9 @@ pub struct RealFactorDbClient {
     id_and_expr_regex: Arc<Regex>,
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
-    by_id_cache: BasicCache<u128, ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<Factor, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<u128, Factor>,
+    by_id_cache: BasicCache<u128, ProcessedStatusApiResponse<A>>,
+    by_expr_cache: BasicCache<Factor<A>, ProcessedStatusApiResponse<A>>,
+    expression_form_cache: BasicCache<u128, Factor<A>>,
 }
 
 pub struct ResourceLimits {
@@ -128,7 +129,7 @@ pub struct ResourceLimits {
     pub resets_at: Instant,
 }
 
-impl RealFactorDbClient {
+impl <A: Allocator> RealFactorDbClient<A> {
     pub fn new(
         requests_per_hour: NonZeroU32,
         max_concurrent_requests: usize,
@@ -255,7 +256,7 @@ impl RealFactorDbClient {
     }
 }
 
-impl FactorDbClient for RealFactorDbClient {
+impl <A: Allocator> FactorDbClient for RealFactorDbClient<A> {
     #[framed]
     async fn parse_resource_limits(
         &self,
@@ -421,7 +422,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
-    fn cached_factors(&self, mut id: NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
+    fn cached_factors(&self, mut id: NumberSpecifier<A>) -> Option<ProcessedStatusApiResponse<A>> {
         if let Id(entry_id) = id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
@@ -462,7 +463,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn known_factors_as_digits(
         &mut self,
-        id: NumberSpecifier,
+        id: NumberSpecifier<A>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
@@ -588,8 +589,8 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn try_report_factor(
         &self,
-        u_id: NumberSpecifier,
-        factor: &Factor,
+        u_id: NumberSpecifier<A>,
+        factor: &Factor<A>,
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
             Expression(Numeric(_)) => return AlreadyFullyFactored,

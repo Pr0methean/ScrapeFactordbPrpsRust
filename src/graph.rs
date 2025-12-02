@@ -1,3 +1,4 @@
+use std::alloc::Allocator;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -35,20 +36,20 @@ pub enum Divisibility {
     Direct,
 }
 
-pub type DivisibilityGraph = Graph<
-    Factor,
+pub type DivisibilityGraph<A: Allocator> = Graph<
+    Factor<A>,
     Divisibility,
     Directed,
-    Stable<AdjMatrix<Factor, Divisibility, Directed, DefaultId>>,
+    Stable<AdjMatrix<Factor<A>, Divisibility, Directed, DefaultId>>,
 >;
 
-pub struct FactorData {
-    pub divisibility_graph: DivisibilityGraph,
+pub struct FactorData<A: Allocator> {
+    pub divisibility_graph: DivisibilityGraph<A>,
     pub deleted_synonyms: BTreeMap<VertexId, VertexId>,
     pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
 }
 
-pub fn rule_out_divisibility(data: &mut FactorData, nonfactor: VertexId, dest: VertexId) {
+pub fn rule_out_divisibility<A: Allocator>(data: &mut FactorData<A>, nonfactor: VertexId, dest: VertexId) {
     let nonfactor = to_real_vertex_id(nonfactor, &data.deleted_synonyms);
     let dest = to_real_vertex_id(dest, &data.deleted_synonyms);
     if nonfactor == dest {
@@ -71,8 +72,8 @@ pub fn rule_out_divisibility(data: &mut FactorData, nonfactor: VertexId, dest: V
     }
 }
 
-pub fn propagate_divisibility(
-    data: &mut FactorData,
+pub fn propagate_divisibility<A: Allocator>(
+    data: &mut FactorData<A>,
     factor: VertexId,
     dest: VertexId,
     transitive: bool,
@@ -120,11 +121,11 @@ pub fn propagate_divisibility(
     }
 }
 
-fn as_specifier<'a>(
+fn as_specifier<'a, A: Allocator>(
     factor_vid: VertexId,
-    data: &'a FactorData,
-    factor: Option<&'a Factor>,
-) -> NumberSpecifier {
+    data: &'a FactorData<A>,
+    factor: Option<&'a Factor<A>>,
+) -> NumberSpecifier<A> {
     if let Some(facts) = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
         && let Some(factor_entry_id) = facts.entry_id
     {
@@ -143,7 +144,7 @@ fn as_specifier<'a>(
     }
 }
 
-pub fn get_edge(data: &FactorData, source: VertexId, dest: VertexId) -> Option<Divisibility> {
+pub fn get_edge<A: Allocator>(data: &FactorData<A>, source: VertexId, dest: VertexId) -> Option<Divisibility> {
     Some(
         *data
             .divisibility_graph
@@ -154,8 +155,8 @@ pub fn get_edge(data: &FactorData, source: VertexId, dest: VertexId) -> Option<D
     )
 }
 
-pub fn get_edge_mut(
-    data: &mut FactorData,
+pub fn get_edge_mut<A: Allocator>(
+    data: &mut FactorData<A>,
     source: VertexId,
     dest: VertexId,
 ) -> Option<&mut Divisibility> {
@@ -166,12 +167,12 @@ pub fn get_edge_mut(
         )?)
 }
 
-pub fn add_factor_node(
-    data: &mut FactorData,
-    factor: Factor,
+pub fn add_factor_node<A: Allocator>(
+    data: &mut FactorData<A>,
+    factor: Factor<A>,
     root_vid: Option<VertexId>,
     mut entry_id: Option<u128>,
-    http: &impl FactorDbClient,
+    http: &impl FactorDbClient<A>,
 ) -> (VertexId, bool) {
     let (existing_vertex, matching_vertices) = data
         .divisibility_graph
@@ -281,8 +282,8 @@ pub fn add_factor_node(
     (merge_dest, added)
 }
 
-fn neighbor_vids(
-    divisibility_graph: &DivisibilityGraph,
+fn neighbor_vids<A: Allocator>(
+    divisibility_graph: &DivisibilityGraph<A>,
     vertex_id: VertexId,
     direction: Direction,
 ) -> Vec<(VertexId, Divisibility)> {
@@ -309,17 +310,17 @@ pub fn to_real_vertex_id(
 }
 
 #[inline(always)]
-pub fn get_vertex<'a>(
-    divisibility_graph: &'a DivisibilityGraph,
+pub fn get_vertex<'a, A: Allocator>(
+    divisibility_graph: &'a DivisibilityGraph<A>,
     vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>,
-) -> &'a Factor {
+) -> &'a Factor<A> {
     divisibility_graph
         .vertex(to_real_vertex_id(vertex_id, deleted_synonyms))
         .unwrap()
 }
 
-pub fn is_known_factor(data: &FactorData, factor_vid: VertexId, composite_vid: VertexId) -> bool {
+pub fn is_known_factor<A: Allocator>(data: &FactorData<A>, factor_vid: VertexId, composite_vid: VertexId) -> bool {
     matches!(
         get_edge(data, factor_vid, composite_vid),
         Some(Direct) | Some(Transitive)
@@ -410,10 +411,10 @@ impl PartialEq<Self> for NumberFacts {
 /// cycle in favor of c < a < b, which is the actual numeric-value ordering. This is probably about
 /// as close as we can come to a total numeric-value ordering with no bignum math and no isk of
 /// cycles.
-fn compare(
+fn compare<A: Allocator>(
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
-    left: &VertexRef<VertexId, Factor>,
-    right: &VertexRef<VertexId, Factor>,
+    left: &VertexRef<VertexId, Factor<A>>,
+    right: &VertexRef<VertexId, Factor<A>>,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>,
 ) -> Ordering {
     let left_facts = facts_of(number_facts_map, left.id, deleted_synonyms)
@@ -1042,7 +1043,7 @@ pub async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn known_factors_upper_bound(data: &FactorData, cofactor_vid: VertexId) -> u128 {
+fn known_factors_upper_bound<A: Allocator>(data: &FactorData<A>, cofactor_vid: VertexId) -> u128 {
     neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
         .into_iter()
         .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &data.deleted_synonyms)
@@ -1091,9 +1092,9 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
 }
 
 #[framed]
-async fn add_factors_to_graph(
+async fn add_factors_to_graph<A: Allocator>(
     http: &mut impl FactorDbClient,
-    data: &mut FactorData,
+    data: &mut FactorData<A>,
     root_vid: VertexId,
     factor_vid: VertexId,
 ) -> Box<[VertexId]> {
@@ -1255,12 +1256,12 @@ async fn add_factors_to_graph(
     added.into_iter().collect()
 }
 
-fn merge_equivalent_expressions(
-    data: &mut FactorData,
+fn merge_equivalent_expressions<A: Allocator>(
+    data: &mut FactorData<A>,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
-    equivalent: Factor,
-    http: &impl FactorDbClient,
+    equivalent: Factor<A>,
+    http: &impl FactorDbClient<A>,
 ) -> Vec<VertexId> {
     let current = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
     if equivalent == *current {
@@ -1313,12 +1314,12 @@ fn merge_equivalent_expressions(
     }
 }
 
-fn add_factor_finder_factor_vertices_to_graph(
-    data: &mut FactorData,
+fn add_factor_finder_factor_vertices_to_graph<A: Allocator>(
+    data: &mut FactorData<A>,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
     entry_id: Option<u128>,
-    http: &impl FactorDbClient,
+    http: &impl FactorDbClient<A>,
 ) -> Vec<VertexId> {
     find_unique_factors(
         get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms).clone(),
