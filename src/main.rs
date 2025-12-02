@@ -14,6 +14,7 @@ mod graph;
 mod monitor;
 mod net;
 
+use alloc::rc::Rc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::NumberStatus::FullyFactored;
@@ -218,7 +219,7 @@ async fn check_composite(
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier {
     Id(u128),
-    Expression(Factor),
+    Expression(Rc<Factor>),
 }
 
 impl Display for NumberSpecifier {
@@ -548,7 +549,7 @@ async fn main() -> anyhow::Result<()> {
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_buffer_task: JoinHandle<()> =
-        task::spawn(async_backtrace::location!().frame(async move {
+        task::spawn_local(async_backtrace::location!().frame(async move {
             queue_composites(&http_clone, &c_sender_clone, c_digits)
                 .await
                 .await
@@ -574,7 +575,7 @@ async fn main() -> anyhow::Result<()> {
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
     let mut do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
-    task::spawn(async_backtrace::location!().frame(async move {
+    task::spawn_local(async_backtrace::location!().frame(async move {
         info!("do_checks task starting");
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let mut next_unknown_attempt = Instant::now();
@@ -682,7 +683,7 @@ async fn main() -> anyhow::Result<()> {
                             _ => {
                                 nm1_known_to_divide_2 = nm1_factors[0].as_u128() == Some(2);
                                 nm1_known_to_divide_3 = nm1_factors[0].as_u128() == Some(3)
-                                    || nm1_factors.get(1).and_then(Factor::as_u128) == Some(3);
+                                    || nm1_factors.get(1).and_then(|factor| factor.as_u128()) == Some(3);
                                 updated_nm1_factors = Some(nm1_factors);
                             }
                         }
@@ -709,7 +710,7 @@ async fn main() -> anyhow::Result<()> {
                             _ => {
                                 np1_known_to_divide_2 = np1_factors[0].as_u128() == Some(2);
                                 np1_known_to_divide_3 = np1_factors[0].as_u128() == Some(3)
-                                    || np1_factors.get(1).and_then(Factor::as_u128) == Some(3);
+                                    || np1_factors.get(1).and_then(|factor| factor.as_u128()) == Some(3);
                                 updated_np1_factors = Some(np1_factors);
                             }
                         }
@@ -905,7 +906,7 @@ async fn main() -> anyhow::Result<()> {
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
     let mut u_http = http.clone();
-    task::spawn(async_backtrace::location!().frame(async move {
+    task::spawn_local(async_backtrace::location!().frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
             if u_shutdown_receiver.check_for_shutdown() {

@@ -1,3 +1,4 @@
+use alloc::rc::Rc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -92,7 +93,7 @@ pub trait FactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Factor>;
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Rc<Factor>>;
     async fn known_factors_as_digits(
         &mut self,
         id: NumberSpecifier,
@@ -119,8 +120,8 @@ pub struct RealFactorDbClient {
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
     by_id_cache: BasicCache<u128, ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<Factor, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<u128, Factor>,
+    by_expr_cache: BasicCache<Rc<Factor>, ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<u128, Rc<Factor>>,
 }
 
 pub struct ResourceLimits {
@@ -398,9 +399,9 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Factor> {
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Rc<Factor>> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
-            return Some(entry_id.to_string().into());
+            return Some(Factor::from(entry_id).into());
         }
         if let Some(response) = self.expression_form_cache.get(&entry_id) {
             info!("Expression-form cache hit for {entry_id}");
@@ -409,11 +410,11 @@ impl FactorDbClient for RealFactorDbClient {
         let response = self
             .try_get_and_decode(format!("https://factordb.com/index.php?id={entry_id}").into())
             .await?;
-        let expression_form: Factor = self
+        let expression_form: Rc<Factor> = Factor::from(self
             .expression_form_regex
             .captures(&response)?
             .get(1)?
-            .as_str()
+            .as_str())
             .into();
         self.expression_form_cache
             .insert(entry_id, expression_form.clone());
@@ -425,9 +426,9 @@ impl FactorDbClient for RealFactorDbClient {
         if let Id(entry_id) = id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
-            id = Expression(Numeric(entry_id));
+            id = Expression(Numeric(entry_id).into());
         }
-        if let Expression(Numeric(n)) = id {
+        if let Expression(ref x) = id && let Numeric(n) = **x {
             debug!("Specially handling numeric expression {n}");
             let factors = find_factors_of_u128(n).into_boxed_slice();
             return Some(ProcessedStatusApiResponse {
@@ -527,7 +528,7 @@ impl FactorDbClient for RealFactorDbClient {
                     let factors = {
                         let mut factors: Vec<_> = factors
                             .into_iter()
-                            .map(|(factor, _exponent)| Factor::from(factor))
+                            .map(|(factor, _exponent)| Factor::from(factor).into())
                             .collect();
                         factors.sort();
                         factors.dedup();
@@ -552,11 +553,11 @@ impl FactorDbClient for RealFactorDbClient {
                     .and_then(|c| c.get(1))
                     .map(|digits_cell| {
                         vec![
-                            digits_cell
+                            Factor::from(digits_cell
                                 .as_str()
                                 .chars()
                                 .filter(char::is_ascii_digit)
-                                .collect::<String>()
+                                .collect::<String>())
                                 .into(),
                         ]
                     })
@@ -592,9 +593,10 @@ impl FactorDbClient for RealFactorDbClient {
         factor: &Factor,
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
-            Expression(Numeric(_)) => return AlreadyFullyFactored,
-            Expression(Factor::BigNumber(ref x)) => (None, Some(x.to_owned_string())),
-            Expression(ref x) => (None, Some(x.to_owned_string())),
+            Expression(ref x) => match **x {
+                Numeric(_) => return AlreadyFullyFactored,
+                _ => (None, Some(x.to_owned_string())),
+            },
             Id(id) => (Some(id), None),
         };
         self.rate_limiter.until_ready().await;
