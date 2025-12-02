@@ -1137,7 +1137,7 @@ pub fn to_like_powers_recursive_dedup(
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
-            match *factor {
+            match simplify(factor) {
                 AddSub {
                     left: ref factor_left,
                     right: ref factor_right,
@@ -1245,10 +1245,7 @@ pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>,
                     left: new_left,
                     right: right.clone(),
                 }.into())),
-                Err(left) => Err(Factor::Divide {
-                    left,
-                    right: right.clone(),
-                }.into()),
+                Err(_) => Err(product),
             }
         }
         Factor::Factorial(ref term) => {
@@ -1378,7 +1375,7 @@ pub fn nth_root_exact(factor: Rc<Factor>, root: u128) -> Result<Rc<Factor>, Rc<F
                 .map(|term| nth_root_exact(term.clone(), root).ok())
                 .collect::<Option<Vec<_>>>()
                 .ok_or(factor)?;
-            return Ok(Multiply { terms: new_terms }.into());
+            return Ok(simplify(Multiply { terms: new_terms }.into()));
         }
         Factor::Divide {
             ref left,
@@ -1710,9 +1707,9 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
             match new_terms.len() {
                 0 => Factor::one(),
                 1 => new_terms.into_iter().next().unwrap(),
-                _ => Multiply {
+                _ => simplify(Multiply {
                     terms: new_terms.into_iter().collect(),
-                }.into(),
+                }.into()),
             }
         }
         Factor::Divide {
@@ -1794,10 +1791,10 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
                 Ordering::Equal => return if subtract {
                         Numeric(0)
                     } else {
-                        Multiply {
+                        simplify(Multiply {
                             terms: vec![left, Factor::two()],
-                        }
-                    }.into(),
+                        }.into())
+                    },
                 Ordering::Greater => {
                     if !subtract && left > right {
                         swap(&mut left, &mut right);
