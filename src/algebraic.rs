@@ -653,6 +653,8 @@ peg::parser! {
       x:@ "!" { Factor::Factorial(Box::new(x)) }
       x:@ "#" { Factor::Primorial(Box::new(x)) }
       --
+      x:$(['0'..='9']+) "##" { Factor::Primorial(Box::new(Factor::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(x.parse().unwrap())).into()))) }
+      --
       "I" x:@ { Factor::Fibonacci(Box::new(x)) }
       --
       "lucas(" x:arithmetic() ")" { Factor::Lucas(Box::new(x)) }
@@ -2444,9 +2446,15 @@ mod tests {
     #[test]
     fn test_nested_parens() {
         let factors = find_factors("(12^((2^7-1)^2)-1)/88750555799".into());
-        println!("{factors:?}");
+        println!("{}", factors.iter().join(","));
         assert!(factors.contains(&Numeric(11)));
         assert!(factors.contains(&"12^127-1".into()));
+    }
+
+    #[test]
+    fn test_memory_nested_primorial() {
+        assert_ne!(Factor::from("9##"), Factor::from("(9#)#"));
+        println!("{}", find_factors("92##".into()).into_iter().join(","));
     }
 
     #[test]
