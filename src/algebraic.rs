@@ -2084,7 +2084,6 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
                     div_exact(expr.clone(), factor.clone())
                     .ok()
                 })
-                .filter(|cofactor| !factors.contains(cofactor))
                 .collect();
             factors = multiset_union(vec![factors, cofactors]);
             factors
