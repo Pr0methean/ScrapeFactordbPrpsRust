@@ -650,10 +650,22 @@ peg::parser! {
       --
       x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
       --
-      x:@ "!" { Factor::Factorial(Box::new(x)) }
-      x:@ "#" { Factor::Primorial(Box::new(x)) }
+      x:@ "##" { Factor::Primorial(Box::new(Factor::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_u128(&x).unwrap() as u64)).into()))) }
       --
-      x:$(['0'..='9']+) "##" { Factor::Primorial(Box::new(Factor::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(x.parse().unwrap())).into()))) }
+      x:@ "!" { Factor::Factorial(Box::new(x)) }
+      x:@ y:("#"+) {
+                    let hashes = y.len();
+                    let mut output = x;
+                    for _ in 0..(hashes >> 1) {
+                        output = Factor::Primorial(Box::new(Factor::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_u128(&output).unwrap() as u64)).into())));
+                    }
+                    if !hashes.is_multiple_of(2) {
+                        output = Factor::Primorial(Box::new(output))
+                    };
+                    output
+                }
+      --
+      "M" x:@ { Factor::AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: Box::new(x) }.into(), right: Numeric(1).into(), subtract: true } }
       --
       "I" x:@ { Factor::Fibonacci(Box::new(x)) }
       --
@@ -2452,9 +2464,19 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_nested_primorial() {
-        assert_ne!(Factor::from("9##"), Factor::from("(9#)#"));
+    fn test_double_hash() {
+        assert_eq!(evaluate_as_u128(&"2##".into()), Some(6)); // 2## = 6; (2#)# = 2
+        assert_eq!(evaluate_as_u128(&"2###".into()), Some(30)); // 2### = (2##)# = 30; (2#)## = 6
+        assert_eq!(evaluate_as_u128(&"2####".into()), Some(30030)); // 2#### = (2##)## = 30030
         println!("{}", find_factors("92##".into()).into_iter().join(","));
+    }
+
+    #[test]
+    fn test_m_precedence() {
+        assert_eq!(evaluate_as_u128(&"M7^2".into()), Some(127 * 127));
+        assert_eq!(evaluate_as_u128(&"M7*5".into()), Some(127 * 5));
+        assert_eq!(evaluate_as_u128(&"M5!".into()), Some((1..=31).product())); // (M5)!
+        assert_eq!(evaluate_as_u128(&"M5#".into()), Some(2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23 * 29 * 31)); // (M5)#
     }
 
     #[test]
