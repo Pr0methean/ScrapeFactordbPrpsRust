@@ -409,12 +409,13 @@ impl FactorDbClient for RealFactorDbClient {
         let response = self
             .try_get_and_decode(format!("https://factordb.com/index.php?id={entry_id}").into())
             .await?;
-        let expression_form: Arc<Factor> = Factor::from(self
-            .expression_form_regex
-            .captures(&response)?
-            .get(1)?
-            .as_str())
-            .into();
+        let expression_form: Arc<Factor> = Factor::from(
+            self.expression_form_regex
+                .captures(&response)?
+                .get(1)?
+                .as_str(),
+        )
+        .into();
         self.expression_form_cache
             .insert(entry_id, expression_form.clone());
         Some(expression_form)
@@ -427,7 +428,9 @@ impl FactorDbClient for RealFactorDbClient {
         {
             id = Expression(Numeric(entry_id).into());
         }
-        if let Expression(ref x) = id && let Numeric(n) = **x {
+        if let Expression(ref x) = id
+            && let Numeric(n) = **x
+        {
             debug!("Specially handling numeric expression {n}");
             let factors = find_factors_of_u128(n).into_boxed_slice();
             return Some(ProcessedStatusApiResponse {
@@ -552,12 +555,14 @@ impl FactorDbClient for RealFactorDbClient {
                     .and_then(|c| c.get(1))
                     .map(|digits_cell| {
                         vec![
-                            Factor::from(digits_cell
-                                .as_str()
-                                .chars()
-                                .filter(char::is_ascii_digit)
-                                .collect::<String>())
-                                .into(),
+                            Factor::from(
+                                digits_cell
+                                    .as_str()
+                                    .chars()
+                                    .filter(char::is_ascii_digit)
+                                    .collect::<String>(),
+                            )
+                            .into(),
                         ]
                     })
                     .unwrap_or_default();

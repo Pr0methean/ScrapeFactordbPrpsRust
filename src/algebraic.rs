@@ -1074,7 +1074,8 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
                     *term = Factor::Power {
                         base: Numeric(a).into(),
                         exponent: Numeric(n).into(),
-                    }.into();
+                    }
+                    .into();
                     Some(n)
                 } else {
                     None
@@ -1107,20 +1108,26 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
         {
             if factor == 2 {
                 results.extend(repeat_n(
-                    simplify(AddSub {
-                        left: left_root.clone(),
-                        right: right_root.clone(),
-                        subtract: false,
-                    }.into()),
+                    simplify(
+                        AddSub {
+                            left: left_root.clone(),
+                            right: right_root.clone(),
+                            subtract: false,
+                        }
+                        .into(),
+                    ),
                     factor_power,
                 ));
             }
             results.extend(repeat_n(
-                simplify(AddSub {
-                    left: left_root,
-                    right: right_root,
-                    subtract,
-                }.into()),
+                simplify(
+                    AddSub {
+                        left: left_root,
+                        right: right_root,
+                        subtract,
+                    }
+                    .into(),
+                ),
                 factor_power,
             ));
         }
@@ -1143,7 +1150,8 @@ pub fn to_like_powers_recursive_dedup(
                     right: ref factor_right,
                     subtract,
                 } => {
-                    let subfactors = to_like_powers(factor_left.clone(), factor_right.clone(), subtract);
+                    let subfactors =
+                        to_like_powers(factor_left.clone(), factor_right.clone(), subtract);
                     for subfactor in subfactors
                         .into_iter()
                         .filter(|subfactor| subfactor != &factor)
@@ -1172,10 +1180,9 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
     if let Some(product_u128) = evaluate_as_u128(&product)
         && let Some(divisor_u128) = evaluate_as_u128(&divisor)
     {
-        return match product_u128
-            .div_exact(divisor_u128) {
+        return match product_u128.div_exact(divisor_u128) {
             Some(divided) => Ok(Numeric(divided).into()),
-            None => Err(Numeric(product_u128).into())
+            None => Err(Numeric(product_u128).into()),
         };
     }
     match *product {
@@ -1184,30 +1191,36 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
             ref exponent,
         } => {
             if *base == divisor {
-                Ok(simplify(Factor::Power {
-                    base: base.clone(),
-                    exponent: simplify(AddSub {
-                        left: exponent.clone(),
-                        right: Factor::one(),
-                        subtract: true,
-                    }.into())
-                }.into()))
+                Ok(simplify(
+                    Factor::Power {
+                        base: base.clone(),
+                        exponent: simplify(
+                            AddSub {
+                                left: exponent.clone(),
+                                right: Factor::one(),
+                                subtract: true,
+                            }
+                            .into(),
+                        ),
+                    }
+                    .into(),
+                ))
             } else if let Some(exponent_u128) = evaluate_as_u128(exponent)
                 && let Ok(divisor_root) = nth_root_exact(divisor, exponent_u128)
             {
                 match div_exact(base.clone(), divisor_root) {
-                    Ok(divided_base) => {
-                        Ok(simplify(Factor::Power {
+                    Ok(divided_base) => Ok(simplify(
+                        Factor::Power {
                             base: divided_base,
                             exponent: Numeric(exponent_u128).into(),
-                        }.into()))
+                        }
+                        .into(),
+                    )),
+                    Err(_) => Err(Factor::Power {
+                        base: base.clone(),
+                        exponent: Numeric(exponent_u128).into(),
                     }
-                    Err(_) => {
-                        Err(Factor:: Power {
-                            base: base.clone(),
-                            exponent: Numeric(exponent_u128).into(),
-                        }.into())
-                    }
+                    .into()),
                 }
             } else {
                 Err(product)
@@ -1239,15 +1252,16 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
         Factor::Divide {
             ref left,
             ref right,
-        } => {
-            match div_exact(left.clone(), divisor) {
-                Ok(new_left) => Ok(simplify(Factor::Divide {
+        } => match div_exact(left.clone(), divisor) {
+            Ok(new_left) => Ok(simplify(
+                Factor::Divide {
                     left: new_left,
                     right: right.clone(),
-                }.into())),
-                Err(_) => Err(product),
-            }
-        }
+                }
+                .into(),
+            )),
+            Err(_) => Err(product),
+        },
         Factor::Factorial(ref term) => {
             if let Some(divisor) = evaluate_as_u128(&divisor)
                 && let Some(term) = evaluate_as_u128(term)
@@ -1321,17 +1335,21 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
             subtract,
         } => {
             if let Ok(new_left) = div_exact(left.clone(), divisor.clone())
-                    && let Ok(new_right) = div_exact(right.clone(), divisor) {
-                Ok(simplify(AddSub {
-                    left: new_left,
-                    right: new_right,
-                    subtract,
-                }.into()))
+                && let Ok(new_right) = div_exact(right.clone(), divisor)
+            {
+                Ok(simplify(
+                    AddSub {
+                        left: new_left,
+                        right: new_right,
+                        subtract,
+                    }
+                    .into(),
+                ))
             } else {
                 Err(product)
             }
         }
-        _ => Err(product)
+        _ => Err(product),
     }
 }
 
@@ -1364,7 +1382,8 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
                 Ok(Factor::Power {
                     base: base.clone(),
                     exponent: Numeric(reduced_exponent).into(),
-                }.into())
+                }
+                .into())
             } else {
                 Err(factor)
             };
@@ -1387,10 +1406,13 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
                 .map(|term| nth_root_exact(term.clone(), root).ok())
                 .collect::<Option<Vec<_>>>()
                 .ok_or(factor)?;
-            return Ok(simplify(Factor::Divide {
-                left: new_left,
-                right: new_right,
-            }.into()));
+            return Ok(simplify(
+                Factor::Divide {
+                    left: new_left,
+                    right: new_right,
+                }
+                .into(),
+            ));
         }
         _ => {}
     }
@@ -1416,8 +1438,8 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
                 (0, 0)
             }
             1 => (0, 0),
-            n => (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1)
-        }
+            n => (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1),
+        },
         Factor::BigNumber(ref expr) => {
             let len = expr.as_ref().len();
             ((len - 1) as u128, len as u128)
@@ -1475,7 +1497,10 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
             // Elided numbers from factordb are always at least 51 digits
             (50, u128::MAX)
         }
-        Factor::Power { ref base, ref exponent } => {
+        Factor::Power {
+            ref base,
+            ref exponent,
+        } => {
             let Some(exponent) = evaluate_as_u128(exponent) else {
                 return (0, u128::MAX);
             };
@@ -1491,7 +1516,10 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
                 )
             }
         }
-        Factor::Divide { ref left, ref right } => {
+        Factor::Divide {
+            ref left,
+            ref right,
+        } => {
             let (num_lower, num_upper) = estimate_log10_internal(left.clone());
             let (denom_lower, denom_upper) = right
                 .iter()
@@ -1602,11 +1630,15 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
         Multiply { ref terms } => {
             let mut product: u128 = 1;
             for term in terms.iter() {
-                product = product.checked_mul(evaluate_modulo_as_u128(term.clone(), modulus)?)? % modulus;
+                product =
+                    product.checked_mul(evaluate_modulo_as_u128(term.clone(), modulus)?)? % modulus;
             }
             Some(product)
         }
-        Factor::Divide { ref left, ref right } => {
+        Factor::Divide {
+            ref left,
+            ref right,
+        } => {
             let mut result = evaluate_modulo_as_u128(left.clone(), modulus)?;
             for term in right.iter() {
                 let term_mod = evaluate_modulo_as_u128(term.clone(), modulus)?;
@@ -1617,7 +1649,10 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
             }
             Some(result)
         }
-        Factor::Power { ref base, ref exponent } => {
+        Factor::Power {
+            ref base,
+            ref exponent,
+        } => {
             let base_mod = evaluate_modulo_as_u128(base.clone(), modulus)?;
             let exp = evaluate_as_u128(exponent)?;
             Some(base_mod.powm(exp, &modulus))
@@ -1688,7 +1723,13 @@ fn factor_to_power(base: Arc<Factor>, exponent: u128) -> Arc<Factor> {
     match exponent {
         0 => Factor::one(),
         1 => base,
-        _ => simplify(Factor::Power { base, exponent: Numeric(exponent).into() }.into())
+        _ => simplify(
+            Factor::Power {
+                base,
+                exponent: Numeric(exponent).into(),
+            }
+            .into(),
+        ),
     }
 }
 
@@ -1698,27 +1739,35 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     }
     match *expr {
         Multiply { ref terms } => {
-            let mut new_terms = count_frequencies(terms
-                .iter()
-                .flat_map(|term| {
-                    if let Multiply { ref terms } = **term {
-                        terms.clone()
-                    } else {
-                        vec![term.clone()]
-                    }
-                    .into_iter()
-                })
-                .map(simplify).collect());
+            let mut new_terms = count_frequencies(
+                terms
+                    .iter()
+                    .flat_map(|term| {
+                        if let Multiply { ref terms } = **term {
+                            terms.clone()
+                        } else {
+                            vec![term.clone()]
+                        }
+                        .into_iter()
+                    })
+                    .map(simplify)
+                    .collect(),
+            );
             new_terms.remove(&Factor::one());
             match new_terms.len() {
                 0 => Factor::one(),
                 1 => {
                     let (factor, power) = new_terms.into_iter().next().unwrap();
                     factor_to_power(factor, power as u128)
-                },
+                }
                 _ => Multiply {
-                    terms: new_terms.into_iter().map(|(factor, power)| factor_to_power(factor, power as u128)).sorted_unstable().collect(),
-                }.into(),
+                    terms: new_terms
+                        .into_iter()
+                        .map(|(factor, power)| factor_to_power(factor, power as u128))
+                        .sorted_unstable()
+                        .collect(),
+                }
+                .into(),
             }
         }
         Factor::Divide {
@@ -1730,7 +1779,8 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             while let Factor::Divide {
                 left: ref left_left,
                 right: ref mid,
-            } = *new_left {
+            } = *new_left
+            {
                 let new_right_right = new_right;
                 new_right = mid.clone();
                 new_right.extend(new_right_right);
@@ -1760,10 +1810,14 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 Factor::Divide {
                     left: new_left,
                     right: new_right,
-                }.into()
+                }
+                .into()
             }
         }
-        Factor::Power { ref base, ref exponent } => {
+        Factor::Power {
+            ref base,
+            ref exponent,
+        } => {
             let mut new_base = simplify(base.clone());
             let mut new_exponent = simplify(exponent.clone());
             if let Numeric(new_base_u128) = *new_base {
@@ -1785,7 +1839,8 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 _ => Factor::Power {
                     base: new_base,
                     exponent: new_exponent,
-                }.into(),
+                }
+                .into(),
             }
         }
         Factor::Factorial(ref term) | Factor::Primorial(ref term) => match **term {
@@ -1801,22 +1856,32 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             let mut right = simplify(right.clone());
             match left.cmp(&right) {
                 Ordering::Less => {}
-                Ordering::Equal => return if subtract {
+                Ordering::Equal => {
+                    return if subtract {
                         Numeric(0).into()
                     } else {
-                        simplify(Multiply {
-                            terms: vec![left, Factor::two()],
-                        }.into())
-                    },
+                        simplify(
+                            Multiply {
+                                terms: vec![left, Factor::two()],
+                            }
+                            .into(),
+                        )
+                    };
+                }
                 Ordering::Greater => {
                     if !subtract && left > right {
                         swap(&mut left, &mut right);
                     }
                 }
             }
-            AddSub { left, right, subtract }.into()
+            AddSub {
+                left,
+                right,
+                subtract,
+            }
+            .into()
         }
-        _ => expr
+        _ => expr,
     }
 }
 
@@ -1993,14 +2058,20 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 vec![]
             }
         },
-        Factor::Power { ref base, ref exponent } => {
+        Factor::Power {
+            ref base,
+            ref exponent,
+        } => {
             let power = evaluate_as_u128(exponent)
                 .unwrap_or(MAX_REPEATS)
                 .min(MAX_REPEATS) as usize;
             let base_factors = find_factors(base.clone());
             repeat_n(base_factors, power).flatten().collect()
         }
-        Factor::Divide { ref left, ref right } => {
+        Factor::Divide {
+            ref left,
+            ref right,
+        } => {
             // division
             let mut left_recursive_factors = vec![];
             let left_remaining_factors = find_factors(left.clone());
@@ -2090,10 +2161,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             let cofactors: Vec<_> = factors
                 .iter()
                 .unique()
-                .flat_map(|factor: &Arc<Factor>| {
-                    div_exact(expr.clone(), factor.clone())
-                    .ok()
-                })
+                .flat_map(|factor: &Arc<Factor>| div_exact(expr.clone(), factor.clone()).ok())
                 .collect();
             factors = multiset_union(vec![factors, cofactors]);
             factors
@@ -2235,16 +2303,19 @@ impl NumberStatusExt for Option<NumberStatus> {
 mod tests {
     use crate::algebraic::Factor::Numeric;
     use crate::algebraic::{
-        Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
-        evaluate_as_u128, factor_power, fibonacci_factors, lucas_factors, modinv,
-        multiset_intersection, multiset_union, power_multiset,
+        Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, evaluate_as_u128, factor_power,
+        fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union,
+        power_multiset,
     };
     use itertools::Itertools;
     use std::iter::repeat_n;
     use std::sync::Arc;
 
     fn find_factors(input: &str) -> Vec<Factor> {
-        crate::algebraic::find_factors(Factor::from(input).into()).into_iter().map(Arc::unwrap_or_clone).collect()
+        crate::algebraic::find_factors(Factor::from(input).into())
+            .into_iter()
+            .map(Arc::unwrap_or_clone)
+            .collect()
     }
 
     #[test]
@@ -2464,7 +2535,6 @@ mod tests {
         let expr = Arc::new(Factor::from(expr));
         crate::algebraic::estimate_log10_internal(expr.clone());
         evaluate_as_u128(&expr);
-
     }
 
     #[test]
@@ -2626,13 +2696,11 @@ mod tests {
         let (lower, upper) = estimate_log10_internal("101");
         assert_eq!(lower, 2);
         assert_eq!(upper, 3);
-        let (lower, upper) = estimate_log10_internal(
-            &("1".to_string() + &repeat_n('0', 50).collect::<String>()));
+        let (lower, upper) =
+            estimate_log10_internal(&("1".to_string() + &repeat_n('0', 50).collect::<String>()));
         assert_eq!(lower, 50);
         assert!(upper == 50 || upper == 51);
-        let (lower, upper) = estimate_log10_internal(
-            &(repeat_n('9', 50).collect::<String>())
-        );
+        let (lower, upper) = estimate_log10_internal(&(repeat_n('9', 50).collect::<String>()));
         assert_eq!(lower, 49);
         assert!(upper == 49 || upper == 50);
         let (lower, upper) = estimate_log10_internal("I1234".into());

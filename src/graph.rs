@@ -48,7 +48,7 @@ pub struct FactorData {
     pub deleted_synonyms: BTreeMap<VertexId, VertexId>,
     pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
     pub vertex_id_by_expr: BTreeMap<Arc<Factor>, VertexId>,
-    pub vertex_id_by_entry_id: BTreeMap<u128, VertexId>
+    pub vertex_id_by_entry_id: BTreeMap<u128, VertexId>,
 }
 
 pub fn rule_out_divisibility(data: &mut FactorData, nonfactor: VertexId, dest: VertexId) {
@@ -176,9 +176,12 @@ pub fn add_factor_node(
     mut entry_id: Option<u128>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
-    let existing_vertex = data.vertex_id_by_expr.get(&factor)
+    let existing_vertex = data
+        .vertex_id_by_expr
+        .get(&factor)
         .map(|vertex_id| to_real_vertex_id(*vertex_id, &data.deleted_synonyms));
-    let matching_vid = entry_id.and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id))
+    let matching_vid = entry_id
+        .and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id))
         .map(|vertex_id| to_real_vertex_id(*vertex_id, &data.deleted_synonyms));
     let (merge_dest, added) = existing_vertex
         .or(matching_vid)
@@ -203,8 +206,7 @@ pub fn add_factor_node(
             }));
             // Only full factorizations are cached or obtained via evaluate_as_u128.
             let mut has_cached = false;
-            let (last_known_status, factors_known_to_factordb)
-                    = if let Some(cached) = cached {
+            let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
                 entry_id = entry_id.or(cached.id);
                 has_cached = true;
                 let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
@@ -244,7 +246,9 @@ pub fn add_factor_node(
     if get_vertex(&data.divisibility_graph, merge_dest, &data.deleted_synonyms) != factor {
         merge_equivalent_expressions(data, root_vid, merge_dest, factor.clone(), http);
     }
-    if let Some(matching_vid) = matching_vid && merge_dest != matching_vid {
+    if let Some(matching_vid) = matching_vid
+        && merge_dest != matching_vid
+    {
         neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
             .into_iter()
             .for_each(|(neighbor_vid, divisibility)| match divisibility {
@@ -532,21 +536,9 @@ pub async fn find_and_submit_factors(
         }
         let root_factor = Factor::from(digits_or_expr.clone()).into();
         match known_factors.len() {
-            0 => add_factor_node(
-                &mut data,
-                root_factor,
-                None,
-                Some(id),
-                http,
-            ),
+            0 => add_factor_node(&mut data, root_factor, None, Some(id), http),
             _ => {
-                let (root_node, _) = add_factor_node(
-                    &mut data,
-                    root_factor,
-                    None,
-                    Some(id),
-                    http,
-                );
+                let (root_node, _) = add_factor_node(&mut data, root_factor, None, Some(id), http);
                 digits_or_expr_full.push(root_node);
                 let root_factors = UpToDate(if known_factors.len() > 1 {
                     known_factors
