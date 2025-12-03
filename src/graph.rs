@@ -311,10 +311,16 @@ fn neighbor_vids(
 #[inline(always)]
 pub fn to_real_vertex_id(
     mut vertex_id: VertexId,
-    deleted_synonyms: &BTreeMap<VertexId, VertexId>,
+    deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
 ) -> VertexId {
-    while let Some(synonym) = deleted_synonyms.get(&vertex_id).copied() {
-        vertex_id = synonym;
+    let mut synonyms_to_forward = Vec::new();
+    while let Some(synonym) = deleted_synonyms.get(&vertex_id) {
+        synonyms_to_forward.push(*synonym);
+        vertex_id = to_real_vertex_id(*synonym, deleted_synonyms);
+    }
+    synonyms_to_forward.pop(); // last one found points to the real vertex ID
+    for synonym in synonyms_to_forward {
+        deleted_synonyms.insert(vertex_id, synonym);
     }
     vertex_id
 }
@@ -325,10 +331,10 @@ pub fn get_vertex(
     vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>,
 ) -> Arc<Factor> {
-    divisibility_graph
+    Arc::clone(divisibility_graph
         .vertex(to_real_vertex_id(vertex_id, deleted_synonyms))
         .unwrap()
-        .clone()
+        .clone())
 }
 
 pub fn is_known_factor(data: &FactorData, factor_vid: VertexId, composite_vid: VertexId) -> bool {
