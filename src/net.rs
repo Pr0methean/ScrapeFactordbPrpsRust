@@ -530,7 +530,7 @@ impl FactorDbClient for RealFactorDbClient {
                             .into_iter()
                             .map(|(factor, _exponent)| Factor::from(factor).into())
                             .collect();
-                        factors.sort();
+                        factors.sort_unstable();
                         factors.dedup();
                         factors
                     };

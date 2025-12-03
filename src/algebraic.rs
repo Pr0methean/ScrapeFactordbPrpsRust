@@ -2185,7 +2185,7 @@ fn find_common_factors(expr1: Rc<Factor>, expr2: Rc<Factor>) -> Vec<Rc<Factor>> 
 pub fn find_unique_factors(expr: Rc<Factor>) -> Box<[Rc<Factor>]> {
     let mut factors = find_factors(expr.clone());
     factors.retain(|f| f.as_u128() != Some(1) && f.may_be_proper_divisor_of(&expr));
-    factors.sort();
+    factors.sort_unstable();
     factors.dedup();
     if factors.is_empty() {
         warn!("No factors found for expression {expr}");
@@ -2530,7 +2530,7 @@ mod tests {
     fn test_lucas() {
         let factors = lucas_factors(5040, true);
         let mut unique_factors = factors.clone();
-        unique_factors.sort();
+        unique_factors.sort_unstable();
         unique_factors.dedup();
         assert_eq!(factors.len(), unique_factors.len());
         println!("{}", factors.iter().join(", "));
@@ -2550,7 +2550,7 @@ mod tests {
             .filter(|f| if let Numeric(n) = **f { n > 7 } else { true })
             .collect::<Vec<_>>();
         let mut unique_larger_factors = larger_factors.clone();
-        unique_larger_factors.sort();
+        unique_larger_factors.sort_unstable();
         unique_larger_factors.dedup();
         assert_eq!(larger_factors.len(), unique_larger_factors.len());
         println!("{}", factors.iter().join(", "));
