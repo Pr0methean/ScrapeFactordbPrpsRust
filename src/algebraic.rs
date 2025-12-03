@@ -1067,7 +1067,7 @@ pub fn to_like_powers(left: Rc<Factor>, right: Rc<Factor>, subtract: bool) -> Ve
     let mut new_right = simplify(right.clone());
     for term in [&mut new_left, &mut new_right] {
         let exponent_u128 = match &**term {
-            Factor::Power { exponent, .. } => evaluate_as_u128(&exponent),
+            Factor::Power { exponent, .. } => evaluate_as_u128(exponent),
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
@@ -1108,8 +1108,8 @@ pub fn to_like_powers(left: Rc<Factor>, right: Rc<Factor>, subtract: bool) -> Ve
             if factor == 2 {
                 results.extend(repeat_n(
                     simplify(AddSub {
-                        left: left_root.clone().into(),
-                        right: right_root.clone().into(),
+                        left: left_root.clone(),
+                        right: right_root.clone(),
                         subtract: false,
                     }.into()),
                     factor_power,
@@ -1117,8 +1117,8 @@ pub fn to_like_powers(left: Rc<Factor>, right: Rc<Factor>, subtract: bool) -> Ve
             }
             results.extend(repeat_n(
                 simplify(AddSub {
-                    left: left_root.into(),
-                    right: right_root.into(),
+                    left: left_root,
+                    right: right_root,
                     subtract,
                 }.into()),
                 factor_power,
@@ -1193,7 +1193,7 @@ pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>,
                         subtract: true,
                     }.into())
                 }.into()))
-            } else if let Some(exponent_u128) = evaluate_as_u128(&exponent)
+            } else if let Some(exponent_u128) = evaluate_as_u128(exponent)
                 && let Ok(divisor_root) = nth_root_exact(divisor, exponent_u128)
             {
                 match div_exact(base.clone(), divisor_root) {
@@ -1257,7 +1257,7 @@ pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>,
                 while let Some(divisor) = divisor.div_exact(new_term) {
                     new_term -= 1;
                     if divisor == 1 {
-                        return Ok(simplify(Factor::Factorial(Numeric(new_term).into()).into()).into());
+                        return Ok(simplify(Factor::Factorial(Numeric(new_term).into()).into()));
                     }
                 }
                 Err(product)
@@ -1311,7 +1311,7 @@ pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>,
                 _ => None,
             };
             if reduced && let Some(d_reduced) = d_reduced {
-                div_exact(Factor::from(n_reduced).into(), Factor::from(d_reduced).into())
+                div_exact(Factor::from(n_reduced).into(), d_reduced.into())
             } else {
                 Err(product)
             }
@@ -1324,8 +1324,8 @@ pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>,
             if let Ok(new_left) = div_exact(left.clone(), divisor.clone())
                     && let Ok(new_right) = div_exact(right.clone(), divisor) {
                 Ok(simplify(AddSub {
-                    left: new_left.into(),
-                    right: new_right.into(),
+                    left: new_left,
+                    right: new_right,
                     subtract,
                 }.into()))
             } else {
@@ -1389,7 +1389,7 @@ pub fn nth_root_exact(factor: Rc<Factor>, root: u128) -> Result<Rc<Factor>, Rc<F
                 .collect::<Option<Vec<_>>>()
                 .ok_or(factor)?;
             return Ok(simplify(Factor::Divide {
-                left: new_left.into(),
+                left: new_left,
                 right: new_right,
             }.into()));
         }
@@ -1425,7 +1425,7 @@ fn estimate_log10_internal(expr: Rc<Factor>) -> (u128, u128) {
         }
         Factor::Fibonacci(ref x) | Factor::Lucas(ref x) => {
             // Fibonacci or Lucas number
-            let Some(term_number) = evaluate_as_u128(&x) else {
+            let Some(term_number) = evaluate_as_u128(x) else {
                 warn!("Could not parse term number of a Lucas number: {}", x);
                 return (0, u128::MAX);
             };
@@ -1451,7 +1451,7 @@ fn estimate_log10_internal(expr: Rc<Factor>) -> (u128, u128) {
         }
         Factor::Primorial(ref input) => {
             // primorial
-            let Some(input) = evaluate_as_u128(&input) else {
+            let Some(input) = evaluate_as_u128(input) else {
                 warn!("Could not parse input to a factorial: {}", input);
                 return (0, u128::MAX);
             };
@@ -1477,10 +1477,10 @@ fn estimate_log10_internal(expr: Rc<Factor>) -> (u128, u128) {
             (50, u128::MAX)
         }
         Factor::Power { ref base, ref exponent } => {
-            let Some(exponent) = evaluate_as_u128(&exponent) else {
+            let Some(exponent) = evaluate_as_u128(exponent) else {
                 return (0, u128::MAX);
             };
-            if let Some(base) = evaluate_as_u128(&base) {
+            if let Some(base) = evaluate_as_u128(base) {
                 let lower = (base as f64).log10().next_down() * exponent as f64;
                 let upper = (base as f64).log10().next_up() * (exponent as f64).next_up();
                 (lower.floor() as u128, upper.ceil() as u128)
@@ -1620,19 +1620,19 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Rc<Factor>, modulus: u128) -> Option
         }
         Factor::Power { ref base, ref exponent } => {
             let base_mod = evaluate_modulo_as_u128(base.clone(), modulus)?;
-            let exp = evaluate_as_u128(&exponent)?;
+            let exp = evaluate_as_u128(exponent)?;
             Some(base_mod.powm(exp, &modulus))
         }
         Factor::Fibonacci(ref term) => {
-            let term = evaluate_as_u128(&term)?;
+            let term = evaluate_as_u128(term)?;
             Some(pisano(term, vec![0, 1, 1], modulus))
         }
         Factor::Lucas(ref term) => {
-            let term = evaluate_as_u128(&term)?;
+            let term = evaluate_as_u128(term)?;
             Some(pisano(term, vec![2, 1], modulus))
         }
         Factor::Factorial(ref term) => {
-            let term = evaluate_as_u128(&term)?;
+            let term = evaluate_as_u128(term)?;
             if term >= modulus {
                 return Some(0);
             }
@@ -1646,7 +1646,7 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Rc<Factor>, modulus: u128) -> Option
             Some(result)
         }
         Factor::Primorial(ref term) => {
-            let term = evaluate_as_u128(&term)?;
+            let term = evaluate_as_u128(term)?;
             if term >= modulus {
                 return Some(0);
             }
@@ -1755,7 +1755,7 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
                 new_left
             } else {
                 Factor::Divide {
-                    left: new_left.into(),
+                    left: new_left,
                     right: new_right,
                 }.into()
             }
@@ -1780,8 +1780,8 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
                 Numeric(0) => Factor::one(),
                 Numeric(1) => new_base,
                 _ => Factor::Power {
-                    base: new_base.into(),
-                    exponent: new_exponent.into(),
+                    base: new_base,
+                    exponent: new_exponent,
                 }.into(),
             }
         }
@@ -1937,7 +1937,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
         Factor::BigNumber(ref expr) => factor_big_num(expr.clone()),
         Factor::Lucas(ref term) => {
             // Lucas number
-            let Some(term_number) = evaluate_as_u128(&term) else {
+            let Some(term_number) = evaluate_as_u128(term) else {
                 warn!("Could not parse term number of a Lucas number: {}", term);
                 return vec![expr];
             };
@@ -1945,7 +1945,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
         }
         Factor::Fibonacci(ref term) => {
             // Fibonacci number
-            let Some(term_number) = evaluate_as_u128(&term) else {
+            let Some(term_number) = evaluate_as_u128(term) else {
                 warn!(
                     "Could not parse term number of a Fibonacci number: {}",
                     term
@@ -1956,7 +1956,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
         }
         Factor::Factorial(ref term) => {
             // factorial
-            let Some(input) = evaluate_as_u128(&term) else {
+            let Some(input) = evaluate_as_u128(term) else {
                 warn!("Could not parse input to factorial function: {}", term);
                 return vec![expr];
             };
@@ -1968,7 +1968,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
         }
         Factor::Primorial(ref term) => {
             // primorial
-            let Some(input) = evaluate_as_u128(&term) else {
+            let Some(input) = evaluate_as_u128(term) else {
                 warn!("Could not parse input to primorial function: {}", term);
                 return vec![expr];
             };
@@ -1991,7 +1991,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
             }
         },
         Factor::Power { ref base, ref exponent } => {
-            let power = evaluate_as_u128(&exponent)
+            let power = evaluate_as_u128(exponent)
                 .unwrap_or(MAX_REPEATS)
                 .min(MAX_REPEATS) as usize;
             let base_factors = find_factors(base.clone());
@@ -2052,7 +2052,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
         Multiply { ref terms } => {
             // multiplication
             let mut factors = Vec::new();
-            for term in terms.into_iter() {
+            for term in terms.iter() {
                 let term_factors = find_factors(term.clone());
                 if term_factors.is_empty() {
                     factors.push(term.clone());
