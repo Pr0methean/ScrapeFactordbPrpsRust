@@ -1,4 +1,5 @@
 #![allow(stable_features)]
+#![allow(unexpected_cfgs)] // for Tokio's local flavor
 #![feature(duration_constructors_lite)]
 #![feature(float_gamma)]
 #![feature(deque_extend_front)]

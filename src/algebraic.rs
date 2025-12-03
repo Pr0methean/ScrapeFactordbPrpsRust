@@ -1137,7 +1137,8 @@ pub fn to_like_powers_recursive_dedup(
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
-            match simplify(factor) {
+            let factor = simplify(factor);
+            match *factor {
                 AddSub {
                     left: ref factor_left,
                     right: ref factor_right,
@@ -1698,7 +1699,7 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
     }
     match *expr {
         Multiply { ref terms } => {
-            let new_terms = count_frequencies(terms
+            let mut new_terms = count_frequencies(terms
                 .iter()
                 .flat_map(|term| {
                     if let Multiply { ref terms } = **term {
@@ -1798,7 +1799,7 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
             match left.cmp(&right) {
                 Ordering::Less => {}
                 Ordering::Equal => return if subtract {
-                        Numeric(0)
+                        Numeric(0).into()
                     } else {
                         simplify(Multiply {
                             terms: vec![left, Factor::two()],
