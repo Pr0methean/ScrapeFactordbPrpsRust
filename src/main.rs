@@ -549,7 +549,7 @@ async fn main() -> anyhow::Result<()> {
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_buffer_task: JoinHandle<()> =
-        task::spawn_local(async_backtrace::location!().frame(async move {
+        task::spawn(async_backtrace::location!().frame(async move {
             queue_composites(&http_clone, &c_sender_clone, c_digits)
                 .await
                 .await
@@ -575,7 +575,7 @@ async fn main() -> anyhow::Result<()> {
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
     let mut do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
-    task::spawn_local(async_backtrace::location!().frame(async move {
+    task::spawn(async_backtrace::location!().frame(async move {
         info!("do_checks task starting");
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let mut next_unknown_attempt = Instant::now();
@@ -906,7 +906,7 @@ async fn main() -> anyhow::Result<()> {
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
     let mut u_http = http.clone();
-    task::spawn_local(async_backtrace::location!().frame(async move {
+    task::spawn(async_backtrace::location!().frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
