@@ -19,7 +19,7 @@ use std::hash::Hash;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::{swap, take};
-use std::rc::Rc;
+use std::sync::Arc;
 
 static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     &[0],
@@ -590,25 +590,25 @@ pub enum Factor {
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
     AddSub {
-        left: Rc<Factor>,
-        right: Rc<Factor>,
+        left: Arc<Factor>,
+        right: Arc<Factor>,
         subtract: bool,
     },
     Multiply {
-        terms: Vec<Rc<Factor>>,
+        terms: Vec<Arc<Factor>>,
     },
     Divide {
-        left: Rc<Factor>,
-        right: Vec<Rc<Factor>>,
+        left: Arc<Factor>,
+        right: Vec<Arc<Factor>>,
     },
     Power {
-        base: Rc<Factor>,
-        exponent: Rc<Factor>,
+        base: Arc<Factor>,
+        exponent: Arc<Factor>,
     },
-    Fibonacci(Rc<Factor>),
-    Lucas(Rc<Factor>),
-    Factorial(Rc<Factor>),
-    Primorial(Rc<Factor>),
+    Fibonacci(Arc<Factor>),
+    Lucas(Arc<Factor>),
+    Factorial(Arc<Factor>),
+    Primorial(Arc<Factor>),
 }
 
 impl Default for Factor {
@@ -660,7 +660,7 @@ peg::parser! {
                     output
                 }
       --
-      "M" x:@ { Factor::AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: Rc::new(x) }.into(), right: Factor::one(), subtract: true } }
+      "M" x:@ { Factor::AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: Arc::new(x) }.into(), right: Factor::one(), subtract: true } }
       --
       "I" x:@ { Factor::Fibonacci(x.into()) }
       --
@@ -677,22 +677,22 @@ peg::parser! {
 
 impl Factor {
     thread_local! {
-        static ONE: Rc<Factor> = Rc::new(Numeric(1));
-        static TWO: Rc<Factor> = Rc::new(Numeric(2));
-        static THREE: Rc<Factor> = Rc::new(Numeric(3));
-        static FIVE: Rc<Factor> = Rc::new(Numeric(5));
+        static ONE: Arc<Factor> = Arc::new(Numeric(1));
+        static TWO: Arc<Factor> = Arc::new(Numeric(2));
+        static THREE: Arc<Factor> = Arc::new(Numeric(3));
+        static FIVE: Arc<Factor> = Arc::new(Numeric(5));
     }
-    pub fn one() -> Rc<Factor> {
-        Factor::ONE.with(Rc::clone)
+    pub fn one() -> Arc<Factor> {
+        Factor::ONE.with(Arc::clone)
     }
-    pub fn two() -> Rc<Factor> {
-        Factor::TWO.with(Rc::clone)
+    pub fn two() -> Arc<Factor> {
+        Factor::TWO.with(Arc::clone)
     }
-    pub fn three() -> Rc<Factor> {
-        Factor::THREE.with(Rc::clone)
+    pub fn three() -> Arc<Factor> {
+        Factor::THREE.with(Arc::clone)
     }
-    pub fn five() -> Rc<Factor> {
-        Factor::FIVE.with(Rc::clone)
+    pub fn five() -> Arc<Factor> {
+        Factor::FIVE.with(Arc::clone)
     }
     #[inline(always)]
     pub fn known_id(&self) -> Option<u128> {
@@ -804,7 +804,7 @@ macro_rules! factor_from_str {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
-                    .map(|factor| Rc::unwrap_or_clone(simplify(factor.into())))
+                    .map(|factor| Arc::unwrap_or_clone(simplify(factor.into())))
                     .unwrap_or_else(|_| Factor::UnknownExpression(value.into()))
             }
         }
@@ -900,7 +900,7 @@ fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
 }
 
 #[inline]
-fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Rc<Factor>> {
+fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
     debug!("fibonacci_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
         SMALL_FIBONACCI_FACTORS[term as usize]
@@ -936,7 +936,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Rc<Factor>> {
 }
 
 #[inline]
-fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Rc<Factor>> {
+fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
     debug!("lucas_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_LUCAS_FACTORS.len() as u128 {
         SMALL_LUCAS_FACTORS[term as usize]
@@ -1061,7 +1061,7 @@ fn factor_power(a: u128, n: u128) -> (u128, u128) {
     (a, n)
 }
 
-pub fn to_like_powers(left: Rc<Factor>, right: Rc<Factor>, subtract: bool) -> Vec<Rc<Factor>> {
+pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> Vec<Arc<Factor>> {
     let mut possible_factors = BTreeMap::new();
     let mut new_left = simplify(left.clone());
     let mut new_right = simplify(right.clone());
@@ -1128,17 +1128,16 @@ pub fn to_like_powers(left: Rc<Factor>, right: Rc<Factor>, subtract: bool) -> Ve
     results
 }
 pub fn to_like_powers_recursive_dedup(
-    left: Rc<Factor>,
-    right: Rc<Factor>,
+    left: Arc<Factor>,
+    right: Arc<Factor>,
     subtract: bool,
-) -> Vec<Rc<Factor>> {
+) -> Vec<Arc<Factor>> {
     let mut results = Vec::new();
     let mut to_expand = count_frequencies(to_like_powers(left.clone(), right.clone(), subtract));
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
-            let factor = simplify(factor);
-            match *factor {
+            match *simplify(factor.clone()) {
                 AddSub {
                     left: ref factor_left,
                     right: ref factor_right,
@@ -1166,7 +1165,7 @@ pub fn to_like_powers_recursive_dedup(
     results
 }
 
-pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>, Rc<Factor>> {
+pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Factor>, Arc<Factor>> {
     if product == divisor {
         return Ok(Factor::one());
     }
@@ -1336,7 +1335,7 @@ pub fn div_exact(product: Rc<Factor>, divisor: Rc<Factor>) -> Result<Rc<Factor>,
     }
 }
 
-pub fn nth_root_exact(factor: Rc<Factor>, root: u128) -> Result<Rc<Factor>, Rc<Factor>> {
+pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Arc<Factor>> {
     if root == 1 {
         return Ok(factor);
     }
@@ -1399,7 +1398,7 @@ pub fn nth_root_exact(factor: Rc<Factor>, root: u128) -> Result<Rc<Factor>, Rc<F
 }
 
 #[inline(always)]
-pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Rc<Factor>> {
+pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Arc<Factor>> {
     debug_assert_ne!(input, 0);
     factorize128(input)
         .into_iter()
@@ -1408,7 +1407,7 @@ pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Rc<Factor>> {
 }
 
 #[inline(always)]
-fn estimate_log10_internal(expr: Rc<Factor>) -> (u128, u128) {
+fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
     debug!("estimate_log10_internal: {expr}");
     match *expr {
         Numeric(n) => match n {
@@ -1550,7 +1549,7 @@ fn estimate_log10_internal(expr: Rc<Factor>) -> (u128, u128) {
     }
 }
 
-pub(crate) fn estimate_log10(expr: Rc<Factor>) -> (u128, u128) {
+pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (u128, u128) {
     let (lbound, ubound) = estimate_log10_internal(expr.clone());
     if lbound > ubound {
         error!(
@@ -1562,7 +1561,7 @@ pub(crate) fn estimate_log10(expr: Rc<Factor>) -> (u128, u128) {
     }
 }
 
-pub(crate) fn evaluate_modulo_as_u128(expr: Rc<Factor>, modulus: u128) -> Option<u128> {
+pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Option<u128> {
     if let Some(eval) = evaluate_as_u128(&expr) {
         return Some(eval % modulus);
     }
@@ -1685,7 +1684,7 @@ fn pisano(term: u128, mut sequence: Vec<u128>, modulus: u128) -> u128 {
     }
 }
 
-fn factor_to_power(base: Rc<Factor>, exponent: u128) -> Rc<Factor> {
+fn factor_to_power(base: Arc<Factor>, exponent: u128) -> Arc<Factor> {
     match exponent {
         0 => Factor::one(),
         1 => base,
@@ -1693,7 +1692,7 @@ fn factor_to_power(base: Rc<Factor>, exponent: u128) -> Rc<Factor> {
     }
 }
 
-pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
+pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     if let Some(expr_u128) = evaluate_as_u128(&expr) {
         return Numeric(expr_u128).into();
     }
@@ -1738,7 +1737,7 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
                 new_left = left_left.clone();
             }
             let new_left = simplify(new_left);
-            let mut new_right: Vec<Rc<Factor>> = new_right
+            let mut new_right: Vec<Arc<Factor>> = new_right
                 .into_iter()
                 .flat_map(|term| match *term {
                     Numeric(1) => vec![],
@@ -1931,7 +1930,7 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
 }
 
 #[inline(always)]
-fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
+fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
     info!("find_factors: {expr}");
     if let Some(n) = evaluate_as_u128(&expr) {
         return find_factors_of_u128(n);
@@ -2074,7 +2073,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
             let mut factors = Vec::with_capacity(SMALL_PRIMES.len());
             for prime in SMALL_PRIMES {
                 let mut power = prime as u128;
-                let prime_factor: Rc<Factor> = Numeric(prime as u128).into();
+                let prime_factor: Arc<Factor> = Numeric(prime as u128).into();
                 while evaluate_modulo_as_u128(expr.clone(), power) == Some(0) {
                     factors.push(prime_factor.clone());
                     let Some(new_power) = power.checked_mul(prime as u128) else {
@@ -2091,7 +2090,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
             let cofactors: Vec<_> = factors
                 .iter()
                 .unique()
-                .flat_map(|factor: &Rc<Factor>| {
+                .flat_map(|factor: &Arc<Factor>| {
                     div_exact(expr.clone(), factor.clone())
                     .ok()
                 })
@@ -2103,7 +2102,7 @@ fn find_factors(expr: Rc<Factor>) -> Vec<Rc<Factor>> {
     }
 }
 
-fn factor_big_num(expr: BigNumber) -> Vec<Rc<Factor>> {
+fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
     let mut factors = Vec::new();
     let mut expr_short = expr.as_ref();
     while expr_short != "0"
@@ -2161,7 +2160,7 @@ fn factor_big_num(expr: BigNumber) -> Vec<Rc<Factor>> {
 }
 
 #[inline]
-fn find_common_factors(expr1: Rc<Factor>, expr2: Rc<Factor>) -> Vec<Rc<Factor>> {
+fn find_common_factors(expr1: Arc<Factor>, expr2: Arc<Factor>) -> Vec<Arc<Factor>> {
     let num1 = evaluate_as_u128(&expr1);
     if num1 == Some(1) {
         return vec![];
@@ -2186,7 +2185,7 @@ fn find_common_factors(expr1: Rc<Factor>, expr2: Rc<Factor>) -> Vec<Rc<Factor>> 
 
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
-pub fn find_unique_factors(expr: Rc<Factor>) -> Box<[Rc<Factor>]> {
+pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
     let mut factors = find_factors(expr.clone());
     factors.retain(|f| f.as_u128() != Some(1) && f.may_be_proper_divisor_of(&expr));
     factors.sort_unstable();
@@ -2205,7 +2204,7 @@ pub fn find_unique_factors(expr: Rc<Factor>) -> Box<[Rc<Factor>]> {
 #[derive(Clone, Default, Debug)]
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
-    pub factors: Box<[Rc<Factor>]>,
+    pub factors: Box<[Arc<Factor>]>,
     pub id: Option<u128>,
 }
 
@@ -2234,7 +2233,6 @@ impl NumberStatusExt for Option<NumberStatus> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::rc::Rc;
     use crate::algebraic::Factor::Numeric;
     use crate::algebraic::{
         Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
@@ -2243,9 +2241,10 @@ mod tests {
     };
     use itertools::Itertools;
     use std::iter::repeat_n;
+    use std::sync::Arc;
 
     fn find_factors(input: &str) -> Vec<Factor> {
-        crate::algebraic::find_factors(Factor::from(input).into()).into_iter().map(Rc::unwrap_or_clone).collect()
+        crate::algebraic::find_factors(Factor::from(input).into()).into_iter().map(Arc::unwrap_or_clone).collect()
     }
 
     #[test]
@@ -2462,7 +2461,7 @@ mod tests {
         // unsafe { backtrace_on_stack_overflow::enable() };
         let expr = repeat_n("(2^9+1)", 1 << 16).join("*");
         find_factors(&expr);
-        let expr = Rc::new(Factor::from(expr));
+        let expr = Arc::new(Factor::from(expr));
         crate::algebraic::estimate_log10_internal(expr.clone());
         evaluate_as_u128(&expr);
 

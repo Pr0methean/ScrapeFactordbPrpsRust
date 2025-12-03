@@ -1,5 +1,4 @@
 #![allow(stable_features)]
-#![allow(unexpected_cfgs)] // for Tokio's local flavor
 #![feature(duration_constructors_lite)]
 #![feature(float_gamma)]
 #![feature(deque_extend_front)]
@@ -15,7 +14,6 @@ mod graph;
 mod monitor;
 mod net;
 
-use alloc::rc::Rc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::NumberStatus::FullyFactored;
@@ -45,6 +43,7 @@ use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::signal::ctrl_c;
@@ -220,7 +219,7 @@ async fn check_composite(
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier {
     Id(u128),
-    Expression(Rc<Factor>),
+    Expression(Arc<Factor>),
 }
 
 impl Display for NumberSpecifier {
@@ -429,7 +428,7 @@ async fn queue_composites(
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
-#[tokio::main(flavor = "local")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
@@ -550,7 +549,7 @@ async fn main() -> anyhow::Result<()> {
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_buffer_task: JoinHandle<()> =
-        task::spawn_local(async_backtrace::location!().frame(async move {
+        task::spawn(async_backtrace::location!().frame(async move {
             queue_composites(&http_clone, &c_sender_clone, c_digits)
                 .await
                 .await
@@ -576,7 +575,7 @@ async fn main() -> anyhow::Result<()> {
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
     let mut do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
-    task::spawn_local(async_backtrace::location!().frame(async move {
+    task::spawn(async_backtrace::location!().frame(async move {
         info!("do_checks task starting");
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let mut next_unknown_attempt = Instant::now();
@@ -907,7 +906,7 @@ async fn main() -> anyhow::Result<()> {
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
     let mut u_http = http.clone();
-    task::spawn_local(async_backtrace::location!().frame(async move {
+    task::spawn(async_backtrace::location!().frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
