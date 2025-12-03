@@ -1689,7 +1689,7 @@ fn factor_to_power(base: Rc<Factor>, exponent: u128) -> Rc<Factor> {
     match exponent {
         0 => Factor::one(),
         1 => base,
-        _ => Factor::Power { base, exponent: Numeric(exponent).into() }.into()
+        _ => simplify(Factor::Power { base, exponent: Numeric(exponent).into() }.into())
     }
 }
 
@@ -1717,9 +1717,9 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
                     let (factor, power) = new_terms.into_iter().next().unwrap();
                     factor_to_power(factor, power as u128)
                 },
-                _ => simplify(Multiply {
+                _ => Multiply {
                     terms: new_terms.into_iter().map(|(factor, power)| factor_to_power(factor, power as u128)).collect(),
-                }.into()),
+                }.into(),
             }
         }
         Factor::Divide {
