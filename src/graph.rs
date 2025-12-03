@@ -47,6 +47,8 @@ pub struct FactorData {
     pub divisibility_graph: DivisibilityGraph,
     pub deleted_synonyms: BTreeMap<VertexId, VertexId>,
     pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
+    pub vertex_id_by_expr: BTreeMap<Rc<Factor>, VertexId>,
+    pub vertex_id_by_entry_id: BTreeMap<u128, VertexId>
 }
 
 pub fn rule_out_divisibility(data: &mut FactorData, nonfactor: VertexId, dest: VertexId) {
@@ -174,25 +176,16 @@ pub fn add_factor_node(
     mut entry_id: Option<u128>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
-    let (existing_vertex, matching_vertices) = data
-        .divisibility_graph
-        .vertices()
-        .filter(|v| {
-            // Existing vertices may be missing facts, because add_factors_to_graph calls
-            // add_factor_node on subfactors to generate the initial number_facts_map entry
-            *v.attr == factor
-                || (entry_id.is_some()
-                    && facts_of(&data.number_facts_map, v.id, &data.deleted_synonyms)
-                        .is_some_and(|facts| facts.entry_id == entry_id))
-        })
-        .partition::<Vec<_>, _>(|v| *v.attr == factor);
-    let existing_vertex = existing_vertex.first().map(|v| v.id);
-    let matching_vertices: Vec<_> = matching_vertices.into_iter().map(|v| v.id).collect();
+    let existing_vertex = data.vertex_id_by_expr.get(&factor)
+        .map(|vertex_id| to_real_vertex_id(*vertex_id, &data.deleted_synonyms));
+    let matching_vid = entry_id.and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id))
+        .map(|vertex_id| to_real_vertex_id(*vertex_id, &data.deleted_synonyms));
     let (merge_dest, added) = existing_vertex
-        .or_else(|| matching_vertices.first().copied())
+        .or(matching_vid)
         .map(|x| (x, false))
         .unwrap_or_else(|| {
             let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
+            data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
             let eval_as_u128 = evaluate_as_u128(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(factor.clone());
             let specifier = as_specifier(factor_vid, data, None);
@@ -208,12 +201,12 @@ pub fn add_factor_node(
                     id: Numeric(eval).known_id(),
                 }
             }));
-
             // Only full factorizations are cached or obtained via evaluate_as_u128.
-            let has_cached = cached.is_some();
-
-            let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
+            let mut has_cached = false;
+            let (last_known_status, factors_known_to_factordb)
+                    = if let Some(cached) = cached {
                 entry_id = entry_id.or(cached.id);
+                has_cached = true;
                 let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
                 for subfactor in cached.factors {
                     let (subfactor_vid, _) = if subfactor == factor {
@@ -245,13 +238,13 @@ pub fn add_factor_node(
             );
             (factor_vid, true)
         });
+    if let Some(entry_id) = entry_id {
+        data.vertex_id_by_entry_id.insert(entry_id, merge_dest);
+    }
     if get_vertex(&data.divisibility_graph, merge_dest, &data.deleted_synonyms) != factor {
         merge_equivalent_expressions(data, root_vid, merge_dest, factor.clone(), http);
     }
-    for matching_vid in matching_vertices {
-        if matching_vid == merge_dest {
-            continue;
-        }
+    if let Some(matching_vid) = matching_vid && merge_dest != matching_vid {
         neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
             .into_iter()
             .for_each(|(neighbor_vid, divisibility)| match divisibility {
@@ -516,6 +509,8 @@ pub async fn find_and_submit_factors(
         divisibility_graph: Graph::new_directed_in(AdjMatrix::new()).stabilize(),
         deleted_synonyms: BTreeMap::new(),
         number_facts_map: BTreeMap::new(),
+        vertex_id_by_entry_id: BTreeMap::new(),
+        vertex_id_by_expr: BTreeMap::new(),
     };
     let (root_vid, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
         add_factor_node(
