@@ -1,15 +1,12 @@
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{
-    Factor, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse, estimate_log10,
-    evaluate_as_u128, find_factors_of_u128, find_unique_factors,
-};
+use crate::net::NumberStatus::{FullyFactored, Prime};
+use crate::algebraic::{estimate_log10, evaluate_as_numeric, find_factors_of_numeric, find_unique_factors, Factor, NumericFactor};
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
-use crate::net::FactorDbClient;
-use crate::{FAILED_U_SUBMISSIONS_OUT, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use crate::net::{FactorDbClient, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse};
+use crate::{NumberLength, NumberSpecifier, FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use async_backtrace::framed;
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
@@ -28,6 +25,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
 use std::sync::Arc;
+
+pub type EntryId = u128;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
@@ -48,7 +47,7 @@ pub struct FactorData {
     pub deleted_synonyms: BTreeMap<VertexId, VertexId>,
     pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
     pub vertex_id_by_expr: BTreeMap<Arc<Factor>, VertexId>,
-    pub vertex_id_by_entry_id: BTreeMap<u128, VertexId>,
+    pub vertex_id_by_entry_id: BTreeMap<EntryId, VertexId>,
 }
 
 pub fn rule_out_divisibility(data: &mut FactorData, nonfactor: VertexId, dest: VertexId) {
@@ -173,7 +172,7 @@ pub fn add_factor_node(
     data: &mut FactorData,
     factor: Arc<Factor>,
     root_vid: Option<VertexId>,
-    mut entry_id: Option<u128>,
+    mut entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
     let existing_vertex = data
@@ -189,11 +188,11 @@ pub fn add_factor_node(
         .unwrap_or_else(|| {
             let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
             data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
-            let eval_as_u128 = evaluate_as_u128(&factor);
+            let factor_numeric = evaluate_as_numeric(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(factor.clone());
             let specifier = as_specifier(factor_vid, data, None);
-            let cached = http.cached_factors(specifier).or(eval_as_u128.map(|eval| {
-                let factors = find_factors_of_u128(eval);
+            let cached = http.cached_factors(specifier).or(factor_numeric.map(|eval| {
+                let factors = find_factors_of_numeric(eval);
                 ProcessedStatusApiResponse {
                     status: Some(if factors.len() == 1 {
                         Prime
@@ -204,7 +203,7 @@ pub fn add_factor_node(
                     id: Numeric(eval).known_id(),
                 }
             }));
-            // Only full factorizations are cached or obtained via evaluate_as_u128.
+            // Only full factorizations are cached or obtained via evaluate_as_numeric.
             let mut has_cached = false;
             let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
                 entry_id = entry_id.or(cached.id);
@@ -229,7 +228,7 @@ pub fn add_factor_node(
                 NumberFacts {
                     last_known_status,
                     factors_known_to_factordb,
-                    eval_as_u128,
+                    numeric_value: factor_numeric,
                     lower_bound_log10,
                     upper_bound_log10,
                     entry_id,
@@ -385,10 +384,10 @@ impl FactorsKnownToFactorDb {
 pub struct NumberFacts {
     last_known_status: Option<NumberStatus>,
     factors_known_to_factordb: FactorsKnownToFactorDb,
-    eval_as_u128: Option<u128>,
-    lower_bound_log10: u128,
-    upper_bound_log10: u128,
-    pub(crate) entry_id: Option<u128>,
+    numeric_value: Option<NumericFactor>,
+    lower_bound_log10: NumberLength,
+    upper_bound_log10: NumberLength,
+    pub(crate) entry_id: Option<EntryId>,
     checked_for_listed_algebraic: bool,
     checked_in_factor_finder: bool,
     expression_form_checked_in_factor_finder: bool,
@@ -479,7 +478,7 @@ impl NumberFacts {
         NumberFacts {
             lower_bound_log10: self.lower_bound_log10.max(other.lower_bound_log10),
             upper_bound_log10: self.upper_bound_log10.min(other.upper_bound_log10),
-            eval_as_u128: self.eval_as_u128.or(other.eval_as_u128),
+            numeric_value: self.numeric_value.or(other.numeric_value),
             entry_id: self.entry_id.or(other.entry_id),
             checked_for_listed_algebraic: self.checked_for_listed_algebraic
                 || other.checked_for_listed_algebraic,
@@ -513,7 +512,7 @@ impl NumberFacts {
 #[framed]
 pub async fn find_and_submit_factors(
     http: &mut impl FactorDbClient,
-    id: u128,
+    id: EntryId,
     digits_or_expr: HipStr<'static>,
     skip_looking_up_known: bool,
 ) -> bool {
@@ -618,7 +617,7 @@ pub async fn find_and_submit_factors(
         let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         if factor
-            .as_str_non_u128()
+            .as_str_non_numeric()
             .is_some_and(|expr| expr.contains("..."))
             && facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
                 .expect("Tried to check for entry_id for a number not entered in number_facts_map")
@@ -737,7 +736,7 @@ pub async fn find_and_submit_factors(
         // later
         let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         if factor
-            .as_str_non_u128()
+            .as_str_non_numeric()
             .is_some_and(|expr| expr.contains("..."))
         {
             factors_to_submit.push_back(factor_vid);
@@ -795,7 +794,7 @@ pub async fn find_and_submit_factors(
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 continue;
             }
-            // u128s are already fully factored
+            // NumericFactor entries are already fully factored
             if let Numeric(_) = *cofactor {
                 debug!(
                     "{id}: Skipping submission of {factor} to {cofactor} because the number is too small"
@@ -860,7 +859,7 @@ pub async fn find_and_submit_factors(
             }
             let cofactor_upper_bound = cofactor_facts
                 .upper_bound_log10
-                .saturating_sub(known_factors_upper_bound(&data, cofactor_vid));
+                .saturating_sub(known_factors_product_log10_upper_bound(&data, cofactor_vid));
             if factor_facts.lower_bound_log10 > cofactor_upper_bound {
                 debug!(
                     "Skipping submission of {factor} to {cofactor} because {cofactor} is \
@@ -882,7 +881,7 @@ pub async fn find_and_submit_factors(
             // however, this doesn't affect the divisibility graph because the ID may be found
             // later
             if cofactor
-                .as_str_non_u128()
+                .as_str_non_numeric()
                 .is_some_and(|expr| expr.contains("..."))
                 && facts_of(&data.number_facts_map, cofactor_vid, &data.deleted_synonyms)
                 .expect("Tried to check for entry_id for a cofactor not entered in number_facts_map")
@@ -993,7 +992,7 @@ pub async fn find_and_submit_factors(
     {
         let factor = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);
         if factor
-            .as_str_non_u128()
+            .as_str_non_numeric()
             .is_some_and(|expr| expr.contains("..."))
         {
             debug!(
@@ -1031,7 +1030,7 @@ fn vertex_ids_except<T: FromIterator<VertexId>>(data: &FactorData, root_vid: Ver
         .collect::<T>()
 }
 
-fn known_factors_upper_bound(data: &FactorData, cofactor_vid: VertexId) -> u128 {
+fn known_factors_product_log10_upper_bound(data: &FactorData, cofactor_vid: VertexId) -> NumberLength {
     neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
         .into_iter()
         .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &data.deleted_synonyms)
@@ -1306,7 +1305,7 @@ fn add_factor_finder_factor_vertices_to_graph(
     data: &mut FactorData,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
-    entry_id: Option<u128>,
+    entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     find_unique_factors(

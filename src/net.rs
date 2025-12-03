@@ -1,19 +1,18 @@
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::NumberStatus::{
-    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
-};
-use crate::algebraic::{NumberStatusExt, ProcessedStatusApiResponse, find_factors_of_u128};
+use crate::algebraic::{find_factors_of_numeric, NumericFactor};
 use crate::monitor::Monitor;
 use crate::{
-    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
-    MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
+    FactorSubmission, ReportFactorResult, EXIT_TIME, FAILED_U_SUBMISSIONS_OUT,
+    MAX_CPU_BUDGET_TENTHS, MAX_ID_EQUAL_TO_VALUE, SUBMIT_FACTOR_MAX_ATTEMPTS,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use core::cell::RefCell;
+use core::fmt::{Display, Formatter};
+use std::cmp;
 use curl::easy::{Easy2, Handler, WriteError};
 use futures_util::TryFutureExt;
 use governor::middleware::StateInformationMiddleware;
@@ -32,15 +31,17 @@ use std::io::Write;
 use std::mem::swap;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::block_in_place;
-use tokio::time::{Instant, sleep, sleep_until};
+use tokio::time::{sleep, sleep_until, Instant};
 use urlencoding::encode;
+use crate::graph::EntryId;
+use crate::net::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -91,8 +92,8 @@ pub trait FactorDbClient {
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
-    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Arc<Factor>>;
+    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (EntryId, &'a str)>;
+    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Arc<Factor>>;
     async fn known_factors_as_digits(
         &mut self,
         id: NumberSpecifier,
@@ -102,7 +103,7 @@ pub trait FactorDbClient {
     fn cached_factors(&self, id: NumberSpecifier) -> Option<ProcessedStatusApiResponse>;
     async fn try_report_factor(&self, u_id: NumberSpecifier, factor: &Factor)
     -> ReportFactorResult;
-    async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult;
+    async fn report_numeric_factor(&self, u_id: EntryId, factor: NumericFactor) -> ReportFactorResult;
 }
 
 #[derive(Clone)]
@@ -118,9 +119,9 @@ pub struct RealFactorDbClient {
     id_and_expr_regex: Arc<Regex>,
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
-    by_id_cache: BasicCache<u128, ProcessedStatusApiResponse>,
+    by_id_cache: BasicCache<EntryId, ProcessedStatusApiResponse>,
     by_expr_cache: BasicCache<Arc<Factor>, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<u128, Arc<Factor>>,
+    expression_form_cache: BasicCache<EntryId, Arc<Factor>>,
 }
 
 pub struct ResourceLimits {
@@ -372,7 +373,7 @@ impl FactorDbClient for RealFactorDbClient {
             .await
     }
 
-    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)> {
+    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (EntryId, &'a str)> {
         self.id_and_expr_regex
             .captures_iter(haystack)
             .flat_map(move |capture| {
@@ -380,7 +381,7 @@ impl FactorDbClient for RealFactorDbClient {
                     error!("Failed to get ID for expression in\n{haystack}");
                     return None;
                 };
-                let id = match id.as_str().parse::<u128>() {
+                let id = match id.as_str().parse::<EntryId>() {
                     Ok(id) => id,
                     Err(e) => {
                         error!("Failed to parse ID {}: {e}", id.as_str());
@@ -398,7 +399,7 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Arc<Factor>> {
+    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Arc<Factor>> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
             return Some(Factor::from(entry_id).into());
         }
@@ -469,7 +470,7 @@ impl FactorDbClient for RealFactorDbClient {
                     factors,
                     id: recvd_id,
                 }) => {
-                    let recvd_id_parsed = recvd_id.to_string().parse::<u128>().ok();
+                    let recvd_id_parsed = recvd_id.to_string().parse::<EntryId>().ok();
                     debug!("Parsed received ID {recvd_id} as {recvd_id_parsed:?}");
                     info!(
                         "{recvd_id_parsed:?} ({id}): Fetched status of {status} and {} factors of sizes {}",
@@ -561,7 +562,7 @@ impl FactorDbClient for RealFactorDbClient {
             && let Numeric(n) = **x
         {
             debug!("Specially handling numeric expression {n}");
-            let factors = find_factors_of_u128(n).into_boxed_slice();
+            let factors = find_factors_of_numeric(n).into_boxed_slice();
             return Some(ProcessedStatusApiResponse {
                 status: Some(if factors.len() > 1 {
                     FullyFactored
@@ -639,7 +640,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[framed]
-    async fn report_numeric_factor(&self, u_id: u128, factor: u128) -> ReportFactorResult {
+    async fn report_numeric_factor(&self, u_id: EntryId, factor: NumericFactor) -> ReportFactorResult {
         for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
             let result = self.try_report_factor(Id(u_id), &Numeric(factor)).await;
             if result != OtherError {
@@ -661,3 +662,69 @@ impl FactorDbClient for RealFactorDbClient {
 }
 
 pub static CPU_TENTHS_SPENT_LAST_CHECK: AtomicUsize = AtomicUsize::new(MAX_CPU_BUDGET_TENTHS);
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub struct BigNumber(pub HipStr<'static>);
+
+impl PartialOrd for BigNumber {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for BigNumber {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.0
+            .len()
+            .cmp(&other.0.len())
+            .then_with(|| self.0.cmp(&other.0))
+    }
+}
+
+impl AsRef<str> for BigNumber {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
+impl Display for BigNumber {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl<T: Into<HipStr<'static>>> From<T> for BigNumber {
+    fn from(value: T) -> Self {
+        BigNumber(value.into())
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct ProcessedStatusApiResponse {
+    pub status: Option<NumberStatus>,
+    pub factors: Box<[Arc<Factor>]>,
+    pub id: Option<EntryId>,
+}
+
+pub trait NumberStatusExt {
+    fn is_known_fully_factored(&self) -> bool;
+}
+
+impl NumberStatusExt for Option<NumberStatus> {
+    #[inline]
+    fn is_known_fully_factored(&self) -> bool {
+        matches!(
+            self,
+            Some(NumberStatus::FullyFactored) | Some(NumberStatus::Prime)
+        )
+    }
+}
+
+#[derive(Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
+pub enum NumberStatus {
+    Unknown,
+    UnfactoredComposite,
+    PartlyFactoredComposite,
+    Prime, // includes PRP
+    FullyFactored,
+}

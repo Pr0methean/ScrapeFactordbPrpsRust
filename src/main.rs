@@ -16,9 +16,9 @@ mod net;
 
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
-use crate::algebraic::NumberStatus::FullyFactored;
-use crate::algebraic::NumberStatusExt;
-use crate::algebraic::{Factor, ProcessedStatusApiResponse};
+use net::NumberStatus::FullyFactored;
+use net::{NumberStatusExt, ProcessedStatusApiResponse};
+use crate::algebraic::Factor;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, ResourceLimits};
 use async_backtrace::framed;
@@ -28,10 +28,10 @@ use cuckoofilter::CuckooFilter;
 use futures_util::FutureExt;
 use hipstr::HipStr;
 use log::{error, info, warn};
-use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
+use net::{RealFactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{Rng, rng};
+use rand::{rng, Rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -39,7 +39,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZeroU32, NonZeroU128};
+use std::num::{NonZero, NonZeroU32};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
@@ -48,28 +48,31 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::mpsc::{channel, OwnedPermit, Sender};
+use tokio::sync::{oneshot, Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
+use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
 use tokio::{select, signal, task};
+use crate::graph::EntryId;
 
-const MAX_START: u128 = 100_000;
+pub type NumberLength = usize;
+
+const MAX_START: EntryId = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
-const PRP_RESULTS_PER_PAGE: u128 = 32;
-const MIN_DIGITS_IN_PRP: usize = 300;
+const PRP_RESULTS_PER_PAGE: usize = 32;
+const MIN_DIGITS_IN_PRP: NumberLength = 300;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = (4 * PRP_RESULTS_PER_PAGE) as usize;
 const U_TASK_BUFFER_SIZE: usize = 256;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 4096;
-const C_MIN_DIGITS: u128 = 92;
-const C_MAX_DIGITS: u128 = 300;
+const C_MIN_DIGITS: NumberLength = 92;
+const C_MAX_DIGITS: NumberLength = 300;
 
-const U_MIN_DIGITS: u128 = 2001;
-const U_MAX_DIGITS: u128 = 199_999;
+const U_MIN_DIGITS: NumberLength = 2001;
+const U_MAX_DIGITS: NumberLength = 199_999;
 const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 5;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
@@ -78,7 +81,7 @@ static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
-    id: u128,
+    id: EntryId,
     digits_or_expr: HipStr<'static>,
 }
 
@@ -100,12 +103,12 @@ impl Hash for CompositeCheckTask {
 struct NumberStatusApiResponse {
     id: Value,
     status: HipStr<'static>,
-    factors: Box<[(HipStr<'static>, u128)]>,
+    factors: Box<[(HipStr<'static>, EntryId)]>,
 }
 
 #[derive(Serialize)]
 struct FactorSubmission<'a> {
-    id: Option<u128>,
+    id: Option<EntryId>,
     number: Option<HipStr<'static>>,
     factor: &'a str,
 }
@@ -143,7 +146,7 @@ async fn composites_while_waiting(
 async fn check_composite(
     http: &mut impl FactorDbClient,
     c_filter: &mut CuckooFilter<DefaultHasher>,
-    id: u128,
+    id: EntryId,
     digits_or_expr: HipStr<'static>,
     return_permit: OwnedPermit<CompositeCheckTask>,
 ) -> bool {
@@ -178,7 +181,7 @@ async fn check_composite(
         let mut factors_submitted = false;
         let mut factors_to_dispatch = Vec::with_capacity(factors.len());
         for factor in factors {
-            if let Some(factor_str) = factor.as_str_non_u128() {
+            if let Some(factor_str) = factor.as_str_non_numeric() {
                 if graph::find_and_submit_factors(http, id, factor_str, true).await {
                     factors_submitted = true;
                 } else {
@@ -218,7 +221,7 @@ async fn check_composite(
 
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier {
-    Id(u128),
+    Id(EntryId),
     Expression(Arc<Factor>),
 }
 
@@ -244,7 +247,7 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
 
 #[inline(always)]
 #[framed]
-async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
+async fn prove_by_np1(id: EntryId, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
             format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}").into(),
@@ -255,7 +258,7 @@ async fn prove_by_np1(id: u128, http: &impl FactorDbClient) {
 
 #[inline(always)]
 #[framed]
-async fn prove_by_nm1(id: u128, http: &impl FactorDbClient) {
+async fn prove_by_nm1(id: EntryId, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
             format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}").into(),
@@ -353,7 +356,7 @@ async fn throttle_if_necessary(
 async fn queue_composites(
     http: &impl FactorDbClient,
     c_sender: &Sender<CompositeCheckTask>,
-    digits: Option<NonZeroU128>,
+    digits: Option<NonZero<NumberLength>>,
 ) -> JoinHandle<()> {
     let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
         0
@@ -489,27 +492,27 @@ async fn main() -> anyhow::Result<()> {
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
         .ok()
-        .and_then(|s| s.parse::<NonZeroU128>().ok());
+        .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
     let mut u_digits = std::env::var("U_DIGITS")
         .ok()
-        .and_then(|s| s.parse::<NonZeroU128>().ok());
+        .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
     let mut prp_start = std::env::var("PRP_START")
         .ok()
-        .and_then(|s| s.parse::<u128>().ok());
+        .and_then(|s| s.parse::<EntryId>().ok());
     if let Ok(run_number) = std::env::var("RUN") {
-        let run_number = run_number.parse::<u128>()?;
+        let run_number = run_number.parse::<EntryId>()?;
         if c_digits.is_none() {
             let mut c_digits_value =
-                C_MAX_DIGITS - ((run_number * 19) % (C_MAX_DIGITS - C_MIN_DIGITS + 2));
+                C_MAX_DIGITS - NumberLength::try_from((run_number * 19) % EntryId::try_from(C_MAX_DIGITS - C_MIN_DIGITS + 2)?)?;
             if c_digits_value == C_MIN_DIGITS - 1 {
                 c_digits_value = 1;
             }
             c_digits = Some(c_digits_value.try_into()?);
         }
         if u_digits.is_none() {
-            let u_digits_value =
-                U_MAX_DIGITS - ((run_number * 19793) % (U_MAX_DIGITS - U_MIN_DIGITS + 1));
-            u_digits = Some(u_digits_value.try_into()?);
+            let u_digits_value: NumberLength =
+                U_MIN_DIGITS + NumberLength::try_from((run_number * 19793) % EntryId::try_from(U_MAX_DIGITS - U_MIN_DIGITS + 1)?)?;
+            u_digits = Some(NumberLength::try_from(u_digits_value)?.try_into()?);
         }
         if prp_start.is_none() {
             prp_start = Some((run_number * 9973) % (MAX_START + 1));
@@ -665,7 +668,7 @@ async fn main() -> anyhow::Result<()> {
                     let mut np1_known_to_divide_3 = false;
                     let mut updated_nm1_factors = None;
                     if let Some(captures) = nm1_regex.captures(&bases_text) {
-                        let nm1_id = captures[1].parse::<u128>().unwrap();
+                        let nm1_id = captures[1].parse::<EntryId>().unwrap();
                         nm1_id_if_available = Some(nm1_id);
                         let ProcessedStatusApiResponse {
                             status,
@@ -681,9 +684,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             _ => {
-                                nm1_known_to_divide_2 = nm1_factors[0].as_u128() == Some(2);
-                                nm1_known_to_divide_3 = nm1_factors[0].as_u128() == Some(3)
-                                    || nm1_factors.get(1).and_then(|factor| factor.as_u128()) == Some(3);
+                                nm1_known_to_divide_2 = nm1_factors[0].as_numeric() == Some(2);
+                                nm1_known_to_divide_3 = nm1_factors[0].as_numeric() == Some(3)
+                                    || nm1_factors.get(1).and_then(|factor| factor.as_numeric()) == Some(3);
                                 updated_nm1_factors = Some(nm1_factors);
                             }
                         }
@@ -692,7 +695,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     let mut updated_np1_factors = None;
                     if let Some(captures) = np1_regex.captures(&bases_text) {
-                        let np1_id = captures[1].parse::<u128>().unwrap();
+                        let np1_id = captures[1].parse::<EntryId>().unwrap();
                         np1_id_if_available = Some(np1_id);
                         let ProcessedStatusApiResponse {
                             status,
@@ -708,9 +711,9 @@ async fn main() -> anyhow::Result<()> {
                                 }
                             }
                             _ => {
-                                np1_known_to_divide_2 = np1_factors[0].as_u128() == Some(2);
-                                np1_known_to_divide_3 = np1_factors[0].as_u128() == Some(3)
-                                    || np1_factors.get(1).and_then(|factor| factor.as_u128()) == Some(3);
+                                np1_known_to_divide_2 = np1_factors[0].as_numeric() == Some(2);
+                                np1_known_to_divide_3 = np1_factors[0].as_numeric() == Some(3)
+                                    || np1_factors.get(1).and_then(|factor| factor.as_numeric()) == Some(3);
                                 updated_np1_factors = Some(np1_factors);
                             }
                         }
@@ -794,7 +797,7 @@ async fn main() -> anyhow::Result<()> {
                                 .factors
                             };
                             for factor in factors {
-                                if factor.as_str_non_u128().is_some() {
+                                if factor.as_str_non_numeric().is_some() {
                                     graph::find_and_submit_factors(&mut do_checks_http, id, factor.to_owned_string(), true)
                                         .await;
                                 }
@@ -1002,7 +1005,7 @@ async fn main() -> anyhow::Result<()> {
                     prp_permit.send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
                 }
-                prp_start += PRP_RESULTS_PER_PAGE;
+                prp_start += PRP_RESULTS_PER_PAGE as EntryId;
                 if prp_start > MAX_START {
                     info!("Restarting PRP search: reached maximum starting index");
                     prp_start = 0;
@@ -1023,4 +1026,4 @@ enum ReportFactorResult {
     OtherError,
 }
 
-const MAX_ID_EQUAL_TO_VALUE: u128 = 999_999_999_999_999_999;
+const MAX_ID_EQUAL_TO_VALUE: EntryId = 999_999_999_999_999_999;

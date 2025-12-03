@@ -1,5 +1,5 @@
 use crate::algebraic::Factor::{AddSub, Multiply, Numeric};
-use crate::{MAX_ID_EQUAL_TO_VALUE, write_bignum};
+use crate::{write_bignum, NumberLength, MAX_ID_EQUAL_TO_VALUE};
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -20,8 +20,10 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::{swap, take};
 use std::sync::Arc;
+use crate::graph::EntryId;
+use crate::net::BigNumber;
 
-static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
+static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
     &[],
     &[],
@@ -325,7 +327,7 @@ static SMALL_FIBONACCI_FACTORS: [&[u128]; 199] = [
     ],
 ];
 
-static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
+static SMALL_LUCAS_FACTORS: [&[NumericFactor]; 202] = [
     &[2],
     &[],
     &[3],
@@ -547,45 +549,12 @@ static SMALL_LUCAS_FACTORS: [&[u128]; 202] = [
     &[2, 2, 4021, 24994118449, 2686039424221, 940094299967491],
 ];
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct BigNumber(HipStr<'static>);
-
-impl PartialOrd for BigNumber {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for BigNumber {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0
-            .len()
-            .cmp(&other.0.len())
-            .then_with(|| self.0.cmp(&other.0))
-    }
-}
-
-impl AsRef<str> for BigNumber {
-    fn as_ref(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl Display for BigNumber {
-    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<T: Into<HipStr<'static>>> From<T> for BigNumber {
-    fn from(value: T) -> Self {
-        BigNumber(value.into())
-    }
-}
+pub type NumericFactor = u128;
+pub type SignedNumericFactor = i128;
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Factor {
-    Numeric(u128),
+    Numeric(NumericFactor),
     BigNumber(BigNumber),
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
@@ -620,7 +589,7 @@ impl Default for Factor {
 peg::parser! {
   pub grammar expression_parser() for str {
     pub rule number() -> Factor
-      = n:$(['0'..='9']+) { n.parse::<u128>().map(Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
+      = n:$(['0'..='9']+) { n.parse::<NumericFactor>().map(Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
 
     #[cache_left_rec]
     pub rule arithmetic() -> Factor = precedence!{
@@ -652,7 +621,7 @@ peg::parser! {
                     let hashes = y.len();
                     let mut output = x;
                     for _ in 0..(hashes >> 1) {
-                        output = Factor::Primorial(Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_u128(&output).unwrap() as u64)) as u128).into());
+                        output = Factor::Primorial(Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_numeric(&output).unwrap() as u64)) as NumericFactor).into());
                     }
                     if !hashes.is_multiple_of(2) {
                         output = Factor::Primorial(output.into())
@@ -660,7 +629,7 @@ peg::parser! {
                     output
                 }
       --
-      "M" x:@ { AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: Arc::new(x) }.into(), right: Factor::one(), subtract: true } }
+      "M" x:@ { AddSub { left: Factor::Power { base: Factor::two(), exponent: Arc::new(x) }.into(), right: Factor::one(), subtract: true } }
       --
       "I" x:@ { Factor::Fibonacci(x.into()) }
       --
@@ -695,7 +664,7 @@ impl Factor {
         Factor::FIVE.with(Arc::clone)
     }
     #[inline(always)]
-    pub fn known_id(&self) -> Option<u128> {
+    pub fn known_id(&self) -> Option<EntryId> {
         if let Numeric(n) = self
             && *n <= MAX_ID_EQUAL_TO_VALUE
         {
@@ -705,7 +674,7 @@ impl Factor {
         }
     }
     #[inline(always)]
-    pub fn as_u128(&self) -> Option<u128> {
+    pub fn as_numeric(&self) -> Option<NumericFactor> {
         match self {
             Numeric(n) => Some(*n),
             _ => None,
@@ -722,7 +691,7 @@ impl Factor {
     }
 
     #[inline(always)]
-    pub fn as_str_non_u128(&self) -> Option<HipStr<'static>> {
+    pub fn as_str_non_numeric(&self) -> Option<HipStr<'static>> {
         match self {
             Numeric(_) => None,
             Factor::BigNumber(n) => Some(n.0.clone()),
@@ -784,9 +753,9 @@ impl Factor {
     }
 }
 
-impl From<u128> for Factor {
+impl From<NumericFactor> for Factor {
     #[inline(always)]
-    fn from(value: u128) -> Self {
+    fn from(value: NumericFactor) -> Self {
         Numeric(value)
     }
 }
@@ -900,9 +869,9 @@ fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
 }
 
 #[inline]
-fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
+fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Arc<Factor>> {
     debug!("fibonacci_factors: term {term}, subset_recursion {subset_recursion}");
-    if term < SMALL_FIBONACCI_FACTORS.len() as u128 {
+    if term < SMALL_FIBONACCI_FACTORS.len() as NumericFactor {
         SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
             .copied()
@@ -919,13 +888,13 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
         let mut factors_of_term = factors_of_term
             .into_iter()
             .flat_map(|(key, value)| repeat_n(key, value))
-            .collect::<Vec<u128>>();
+            .collect::<Vec<NumericFactor>>();
         let full_set_size = factors_of_term.len();
         let subsets = power_multiset(&mut factors_of_term);
         let mut subset_factors = Vec::with_capacity(subsets.len());
         for subset in subsets {
             if subset.len() < full_set_size && !subset.is_empty() {
-                let product: u128 = subset.into_iter().product();
+                let product: NumericFactor = subset.into_iter().product();
                 if product > 2 {
                     subset_factors.push(fibonacci_factors(product, false));
                 }
@@ -936,9 +905,9 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
 }
 
 #[inline]
-fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
+fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Arc<Factor>> {
     debug!("lucas_factors: term {term}, subset_recursion {subset_recursion}");
-    if term < SMALL_LUCAS_FACTORS.len() as u128 {
+    if term < SMALL_LUCAS_FACTORS.len() as NumericFactor {
         SMALL_LUCAS_FACTORS[term as usize]
             .iter()
             .copied()
@@ -948,17 +917,17 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
         vec![Factor::Lucas(Numeric(term).into()).into()]
     } else {
         let mut factors_of_term = factorize128(term);
-        let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as u128;
+        let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as NumericFactor;
         let mut factors_of_term = factors_of_term
             .into_iter()
             .flat_map(|(key, value)| repeat_n(key, value))
-            .collect::<Vec<u128>>();
+            .collect::<Vec<NumericFactor>>();
         let full_set_size = factors_of_term.len();
         let subsets = power_multiset(&mut factors_of_term);
         let mut subset_factors = Vec::with_capacity(subsets.len());
         for subset in subsets {
             if subset.len() < full_set_size && !subset.is_empty() {
-                let product = subset.into_iter().product::<u128>() << power_of_2;
+                let product = subset.into_iter().product::<NumericFactor>() << power_of_2;
                 if product > 2 {
                     subset_factors.push(lucas_factors(product, false));
                 }
@@ -1016,9 +985,12 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T
 
 /// Modular inverse using extended Euclidean algorithm
 #[inline]
-fn modinv(a: u128, m: u128) -> Option<u128> {
-    let (mut t, mut newt) = (0i128, 1i128);
-    let (mut r, mut newr) = (m as i128, a as i128);
+fn modinv(a: NumericFactor, m: NumericFactor) -> Option<NumericFactor> {
+    let mut t: SignedNumericFactor = 0;
+    let mut newt: SignedNumericFactor = 1;
+    let m: SignedNumericFactor = m.try_into().ok()?;
+    let mut r = m;
+    let mut newr: SignedNumericFactor = a.try_into().ok()?;
 
     while newr != 0 {
         let quotient = r / newr;
@@ -1033,26 +1005,26 @@ fn modinv(a: u128, m: u128) -> Option<u128> {
     }
 
     if t < 0 {
-        t += m as i128;
+        t += m;
     }
 
-    Some(t as u128)
+    t.try_into().ok()
 }
 
 // Maximum number of times a factor will be repeated when raised to a power, to limit memory usage.
-const MAX_REPEATS: u128 = 16;
+const MAX_REPEATS: usize = 16;
 
-fn factor_power(a: u128, n: u128) -> (u128, u128) {
+fn factor_power(a: NumericFactor, n: NumericFactor) -> (NumericFactor, NumericFactor) {
     if a == 1 {
         return (1, 1);
     }
-    // A u128 can't be a 128th or higher power
+    // A NumericFactor can't be a 128th or higher power
     for prime in [
         2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89,
         97, 101, 103, 107, 109, 113, 127,
     ] {
         if let Some(root) = a.nth_root_exact(prime as u32) {
-            return match n.checked_mul(prime as u128) {
+            return match n.checked_mul(prime as NumericFactor) {
                 Some(product) => factor_power(root, product),
                 None => (a, n),
             };
@@ -1066,8 +1038,8 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
     let mut new_left = simplify(left.clone());
     let mut new_right = simplify(right.clone());
     for term in [&mut new_left, &mut new_right] {
-        let exponent_u128 = match &**term {
-            Factor::Power { exponent, .. } => evaluate_as_u128(exponent),
+        let exponent_numeric = match &**term {
+            Factor::Power { exponent, .. } => evaluate_as_numeric(exponent),
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
@@ -1083,8 +1055,8 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
             }
             _ => None,
         };
-        if let Some(exponent_u128) = exponent_u128 {
-            factorize128(exponent_u128)
+        if let Some(exponent_numeric) = exponent_numeric {
+            factorize128(exponent_numeric)
                 .into_iter()
                 .for_each(|(factor, factor_exponent)| {
                     possible_factors.insert(
@@ -1161,7 +1133,7 @@ pub fn to_like_powers_recursive_dedup(
                     results.extend(repeat_n(factor.clone(), exponent));
                 }
                 Numeric(n) => {
-                    results.extend(find_factors_of_u128(n));
+                    results.extend(find_factors_of_numeric(n));
                 }
                 _ => {
                     results.push(factor.clone());
@@ -1177,12 +1149,12 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
     if product == divisor {
         return Ok(Factor::one());
     }
-    if let Some(product_u128) = evaluate_as_u128(&product)
-        && let Some(divisor_u128) = evaluate_as_u128(&divisor)
+    if let Some(product_numeric) = evaluate_as_numeric(&product)
+        && let Some(divisor_numeric) = evaluate_as_numeric(&divisor)
     {
-        return match product_u128.div_exact(divisor_u128) {
+        return match product_numeric.div_exact(divisor_numeric) {
             Some(divided) => Ok(Numeric(divided).into()),
-            None => Err(Numeric(product_u128).into()),
+            None => Err(Numeric(product_numeric).into()),
         };
     }
     match *product {
@@ -1205,20 +1177,20 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
                     }
                     .into(),
                 ))
-            } else if let Some(exponent_u128) = evaluate_as_u128(exponent)
-                && let Ok(divisor_root) = nth_root_exact(divisor, exponent_u128)
+            } else if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
+                && let Ok(divisor_root) = nth_root_exact(divisor, exponent_numeric)
             {
                 match div_exact(base.clone(), divisor_root) {
                     Ok(divided_base) => Ok(simplify(
                         Factor::Power {
                             base: divided_base,
-                            exponent: Numeric(exponent_u128).into(),
+                            exponent: Numeric(exponent_numeric).into(),
                         }
                         .into(),
                     )),
                     Err(_) => Err(Factor::Power {
                         base: base.clone(),
-                        exponent: Numeric(exponent_u128).into(),
+                        exponent: Numeric(exponent_numeric).into(),
                     }
                     .into()),
                 }
@@ -1227,19 +1199,19 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
             }
         }
         Multiply { ref terms } => {
-            let mut divisor_u128 = evaluate_as_u128(&divisor);
+            let mut divisor_numeric = evaluate_as_numeric(&divisor);
             let mut new_terms = terms.clone();
             for (index, term) in new_terms.iter_mut().enumerate() {
                 if **term == *divisor {
                     new_terms.remove(index);
                     return Ok(simplify(Multiply { terms: new_terms }.into()));
                 }
-                if let Some(divisor) = &mut divisor_u128
-                    && let Some(term_u128) = evaluate_as_u128(term)
+                if let Some(divisor) = &mut divisor_numeric
+                    && let Some(term_numeric) = evaluate_as_numeric(term)
                 {
-                    let gcd = term_u128.gcd(divisor);
+                    let gcd = term_numeric.gcd(divisor);
                     if gcd > 1 {
-                        *term = Numeric(term_u128 / gcd).into();
+                        *term = Numeric(term_numeric / gcd).into();
                         *divisor /= gcd;
                         if *divisor == 1 {
                             return Ok(simplify(Multiply { terms: new_terms }.into()));
@@ -1263,8 +1235,8 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
             Err(_) => Err(product),
         },
         Factor::Factorial(ref term) => {
-            if let Some(divisor) = evaluate_as_u128(&divisor)
-                && let Some(term) = evaluate_as_u128(term)
+            if let Some(divisor) = evaluate_as_numeric(&divisor)
+                && let Some(term) = evaluate_as_numeric(term)
             {
                 let mut new_term = term;
                 while let Some(divisor) = divisor.div_exact(new_term) {
@@ -1279,8 +1251,8 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
             }
         }
         Factor::Primorial(ref term) => {
-            if let Some(mut divisor) = evaluate_as_u128(&divisor)
-                && let Some(term) = evaluate_as_u128(term)
+            if let Some(mut divisor) = evaluate_as_numeric(&divisor)
+                && let Some(term) = evaluate_as_numeric(term)
             {
                 let mut new_term = term;
                 while !is_prime(new_term)
@@ -1353,16 +1325,16 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
     }
 }
 
-pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Arc<Factor>> {
+pub fn nth_root_exact(factor: Arc<Factor>, root: NumericFactor) -> Result<Arc<Factor>, Arc<Factor>> {
     if root == 1 {
         return Ok(factor);
     }
-    if let Some(factor_u128) = evaluate_as_u128(&factor) {
-        if factor_u128 == 1 {
-            return Ok(Numeric(1).into());
+    if let Some(factor_numeric) = evaluate_as_numeric(&factor) {
+        if factor_numeric == 1 {
+            return Ok(Factor::one());
         }
         if let Ok(root_u32) = root.try_into() {
-            return factor_u128
+            return factor_numeric
                 .nth_root_exact(root_u32)
                 .map(|x| Numeric(x).into())
                 .ok_or(factor);
@@ -1373,11 +1345,11 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
             ref base,
             ref exponent,
         } => {
-            if evaluate_as_u128(base) == Some(1) {
+            if evaluate_as_numeric(base) == Some(1) {
                 return Ok(Factor::one());
             }
-            return if let Some(exponent_u128) = evaluate_as_u128(exponent)
-                && let Some(reduced_exponent) = exponent_u128.div_exact(root)
+            return if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
+                && let Some(reduced_exponent) = exponent_numeric.div_exact(root)
             {
                 Ok(Factor::Power {
                     base: base.clone(),
@@ -1411,7 +1383,7 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
     Err(factor)
 }
 
-fn nth_root_of_product(terms: &[Arc<Factor>], root: u128) -> Option<Vec<Arc<Factor>>> {
+fn nth_root_of_product(terms: &[Arc<Factor>], root: NumericFactor) -> Option<Vec<Arc<Factor>>> {
     terms
         .iter()
         .map(|term| nth_root_exact(term.clone(), root).ok())
@@ -1419,7 +1391,7 @@ fn nth_root_of_product(terms: &[Arc<Factor>], root: u128) -> Option<Vec<Arc<Fact
 }
 
 #[inline(always)]
-pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Arc<Factor>> {
+pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Vec<Arc<Factor>> {
     debug_assert_ne!(input, 0);
     factorize128(input)
         .into_iter()
@@ -1428,7 +1400,7 @@ pub(crate) fn find_factors_of_u128(input: u128) -> Vec<Arc<Factor>> {
 }
 
 #[inline(always)]
-fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
+fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
     match *expr {
         Numeric(n) => match n {
@@ -1437,26 +1409,26 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
                 (0, 0)
             }
             1 => (0, 0),
-            n => (n.ilog10() as u128, (n - 1).ilog10() as u128 + 1),
+            n => (n.ilog10() as NumberLength, (n - 1).ilog10() as NumberLength + 1),
         },
         Factor::BigNumber(ref expr) => {
             let len = expr.as_ref().len();
-            ((len - 1) as u128, len as u128)
+            ((len - 1) as NumberLength, len as NumberLength)
         }
         Factor::Fibonacci(ref x) | Factor::Lucas(ref x) => {
             // Fibonacci or Lucas number
-            let Some(term_number) = evaluate_as_u128(x) else {
+            let Some(term_number) = evaluate_as_numeric(x) else {
                 warn!("Could not parse term number of a Lucas number: {}", x);
-                return (0, u128::MAX);
+                return (0, NumberLength::MAX);
             };
             let est_log = term_number as f64 * 0.20898;
-            (est_log.floor() as u128, est_log.ceil() as u128 + 1)
+            (est_log.floor() as NumberLength, est_log.ceil() as NumberLength + 1)
         }
         Factor::Factorial(ref input) => {
             // factorial
-            let Some(input) = evaluate_as_u128(input) else {
+            let Some(input) = evaluate_as_numeric(input) else {
                 warn!("Could not parse input to a factorial: {}", input);
-                return (0, u128::MAX);
+                return (0, NumberLength::MAX);
             };
             let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
 
@@ -1465,15 +1437,15 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
             let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
 
             (
-                log_factorial_lower_bound.floor() as u128,
-                log_factorial_upper_bound.ceil() as u128,
+                log_factorial_lower_bound.floor() as NumberLength,
+                log_factorial_upper_bound.ceil() as NumberLength,
             )
         }
         Factor::Primorial(ref input) => {
             // primorial
-            let Some(input) = evaluate_as_u128(input) else {
+            let Some(input) = evaluate_as_numeric(input) else {
                 warn!("Could not parse input to a factorial: {}", input);
-                return (0, u128::MAX);
+                return (0, NumberLength::MAX);
             };
 
             // Lower bound is from
@@ -1483,30 +1455,30 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
             // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
             // (p. 7 of PDF)
             let lower_bound = if input >= 563 {
-                (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil() as u128
+                (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil() as NumberLength
             } else if input >= 41 {
-                (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil() as u128
+                (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil() as NumberLength
             } else {
                 0
             };
-            let upper_bound = (1.01624 / LN_10 * input as f64).floor();
-            (lower_bound, upper_bound as u128)
+            let upper_bound = (1.01624 / LN_10 * input as f64).floor() as NumberLength;
+            (lower_bound, upper_bound)
         }
         Factor::ElidedNumber(_) => {
             // Elided numbers from factordb are always at least 51 digits
-            (50, u128::MAX)
+            (50, NumberLength::MAX)
         }
         Factor::Power {
             ref base,
             ref exponent,
         } => {
-            let Some(exponent) = evaluate_as_u128(exponent) else {
-                return (0, u128::MAX);
+            let Some(exponent) = evaluate_as_numeric(exponent).and_then(|exponent| NumberLength::try_from(exponent).ok()) else {
+                return (0, NumberLength::MAX);
             };
-            if let Some(base) = evaluate_as_u128(base) {
+            if let Some(base) = evaluate_as_numeric(base) {
                 let lower = (base as f64).log10().next_down() * exponent as f64;
                 let upper = (base as f64).log10().next_up() * (exponent as f64).next_up();
-                (lower.floor() as u128, upper.ceil() as u128)
+                (lower.floor() as NumberLength, upper.ceil() as NumberLength)
             } else {
                 let (base_lower, base_upper) = estimate_log10_internal(base.clone());
                 (
@@ -1554,11 +1526,11 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
             };
             (combined_lower, combined_upper)
         }
-        Factor::UnknownExpression(_) => (0, u128::MAX),
+        Factor::UnknownExpression(_) => (0, NumberLength::MAX),
     }
 }
 
-fn estimate_log10_of_product(right: &[Arc<Factor>]) -> (u128, u128) {
+fn estimate_log10_of_product(right: &[Arc<Factor>]) -> (NumberLength, NumberLength) {
     let (denom_lower, denom_upper) = right
         .iter()
         .map(|factor| estimate_log10_internal(factor.clone()))
@@ -1572,20 +1544,20 @@ fn estimate_log10_of_product(right: &[Arc<Factor>]) -> (u128, u128) {
     (denom_lower, denom_upper)
 }
 
-pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (u128, u128) {
+pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
     let (lbound, ubound) = estimate_log10_internal(expr.clone());
     if lbound > ubound {
         error!(
             "{expr}: estimate_log10 produced inconsistent bounds: lower bound {lbound}, upper bound {ubound}"
         );
-        (0, u128::MAX)
+        (0, NumberLength::MAX)
     } else {
         (lbound, ubound)
     }
 }
 
-pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Option<u128> {
-    if let Some(eval) = evaluate_as_u128(&expr) {
+pub(crate) fn modulo_as_numeric(expr: Arc<Factor>, modulus: NumericFactor) -> Option<NumericFactor> {
+    if let Some(eval) = evaluate_as_numeric(&expr) {
         return Some(eval % modulus);
     }
     match modulus {
@@ -1596,7 +1568,7 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
         1 => return Some(0),
         2 | 5 => {
             if let Some(last_digit) = expr.last_digit() {
-                return Some(last_digit as u128 % modulus);
+                return Some(last_digit as NumericFactor % modulus);
             }
         }
         _ => {}
@@ -1609,8 +1581,8 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
             ref right,
             subtract,
         } => {
-            let left = evaluate_modulo_as_u128(left.clone(), modulus)?;
-            let right = evaluate_modulo_as_u128(right.clone(), modulus)?;
+            let left = modulo_as_numeric(left.clone(), modulus)?;
+            let right = modulo_as_numeric(right.clone(), modulus)?;
             if subtract {
                 let diff = left.abs_diff(right);
                 Some(if left > right {
@@ -1623,10 +1595,10 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
             }
         }
         Multiply { ref terms } => {
-            let mut product: u128 = 1;
+            let mut product: NumericFactor = 1;
             for term in terms.iter() {
                 product =
-                    product.checked_mul(evaluate_modulo_as_u128(term.clone(), modulus)?)? % modulus;
+                    product.checked_mul(modulo_as_numeric(term.clone(), modulus)?)? % modulus;
             }
             Some(product)
         }
@@ -1634,9 +1606,9 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
             ref left,
             ref right,
         } => {
-            let mut result = evaluate_modulo_as_u128(left.clone(), modulus)?;
+            let mut result = modulo_as_numeric(left.clone(), modulus)?;
             for term in right.iter() {
-                let term_mod = evaluate_modulo_as_u128(term.clone(), modulus)?;
+                let term_mod = modulo_as_numeric(term.clone(), modulus)?;
                 match modinv(term_mod, modulus) {
                     Some(inv) => result = (result * inv) % modulus,
                     None => result = result.div_exact(modulus)?,
@@ -1648,20 +1620,20 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
             ref base,
             ref exponent,
         } => {
-            let base_mod = evaluate_modulo_as_u128(base.clone(), modulus)?;
-            let exp = evaluate_as_u128(exponent)?;
+            let base_mod = modulo_as_numeric(base.clone(), modulus)?;
+            let exp = evaluate_as_numeric(exponent)?;
             Some(base_mod.powm(exp, &modulus))
         }
         Factor::Fibonacci(ref term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             Some(pisano(term, vec![0, 1, 1], modulus))
         }
         Factor::Lucas(ref term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             Some(pisano(term, vec![2, 1], modulus))
         }
         Factor::Factorial(ref term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             if term >= modulus {
                 return Some(0);
             }
@@ -1675,7 +1647,7 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
             Some(result)
         }
         Factor::Primorial(ref term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             if term >= modulus {
                 return Some(0);
             }
@@ -1693,14 +1665,14 @@ pub(crate) fn evaluate_modulo_as_u128(expr: Arc<Factor>, modulus: u128) -> Optio
     }
 }
 
-fn is_prime(val: u128) -> bool {
+fn is_prime(val: NumericFactor) -> bool {
     SIEVE.with_borrow(|sieve| sieve.is_prime(&val, None)) != No
 }
 
-fn pisano(term: u128, mut sequence: Vec<u128>, modulus: u128) -> u128 {
+fn pisano(term: NumericFactor, mut sequence: Vec<NumericFactor>, modulus: NumericFactor) -> NumericFactor {
     let mut zeros = 0; // don't count the initial 0th term for Fibonacci sequence
     loop {
-        if sequence.len() as u128 == term + 1 {
+        if sequence.len() as NumericFactor == term + 1 {
             return *sequence.last().unwrap();
         }
         let next_term = (sequence[sequence.len() - 2] + sequence[sequence.len() - 2]) % modulus;
@@ -1708,13 +1680,13 @@ fn pisano(term: u128, mut sequence: Vec<u128>, modulus: u128) -> u128 {
             zeros += 1;
         }
         if zeros == 4 && next_term == sequence[0] {
-            return sequence[(term % (sequence.len() as u128)) as usize];
+            return sequence[(term % (sequence.len() as NumericFactor)) as usize];
         }
         sequence.push(next_term);
     }
 }
 
-fn factor_to_power(base: Arc<Factor>, exponent: u128) -> Arc<Factor> {
+fn factor_to_power(base: Arc<Factor>, exponent: NumericFactor) -> Arc<Factor> {
     match exponent {
         0 => Factor::one(),
         1 => base,
@@ -1729,8 +1701,8 @@ fn factor_to_power(base: Arc<Factor>, exponent: u128) -> Arc<Factor> {
 }
 
 pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
-    if let Some(expr_u128) = evaluate_as_u128(&expr) {
-        return Numeric(expr_u128).into();
+    if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
+        return Numeric(expr_numeric).into();
     }
     match *expr {
         Multiply { ref terms } => {
@@ -1753,12 +1725,12 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 0 => Factor::one(),
                 1 => {
                     let (factor, power) = new_terms.into_iter().next().unwrap();
-                    factor_to_power(factor, power as u128)
+                    factor_to_power(factor, power as NumericFactor)
                 }
                 _ => Multiply {
                     terms: new_terms
                         .into_iter()
-                        .map(|(factor, power)| factor_to_power(factor, power as u128))
+                        .map(|(factor, power)| factor_to_power(factor, power as NumericFactor))
                         .sorted_unstable()
                         .collect(),
                 }
@@ -1815,16 +1787,16 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
         } => {
             let mut new_base = simplify(base.clone());
             let mut new_exponent = simplify(exponent.clone());
-            if let Numeric(new_base_u128) = *new_base {
-                if new_base_u128 == 1 {
+            if let Numeric(new_base_numeric) = *new_base {
+                if new_base_numeric == 1 {
                     return Factor::one();
                 }
-                if let Some(new_exponent_u128) = evaluate_as_u128(&new_exponent) {
-                    let (factored_base_u128, factored_exponent_u128) =
-                        factor_power(new_base_u128, new_exponent_u128);
-                    if factored_exponent_u128 != new_exponent_u128 {
-                        new_base = Numeric(factored_base_u128).into();
-                        new_exponent = Numeric(factored_exponent_u128).into();
+                if let Some(new_exponent_numeric) = evaluate_as_numeric(&new_exponent) {
+                    let (factored_base, factored_exponent) =
+                        factor_power(new_base_numeric, new_exponent_numeric);
+                    if factored_exponent != new_exponent_numeric {
+                        new_base = Numeric(factored_base).into();
+                        new_exponent = Numeric(factored_exponent).into();
                     }
                 }
             }
@@ -1880,20 +1852,20 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     }
 }
 
-pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
+pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
     match expr {
         Numeric(n) => Some(*n),
         Factor::BigNumber(_) => None,
         Factor::Lucas(term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             match term {
                 0 => Some(2),
                 1 => Some(1),
                 185.. => None,
                 n => {
-                    let mut a = 2u128;
-                    let mut b = 1u128;
-                    let mut result = 0u128;
+                    let mut a: NumericFactor = 2;
+                    let mut b: NumericFactor = 1;
+                    let mut result: NumericFactor = 0;
 
                     for _ in 2..=n {
                         result = a + b;
@@ -1905,15 +1877,15 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
             }
         }
         Factor::Fibonacci(term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             match term {
                 0 => Some(0),
                 1 | 2 => Some(1),
                 186.. => None,
                 n => {
-                    let mut a = 1u128;
-                    let mut b = 1u128;
-                    let mut result = 0u128;
+                    let mut a: NumericFactor = 1;
+                    let mut b: NumericFactor = 1;
+                    let mut result: NumericFactor = 0;
                     for _ in 3..=n {
                         result = a + b;
                         a = b;
@@ -1924,7 +1896,7 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
             }
         }
         Factor::Factorial(term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             match term {
                 0 | 1 => Some(1),
                 35.. => None,
@@ -1938,37 +1910,38 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
             }
         }
         Factor::Primorial(term) => {
-            let term = evaluate_as_u128(term)?;
+            let term = evaluate_as_numeric(term)?;
             match term {
                 0 | 1 => Some(1),
                 103.. => None,
                 x => Some(
+                    // SMALL_PRIMES always has all the primes we need
                     SMALL_PRIMES
                         .iter()
                         .copied()
-                        .map(u128::from)
+                        .map(NumericFactor::from)
                         .take_while(|p| *p <= x)
                         .product(),
                 ),
             }
         }
         Factor::ElidedNumber(_) => None,
-        Factor::Power { base, exponent } => match evaluate_as_u128(base)? {
+        Factor::Power { base, exponent } => match evaluate_as_numeric(base)? {
             0 => Some(0),
             1 => Some(1),
-            base => base.checked_pow(u32::try_from(evaluate_as_u128(exponent)?).ok()?),
+            base => base.checked_pow(u32::try_from(evaluate_as_numeric(exponent)?).ok()?),
         },
         Factor::Divide { left, right } => {
-            let mut result = evaluate_as_u128(left)?;
+            let mut result = evaluate_as_numeric(left)?;
             for term in right.iter() {
-                result = result.checked_div_exact(evaluate_as_u128(term)?)?;
+                result = result.checked_div_exact(evaluate_as_numeric(term)?)?;
             }
             Some(result)
         }
         Multiply { terms } => {
-            let mut result = 1u128;
+            let mut result: NumericFactor = 1;
             for term in terms.iter() {
-                result = result.checked_mul(evaluate_as_u128(term)?)?;
+                result = result.checked_mul(evaluate_as_numeric(term)?)?;
             }
             Some(result)
         }
@@ -1977,8 +1950,8 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
             right,
             subtract,
         } => {
-            let left = evaluate_as_u128(left)?;
-            let right = evaluate_as_u128(right)?;
+            let left = evaluate_as_numeric(left)?;
+            let right = evaluate_as_numeric(right)?;
             if *subtract {
                 left.checked_sub(right)
             } else {
@@ -1992,15 +1965,15 @@ pub(crate) fn evaluate_as_u128(expr: &Factor) -> Option<u128> {
 #[inline(always)]
 fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
     info!("find_factors: {expr}");
-    if let Some(n) = evaluate_as_u128(&expr) {
-        return find_factors_of_u128(n);
+    if let Some(n) = evaluate_as_numeric(&expr) {
+        return find_factors_of_numeric(n);
     }
     match *expr {
-        Numeric(n) => find_factors_of_u128(n),
+        Numeric(n) => find_factors_of_numeric(n),
         Factor::BigNumber(ref expr) => factor_big_num(expr.clone()),
         Factor::Lucas(ref term) => {
             // Lucas number
-            let Some(term_number) = evaluate_as_u128(term) else {
+            let Some(term_number) = evaluate_as_numeric(term) else {
                 warn!("Could not parse term number of a Lucas number: {}", term);
                 return vec![expr];
             };
@@ -2008,7 +1981,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
         }
         Factor::Fibonacci(ref term) => {
             // Fibonacci number
-            let Some(term_number) = evaluate_as_u128(term) else {
+            let Some(term_number) = evaluate_as_numeric(term) else {
                 warn!(
                     "Could not parse term number of a Fibonacci number: {}",
                     term
@@ -2019,19 +1992,19 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
         }
         Factor::Factorial(ref term) => {
             // factorial
-            let Some(input) = evaluate_as_u128(term) else {
+            let Some(input) = evaluate_as_numeric(term) else {
                 warn!("Could not parse input to factorial function: {}", term);
                 return vec![expr];
             };
             let mut factors = Vec::new();
             for i in 2..=input {
-                factors.extend(find_factors_of_u128(i));
+                factors.extend(find_factors_of_numeric(i));
             }
             factors
         }
         Factor::Primorial(ref term) => {
             // primorial
-            let Some(input) = evaluate_as_u128(term) else {
+            let Some(input) = evaluate_as_numeric(term) else {
                 warn!("Could not parse input to primorial function: {}", term);
                 return vec![expr];
             };
@@ -2057,7 +2030,8 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             ref base,
             ref exponent,
         } => {
-            let power = evaluate_as_u128(exponent)
+            let power = evaluate_as_numeric(exponent)
+                .and_then(|power| usize::try_from(power).ok())
                 .unwrap_or(MAX_REPEATS)
                 .min(MAX_REPEATS) as usize;
             let base_factors = find_factors(base.clone());
@@ -2138,11 +2112,11 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
         } => {
             let mut factors = Vec::with_capacity(SMALL_PRIMES.len());
             for prime in SMALL_PRIMES {
-                let mut power = prime as u128;
-                let prime_factor: Arc<Factor> = Numeric(prime as u128).into();
-                while evaluate_modulo_as_u128(expr.clone(), power) == Some(0) {
+                let mut power = prime as NumericFactor;
+                let prime_factor: Arc<Factor> = Numeric(power).into();
+                while modulo_as_numeric(expr.clone(), power) == Some(0) {
                     factors.push(prime_factor.clone());
-                    let Some(new_power) = power.checked_mul(prime as u128) else {
+                    let Some(new_power) = power.checked_mul(prime as NumericFactor) else {
                         break;
                     };
                     power = new_power;
@@ -2175,8 +2149,8 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
         factors.push(Factor::five());
         expr_short = stripped;
     }
-    if let Ok(num) = expr_short.parse::<u128>() {
-        factors.extend(find_factors_of_u128(num));
+    if let Ok(num) = expr_short.parse::<NumericFactor>() {
+        factors.extend(find_factors_of_numeric(num));
     } else {
         match expr_short.chars().last() {
             Some('5') => factors.push(Factor::five()),
@@ -2188,9 +2162,9 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
                 error!("Invalid last digit: {x:?}");
             }
         }
-        let sum_of_digits: u128 = expr_short
+        let sum_of_digits: NumericFactor = expr_short
             .chars()
-            .map(|digit| digit as u128 - '0' as u128)
+            .map(|digit| digit.to_digit(10).unwrap() as NumericFactor)
             .sum();
         match sum_of_digits % 9 {
             0 => {
@@ -2224,18 +2198,18 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
 
 #[inline]
 fn find_common_factors(expr1: Arc<Factor>, expr2: Arc<Factor>) -> Vec<Arc<Factor>> {
-    let num1 = evaluate_as_u128(&expr1);
+    let num1 = evaluate_as_numeric(&expr1);
     if num1 == Some(1) {
         return vec![];
     }
-    let num2 = evaluate_as_u128(&expr2);
+    let num2 = evaluate_as_numeric(&expr2);
     if num2 == Some(1) {
         return vec![];
     }
     if let Some(num1) = num1
         && let Some(num2) = num2
     {
-        find_factors_of_u128(num1.gcd(&num2))
+        find_factors_of_numeric(num1.gcd(&num2))
     } else {
         let expr1_factors = find_factors(expr1);
         if expr1_factors.is_empty() {
@@ -2250,7 +2224,7 @@ fn find_common_factors(expr1: Arc<Factor>, expr2: Arc<Factor>) -> Vec<Arc<Factor
 #[inline(always)]
 pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
     let mut factors = find_factors(expr.clone());
-    factors.retain(|f| f.as_u128() != Some(1) && f.may_be_proper_divisor_of(&expr));
+    factors.retain(|f| f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr));
     factors.sort_unstable();
     factors.dedup();
     if factors.is_empty() {
@@ -2264,44 +2238,11 @@ pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
     factors.into_boxed_slice()
 }
 
-#[derive(Clone, Default, Debug)]
-pub struct ProcessedStatusApiResponse {
-    pub status: Option<NumberStatus>,
-    pub factors: Box<[Arc<Factor>]>,
-    pub id: Option<u128>,
-}
-
-#[derive(Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
-pub enum NumberStatus {
-    Unknown,
-    UnfactoredComposite,
-    PartlyFactoredComposite,
-    Prime, // includes PRP
-    FullyFactored,
-}
-
-pub trait NumberStatusExt {
-    fn is_known_fully_factored(&self) -> bool;
-}
-
-impl NumberStatusExt for Option<NumberStatus> {
-    #[inline]
-    fn is_known_fully_factored(&self) -> bool {
-        matches!(
-            self,
-            Some(NumberStatus::FullyFactored) | Some(NumberStatus::Prime)
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{
-        Factor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, evaluate_as_u128, factor_power,
-        fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union,
-        power_multiset,
-    };
+    use crate::NumberLength;
+use crate::algebraic::Factor::Numeric;
+    use crate::algebraic::{evaluate_as_numeric, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union, power_multiset, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS};
     use itertools::Itertools;
     use std::iter::repeat_n;
     use std::sync::Arc;
@@ -2319,7 +2260,7 @@ mod tests {
             &Factor::from("(3^7396-928)/3309349849490834480566907-1").to_string(),
             "((((3)^(7396))-(928))/(3309349849490834480566907))-(1)"
         );
-        assert_eq!(evaluate_as_u128(&"(3^7-6)/727".into()), Some(3));
+        assert_eq!(evaluate_as_numeric(&"(3^7-6)/727".into()), Some(3));
     }
 
     #[test]
@@ -2334,11 +2275,11 @@ mod tests {
 
     #[test]
     fn test_anbc() {
-        let expr = format!("{}^9*3+3", u128::MAX);
+        let expr = format!("{}^9*3+3", NumericFactor::MAX);
         let factors = find_factors(&expr);
         println!("{}", factors.iter().join(", "));
         assert!(factors.contains(&3.into()));
-        assert!(factors.contains(&format!("{}^9+1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^9+1", NumericFactor::MAX).into()));
     }
 
     #[test]
@@ -2350,7 +2291,7 @@ mod tests {
         assert!(factors.contains(&98801.into()));
 
         // Shouldn't contain 6^5+1
-        assert!(!factors.contains(&(6u128.pow(5) + 1).into()));
+        assert!(!factors.contains(&((6 as NumericFactor).pow(5) + 1).into()));
         assert!(!factors.contains(&7.into()));
         assert!(!factors.contains(&11.into()));
         assert!(!factors.contains(&101.into()));
@@ -2366,21 +2307,21 @@ mod tests {
 
     #[test]
     fn test_anb_minus_c() {
-        let expr = format!("{}^24-1", u128::MAX);
+        let expr = format!("{}^24-1", NumericFactor::MAX);
         let factors = find_factors(&expr);
         println!("{}", factors.iter().join(", "));
-        assert!(factors.contains(&format!("{}^12-1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^12+1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^8-1", u128::MAX).into()));
-        assert!(!factors.contains(&format!("{}^8+1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^6+1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^6-1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^4+1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^4-1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^3+1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^3-1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^2+1", u128::MAX).into()));
-        assert!(factors.contains(&format!("{}^2-1", u128::MAX).into()));
+        assert!(factors.contains(&format!("{}^12-1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^12+1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^8-1", NumericFactor::MAX).into()));
+        assert!(!factors.contains(&format!("{}^8+1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^6+1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^6-1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^4+1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^4-1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^3+1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^3-1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^2+1", NumericFactor::MAX).into()));
+        assert!(factors.contains(&format!("{}^2-1", NumericFactor::MAX).into()));
     }
 
     #[test]
@@ -2512,14 +2453,14 @@ mod tests {
     fn test_power_associativity() {
         let expr = "2^3^4".into();
 
-        assert_eq!(evaluate_as_u128(&expr), Some(1 << 81));
+        assert_eq!(evaluate_as_numeric(&expr), Some(1 << 81));
     }
 
     #[test]
     fn test_division_associativity() {
         let expr = "20/5/2".into();
 
-        assert_eq!(evaluate_as_u128(&expr), Some(2));
+        assert_eq!(evaluate_as_numeric(&expr), Some(2));
     }
 
     #[test]
@@ -2529,12 +2470,12 @@ mod tests {
         find_factors(&expr);
         let expr = Arc::new(Factor::from(expr));
         crate::algebraic::estimate_log10_internal(expr.clone());
-        evaluate_as_u128(&expr);
+        evaluate_as_numeric(&expr);
     }
 
     #[test]
     fn test_stack_depth_2() {
-        const PRIMORIAL: u128 = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
+        const PRIMORIAL: NumericFactor = 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19;
         lucas_factors(PRIMORIAL, true);
         fibonacci_factors(PRIMORIAL, true);
     }
@@ -2556,11 +2497,11 @@ mod tests {
 
     #[test]
     fn test_multiple_hashes() {
-        assert_eq!(evaluate_as_u128(&"2##".into()), Some(6)); // 2## = 6; (2#)# = 2
-        assert_eq!(evaluate_as_u128(&"2###".into()), Some(30)); // 2### = (2##)# = 30; (2#)## = 6
+        assert_eq!(evaluate_as_numeric(&"2##".into()), Some(6)); // 2## = 6; (2#)# = 2
+        assert_eq!(evaluate_as_numeric(&"2###".into()), Some(30)); // 2### = (2##)# = 30; (2#)## = 6
 
         // 2#### = (2##)## = 30030
-        assert_eq!(evaluate_as_u128(&"2####".into()), Some(30030));
+        assert_eq!(evaluate_as_numeric(&"2####".into()), Some(30030));
         // (3#)### = 30029#
         // (3##)## = 113#
         // (3###)# = 6469693230#
@@ -2570,11 +2511,11 @@ mod tests {
 
     #[test]
     fn test_m_precedence() {
-        assert_eq!(evaluate_as_u128(&"M7^2".into()), Some(127 * 127));
-        assert_eq!(evaluate_as_u128(&"M7*5".into()), Some(127 * 5));
-        assert_eq!(evaluate_as_u128(&"M5!".into()), Some((1..=31).product())); // (M5)!
+        assert_eq!(evaluate_as_numeric(&"M7^2".into()), Some(127 * 127));
+        assert_eq!(evaluate_as_numeric(&"M7*5".into()), Some(127 * 5));
+        assert_eq!(evaluate_as_numeric(&"M5!".into()), Some((1..=31).product())); // (M5)!
         assert_eq!(
-            evaluate_as_u128(&"M5#".into()),
+            evaluate_as_numeric(&"M5#".into()),
             Some(2 * 3 * 5 * 7 * 11 * 13 * 17 * 19 * 23 * 29 * 31)
         ); // (M5)#
     }
@@ -2678,7 +2619,7 @@ mod tests {
 
     #[test]
     fn test_estimate_log10() {
-        fn estimate_log10_internal(input: &str) -> (u128, u128) {
+        fn estimate_log10_internal(input: &str) -> (NumberLength, NumberLength) {
             crate::algebraic::estimate_log10_internal(Factor::from(input).into())
         }
 
@@ -2743,10 +2684,10 @@ mod tests {
     }
 
     #[test]
-    fn test_evaluate_as_u128() {
-        assert_eq!(evaluate_as_u128(&"2^127-1".into()), Some(i128::MAX as u128));
-        assert_eq!(evaluate_as_u128(&"(5^6+1)^2-1".into()), Some(244171875));
-        assert_eq!(evaluate_as_u128(&"3^3+4^4+5^5".into()), Some(3408));
+    fn test_evaluate_as_numeric() {
+        assert_eq!(evaluate_as_numeric(&"2^127-1".into()), Some(i128::MAX as NumericFactor));
+        assert_eq!(evaluate_as_numeric(&"(5^6+1)^2-1".into()), Some(244171875));
+        assert_eq!(evaluate_as_numeric(&"3^3+4^4+5^5".into()), Some(3408));
     }
 
     #[test]
