@@ -428,7 +428,7 @@ async fn queue_composites(
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
-#[tokio::main(flavor = "local")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
