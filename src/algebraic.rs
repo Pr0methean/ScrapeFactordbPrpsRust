@@ -1035,8 +1035,8 @@ fn factor_power(a: NumericFactor, n: NumericFactor) -> (NumericFactor, NumericFa
 
 pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> Vec<Arc<Factor>> {
     let mut possible_factors = BTreeMap::new();
-    let mut new_left = simplify(left.clone());
-    let mut new_right = simplify(right.clone());
+    let mut new_left = simplify(Arc::clone(&left));
+    let mut new_right = simplify(Arc::clone(&right));
     for term in [&mut new_left, &mut new_right] {
         let exponent_numeric = match &**term {
             Factor::Power { exponent, .. } => evaluate_as_numeric(exponent),
@@ -1082,8 +1082,8 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
                 results.extend(repeat_n(
                     simplify(
                         AddSub {
-                            left: left_root.clone(),
-                            right: right_root.clone(),
+                            left: Arc::clone(&left_root),
+                            right: Arc::clone(&right_root),
                             subtract: false,
                         }
                         .into(),
@@ -1112,31 +1112,31 @@ pub fn to_like_powers_recursive_dedup(
     subtract: bool,
 ) -> Vec<Arc<Factor>> {
     let mut results = Vec::new();
-    let mut to_expand = count_frequencies(to_like_powers(left.clone(), right.clone(), subtract));
+    let mut to_expand = count_frequencies(to_like_powers(Arc::clone(&left), Arc::clone(&right), subtract));
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
-            match *simplify(factor.clone()) {
+            match *simplify(Arc::clone(&factor)) {
                 AddSub {
                     left: ref factor_left,
                     right: ref factor_right,
                     subtract,
                 } => {
                     let subfactors =
-                        to_like_powers(factor_left.clone(), factor_right.clone(), subtract);
+                        to_like_powers(Arc::clone(factor_left), Arc::clone(factor_right), subtract);
                     for subfactor in subfactors
                         .into_iter()
                         .filter(|subfactor| subfactor != &factor)
                     {
                         *to_expand.entry(subfactor).or_insert(0) += exponent;
                     }
-                    results.extend(repeat_n(factor.clone(), exponent));
+                    results.extend(repeat_n(Arc::clone(&factor), exponent));
                 }
                 Numeric(n) => {
                     results.extend(find_factors_of_numeric(n));
                 }
                 _ => {
-                    results.push(factor.clone());
+                    results.push(Arc::clone(&factor));
                 }
             }
             already_expanded.insert(factor);
@@ -1165,10 +1165,10 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
             if *base == divisor {
                 Ok(simplify(
                     Factor::Power {
-                        base: base.clone(),
+                        base: Arc::clone(base),
                         exponent: simplify(
                             AddSub {
-                                left: exponent.clone(),
+                                left: Arc::clone(exponent),
                                 right: Factor::one(),
                                 subtract: true,
                             }
@@ -2148,7 +2148,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             let cofactors: Vec<_> = factors
                 .iter()
                 .unique()
-                .flat_map(|factor: &Arc<Factor>| div_exact(expr.clone(), factor.clone()).ok())
+                .flat_map(|factor: &Arc<Factor>| div_exact(Arc::clone(&expr), Arc::clone(factor)).ok())
                 .collect();
             factors = multiset_union(vec![factors, cofactors]);
             factors
