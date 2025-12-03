@@ -86,10 +86,10 @@ pub trait FactorDbClient {
     /// restarts the process if that request consistently fails.
     async fn retrying_get_and_decode(
         &self,
-        url: HipStr<'_>,
+        url: &str,
         retry_delay: Duration,
     ) -> HipStr<'static>;
-    async fn try_get_and_decode(&self, url: HipStr<'_>) -> Option<HipStr<'static>>;
+    async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>>;
     async fn try_get_resource_limits(
         &self,
         bases_before_next_cpu_check: &mut usize,
@@ -192,7 +192,7 @@ impl RealFactorDbClient {
     }
 
     #[framed]
-    async fn try_get_and_decode_core(&self, url: HipStr<'_>) -> Option<HipStr<'static>> {
+    async fn try_get_and_decode_core(&self, url: &str) -> Option<HipStr<'static>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
@@ -201,7 +201,7 @@ impl RealFactorDbClient {
                     curl.get(true)
                         .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
                         .and_then(|_| curl.timeout(E2E_TIMEOUT))
-                        .and_then(|_| curl.url(&url))
+                        .and_then(|_| curl.url(url))
                         .and_then(|_| curl.perform())
                         .map_err(anyhow::Error::from)
                         .and_then(|_| {
@@ -220,7 +220,7 @@ impl RealFactorDbClient {
         } else {
             let result = self
                 .http
-                .get(url.as_str())
+                .get(url)
                 .header("Referer", "https://factordb.com")
                 .send()
                 .and_then(Response::text)
@@ -247,7 +247,7 @@ impl RealFactorDbClient {
     #[framed]
     async fn retrying_get_and_decode_or<'a>(
         &self,
-        url: HipStr<'_>,
+        url: &str,
         retry_delay: Duration,
         alt_url_supplier: impl FnOnce() -> HipStr<'a>,
     ) -> Result<HipStr<'static>, HipStr<'static>> {
@@ -259,7 +259,7 @@ impl RealFactorDbClient {
         }
         let alt_url = alt_url_supplier();
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
-        Err(self.retrying_get_and_decode(alt_url, retry_delay).await)
+        Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
     }
 }
 
@@ -320,7 +320,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn retrying_get_and_decode(
         &self,
-        url: HipStr<'_>,
+        url: &str,
         retry_delay: Duration,
     ) -> HipStr<'static> {
         for _ in 0..MAX_RETRIES {
@@ -343,7 +343,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[framed]
-    async fn try_get_and_decode(&self, url: HipStr<'_>) -> Option<HipStr<'static>> {
+    async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
         let response = self.try_get_and_decode_core(url).await?;
         let mut temp_bases = usize::MAX;
@@ -418,7 +418,7 @@ impl FactorDbClient for RealFactorDbClient {
             return Some(response.clone());
         }
         let response = self
-            .try_get_and_decode(format!("https://factordb.com/index.php?id={entry_id}").into())
+            .try_get_and_decode(&format!("https://factordb.com/index.php?id={entry_id}"))
             .await?;
         let expression_form: Arc<Factor> = Factor::from(
             self.expression_form_regex
@@ -447,15 +447,15 @@ impl FactorDbClient for RealFactorDbClient {
         let mut expr_key = None;
         let response = match id {
             Id(id) => {
-                let url = format!("https://factordb.com/api?id={id}").into();
+                let url = format!("https://factordb.com/api?id={id}");
                 if get_digits_as_fallback {
-                    self.retrying_get_and_decode_or(url, RETRY_DELAY, || {
+                    self.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
                         format!("https://factordb.com/index.php?showid={id}").into()
                     })
                     .await
                     .map_err(Some)
                 } else {
-                    self.try_get_and_decode(url).await.ok_or(None)
+                    self.try_get_and_decode(&url).await.ok_or(None)
                 }
             }
             Expression(ref expr) => {
@@ -463,9 +463,8 @@ impl FactorDbClient for RealFactorDbClient {
                 let url = format!(
                     "https://factordb.com/api?query={}",
                     encode(&expr.to_owned_string())
-                )
-                .into();
-                self.try_get_and_decode(url).await.ok_or(None)
+                );
+                self.try_get_and_decode(&url).await.ok_or(None)
             }
         };
         debug!("{id}: Got API response:\n{response:?}");
@@ -563,7 +562,11 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     fn cached_factors(&self, id: &NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
-        if (let Id(entry_id) = id || (let Expression(ref x) = id && let Numeric(entry_id) = **x))
+        let numeric_or_id = match id {
+            Id(entry_id) => Some(*entry_id),
+            Expression(x) => if let Numeric(n) = **x { Some(n) } else { None }
+        };
+        if let Some(entry_id) = numeric_or_id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
             debug!("Specially handling numeric expression {entry_id}");
@@ -581,14 +584,14 @@ impl FactorDbClient for RealFactorDbClient {
         let cached = match id {
             Id(id) => self
                 .by_id_cache
-                .get(&id)
+                .get(id)
                 .or_else(|| {
                     self.expression_form_cache
-                        .get(&id)
+                        .get(id)
                         .and_then(|expr| self.by_expr_cache.get(expr))
                 })
                 .cloned(),
-            Expression(ref expr) => self.by_expr_cache.get(expr).cloned(),
+            Expression(expr) => self.by_expr_cache.get(expr).cloned(),
         };
         if cached.is_some() {
             info!("Factor cache hit for {id}");

@@ -195,7 +195,7 @@ pub fn add_factor_node(
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(Arc::clone(&factor));
             let specifier = as_specifier(factor_vid, data, None);
             let cached = http
-                .cached_factors(specifier)
+                .cached_factors(&specifier)
                 .or(factor_numeric.map(|eval| {
                     let factors = find_factors_of_numeric(eval);
                     ProcessedStatusApiResponse {
@@ -1173,8 +1173,8 @@ async fn add_factors_to_graph(
         } else {
             info!("{id}: Checking for listed algebraic factors");
             // Links before the "Is factor of" header are algebraic factors; links after it aren't
-            let url = format!("https://factordb.com/frame_moreinfo.php?id={id}").into();
-            let result = http.try_get_and_decode(url).await;
+            let url = format!("https://factordb.com/frame_moreinfo.php?id={id}");
+            let result = http.try_get_and_decode(&url).await;
             if let Some(result) = result
                 && let Some((_before, listed_algebraic_and_rest)) = result.split_once("Algebraic factors")
                 && let Some((listed_algebraic, _rest)) = listed_algebraic_and_rest.split_once("Is factor of")
