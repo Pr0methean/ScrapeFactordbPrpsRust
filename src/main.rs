@@ -859,7 +859,7 @@ async fn main() -> anyhow::Result<()> {
                         let url: HipStr = format!(
                             "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
                         ).into();
-                        let text = do_checks_http.retrying_get_and_decode(url.clone(), RETRY_DELAY).await;
+                        let text = do_checks_http.retrying_get_and_decode(url, RETRY_DELAY).await;
                         if !text.contains(">number<") {
                             error!("Failed to decode result from {url}: {text}");
                             task_return_permit.send(id);

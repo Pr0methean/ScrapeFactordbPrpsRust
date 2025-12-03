@@ -103,7 +103,7 @@ pub trait FactorDbClient {
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
-    fn cached_factors(&self, id: NumberSpecifier) -> Option<ProcessedStatusApiResponse>;
+    fn cached_factors(&self, id: &NumberSpecifier) -> Option<ProcessedStatusApiResponse>;
     async fn try_report_factor(&self, u_id: NumberSpecifier, factor: &Factor)
     -> ReportFactorResult;
     async fn report_numeric_factor(
@@ -252,7 +252,7 @@ impl RealFactorDbClient {
         alt_url_supplier: impl FnOnce() -> HipStr<'a>,
     ) -> Result<HipStr<'static>, HipStr<'static>> {
         for _ in 0..MAX_RETRIES_WITH_FALLBACK {
-            if let Some(value) = self.try_get_and_decode(url.clone()).await {
+            if let Some(value) = self.try_get_and_decode(url).await {
                 return Ok(value);
             }
             sleep(retry_delay).await;
@@ -324,7 +324,7 @@ impl FactorDbClient for RealFactorDbClient {
         retry_delay: Duration,
     ) -> HipStr<'static> {
         for _ in 0..MAX_RETRIES {
-            if let Some(value) = self.try_get_and_decode(url.clone()).await {
+            if let Some(value) = self.try_get_and_decode(url).await {
                 return value;
             }
             sleep(retry_delay).await;
@@ -441,7 +441,7 @@ impl FactorDbClient for RealFactorDbClient {
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
         debug!("known_factors_as_digits: id={id:?}");
-        if let Some(cached) = self.cached_factors(id.clone()) {
+        if let Some(cached) = self.cached_factors(&id) {
             return cached;
         }
         let mut expr_key = None;
@@ -562,17 +562,12 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
-    fn cached_factors(&self, mut id: NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
-        if let Id(entry_id) = id
+    fn cached_factors(&self, id: &NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
+        if (let Id(entry_id) = id || (let Expression(ref x) = id && let Numeric(entry_id) = **x))
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
-            id = Expression(Numeric(entry_id).into());
-        }
-        if let Expression(ref x) = id
-            && let Numeric(n) = **x
-        {
-            debug!("Specially handling numeric expression {n}");
-            let factors = find_factors_of_numeric(n).into_boxed_slice();
+            debug!("Specially handling numeric expression {entry_id}");
+            let factors = find_factors_of_numeric(entry_id).into_boxed_slice();
             return Some(ProcessedStatusApiResponse {
                 status: Some(if factors.len() > 1 {
                     FullyFactored
@@ -580,7 +575,7 @@ impl FactorDbClient for RealFactorDbClient {
                     Prime
                 }),
                 factors,
-                id: Numeric(n).known_id(),
+                id: Numeric(entry_id).known_id(),
             });
         }
         let cached = match id {
