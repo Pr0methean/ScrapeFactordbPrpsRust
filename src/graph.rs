@@ -1,12 +1,15 @@
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
-use crate::net::NumberStatus::{FullyFactored, Prime};
-use crate::algebraic::{estimate_log10, evaluate_as_numeric, find_factors_of_numeric, find_unique_factors, Factor, NumericFactor};
+use crate::algebraic::{
+    Factor, NumericFactor, estimate_log10, evaluate_as_numeric, find_factors_of_numeric,
+    find_unique_factors,
+};
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
+use crate::net::NumberStatus::{FullyFactored, Prime};
 use crate::net::{FactorDbClient, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse};
-use crate::{NumberLength, NumberSpecifier, FAILED_U_SUBMISSIONS_OUT, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use async_backtrace::framed;
 use gryf::Graph;
 use gryf::algo::ShortestPaths;
@@ -191,18 +194,20 @@ pub fn add_factor_node(
             let factor_numeric = evaluate_as_numeric(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(factor.clone());
             let specifier = as_specifier(factor_vid, data, None);
-            let cached = http.cached_factors(specifier).or(factor_numeric.map(|eval| {
-                let factors = find_factors_of_numeric(eval);
-                ProcessedStatusApiResponse {
-                    status: Some(if factors.len() == 1 {
-                        Prime
-                    } else {
-                        FullyFactored
-                    }),
-                    factors: factors.into_boxed_slice(),
-                    id: Numeric(eval).known_id(),
-                }
-            }));
+            let cached = http
+                .cached_factors(specifier)
+                .or(factor_numeric.map(|eval| {
+                    let factors = find_factors_of_numeric(eval);
+                    ProcessedStatusApiResponse {
+                        status: Some(if factors.len() == 1 {
+                            Prime
+                        } else {
+                            FullyFactored
+                        }),
+                        factors: factors.into_boxed_slice(),
+                        id: Numeric(eval).known_id(),
+                    }
+                }));
             // Only full factorizations are cached or obtained via evaluate_as_numeric.
             let mut has_cached = false;
             let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
@@ -1030,7 +1035,10 @@ fn vertex_ids_except<T: FromIterator<VertexId>>(data: &FactorData, root_vid: Ver
         .collect::<T>()
 }
 
-fn known_factors_product_log10_upper_bound(data: &FactorData, cofactor_vid: VertexId) -> NumberLength {
+fn known_factors_product_log10_upper_bound(
+    data: &FactorData,
+    cofactor_vid: VertexId,
+) -> NumberLength {
     neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
         .into_iter()
         .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &data.deleted_synonyms)

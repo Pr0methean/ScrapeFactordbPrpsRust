@@ -1,18 +1,21 @@
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::{find_factors_of_numeric, NumericFactor};
+use crate::algebraic::{NumericFactor, find_factors_of_numeric};
+use crate::graph::EntryId;
 use crate::monitor::Monitor;
+use crate::net::NumberStatus::{
+    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
+};
 use crate::{
-    FactorSubmission, ReportFactorResult, EXIT_TIME, FAILED_U_SUBMISSIONS_OUT,
-    MAX_CPU_BUDGET_TENTHS, MAX_ID_EQUAL_TO_VALUE, SUBMIT_FACTOR_MAX_ATTEMPTS,
+    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
+    MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
-use std::cmp;
 use curl::easy::{Easy2, Handler, WriteError};
 use futures_util::TryFutureExt;
 use governor::middleware::StateInformationMiddleware;
@@ -27,21 +30,20 @@ use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use reqwest::Response;
 use serde_json::from_str;
+use std::cmp;
 use std::io::Write;
 use std::mem::swap;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
-use std::process::{exit, Command};
+use std::process::{Command, exit};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::Semaphore;
 use tokio::task::block_in_place;
-use tokio::time::{sleep, sleep_until, Instant};
+use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
-use crate::graph::EntryId;
-use crate::net::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
 
 pub const MAX_RETRIES: usize = 40;
 const MAX_RETRIES_WITH_FALLBACK: usize = 10;
@@ -92,7 +94,8 @@ pub trait FactorDbClient {
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
-    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (EntryId, &'a str)>;
+    fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
+    -> impl Iterator<Item = (EntryId, &'a str)>;
     async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Arc<Factor>>;
     async fn known_factors_as_digits(
         &mut self,
@@ -103,7 +106,11 @@ pub trait FactorDbClient {
     fn cached_factors(&self, id: NumberSpecifier) -> Option<ProcessedStatusApiResponse>;
     async fn try_report_factor(&self, u_id: NumberSpecifier, factor: &Factor)
     -> ReportFactorResult;
-    async fn report_numeric_factor(&self, u_id: EntryId, factor: NumericFactor) -> ReportFactorResult;
+    async fn report_numeric_factor(
+        &self,
+        u_id: EntryId,
+        factor: NumericFactor,
+    ) -> ReportFactorResult;
 }
 
 #[derive(Clone)]
@@ -373,7 +380,10 @@ impl FactorDbClient for RealFactorDbClient {
             .await
     }
 
-    fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (EntryId, &'a str)> {
+    fn read_ids_and_exprs<'a>(
+        &self,
+        haystack: &'a str,
+    ) -> impl Iterator<Item = (EntryId, &'a str)> {
         self.id_and_expr_regex
             .captures_iter(haystack)
             .flat_map(move |capture| {
@@ -640,7 +650,11 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[framed]
-    async fn report_numeric_factor(&self, u_id: EntryId, factor: NumericFactor) -> ReportFactorResult {
+    async fn report_numeric_factor(
+        &self,
+        u_id: EntryId,
+        factor: NumericFactor,
+    ) -> ReportFactorResult {
         for _ in 0..SUBMIT_FACTOR_MAX_ATTEMPTS {
             let result = self.try_report_factor(Id(u_id), &Numeric(factor)).await;
             if result != OtherError {

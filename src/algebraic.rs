@@ -1,5 +1,7 @@
 use crate::algebraic::Factor::{AddSub, Multiply, Numeric};
-use crate::{write_bignum, NumberLength, MAX_ID_EQUAL_TO_VALUE};
+use crate::graph::EntryId;
+use crate::net::BigNumber;
+use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, write_bignum};
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -20,8 +22,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::{swap, take};
 use std::sync::Arc;
-use crate::graph::EntryId;
-use crate::net::BigNumber;
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
@@ -1325,7 +1325,10 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
     }
 }
 
-pub fn nth_root_exact(factor: Arc<Factor>, root: NumericFactor) -> Result<Arc<Factor>, Arc<Factor>> {
+pub fn nth_root_exact(
+    factor: Arc<Factor>,
+    root: NumericFactor,
+) -> Result<Arc<Factor>, Arc<Factor>> {
     if root == 1 {
         return Ok(factor);
     }
@@ -1409,7 +1412,10 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
                 (0, 0)
             }
             1 => (0, 0),
-            n => (n.ilog10() as NumberLength, (n - 1).ilog10() as NumberLength + 1),
+            n => (
+                n.ilog10() as NumberLength,
+                (n - 1).ilog10() as NumberLength + 1,
+            ),
         },
         Factor::BigNumber(ref expr) => {
             let len = expr.as_ref().len();
@@ -1422,7 +1428,10 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
                 return (0, NumberLength::MAX);
             };
             let est_log = term_number as f64 * 0.20898;
-            (est_log.floor() as NumberLength, est_log.ceil() as NumberLength + 1)
+            (
+                est_log.floor() as NumberLength,
+                est_log.ceil() as NumberLength + 1,
+            )
         }
         Factor::Factorial(ref input) => {
             // factorial
@@ -1457,7 +1466,8 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
             let lower_bound = if input >= 563 {
                 (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil() as NumberLength
             } else if input >= 41 {
-                (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil() as NumberLength
+                (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil()
+                    as NumberLength
             } else {
                 0
             };
@@ -1472,7 +1482,9 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
             ref base,
             ref exponent,
         } => {
-            let Some(exponent) = evaluate_as_numeric(exponent).and_then(|exponent| NumberLength::try_from(exponent).ok()) else {
+            let Some(exponent) = evaluate_as_numeric(exponent)
+                .and_then(|exponent| NumberLength::try_from(exponent).ok())
+            else {
                 return (0, NumberLength::MAX);
             };
             if let Some(base) = evaluate_as_numeric(base) {
@@ -1556,7 +1568,10 @@ pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (NumberLength, NumberLength) 
     }
 }
 
-pub(crate) fn modulo_as_numeric(expr: Arc<Factor>, modulus: NumericFactor) -> Option<NumericFactor> {
+pub(crate) fn modulo_as_numeric(
+    expr: Arc<Factor>,
+    modulus: NumericFactor,
+) -> Option<NumericFactor> {
     if let Some(eval) = evaluate_as_numeric(&expr) {
         return Some(eval % modulus);
     }
@@ -1597,8 +1612,7 @@ pub(crate) fn modulo_as_numeric(expr: Arc<Factor>, modulus: NumericFactor) -> Op
         Multiply { ref terms } => {
             let mut product: NumericFactor = 1;
             for term in terms.iter() {
-                product =
-                    product.checked_mul(modulo_as_numeric(term.clone(), modulus)?)? % modulus;
+                product = product.checked_mul(modulo_as_numeric(term.clone(), modulus)?)? % modulus;
             }
             Some(product)
         }
@@ -1669,7 +1683,11 @@ fn is_prime(val: NumericFactor) -> bool {
     SIEVE.with_borrow(|sieve| sieve.is_prime(&val, None)) != No
 }
 
-fn pisano(term: NumericFactor, mut sequence: Vec<NumericFactor>, modulus: NumericFactor) -> NumericFactor {
+fn pisano(
+    term: NumericFactor,
+    mut sequence: Vec<NumericFactor>,
+    modulus: NumericFactor,
+) -> NumericFactor {
     let mut zeros = 0; // don't count the initial 0th term for Fibonacci sequence
     loop {
         if sequence.len() as NumericFactor == term + 1 {
@@ -2241,8 +2259,12 @@ pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
 #[cfg(test)]
 mod tests {
     use crate::NumberLength;
-use crate::algebraic::Factor::Numeric;
-    use crate::algebraic::{evaluate_as_numeric, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union, power_multiset, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS};
+    use crate::algebraic::Factor::Numeric;
+    use crate::algebraic::{
+        Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, evaluate_as_numeric,
+        factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection,
+        multiset_union, power_multiset,
+    };
     use itertools::Itertools;
     use std::iter::repeat_n;
     use std::sync::Arc;
@@ -2685,7 +2707,10 @@ use crate::algebraic::Factor::Numeric;
 
     #[test]
     fn test_evaluate_as_numeric() {
-        assert_eq!(evaluate_as_numeric(&"2^127-1".into()), Some(i128::MAX as NumericFactor));
+        assert_eq!(
+            evaluate_as_numeric(&"2^127-1".into()),
+            Some(i128::MAX as NumericFactor)
+        );
         assert_eq!(evaluate_as_numeric(&"(5^6+1)^2-1".into()), Some(244171875));
         assert_eq!(evaluate_as_numeric(&"3^3+4^4+5^5".into()), Some(3408));
     }

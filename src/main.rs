@@ -16,9 +16,8 @@ mod net;
 
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
-use net::NumberStatus::FullyFactored;
-use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use crate::algebraic::Factor;
+use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, ResourceLimits};
 use async_backtrace::framed;
@@ -28,10 +27,12 @@ use cuckoofilter::CuckooFilter;
 use futures_util::FutureExt;
 use hipstr::HipStr;
 use log::{error, info, warn};
-use net::{RealFactorDbClient, CPU_TENTHS_SPENT_LAST_CHECK};
+use net::NumberStatus::FullyFactored;
+use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
+use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use primitive_types::U256;
 use rand::seq::SliceRandom;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -48,12 +49,11 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{channel, OwnedPermit, Sender};
-use tokio::sync::{oneshot, Mutex, OnceCell};
+use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
+use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, sleep_until, timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
-use crate::graph::EntryId;
 
 pub type NumberLength = usize;
 
@@ -502,16 +502,20 @@ async fn main() -> anyhow::Result<()> {
     if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<EntryId>()?;
         if c_digits.is_none() {
-            let mut c_digits_value =
-                C_MAX_DIGITS - NumberLength::try_from((run_number * 19) % EntryId::try_from(C_MAX_DIGITS - C_MIN_DIGITS + 2)?)?;
+            let mut c_digits_value = C_MAX_DIGITS
+                - NumberLength::try_from(
+                    (run_number * 19) % EntryId::try_from(C_MAX_DIGITS - C_MIN_DIGITS + 2)?,
+                )?;
             if c_digits_value == C_MIN_DIGITS - 1 {
                 c_digits_value = 1;
             }
             c_digits = Some(c_digits_value.try_into()?);
         }
         if u_digits.is_none() {
-            let u_digits_value: NumberLength =
-                U_MIN_DIGITS + NumberLength::try_from((run_number * 19793) % EntryId::try_from(U_MAX_DIGITS - U_MIN_DIGITS + 1)?)?;
+            let u_digits_value: NumberLength = U_MIN_DIGITS
+                + NumberLength::try_from(
+                    (run_number * 19793) % EntryId::try_from(U_MAX_DIGITS - U_MIN_DIGITS + 1)?,
+                )?;
             u_digits = Some(NumberLength::try_from(u_digits_value)?.try_into()?);
         }
         if prp_start.is_none() {
