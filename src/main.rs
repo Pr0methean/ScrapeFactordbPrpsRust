@@ -64,7 +64,7 @@ const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: usize = 32;
 const MIN_DIGITS_IN_PRP: NumberLength = 300;
 const U_RESULTS_PER_PAGE: usize = 1;
-const PRP_TASK_BUFFER_SIZE: usize = (4 * PRP_RESULTS_PER_PAGE) as usize;
+const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 256;
 const C_RESULTS_PER_PAGE: usize = 5000;
 const C_TASK_BUFFER_SIZE: usize = 4096;
@@ -977,7 +977,7 @@ async fn main() -> anyhow::Result<()> {
                 info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
                 new_c_buffer_task = true;
             }
-            prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE as usize) => {
+            prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
                 let prp_permits = prp_permits?;
                 info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
