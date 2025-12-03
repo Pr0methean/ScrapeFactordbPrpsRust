@@ -1718,7 +1718,7 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
                     factor_to_power(factor, power as u128)
                 },
                 _ => Multiply {
-                    terms: new_terms.into_iter().map(|(factor, power)| factor_to_power(factor, power as u128)).collect(),
+                    terms: new_terms.into_iter().map(|(factor, power)| factor_to_power(factor, power as u128)).sorted_unstable().collect(),
                 }.into(),
             }
         }
@@ -1740,8 +1740,12 @@ pub(crate) fn simplify(expr: Rc<Factor>) -> Rc<Factor> {
             let new_left = simplify(new_left);
             let mut new_right: Vec<Rc<Factor>> = new_right
                 .into_iter()
+                .flat_map(|term| match *term {
+                    Numeric(1) => vec![],
+                    Multiply { ref terms } => terms.clone(),
+                    _ => vec![term],
+                })
                 .map(simplify)
-                .filter(|term| **term != Numeric(1))
                 .sorted_unstable()
                 .collect();
             if let Some((index, _)) = new_right
