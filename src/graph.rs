@@ -1,4 +1,3 @@
-use alloc::rc::Rc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -28,6 +27,7 @@ use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
+use std::sync::Arc;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub enum Divisibility {
@@ -37,17 +37,17 @@ pub enum Divisibility {
 }
 
 pub type DivisibilityGraph = Graph<
-    Rc<Factor>,
+    Arc<Factor>,
     Divisibility,
     Directed,
-    Stable<AdjMatrix<Rc<Factor>, Divisibility, Directed, DefaultId>>,
+    Stable<AdjMatrix<Arc<Factor>, Divisibility, Directed, DefaultId>>,
 >;
 
 pub struct FactorData {
     pub divisibility_graph: DivisibilityGraph,
     pub deleted_synonyms: BTreeMap<VertexId, VertexId>,
     pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
-    pub vertex_id_by_expr: BTreeMap<Rc<Factor>, VertexId>,
+    pub vertex_id_by_expr: BTreeMap<Arc<Factor>, VertexId>,
     pub vertex_id_by_entry_id: BTreeMap<u128, VertexId>
 }
 
@@ -126,7 +126,7 @@ pub fn propagate_divisibility(
 fn as_specifier(
     factor_vid: VertexId,
     data: &FactorData,
-    factor: Option<Rc<Factor>>,
+    factor: Option<Arc<Factor>>,
 ) -> NumberSpecifier {
     if let Some(facts) = facts_of(&data.number_facts_map, factor_vid, &data.deleted_synonyms)
         && let Some(factor_entry_id) = facts.entry_id
@@ -171,7 +171,7 @@ pub fn get_edge_mut(
 
 pub fn add_factor_node(
     data: &mut FactorData,
-    factor: Rc<Factor>,
+    factor: Arc<Factor>,
     root_vid: Option<VertexId>,
     mut entry_id: Option<u128>,
     http: &impl FactorDbClient,
@@ -307,7 +307,7 @@ pub fn get_vertex(
     divisibility_graph: &DivisibilityGraph,
     vertex_id: VertexId,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>,
-) -> Rc<Factor> {
+) -> Arc<Factor> {
     divisibility_graph
         .vertex(to_real_vertex_id(vertex_id, deleted_synonyms))
         .unwrap()
@@ -407,8 +407,8 @@ impl PartialEq<Self> for NumberFacts {
 /// cycles.
 fn compare(
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
-    left: &VertexRef<VertexId, Rc<Factor>>,
-    right: &VertexRef<VertexId, Rc<Factor>>,
+    left: &VertexRef<VertexId, Arc<Factor>>,
+    right: &VertexRef<VertexId, Arc<Factor>>,
     deleted_synonyms: &BTreeMap<VertexId, VertexId>,
 ) -> Ordering {
     let left_facts = facts_of(number_facts_map, left.id, deleted_synonyms)
@@ -1257,7 +1257,7 @@ fn merge_equivalent_expressions(
     data: &mut FactorData,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
-    equivalent: Rc<Factor>,
+    equivalent: Arc<Factor>,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     let current = get_vertex(&data.divisibility_graph, factor_vid, &data.deleted_synonyms);

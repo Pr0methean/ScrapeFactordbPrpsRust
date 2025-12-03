@@ -15,7 +15,6 @@ mod graph;
 mod monitor;
 mod net;
 
-use alloc::rc::Rc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::NumberStatus::FullyFactored;
@@ -45,6 +44,7 @@ use std::num::{NonZeroU32, NonZeroU128};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::signal::ctrl_c;
@@ -220,7 +220,7 @@ async fn check_composite(
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier {
     Id(u128),
-    Expression(Rc<Factor>),
+    Expression(Arc<Factor>),
 }
 
 impl Display for NumberSpecifier {

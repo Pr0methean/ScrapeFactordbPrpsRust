@@ -1,4 +1,3 @@
-use alloc::rc::Rc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -93,7 +92,7 @@ pub trait FactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str) -> impl Iterator<Item = (u128, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Rc<Factor>>;
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Arc<Factor>>;
     async fn known_factors_as_digits(
         &mut self,
         id: NumberSpecifier,
@@ -120,8 +119,8 @@ pub struct RealFactorDbClient {
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
     by_id_cache: BasicCache<u128, ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<Rc<Factor>, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<u128, Rc<Factor>>,
+    by_expr_cache: BasicCache<Arc<Factor>, ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<u128, Arc<Factor>>,
 }
 
 pub struct ResourceLimits {
@@ -399,7 +398,7 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Rc<Factor>> {
+    async fn try_get_expression_form(&mut self, entry_id: u128) -> Option<Arc<Factor>> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
             return Some(Factor::from(entry_id).into());
         }
@@ -410,7 +409,7 @@ impl FactorDbClient for RealFactorDbClient {
         let response = self
             .try_get_and_decode(format!("https://factordb.com/index.php?id={entry_id}").into())
             .await?;
-        let expression_form: Rc<Factor> = Factor::from(self
+        let expression_form: Arc<Factor> = Factor::from(self
             .expression_form_regex
             .captures(&response)?
             .get(1)?
