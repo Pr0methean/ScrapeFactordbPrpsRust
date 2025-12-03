@@ -1411,7 +1411,7 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
     Err(factor)
 }
 
-fn nth_root_of_product(terms: &Vec<Arc<Factor>>, root: u128) -> Option<Vec<Arc<Factor>>> {
+fn nth_root_of_product(terms: &[Arc<Factor>], root: u128) -> Option<Vec<Arc<Factor>>> {
     terms
         .iter()
         .map(|term| nth_root_exact(term.clone(), root).ok())
@@ -1558,7 +1558,7 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
     }
 }
 
-fn estimate_log10_of_product(right: &Vec<Arc<Factor>>) -> (u128, u128) {
+fn estimate_log10_of_product(right: &[Arc<Factor>]) -> (u128, u128) {
     let (denom_lower, denom_upper) = right
         .iter()
         .map(|factor| estimate_log10_internal(factor.clone()))
