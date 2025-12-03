@@ -620,12 +620,12 @@ impl Default for Factor {
 peg::parser! {
   pub grammar expression_parser() for str {
     pub rule number() -> Factor
-      = n:$(['0'..='9']+) { n.parse::<u128>().map(Factor::Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
+      = n:$(['0'..='9']+) { n.parse::<u128>().map(Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
 
     #[cache_left_rec]
     pub rule arithmetic() -> Factor = precedence!{
-      x:(@) "+" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: false } }
-      x:(@) "-" y:@ { Factor::AddSub { left: x.into(), right: y.into(), subtract: true } }
+      x:(@) "+" y:@ { AddSub { left: x.into(), right: y.into(), subtract: false } }
+      x:(@) "-" y:@ { AddSub { left: x.into(), right: y.into(), subtract: true } }
       --
       x:(@) "/" y:@ { let mut x = x;
         if let Factor::Divide { ref mut right, .. } = x {
@@ -637,11 +637,11 @@ peg::parser! {
       }
       --
       x:(@) "*" y:@ { let mut x = x;
-        if let Factor::Multiply { ref mut terms, .. } = x {
+        if let Multiply { ref mut terms, .. } = x {
             terms.push(y.into());
             x
         } else {
-            Factor::Multiply { terms: vec![x.into(), y.into()] }
+            Multiply { terms: vec![x.into(), y.into()] }
         }
       }
       --
@@ -660,7 +660,7 @@ peg::parser! {
                     output
                 }
       --
-      "M" x:@ { Factor::AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: Arc::new(x) }.into(), right: Factor::one(), subtract: true } }
+      "M" x:@ { AddSub { left: Factor::Power { base: Numeric(2).into(), exponent: Arc::new(x) }.into(), right: Factor::one(), subtract: true } }
       --
       "I" x:@ { Factor::Fibonacci(x.into()) }
       --
@@ -906,7 +906,7 @@ fn fibonacci_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
         SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
             .copied()
-            .map(|x| Factor::Numeric(x).into())
+            .map(|x| Numeric(x).into())
             .collect()
     } else if term.is_multiple_of(2) {
         let mut factors = fibonacci_factors(term >> 1, subset_recursion);
@@ -942,7 +942,7 @@ fn lucas_factors(term: u128, subset_recursion: bool) -> Vec<Arc<Factor>> {
         SMALL_LUCAS_FACTORS[term as usize]
             .iter()
             .copied()
-            .map(|x| Factor::Numeric(x).into())
+            .map(|x| Numeric(x).into())
             .collect()
     } else if !subset_recursion {
         vec![Factor::Lucas(Numeric(term).into()).into()]
@@ -1389,11 +1389,7 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
             };
         }
         Multiply { ref terms } => {
-            let new_terms = terms
-                .iter()
-                .map(|term| nth_root_exact(term.clone(), root).ok())
-                .collect::<Option<Vec<_>>>()
-                .ok_or(factor)?;
+            let new_terms = nth_root_of_product(terms, root).ok_or(factor)?;
             return Ok(simplify(Multiply { terms: new_terms }.into()));
         }
         Factor::Divide {
@@ -1401,11 +1397,7 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
             ref right,
         } => {
             let new_left = nth_root_exact(left.clone(), root)?;
-            let new_right = right
-                .iter()
-                .map(|term| nth_root_exact(term.clone(), root).ok())
-                .collect::<Option<Vec<_>>>()
-                .ok_or(factor)?;
+            let new_right = nth_root_of_product(right, root).ok_or(factor)?;
             return Ok(simplify(
                 Factor::Divide {
                     left: new_left,
@@ -1417,6 +1409,13 @@ pub fn nth_root_exact(factor: Arc<Factor>, root: u128) -> Result<Arc<Factor>, Ar
         _ => {}
     }
     Err(factor)
+}
+
+fn nth_root_of_product(terms: &Vec<Arc<Factor>>, root: u128) -> Option<Vec<Arc<Factor>>> {
+    terms
+        .iter()
+        .map(|term| nth_root_exact(term.clone(), root).ok())
+        .collect::<Option<Vec<_>>>()
 }
 
 #[inline(always)]
@@ -1521,32 +1520,14 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
             ref right,
         } => {
             let (num_lower, num_upper) = estimate_log10_internal(left.clone());
-            let (denom_lower, denom_upper) = right
-                .iter()
-                .map(|factor| estimate_log10_internal(factor.clone()))
-                .reduce(|(l1, u1), (l2, u2)| {
-                    (
-                        l1.saturating_add(l2),
-                        u1.saturating_add(u2).saturating_add(1),
-                    )
-                })
-                .unwrap();
+            let (denom_lower, denom_upper) = estimate_log10_of_product(right);
             let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
             let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
             (lower, upper)
         }
         Multiply { ref terms } => {
             // multiplication
-            let (product_lower, product_upper) = terms
-                .iter()
-                .map(|factor| estimate_log10_internal(factor.clone()))
-                .reduce(|(l1, u1), (l2, u2)| {
-                    (
-                        l1.saturating_add(l2),
-                        u1.saturating_add(u2).saturating_add(1),
-                    )
-                })
-                .unwrap();
+            let (product_lower, product_upper) = estimate_log10_of_product(terms);
             (product_lower, product_upper)
         }
         AddSub {
@@ -1575,6 +1556,20 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (u128, u128) {
         }
         Factor::UnknownExpression(_) => (0, u128::MAX),
     }
+}
+
+fn estimate_log10_of_product(right: &Vec<Arc<Factor>>) -> (u128, u128) {
+    let (denom_lower, denom_upper) = right
+        .iter()
+        .map(|factor| estimate_log10_internal(factor.clone()))
+        .reduce(|(l1, u1), (l2, u2)| {
+            (
+                l1.saturating_add(l2),
+                u1.saturating_add(u2).saturating_add(1),
+            )
+        })
+        .unwrap();
+    (denom_lower, denom_upper)
 }
 
 pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (u128, u128) {

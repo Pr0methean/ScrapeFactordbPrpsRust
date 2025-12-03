@@ -422,46 +422,6 @@ impl FactorDbClient for RealFactorDbClient {
     }
 
     #[inline]
-    fn cached_factors(&self, mut id: NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
-        if let Id(entry_id) = id
-            && entry_id <= MAX_ID_EQUAL_TO_VALUE
-        {
-            id = Expression(Numeric(entry_id).into());
-        }
-        if let Expression(ref x) = id
-            && let Numeric(n) = **x
-        {
-            debug!("Specially handling numeric expression {n}");
-            let factors = find_factors_of_u128(n).into_boxed_slice();
-            return Some(ProcessedStatusApiResponse {
-                status: Some(if factors.len() > 1 {
-                    FullyFactored
-                } else {
-                    Prime
-                }),
-                factors,
-                id: Numeric(n).known_id(),
-            });
-        }
-        let cached = match id {
-            Id(id) => self
-                .by_id_cache
-                .get(&id)
-                .or_else(|| {
-                    self.expression_form_cache
-                        .get(&id)
-                        .and_then(|expr| self.by_expr_cache.get(expr))
-                })
-                .cloned(),
-            Expression(ref expr) => self.by_expr_cache.get(expr).cloned(),
-        };
-        if cached.is_some() {
-            info!("Factor cache hit for {id}");
-        }
-        cached
-    }
-
-    #[inline]
     #[framed]
     async fn known_factors_as_digits(
         &mut self,
@@ -588,6 +548,46 @@ impl FactorDbClient for RealFactorDbClient {
             processed.factors = Box::default();
         }
         processed
+    }
+
+    #[inline]
+    fn cached_factors(&self, mut id: NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
+        if let Id(entry_id) = id
+            && entry_id <= MAX_ID_EQUAL_TO_VALUE
+        {
+            id = Expression(Numeric(entry_id).into());
+        }
+        if let Expression(ref x) = id
+            && let Numeric(n) = **x
+        {
+            debug!("Specially handling numeric expression {n}");
+            let factors = find_factors_of_u128(n).into_boxed_slice();
+            return Some(ProcessedStatusApiResponse {
+                status: Some(if factors.len() > 1 {
+                    FullyFactored
+                } else {
+                    Prime
+                }),
+                factors,
+                id: Numeric(n).known_id(),
+            });
+        }
+        let cached = match id {
+            Id(id) => self
+                .by_id_cache
+                .get(&id)
+                .or_else(|| {
+                    self.expression_form_cache
+                        .get(&id)
+                        .and_then(|expr| self.by_expr_cache.get(expr))
+                })
+                .cloned(),
+            Expression(ref expr) => self.by_expr_cache.get(expr).cloned(),
+        };
+        if cached.is_some() {
+            info!("Factor cache hit for {id}");
+        }
+        cached
     }
 
     #[framed]
