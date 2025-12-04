@@ -20,7 +20,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
-use std::mem::{swap, take};
+use std::mem::{replace, swap};
 use std::sync::Arc;
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
@@ -1075,10 +1075,11 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
     }
     let mut results = Vec::with_capacity(total_factors * 2);
     for (factor, factor_power) in possible_factors {
-        if let Ok(left_root) = nth_root_exact(new_left.clone(), factor)
-            && let Ok(right_root) = nth_root_exact(new_right.clone(), factor)
+        if let Some(left_root) = nth_root_exact(&new_left, factor)
+            && let Some(right_root) = nth_root_exact(&new_right, factor)
         {
             if factor == 2 {
+                // a^(2*x) - b^(2*x) == (a^x - b^x)*(a^x + b^x)
                 results.extend(repeat_n(
                     simplify(
                         AddSub {
@@ -1145,25 +1146,26 @@ pub fn to_like_powers_recursive_dedup(
     results
 }
 
-pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Factor>, Arc<Factor>> {
+pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Factor>> {
     if product == divisor {
-        return Ok(Factor::one());
+        return Some(Factor::one());
     }
-    if let Some(product_numeric) = evaluate_as_numeric(&product)
-        && let Some(divisor_numeric) = evaluate_as_numeric(&divisor)
+    if let Some(product_numeric) = evaluate_as_numeric(product)
+        && let Some(divisor_numeric) = evaluate_as_numeric(divisor)
     {
         return match product_numeric.div_exact(divisor_numeric) {
-            Some(divided) => Ok(Numeric(divided).into()),
-            None => Err(Numeric(product_numeric).into()),
+            Some(divided) => Some(Numeric(divided).into()),
+            None => None,
         };
     }
-    match *product {
+    match **product {
         Factor::Power {
             ref base,
             ref exponent,
         } => {
-            if *base == divisor {
-                Ok(simplify(
+            if base == divisor {
+                // x^y / x -> x^(y-1)
+                Some(simplify(
                     Factor::Power {
                         base: Arc::clone(base),
                         exponent: simplify(
@@ -1178,62 +1180,63 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
                     .into(),
                 ))
             } else if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
-                && let Ok(divisor_root) = nth_root_exact(divisor, exponent_numeric)
-            {
-                match div_exact(base.clone(), divisor_root) {
-                    Ok(divided_base) => Ok(simplify(
-                        Factor::Power {
-                            base: divided_base,
-                            exponent: Numeric(exponent_numeric).into(),
-                        }
-                        .into(),
-                    )),
-                    Err(_) => Err(Factor::Power {
-                        base: base.clone(),
+                && let Some(divisor_root) = nth_root_exact(&divisor, exponent_numeric) {
+                Some(simplify(
+                    Factor::Power {
+                        base: div_exact(base, &divisor_root)?,
                         exponent: Numeric(exponent_numeric).into(),
                     }
-                    .into()),
-                }
+                        .into(),
+                ))
             } else {
-                Err(product)
+                None
             }
         }
         Multiply { ref terms } => {
-            let mut divisor_numeric = evaluate_as_numeric(&divisor);
+            let mut divisor_terms = match **divisor {
+                Multiply { ref terms } => terms.clone(),
+                _ => vec![Arc::clone(&divisor)]
+            };
             let mut new_terms = terms.clone();
-            for (index, term) in new_terms.iter_mut().enumerate() {
-                if **term == *divisor {
+            for index in 0..new_terms.len() {
+                let term = &new_terms[index];
+                if let Some((divisor_index, _)) = divisor_terms.iter().enumerate().find(|(_, divisor_term)| **term == ***divisor_term) {
                     new_terms.remove(index);
-                    return Ok(simplify(Multiply { terms: new_terms }.into()));
+                    divisor_terms.remove(divisor_index);
+                    if divisor_terms.is_empty() {
+                        return Some(simplify(Multiply { terms: new_terms }.into()));
+                    }
                 }
-                if let Some(divisor) = &mut divisor_numeric
-                    && let Some(term_numeric) = evaluate_as_numeric(term)
-                {
-                    let gcd = term_numeric.gcd(divisor);
+            }
+            let mut divisor = divisor_terms.into_iter()
+                .map(|term| evaluate_as_numeric(&term))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .product();
+            for term in new_terms.iter_mut() {
+                if let Some(term_numeric) = evaluate_as_numeric(term) {
+                    let gcd = term_numeric.gcd(&divisor);
                     if gcd > 1 {
                         *term = Numeric(term_numeric / gcd).into();
-                        *divisor /= gcd;
-                        if *divisor == 1 {
-                            return Ok(simplify(Multiply { terms: new_terms }.into()));
+                        divisor /= gcd;
+                        if divisor == 1 {
+                            return Some(simplify(Multiply { terms: new_terms }.into()));
                         }
                     }
                 }
             }
-            Err(product)
+            None
         }
         Factor::Divide {
             ref left,
             ref right,
-        } => match div_exact(left.clone(), divisor) {
-            Ok(new_left) => Ok(simplify(
+        } => Some(simplify(
                 Factor::Divide {
-                    left: new_left,
+                    left: div_exact(left, divisor)?,
                     right: right.clone(),
                 }
                 .into(),
             )),
-            Err(_) => Err(product),
-        },
         Factor::Factorial(ref term) => {
             if let Some(divisor) = evaluate_as_numeric(&divisor)
                 && let Some(term) = evaluate_as_numeric(term)
@@ -1242,13 +1245,11 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
                 while let Some(divisor) = divisor.div_exact(new_term) {
                     new_term -= 1;
                     if divisor == 1 {
-                        return Ok(simplify(Factor::Factorial(Numeric(new_term).into()).into()));
+                        return Some(simplify(Factor::Factorial(Numeric(new_term).into()).into()));
                     }
                 }
-                Err(product)
-            } else {
-                Err(product)
             }
+            None
         }
         Factor::Primorial(ref term) => {
             if let Some(mut divisor) = evaluate_as_numeric(&divisor)
@@ -1263,28 +1264,26 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
                 {
                     new_term -= 1;
                     if divisor == 1 {
-                        return Ok(simplify(Factor::Primorial(Numeric(new_term).into()).into()));
+                        return Some(simplify(Factor::Primorial(Numeric(new_term).into()).into()));
                     }
                 }
-                Err(product)
-            } else {
-                Err(product)
             }
+            None
         }
         Factor::BigNumber(ref n) => {
             let mut n_reduced = n.as_ref();
             let mut reduced = false;
-            let d_reduced = match &*divisor {
+            let d_reduced = match **divisor {
                 Numeric(d) => {
-                    let mut d = *d;
-                    while d.is_multiple_of(10) && n_reduced.ends_with('0') {
+                    let mut d_reduced = d;
+                    while d_reduced.is_multiple_of(10) && n_reduced.ends_with('0') {
                         reduced = true;
                         n_reduced = &n_reduced[0..(n_reduced.len() - 1)];
-                        d /= 10;
+                        d_reduced /= 10;
                     }
-                    Some(Numeric(d))
+                    Some(Numeric(d_reduced))
                 }
-                Factor::BigNumber(d) => {
+                Factor::BigNumber(ref d) => {
                     let mut d_reduced = d.as_ref();
                     while d_reduced.ends_with('0') && n_reduced.ends_with('0') {
                         reduced = true;
@@ -1296,9 +1295,9 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
                 _ => None,
             };
             if reduced && let Some(d_reduced) = d_reduced {
-                div_exact(Factor::from(n_reduced).into(), d_reduced.into())
+                div_exact(&Factor::from(n_reduced).into(), &d_reduced.into())
             } else {
-                Err(product)
+                None
             }
         }
         AddSub {
@@ -1306,10 +1305,10 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
             ref right,
             subtract,
         } => {
-            if let Ok(new_left) = div_exact(left.clone(), divisor.clone())
-                && let Ok(new_right) = div_exact(right.clone(), divisor)
+            if let Some(new_left) = div_exact(left, divisor)
+                && let Some(new_right) = div_exact(right, divisor)
             {
-                Ok(simplify(
+                Some(simplify(
                     AddSub {
                         left: new_left,
                         right: new_right,
@@ -1318,62 +1317,61 @@ pub fn div_exact(product: Arc<Factor>, divisor: Arc<Factor>) -> Result<Arc<Facto
                     .into(),
                 ))
             } else {
-                Err(product)
+                None
             }
         }
-        _ => Err(product),
+        _ => None
     }
 }
 
 pub fn nth_root_exact(
-    factor: Arc<Factor>,
+    factor: &Arc<Factor>,
     root: NumericFactor,
-) -> Result<Arc<Factor>, Arc<Factor>> {
+) -> Option<Arc<Factor>> {
     if root == 1 {
-        return Ok(factor);
+        return Some(Arc::clone(factor));
     }
-    if let Some(factor_numeric) = evaluate_as_numeric(&factor) {
+    if let Some(factor_numeric) = evaluate_as_numeric(factor) {
         if factor_numeric == 1 {
-            return Ok(Factor::one());
+            return Some(Factor::one());
         }
         if let Ok(root_u32) = root.try_into() {
-            return factor_numeric
+            return Some(factor_numeric
                 .nth_root_exact(root_u32)
-                .map(|x| Numeric(x).into())
-                .ok_or(factor);
+                .map(|x| Numeric(x).into())?);
         }
     }
-    match *factor {
+    match **factor {
         Factor::Power {
             ref base,
             ref exponent,
         } => {
             if evaluate_as_numeric(base) == Some(1) {
-                return Ok(Factor::one());
+                return Some(Factor::one());
             }
             return if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
                 && let Some(reduced_exponent) = exponent_numeric.div_exact(root)
             {
-                Ok(Factor::Power {
-                    base: base.clone(),
+                Some(Factor::Power {
+                    base: Arc::clone(base),
                     exponent: Numeric(reduced_exponent).into(),
                 }
                 .into())
             } else {
-                Err(factor)
+                None
             };
         }
         Multiply { ref terms } => {
-            let new_terms = nth_root_of_product(terms, root).ok_or(factor)?;
-            return Ok(simplify(Multiply { terms: new_terms }.into()));
+            let new_terms = nth_root_of_product(terms, root)?;
+            return Some(simplify(Multiply { terms: new_terms }.into()));
         }
         Factor::Divide {
             ref left,
             ref right,
         } => {
-            let new_left = nth_root_exact(left.clone(), root)?;
-            let new_right = nth_root_of_product(right, root).ok_or(factor)?;
-            return Ok(simplify(
+            let new_left = nth_root_exact(left, root)?;
+            let new_right = nth_root_of_product(right, root)?;
+            return Some(simplify(
                 Factor::Divide {
                     left: new_left,
                     right: new_right,
@@ -1383,13 +1381,13 @@ pub fn nth_root_exact(
         }
         _ => {}
     }
-    Err(factor)
+    None
 }
 
 fn nth_root_of_product(terms: &[Arc<Factor>], root: NumericFactor) -> Option<Vec<Arc<Factor>>> {
     terms
         .iter()
-        .map(|term| nth_root_exact(term.clone(), root).ok())
+        .map(|term| nth_root_exact(term, root))
         .collect::<Option<Vec<_>>>()
 }
 
@@ -1569,112 +1567,114 @@ pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (NumberLength, NumberLength) 
 }
 
 pub(crate) fn modulo_as_numeric(
-    expr: Arc<Factor>,
+    expr: &Arc<Factor>,
     modulus: NumericFactor,
 ) -> Option<NumericFactor> {
-    if let Some(eval) = evaluate_as_numeric(&expr) {
+    if let Some(eval) = evaluate_as_numeric(expr) {
         return Some(eval % modulus);
     }
     match modulus {
         0 => {
             warn!("Attempted to evaluate {expr} modulo 0");
-            return None;
+            None
         }
-        1 => return Some(0),
-        2 | 5 => {
-            if let Some(last_digit) = expr.last_digit() {
-                return Some(last_digit as NumericFactor % modulus);
-            }
-        }
-        _ => {}
-    }
-    match *expr {
-        Numeric(n) => Some(n % modulus),
-        Factor::BigNumber(_) | Factor::ElidedNumber(_) | Factor::UnknownExpression(_) => None,
-        AddSub {
-            ref left,
-            ref right,
-            subtract,
-        } => {
-            let left = modulo_as_numeric(left.clone(), modulus)?;
-            let right = modulo_as_numeric(right.clone(), modulus)?;
-            if subtract {
-                let diff = left.abs_diff(right);
-                Some(if left > right {
-                    diff.rem_euclid(modulus)
-                } else {
-                    (modulus - diff.rem_euclid(modulus)) % modulus
-                })
-            } else {
-                Some((left + right) % modulus)
-            }
-        }
-        Multiply { ref terms } => {
-            let mut product: NumericFactor = 1;
-            for term in terms.iter() {
-                product = product.checked_mul(modulo_as_numeric(term.clone(), modulus)?)? % modulus;
-            }
-            Some(product)
-        }
-        Factor::Divide {
-            ref left,
-            ref right,
-        } => {
-            let mut result = modulo_as_numeric(left.clone(), modulus)?;
-            for term in right.iter() {
-                let term_mod = modulo_as_numeric(term.clone(), modulus)?;
-                match modinv(term_mod, modulus) {
-                    Some(inv) => result = (result * inv) % modulus,
-                    None => result = result.div_exact(modulus)?,
-                }
-            }
-            Some(result)
-        }
-        Factor::Power {
-            ref base,
-            ref exponent,
-        } => {
-            let base_mod = modulo_as_numeric(base.clone(), modulus)?;
-            let exp = evaluate_as_numeric(exponent)?;
-            Some(base_mod.powm(exp, &modulus))
-        }
-        Factor::Fibonacci(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            Some(pisano(term, vec![0, 1, 1], modulus))
-        }
-        Factor::Lucas(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            Some(pisano(term, vec![2, 1], modulus))
-        }
-        Factor::Factorial(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            if term >= modulus {
-                return Some(0);
-            }
-            let mut result = 1;
-            for i in 2..=term {
-                result = (result * i) % modulus;
-                if result == 0 {
-                    return Some(0);
-                }
-            }
-            Some(result)
-        }
-        Factor::Primorial(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            if term >= modulus {
-                return Some(0);
-            }
-            let mut result = 1;
-            for i in 2..=term {
-                if is_prime(i) {
-                    result = (result * i) % modulus;
-                    if result == 0 {
-                        return Some(0);
+        1 => Some(0),
+        _ => {
+            match **expr {
+                Numeric(n) => Some(n % modulus),
+                Factor::BigNumber(_) => {
+                    if (modulus == 2 || modulus == 5) && let Some(last_digit) = expr.last_digit() {
+                        Some(last_digit as NumericFactor % modulus)
+                    } else {
+                        None
+                    }
+                } | Factor::ElidedNumber(_) | Factor::UnknownExpression(_) => None,
+                AddSub {
+                    ref left,
+                    ref right,
+                    subtract,
+                } => {
+                    let left = modulo_as_numeric(left, modulus)?;
+                    let right = modulo_as_numeric(right, modulus)?;
+                    if subtract {
+                        let diff = left.abs_diff(right);
+                        Some(if left > right {
+                            diff.rem_euclid(modulus)
+                        } else {
+                            (modulus - diff.rem_euclid(modulus)) % modulus
+                        })
+                    } else {
+                        Some((left + right) % modulus)
                     }
                 }
+                Multiply { ref terms } => {
+                    let mut product: NumericFactor = 1;
+                    for term in terms.iter() {
+                        product = product.checked_mul(modulo_as_numeric(term, modulus)?)? % modulus;
+                    }
+                    Some(product)
+                }
+                Factor::Divide {
+                    ref left,
+                    ref right,
+                } => {
+                    let mut result = modulo_as_numeric(left, modulus)?;
+                    for term in right.iter() {
+                        let term_mod = modulo_as_numeric(term, modulus)?;
+                        match modinv(term_mod, modulus) {
+                            Some(inv) => result = (result * inv) % modulus,
+                            None => result = result.div_exact(modulus)?,
+                        }
+                    }
+                    Some(result)
+                }
+                Factor::Power {
+                    ref base,
+                    ref exponent,
+                } => {
+                    let base_mod = modulo_as_numeric(base, modulus)?;
+                    let exp = evaluate_as_numeric(exponent)?;
+                    Some(base_mod.powm(exp, &modulus))
+                }
+                Factor::Fibonacci(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    Some(pisano(term, vec![0, 1, 1], modulus))
+                }
+                Factor::Lucas(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    Some(pisano(term, vec![2, 1], modulus))
+                }
+                Factor::Factorial(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    if term >= modulus {
+                        return Some(0);
+                    }
+                    let mut result = 1;
+                    for i in 2..=term {
+                        result = (result * i) % modulus;
+                        if result == 0 {
+                            return Some(0);
+                        }
+                    }
+                    Some(result)
+                }
+                Factor::Primorial(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    if term >= modulus {
+                        return Some(0);
+                    }
+                    let mut result = 1;
+                    for i in 2..=term {
+                        if is_prime(i) {
+                            result = (result * i) % modulus;
+                            if result == 0 {
+                                return Some(0);
+                            }
+                        }
+                    }
+                    Some(result)
+                }
             }
-            Some(result)
         }
     }
 }
@@ -1731,7 +1731,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                         if let Multiply { ref terms } = **term {
                             terms.clone()
                         } else {
-                            vec![term.clone()]
+                            vec![Arc::clone(term)]
                         }
                         .into_iter()
                     })
@@ -1759,17 +1759,18 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             ref left,
             ref right,
         } => {
-            let mut new_left = left.clone();
+            let mut new_left = Arc::clone(left);
             let mut new_right = right.clone();
             while let Factor::Divide {
                 left: ref left_left,
                 right: ref mid,
             } = *new_left
             {
-                let new_right_right = new_right;
-                new_right = mid.clone();
+                // (left_left / mid) / right
+                let new_right_right = replace(&mut new_right, mid.clone());
                 new_right.extend(new_right_right);
-                new_left = left_left.clone();
+                new_left = Arc::clone(left_left);
+                // left_left / (mid * right)
             }
             let new_left = simplify(new_left);
             let mut new_right: Vec<Arc<Factor>> = new_right
@@ -1803,8 +1804,8 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             ref base,
             ref exponent,
         } => {
-            let mut new_base = simplify(base.clone());
-            let mut new_exponent = simplify(exponent.clone());
+            let mut new_base = simplify(Arc::clone(base));
+            let mut new_exponent = simplify(Arc::clone(exponent));
             if let Numeric(new_base_numeric) = *new_base {
                 if new_base_numeric == 1 {
                     return Factor::one();
@@ -1837,8 +1838,8 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             ref right,
             subtract,
         } => {
-            let mut left = simplify(left.clone());
-            let mut right = simplify(right.clone());
+            let mut left = simplify(Arc::clone(left));
+            let mut right = simplify(Arc::clone(right));
             match left.cmp(&right) {
                 Ordering::Less => {}
                 Ordering::Equal => {
@@ -2084,16 +2085,8 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                             if *left_factor == factor {
                                 return Some((index, true));
                             }
-                            match div_exact(take(left_factor), factor.clone()) {
-                                Ok(quotient) => {
-                                    *left_factor = quotient;
-                                    Some((index, false))
-                                }
-                                Err(returned_left_factor) => {
-                                    *left_factor = returned_left_factor;
-                                    None
-                                }
-                            }
+                            *left_factor = div_exact(left_factor, &factor)?;
+                            Some((index, false))
                         })
                         .next()
                 {
@@ -2132,7 +2125,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             for prime in SMALL_PRIMES {
                 let mut power = prime as NumericFactor;
                 let prime_factor: Arc<Factor> = Numeric(power).into();
-                while modulo_as_numeric(expr.clone(), power) == Some(0) {
+                while modulo_as_numeric(&expr, power) == Some(0) {
                     factors.push(prime_factor.clone());
                     let Some(new_power) = power.checked_mul(prime as NumericFactor) else {
                         break;
@@ -2142,13 +2135,13 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             }
             factors = multiset_union(vec![
                 factors,
-                to_like_powers_recursive_dedup(left.clone(), right.clone(), subtract),
-                find_common_factors(left.clone(), right.clone()),
+                to_like_powers_recursive_dedup(Arc::clone(left), Arc::clone(right), subtract),
+                find_common_factors(Arc::clone(left), Arc::clone(right)),
             ]);
             let cofactors: Vec<_> = factors
                 .iter()
                 .unique()
-                .flat_map(|factor: &Arc<Factor>| div_exact(Arc::clone(&expr), Arc::clone(factor)).ok())
+                .flat_map(|factor: &Arc<Factor>| div_exact(&expr, factor))
                 .collect();
             factors = multiset_union(vec![factors, cofactors]);
             factors
@@ -2491,7 +2484,7 @@ mod tests {
         let expr = repeat_n("(2^9+1)", 1 << 16).join("*");
         find_factors(&expr);
         let expr = Arc::new(Factor::from(expr));
-        crate::algebraic::estimate_log10_internal(expr.clone());
+        crate::algebraic::estimate_log10_internal(Arc::clone(&expr));
         evaluate_as_numeric(&expr);
     }
 

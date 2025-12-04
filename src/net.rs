@@ -551,7 +551,7 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache.insert(expr.clone(), processed.clone());
+                self.by_expr_cache.insert(Arc::clone(expr), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
