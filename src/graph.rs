@@ -911,19 +911,27 @@ pub async fn find_and_submit_factors(
                 cofactor_facts.factors_known_to_factordb
                 && !known_factor_vids.is_empty()
             {
-                let (possible_factors, unknown_non_factors): (Vec<_>, Vec<_>) = known_factor_vids
+                let mut by_status = known_factor_vids
                     .iter()
-                    .filter(|known_factor_vid| get_edge(&data.divisibility_graph, factor_vid, **known_factor_vid, &mut data.deleted_synonyms) != Some(NotFactor))
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .partition(|known_factor_vid| {
-                        factor.may_be_proper_divisor_of(
-                            get_vertex(&data.divisibility_graph, **known_factor_vid, &mut data.deleted_synonyms),
+                    .copied()
+                    .flat_map(|known_factor_vid| {
+                        if get_edge(&data.divisibility_graph, factor_vid, known_factor_vid, &mut data.deleted_synonyms) != Some(NotFactor) {
+                            None
+                        } else if factor.may_be_proper_divisor_of(
+                            get_vertex(&data.divisibility_graph, known_factor_vid, &mut data.deleted_synonyms),
                         ) && cofactor_lower_bound_log10
-                            <= facts_of(&data.number_facts_map, **known_factor_vid, &mut data.deleted_synonyms)
+                            <= facts_of(&data.number_facts_map, known_factor_vid, &mut data.deleted_synonyms)
                             .expect("known_factor_statuses included a number not entered in number_facts_map")
-                            .upper_bound_log10
-                    });
+                            .upper_bound_log10 {
+                            Some((false, known_factor_vid))
+                        } else {
+                            Some((true, known_factor_vid))
+                        }
+                    })
+                    .into_group_map();
+                let possible_factors = by_status.remove(&true).unwrap_or(vec![]);
+                let unknown_non_factors = by_status.remove(&false).unwrap_or(vec![]);
+                drop(by_status);
                 if possible_factors.is_empty() {
                     // No possible path from factor to cofactor
                     for unknown_non_factor in unknown_non_factors {
