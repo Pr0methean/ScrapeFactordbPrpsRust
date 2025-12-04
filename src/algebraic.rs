@@ -774,7 +774,10 @@ macro_rules! factor_from_str {
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
                     .map(|factor| Arc::unwrap_or_clone(simplify(factor.into())))
-                    .unwrap_or_else(|_| Factor::UnknownExpression(value.into()))
+                    .unwrap_or_else(|e| {
+                      error!("Error parsing expression {value}: {e}");
+                      Factor::UnknownExpression(value.into())
+                    })
             }
         }
     };
