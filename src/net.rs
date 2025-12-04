@@ -374,7 +374,7 @@ impl FactorDbClient for RealFactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits> {
         let response = self
-            .try_get_and_decode_core("https://factordb.com/res.php".into())
+            .try_get_and_decode_core("https://factordb.com/res.php")
             .await?;
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
             .await

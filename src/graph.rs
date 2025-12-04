@@ -802,7 +802,7 @@ pub async fn find_and_submit_factors(
                 cofactor_vid,
                 &mut data.deleted_synonyms,
             );
-            if !factor.may_be_proper_divisor_of(&cofactor) {
+            if !factor.may_be_proper_divisor_of(cofactor) {
                 debug!(
                     "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                     smaller or equal or fails last-digit test"
@@ -848,7 +848,7 @@ pub async fn find_and_submit_factors(
                     .into_iter()
                         .partition(|known_factor_vid| {
                             factor.may_be_proper_divisor_of(
-                                &get_vertex(&data.divisibility_graph, *known_factor_vid, &mut data.deleted_synonyms),
+                                get_vertex(&data.divisibility_graph, *known_factor_vid, &mut data.deleted_synonyms),
                             ) && cofactor_lower_bound_log10
                                 <= facts_of(&data.number_facts_map, *known_factor_vid, &mut data.deleted_synonyms)
                                 .expect("known_factor_statuses included a number not entered in number_facts_map")
@@ -910,7 +910,7 @@ pub async fn find_and_submit_factors(
             match http
                 .try_report_factor(
                     dest_specifier,
-                    &get_vertex(&data.divisibility_graph, factor_vid, &mut data.deleted_synonyms),
+                    get_vertex(&data.divisibility_graph, factor_vid, &mut data.deleted_synonyms),
                 )
                 .await
             {
@@ -955,7 +955,7 @@ pub async fn find_and_submit_factors(
                                     &data.number_facts_map,
                                     &VertexRef {
                                         id: *v2,
-                                        attr: &get_vertex(
+                                        attr: get_vertex(
                                             &data.divisibility_graph,
                                             *v2,
                                             &mut data.deleted_synonyms,
@@ -963,7 +963,7 @@ pub async fn find_and_submit_factors(
                                     },
                                     &VertexRef {
                                         id: *v1,
-                                        attr: &get_vertex(
+                                        attr: get_vertex(
                                             &data.divisibility_graph,
                                             *v1,
                                             &mut data.deleted_synonyms,

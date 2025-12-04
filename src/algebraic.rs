@@ -1153,10 +1153,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
     if let Some(product_numeric) = evaluate_as_numeric(product)
         && let Some(divisor_numeric) = evaluate_as_numeric(divisor)
     {
-        return match product_numeric.div_exact(divisor_numeric) {
-            Some(divided) => Some(Numeric(divided).into()),
-            None => None,
-        };
+        return product_numeric.div_exact(divisor_numeric).map(|divided| Numeric(divided).into());
     }
     match **product {
         Factor::Power {
@@ -1180,7 +1177,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                     .into(),
                 ))
             } else if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
-                && let Some(divisor_root) = nth_root_exact(&divisor, exponent_numeric) {
+                && let Some(divisor_root) = nth_root_exact(divisor, exponent_numeric) {
                 Some(simplify(
                     Factor::Power {
                         base: div_exact(base, &divisor_root)?,
@@ -1195,7 +1192,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
         Multiply { ref terms } => {
             let mut divisor_terms = match **divisor {
                 Multiply { ref terms } => terms.clone(),
-                _ => vec![Arc::clone(&divisor)]
+                _ => vec![Arc::clone(divisor)]
             };
             let mut new_terms = terms.clone();
             for index in 0..new_terms.len() {
@@ -1238,7 +1235,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                 .into(),
             )),
         Factor::Factorial(ref term) => {
-            if let Some(divisor) = evaluate_as_numeric(&divisor)
+            if let Some(divisor) = evaluate_as_numeric(divisor)
                 && let Some(term) = evaluate_as_numeric(term)
             {
                 let mut new_term = term;
@@ -1252,7 +1249,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
             None
         }
         Factor::Primorial(ref term) => {
-            if let Some(mut divisor) = evaluate_as_numeric(&divisor)
+            if let Some(mut divisor) = evaluate_as_numeric(divisor)
                 && let Some(term) = evaluate_as_numeric(term)
             {
                 let mut new_term = term;
@@ -1336,9 +1333,9 @@ pub fn nth_root_exact(
             return Some(Factor::one());
         }
         if let Ok(root_u32) = root.try_into() {
-            return Some(factor_numeric
+            return factor_numeric
                 .nth_root_exact(root_u32)
-                .map(|x| Numeric(x).into())?);
+                .map(|x| Numeric(x).into());
         }
     }
     match **factor {
