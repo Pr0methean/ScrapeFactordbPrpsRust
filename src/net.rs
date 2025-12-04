@@ -84,11 +84,7 @@ pub trait FactorDbClient {
     ) -> Option<ResourceLimits>;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    async fn retrying_get_and_decode(
-        &self,
-        url: &str,
-        retry_delay: Duration,
-    ) -> HipStr<'static>;
+    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> HipStr<'static>;
     async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>>;
     async fn try_get_resource_limits(
         &self,
@@ -318,11 +314,7 @@ impl FactorDbClient for RealFactorDbClient {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     #[framed]
-    async fn retrying_get_and_decode(
-        &self,
-        url: &str,
-        retry_delay: Duration,
-    ) -> HipStr<'static> {
+    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> HipStr<'static> {
         for _ in 0..MAX_RETRIES {
             if let Some(value) = self.try_get_and_decode(url).await {
                 return value;
@@ -551,7 +543,8 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache.insert(Arc::clone(expr), processed.clone());
+                self.by_expr_cache
+                    .insert(Arc::clone(expr), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -564,7 +557,13 @@ impl FactorDbClient for RealFactorDbClient {
     fn cached_factors(&self, id: &NumberSpecifier) -> Option<ProcessedStatusApiResponse> {
         let numeric_or_id = match id {
             Id(entry_id) => Some(*entry_id),
-            Expression(x) => if let Numeric(n) = **x { Some(n) } else { None }
+            Expression(x) => {
+                if let Numeric(n) = **x {
+                    Some(n)
+                } else {
+                    None
+                }
+            }
         };
         if let Some(entry_id) = numeric_or_id
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
