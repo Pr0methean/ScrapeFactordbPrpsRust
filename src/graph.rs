@@ -767,7 +767,7 @@ pub async fn find_and_submit_factors(
             .into_iter()
             .filter(|dest_vid|
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                    get_edge(&mut data.divisibility_graph, factor_vid, *dest_vid, &mut data.deleted_synonyms).is_none())
+                    get_edge(&data.divisibility_graph, factor_vid, *dest_vid, &mut data.deleted_synonyms).is_none())
             .collect::<Box<[_]>>();
         if dest_factors.is_empty() {
             continue;
