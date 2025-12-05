@@ -744,6 +744,11 @@ impl Factor {
         if self == other {
             return false;
         }
+        if let Factor::Divide { left, right } = self
+            && !(Multiply {terms: right.clone()}.may_be_proper_divisor_of(left)) {
+            // Can't be an integer, therefore can't be a divisor
+            return false;
+        }
         if let Factor::Divide { left, .. } = other
             && !self.may_be_proper_divisor_of(left)
         {
@@ -2771,6 +2776,7 @@ mod tests {
             "123456789123456789123456789123456789123456789",
             "123456789123456789123456789123456789123456789/3"
         ));
+        assert!(!may_be_proper_divisor_of("2/12345", "12345"));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
     }
     #[test]
@@ -2804,10 +2810,16 @@ mod tests {
         assert!(factors.contains(&super::Factor::three()));
         
         // Should contain a generic factor which is the Divide term
-        let has_divide = factors.iter().any(|f| matches!(**f, super::Factor::Divide { .. }));
+        let has_divide = factors.iter().any(|f| matches!(**f, super::Factor::Divide { ref right, .. } if right.contains_key(&Factor::two())));
         assert!(has_divide, "Should return a symbolic Divide term");
 
         // Should prevent infinite recursion
         factors.into_iter().for_each(|f| {super::find_factors(f);});
+    }
+
+    #[test]
+    fn test_parser_sanity() {
+        assert!(matches!(Factor::from("20025433792284810863801624695138170069954824799360087619907573551803727319746587493776261114573137810793371441975422203540802400135196/2"),
+            super::Factor::Divide { ref right, .. } if right.contains_key(&Factor::two())));
     }
 }
