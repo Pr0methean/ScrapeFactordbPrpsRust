@@ -2881,6 +2881,69 @@ mod tests {
     }
 
     #[test]
+    fn test_large_fibonacci_lucas_factors() {
+        use primitive_types::U256;
+        fn fib(n: usize) -> U256 {
+            let mut a = U256::from(0);
+            let mut b = U256::from(1);
+            for _ in 0..n {
+                let tmp = a;
+                a = b;
+                b = tmp + b;
+            }
+            a
+        }
+
+        fn luc(n: usize) -> U256 {
+             let mut a = U256::from(2);
+            let mut b = U256::from(1);
+             for _ in 0..n {
+                let tmp = a;
+                a = b;
+                b = tmp + b;
+            }
+            a
+        }
+
+        for n in 2..=300 {
+            let f_n = fib(n);
+            let factors = fibonacci_factors(n as NumericFactor, true);
+            let mut product = U256::from(1);
+            for factor in factors {
+                 if let Some(val) = evaluate_as_numeric(&factor) {
+                    assert_eq!(f_n % U256::from(val), U256::from(0), "Factor {} of F({}) = {} is not a divisor", val, n, f_n);
+                    product *= U256::from(val);
+                } else {
+                     assert!(n >= SMALL_FIBONACCI_FACTORS.len(), "Factor {:?} of I({}) is not numeric", factor, n);
+                }
+            }
+            if n < SMALL_FIBONACCI_FACTORS.len() {
+                assert_eq!(product, f_n, "Product of factors of F({}) != I({})", n, n);
+            } else {
+                assert!(product <= f_n);
+            }
+
+             let l_n = luc(n);
+            let factors = lucas_factors(n as NumericFactor, true);
+            let mut product = U256::from(1);
+            for factor in factors {
+                if let Some(val) = evaluate_as_numeric(&factor) {
+                    assert_eq!(l_n % U256::from(val), U256::from(0), "Factor {} of L({}) = {} is not a divisor", val, n, l_n);
+                    product *= U256::from(val);
+                } else {
+                    assert!(n >= SMALL_LUCAS_FACTORS.len(), "Factor {:?} of L({}) is not numeric", factor, n);
+                }
+            }
+            if n < SMALL_LUCAS_FACTORS.len() {
+                assert_eq!(product, l_n, "Product of factors of L({}) != L({})", n, n);
+            } else {
+                assert!(product <= l_n);
+            }
+
+        }
+    }
+
+    #[test]
     fn test_parse_elided() {
         assert!(matches!(Factor::from("2002...96"), Factor::ElidedNumber(_)));
     }
