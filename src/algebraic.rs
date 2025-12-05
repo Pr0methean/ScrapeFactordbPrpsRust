@@ -2121,7 +2121,11 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             let left_remaining_factors = find_factors(left.clone());
             let mut left_remaining_factors = count_frequencies(left_remaining_factors);
             while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
-                let subfactors = find_factors(factor.clone());
+                let subfactors = if factor == expr {
+                    vec![Arc::clone(&factor)]
+                } else {
+                    find_factors(factor.clone())
+                };
                 subfactors
                     .into_iter()
                     .filter(|subfactor| *subfactor != factor)
@@ -2806,5 +2810,8 @@ mod tests {
         // Should contain a generic factor which is the Divide term
         let has_divide = factors.iter().any(|f| matches!(**f, super::Factor::Divide { .. }));
         assert!(has_divide, "Should return a symbolic Divide term");
+
+        // Should prevent infinite recursion
+        factors.into_iter().for_each(|f| {super::find_factors(f);});
     }
 }
