@@ -504,7 +504,7 @@ async fn main() -> anyhow::Result<()> {
         if c_digits.is_none() {
             let mut c_digits_value = C_MAX_DIGITS
                 - NumberLength::try_from(
-                    (run_number * 19) % EntryId::try_from(C_MAX_DIGITS - C_MIN_DIGITS + 2)?,
+                    (run_number * 19) % EntryId::from(C_MAX_DIGITS - C_MIN_DIGITS + 2),
                 )?;
             if c_digits_value == C_MIN_DIGITS - 1 {
                 c_digits_value = 1;
@@ -514,7 +514,7 @@ async fn main() -> anyhow::Result<()> {
         if u_digits.is_none() {
             let u_digits_value: NumberLength = U_MIN_DIGITS
                 + NumberLength::try_from(
-                    (run_number * 19793) % EntryId::try_from(U_MAX_DIGITS - U_MIN_DIGITS + 1)?,
+                    (run_number * 19793) % EntryId::from(U_MAX_DIGITS - U_MIN_DIGITS + 1),
                 )?;
             u_digits = Some(NumberLength::try_from(u_digits_value)?.try_into()?);
         }

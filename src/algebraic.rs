@@ -1292,8 +1292,8 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                 .into_iter()
                 .product();
             let product_numeric: NumericFactor = terms
-                .into_iter()
-                .map(|(term, exponent)| evaluate_as_numeric(&term).and_then(|numeric| numeric.checked_pow(*exponent)))
+                .iter()
+                .map(|(term, exponent)| evaluate_as_numeric(term).and_then(|numeric| numeric.checked_pow(*exponent)))
                 .collect::<Option<Vec<_>>>()?
                 .into_iter()
                 .product();

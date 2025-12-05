@@ -556,7 +556,7 @@ impl NumberFacts {
                         if matches!(other.factors_known_to_factordb, UpToDate(_)) {
                             UpToDate(f)
                         } else {
-                            NotUpToDate(f.into_iter().chain(other.factors_known_to_factordb.to_vec().into_iter()).sorted_unstable().unique().collect())
+                            NotUpToDate(f.into_iter().chain(other.factors_known_to_factordb.to_vec()).sorted_unstable().unique().collect())
                         }
                     }
                     x => x,
@@ -687,7 +687,7 @@ pub async fn find_and_submit_factors(
     // Sort backwards so that we try to submit largest factors first
     let mut any_failed_retryably = false;
     let (root_denominator_terms, root_denominator) = if let Factor::Divide {ref right, ..}
-            = **get_vertex(&mut data.divisibility_graph, root_vid, &mut data.deleted_synonyms) {
+            = **get_vertex(&data.divisibility_graph, root_vid, &mut data.deleted_synonyms) {
         let terms = right.clone();
         (Some(terms.clone()), Some(Arc::new(Factor::Multiply {terms})))
     } else {
@@ -754,7 +754,7 @@ pub async fn find_and_submit_factors(
                 if let Some(ref root_denominator) = root_denominator {
                     facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms).checked_with_root_denominator = true;
                     if root_denominator.may_be_proper_divisor_of(&factor) {
-                        let divided = div_exact(&factor, &root_denominator)
+                        let divided = div_exact(&factor, root_denominator)
                             .unwrap_or_else(|| Factor::Divide { left: factor, right: Option::<&BTreeMap<_,_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
                         let (divided_vid, added) = add_factor_node(&mut data, divided, Some(root_vid), None, http);
                         if added {
@@ -1071,7 +1071,7 @@ pub async fn find_and_submit_factors(
                         let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms);
                         if !replace(&mut facts.checked_with_root_denominator, true) {
                             let factor = get_vertex(&data.divisibility_graph, factor_vid, &mut data.deleted_synonyms);
-                            let divided = div_exact(&factor, &root_denominator)
+                            let divided = div_exact(factor, root_denominator)
                                 .unwrap_or_else(|| Factor::Divide { left: Arc::clone(factor), right: Option::<&BTreeMap<_,_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
                             let (divided_vid, added) = add_factor_node(&mut data, divided, Some(root_vid), None, http);
                             if added {
