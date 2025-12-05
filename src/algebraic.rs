@@ -604,7 +604,7 @@ peg::parser! {
             x
         } else if let Factor::Divide { ref mut left, ref mut right } = y {
             let old_left = core::mem::take(left);
-            *left = Factor::Multiply { terms: [(old_left, 1), (x.into(), 1)].into() }.into();
+            *left = Multiply { terms: [(old_left, 1), (x.into(), 1)].into() }.into();
             y
         } else {
             Factor::Divide { left: x.into(), right: [(y.into(), 1)].into() }
@@ -1106,34 +1106,35 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
         return vec![];
     }
     let mut results = Vec::with_capacity(total_factors * 2);
-    for (factor, factor_power) in possible_factors {
+    for (factor, _factor_power) in possible_factors {
         if let Ok(factor) = NumberLength::try_from(factor)
             && let Some(left_root) = nth_root_exact(&new_left, factor)
             && let Some(right_root) = nth_root_exact(&new_right, factor)
         {
             if subtract {
-                if factor_power.is_multiple_of(2) {
-                    results.push(
-                        simplify(
-                            AddSub {
-                                left: Arc::clone(&left_root),
-                                right: Arc::clone(&right_root),
-                                subtract: false,
-                            }.into(),
-                        ),
-                    );
-                }
                 results.push(
                     simplify(
                         AddSub {
-                            left: left_root,
-                            right: right_root,
+                            left: Arc::clone(&left_root),
+                            right: Arc::clone(&right_root),
                             subtract: true,
                         }
                             .into(),
                     ),
                 );
-            } else if !factor_power.is_multiple_of(2) {
+                if factor == 2 {
+                    results.push(
+                        simplify(
+                            AddSub {
+                                left: left_root,
+                                right: right_root,
+                                subtract: false,
+                            }
+                                .into(),
+                        ),
+                    );
+                }
+            } else if factor != 2 {
                 results.push(
                     simplify(
                         AddSub {
@@ -2104,7 +2105,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             let power = evaluate_as_numeric(exponent)
                 .and_then(|power| usize::try_from(power).ok())
                 .unwrap_or(MAX_REPEATS)
-                .min(MAX_REPEATS) as usize;
+                .min(MAX_REPEATS);
             let base_factors = find_factors(base.clone());
             repeat_n(base_factors, power).flatten().collect()
         }
@@ -2129,18 +2130,18 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             let mut right_remaining_factors = right.clone();
             while let Some((factor, exponent)) = right_remaining_factors.pop_last() {
                 let subfactors = find_factors(Arc::clone(&factor));
-                if (subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor))
-                        && let Some(left_exponent) = left_recursive_factors.get_mut(&factor)
-                {
-                    let min_exponent = (*left_exponent).min(exponent);
-                    *left_exponent -= min_exponent;
-                    if min_exponent != exponent {
-                        right_remaining_factors.insert(factor, exponent - min_exponent);
+                if subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor) {
+                    if let Some(left_exponent) = left_recursive_factors.get_mut(&factor) {
+                        let min_exponent = (*left_exponent).min(exponent);
+                        *left_exponent -= min_exponent;
+                        if min_exponent != exponent && min_exponent != 0 {
+                            right_remaining_factors.insert(factor, exponent - min_exponent);
+                        }
                     }
                 } else {
-                right_remaining_factors.extend(
-                        count_frequencies(subfactors)
-                    );
+                    for (subfactor, subfactor_exponent) in count_frequencies(subfactors) {
+                        *right_remaining_factors.entry(subfactor).or_insert(0) += subfactor_exponent;
+                    }
                 }
             }
             left_recursive_factors
