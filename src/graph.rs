@@ -556,7 +556,7 @@ impl NumberFacts {
                         if matches!(other.factors_known_to_factordb, UpToDate(_)) {
                             UpToDate(f)
                         } else {
-                            NotUpToDate(f)
+                            NotUpToDate(f.into_iter().chain(other.factors_known_to_factordb.to_vec().into_iter()).sorted_unstable().unique().collect())
                         }
                     }
                     x => x,
