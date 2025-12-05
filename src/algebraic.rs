@@ -1,12 +1,13 @@
-use crate::algebraic::Factor::{AddSub, Multiply, Numeric};
+use core::fmt::Write;
+use crate::algebraic::Factor::{AddSub, MultiplyDivide, Numeric};
 use crate::graph::EntryId;
 use crate::net::BigNumber;
-use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, write_bignum};
+use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, write_bignum, SignedNumberLength};
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
-use num_modular::ModularPow;
+use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
@@ -22,6 +23,7 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::{replace, swap};
 use std::sync::Arc;
+use simple_log::new;
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
@@ -563,13 +565,7 @@ pub enum Factor {
         right: Arc<Factor>,
         subtract: bool,
     },
-    Multiply {
-        terms: Vec<Arc<Factor>>,
-    },
-    Divide {
-        left: Arc<Factor>,
-        right: Vec<Arc<Factor>>,
-    },
+    MultiplyDivide(BTreeMap<Arc<Factor>, SignedNumberLength>),
     Power {
         base: Arc<Factor>,
         exponent: Arc<Factor>,
@@ -596,38 +592,51 @@ peg::parser! {
       x:(@) "+" y:@ { AddSub { left: x.into(), right: y.into(), subtract: false } }
       x:(@) "-" y:@ { AddSub { left: x.into(), right: y.into(), subtract: true } }
       --
-      x:(@) "/" y:@ { let mut x = x;
-        if let Factor::Divide { ref mut right, .. } = x {
-            right.push(y.into());
+      x:(@) "/" y:@ { let mut x = x; let mut y = y;
+        if let MultiplyDivide(ref mut terms) = x {
+            *terms.entry(y.into()).or_insert(0) -= 1;
             x
+        } else if let MultiplyDivide(ref mut terms) = y {
+            terms.values_mut().for_each(|x| *x = -*x);
+            *terms.entry(x.into()).or_insert(0) += 1;
+            y
         } else {
-            Factor::Divide { left: x.into(), right: vec![y.into()] }
+            MultiplyDivide([(x.into(), 1), (y.into(), -1)].into())
         }
       }
       --
-      x:(@) "*" y:@ { let mut x = x;
-        if let Multiply { ref mut terms, .. } = x {
-            terms.push(y.into());
+      x:(@) "*" y:@ { let mut x = x; let mut y = y;
+        if let Factor::MultiplyDivide(ref mut terms) = x {
+            *terms.entry(y.into()).or_insert(0) += 1;
             x
+        } else if let Factor::MultiplyDivide(ref mut terms) = y {
+            *terms.entry(x.into()).or_insert(0) += 1;
+            y
         } else {
-            Multiply { terms: vec![x.into(), y.into()] }
+            Factor::MultiplyDivide([(x.into(), 1), (y.into(), 1)].into())
         }
       }
       --
-      x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
+      x:@ "^" y:(@) {
+        if let Some(n) = evaluate_as_numeric(&y) && let Ok(n) = i32::try_from(n) {
+            Factor::MultiplyDivide([(x.into(), n)].into())
+        } else {
+            Factor::Power { base: x.into(), exponent: y.into() }
+        }
+      }
       --
       x:@ "!" { Factor::Factorial(x.into()) }
       x:@ y:$("#"+) {
-                    let hashes = y.len();
-                    let mut output = x;
-                    for _ in 0..(hashes >> 1) {
-                        output = Factor::Primorial(Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_numeric(&output).unwrap() as u64)) as NumericFactor).into());
-                    }
-                    if !hashes.is_multiple_of(2) {
-                        output = Factor::Primorial(output.into())
-                    };
-                    output
-                }
+            let hashes = y.len();
+            let mut output = x;
+            for _ in 0..(hashes >> 1) {
+                output = Factor::Primorial(Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_numeric(&output).unwrap() as u64)) as NumericFactor).into());
+            }
+            if !hashes.is_multiple_of(2) {
+                output = Factor::Primorial(output.into())
+            }
+            output
+      }
       --
       "M" x:@ { AddSub { left: Factor::Power { base: Factor::two(), exponent: Arc::new(x) }.into(), right: Factor::one(), subtract: true } }
       --
@@ -728,12 +737,19 @@ impl Factor {
                 _ => {}
             }
         }
-        if self == other {
-            return false;
+        if let Factor::MultiplyDivide(other_terms) = other {
+            if let Factor::MultiplyDivide(terms) = self &&
+                terms.iter().all(|(k, v)| *other_terms.get(k).unwrap_or(&0) <= *v)
+                && other_terms.iter().all(|(k, v)| *terms.get(k).unwrap_or(&0) >= *v)
+            {
+                return false;
+            }
+            else if other_terms.get(self) == Some(&1)
+                && other_terms.iter().all(|(k, v)| &**k == self || *v <= 0) {
+                return false;
+            }
         }
-        if let Factor::Divide { left, .. } = other
-            && !self.may_be_proper_divisor_of(left)
-        {
+        if self == other {
             return false;
         }
         let Some(last_digit) = self.last_digit() else {
@@ -803,9 +819,35 @@ impl Display for Factor {
                 "({left}){}({right})",
                 if *subtract { '-' } else { '+' }
             )),
-            Multiply { terms } => f.write_fmt(format_args!("({})", terms.iter().join(")*("))),
-            Factor::Divide { left, right } => {
-                f.write_fmt(format_args!("({left})/({})", right.iter().join(")/(")))
+            Factor::MultiplyDivide(terms) => {
+                let (left, right): (Vec<_>, Vec<_>) =
+                    terms.iter()
+                        .map(|(term, exponent)|
+                            (if exponent.unsigned_abs() != 1 {
+                                format!("({term})^{}", exponent.unsigned_abs())
+                            } else {
+                                format!("({term})")
+                            }, exponent))
+                        .partition(|(_, exponent)| **exponent > 0);
+                let left: Vec<_> = left.into_iter().map(|(term, _exponent)| term).collect();
+                let right: Vec<_> = right.into_iter().map(|(term, _exponent)| term).collect();
+                let need_outer_brackets = left.len() + right.len() > 1;
+                if need_outer_brackets {
+                    f.write_char('(')?;
+                }
+                if left.is_empty() {
+                    f.write_char('1')?;
+                } else {
+                    f.write_str(&left.into_iter().join("*"))?;
+                }
+                if !right.is_empty() {
+                    f.write_char('/')?;
+                    f.write_str(&right.into_iter().join("/"))?;
+                }
+                if need_outer_brackets {
+                    f.write_char(')')?;
+                }
+                Ok(())
             }
             Factor::Power { base, exponent } => f.write_fmt(format_args!("({base})^({exponent})")),
             Factor::Factorial(input) => f.write_fmt(format_args!("({input}!)")),
@@ -1046,16 +1088,15 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
-                    *term = Factor::Power {
-                        base: Numeric(a).into(),
-                        exponent: Numeric(n).into(),
-                    }
-                    .into();
+                    *term = Factor::MultiplyDivide([(Numeric(a).into(), n as SignedNumberLength)].into()).into();
                     Some(n)
                 } else {
                     None
                 }
             }
+            Factor::MultiplyDivide(terms) => {
+                terms.values().copied().reduce(|x, y| x.gcd(&y)).map(|n| n as NumericFactor)
+            },
             _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
@@ -1199,56 +1240,26 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                 None
             }
         }
-        Multiply { ref terms } => {
-            let mut divisor_terms = match **divisor {
-                Multiply { ref terms } => terms.clone(),
-                _ => vec![Arc::clone(divisor)],
-            };
-            let mut new_terms = terms.clone();
-            for index in 0..new_terms.len() {
-                let term = &new_terms[index];
-                if let Some((divisor_index, _)) = divisor_terms
-                    .iter()
-                    .enumerate()
-                    .find(|(_, divisor_term)| **term == ***divisor_term)
-                {
-                    new_terms.remove(index);
-                    divisor_terms.remove(divisor_index);
-                    if divisor_terms.is_empty() {
-                        return Some(simplify(Multiply { terms: new_terms }.into()));
+        MultiplyDivide(ref terms) => {
+            let mut new_terms: BTreeMap<Arc<Factor>, i32> = terms.clone();
+            if let Some(exponent) = new_terms.get_mut(divisor) && *exponent > 0 {
+                *exponent -= 1;
+                Some(simplify(MultiplyDivide(new_terms).into()))
+            } else if let MultiplyDivide(divisor_terms) = &**divisor {
+                for (divisor_term, exponent) in divisor_terms {
+                    let product_exponent = new_terms.get_mut(divisor_term)?;
+                    let result = *product_exponent - exponent;
+                    if result >= (*product_exponent).min(0) {
+                        *product_exponent -= exponent;
+                    } else {
+                        return None;
                     }
                 }
+                Some(simplify(MultiplyDivide(new_terms).into()))
+            } else {
+                None
             }
-            let mut divisor = divisor_terms
-                .into_iter()
-                .map(|term| evaluate_as_numeric(&term))
-                .collect::<Option<Vec<_>>>()?
-                .into_iter()
-                .product();
-            for term in new_terms.iter_mut() {
-                if let Some(term_numeric) = evaluate_as_numeric(term) {
-                    let gcd = term_numeric.gcd(&divisor);
-                    if gcd > 1 {
-                        *term = Numeric(term_numeric / gcd).into();
-                        divisor /= gcd;
-                        if divisor == 1 {
-                            return Some(simplify(Multiply { terms: new_terms }.into()));
-                        }
-                    }
-                }
-            }
-            None
         }
-        Factor::Divide {
-            ref left,
-            ref right,
-        } => Some(simplify(
-            Factor::Divide {
-                left: div_exact(left, divisor)?,
-                right: right.clone(),
-            }
-            .into(),
-        )),
         Factor::Factorial(ref term) => {
             if let Some(divisor) = evaluate_as_numeric(divisor)
                 && let Some(term) = evaluate_as_numeric(term)
@@ -1372,23 +1383,13 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumericFactor) -> Option<Arc<F
                 None
             };
         }
-        Multiply { ref terms } => {
-            let new_terms = nth_root_of_product(terms, root)?;
-            return Some(simplify(Multiply { terms: new_terms }.into()));
-        }
-        Factor::Divide {
-            ref left,
-            ref right,
-        } => {
-            let new_left = nth_root_exact(left, root)?;
-            let new_right = nth_root_of_product(right, root)?;
-            return Some(simplify(
-                Factor::Divide {
-                    left: new_left,
-                    right: new_right,
-                }
-                .into(),
-            ));
+        MultiplyDivide(ref terms) => {
+            let root = i32::try_from(root).ok()?;
+            let mut new_terms = terms.clone();
+            for exponent in new_terms.values_mut() {
+                *exponent = exponent.div_exact(root)?;
+            }
+            return Some(simplify(MultiplyDivide(new_terms).into()));
         }
         _ => {}
     }
@@ -1404,7 +1405,9 @@ fn nth_root_of_product(terms: &[Arc<Factor>], root: NumericFactor) -> Option<Vec
 
 #[inline(always)]
 pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Vec<Arc<Factor>> {
-    debug_assert_ne!(input, 0);
+    if input == 0 {
+        return vec![Numeric(0).into()];
+    }
     factorize128(input)
         .into_iter()
         .flat_map(|(factor, power)| repeat_n(Numeric(factor).into(), power))
@@ -1508,20 +1511,25 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
                 )
             }
         }
-        Factor::Divide {
-            ref left,
-            ref right,
-        } => {
-            let (num_lower, num_upper) = estimate_log10_internal(left.clone());
-            let (denom_lower, denom_upper) = estimate_log10_of_product(right);
-            let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
-            let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
+        Factor::MultiplyDivide(ref terms) => {
+            let mut lower: NumberLength = 0;
+            let mut upper: NumberLength = 0;
+            for (term, exponent) in terms {
+                let (power_lower, power_upper)
+                    = match exponent.unsigned_abs() {
+                    0 => (0, 0),
+                    1 => estimate_log10_internal(Arc::clone(term)),
+                    x => estimate_log10_internal(Factor::Power { base: Arc::clone(term), exponent: Numeric(x as NumericFactor).into()}.into())
+                };
+                if *exponent < 0 {
+                    upper = upper.saturating_sub(power_lower);
+                    lower = lower.saturating_sub(power_upper);
+                } else {
+                    lower = lower.saturating_add(power_lower);
+                    upper = upper.saturating_add(power_upper);
+                }
+            }
             (lower, upper)
-        }
-        Multiply { ref terms } => {
-            // multiplication
-            let (product_lower, product_upper) = estimate_log10_of_product(terms);
-            (product_lower, product_upper)
         }
         AddSub {
             ref left,
@@ -1532,7 +1540,7 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
             let (left_lower, left_upper) = estimate_log10_internal(left.clone());
             let (right_lower, right_upper) = estimate_log10_internal(right.clone());
             let combined_lower = if subtract {
-                if right_upper >= left_lower - 1 {
+                if right_upper >= left_lower.saturating_sub(1) {
                     0
                 } else {
                     left_lower.saturating_sub(1)
@@ -1620,23 +1628,17 @@ pub(crate) fn modulo_as_numeric(
                     Some((left + right) % modulus)
                 }
             }
-            Multiply { ref terms } => {
-                let mut product: NumericFactor = 1;
-                for term in terms.iter() {
-                    product = product.checked_mul(modulo_as_numeric(term, modulus)?)? % modulus;
-                }
-                Some(product)
-            }
-            Factor::Divide {
-                ref left,
-                ref right,
-            } => {
-                let mut result = modulo_as_numeric(left, modulus)?;
-                for term in right.iter() {
+            MultiplyDivide(ref terms) => {
+                let mut result: NumericFactor = 1;
+                for (term, exponent) in terms.iter() {
                     let term_mod = modulo_as_numeric(term, modulus)?;
-                    match modinv(term_mod, modulus) {
-                        Some(inv) => result = (result * inv) % modulus,
-                        None => result = result.div_exact(modulus)?,
+                    if *exponent < 0 {
+                        match modinv(term_mod, modulus) {
+                            Some(inv) => result = result.mulm(inv.powm(&exponent.unsigned_abs().into(), &modulus), &modulus),
+                            None => result = result.div_exact(term_mod.powm(&(-exponent as NumericFactor), &modulus))?,
+                        }
+                    } else {
+                        result = result.mulm(term_mod.powm(&(*exponent as NumericFactor), &modulus), &modulus);
                     }
                 }
                 Some(result)
@@ -1716,17 +1718,12 @@ fn pisano(
     }
 }
 
-fn factor_to_power(base: Arc<Factor>, exponent: NumericFactor) -> Arc<Factor> {
+fn factor_to_power(base: Arc<Factor>, exponent: SignedNumberLength) -> Arc<Factor> {
     match exponent {
         0 => Factor::one(),
         1 => base,
         _ => simplify(
-            Factor::Power {
-                base,
-                exponent: Numeric(exponent).into(),
-            }
-            .into(),
-        ),
+            Factor::MultiplyDivide([(base, exponent)].into()).into()),
     }
 }
 
@@ -1735,110 +1732,75 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
         return Numeric(expr_numeric).into();
     }
     match *expr {
-        Multiply { ref terms } => {
-            let mut new_terms = count_frequencies(
-                terms
-                    .iter()
-                    .flat_map(|term| {
-                        if let Multiply { ref terms } = **term {
-                            terms.clone()
-                        } else {
-                            vec![Arc::clone(term)]
-                        }
-                        .into_iter()
-                    })
-                    .map(simplify)
-                    .collect(),
-            );
-            new_terms.remove(&Factor::one());
-            match new_terms.len() {
-                0 => Factor::one(),
-                1 => {
-                    let (factor, power) = new_terms.into_iter().next().unwrap();
-                    factor_to_power(factor, power as NumericFactor)
+        Factor::MultiplyDivide(ref terms) => {
+            let mut new_numeric_left: NumericFactor = 1;
+            let mut new_numeric_right: NumericFactor = 1;
+            let mut new_terms: BTreeMap<Arc<Factor>, i32> = BTreeMap::new();
+            for (term, exponent) in terms {
+                if *exponent == 0 {
+                    continue;
                 }
-                _ => Multiply {
-                    terms: new_terms
-                        .into_iter()
-                        .map(|(factor, power)| factor_to_power(factor, power as NumericFactor))
-                        .sorted_unstable()
-                        .collect(),
+                let term = simplify(Arc::clone(term));
+                if let Some(numeric) = evaluate_as_numeric(&term) {
+                    if *exponent > 0 && let Some(new_left) = numeric.checked_pow(*exponent as NumberLength).and_then(|n| new_numeric_left.checked_mul(n)) {
+                        new_numeric_left = new_left;
+                        let gcd = new_numeric_left.gcd(&new_numeric_right);
+                        new_numeric_left /= gcd;
+                        new_numeric_right /= gcd;
+                        continue;
+                    }
+                    if *exponent < 0 && let Some(new_right) = numeric.checked_pow(exponent.unsigned_abs()).and_then(|n| new_numeric_right.checked_mul(n)) {
+                        new_numeric_right = new_right;
+                        let gcd = new_numeric_left.gcd(&new_numeric_right);
+                        new_numeric_left /= gcd;
+                        new_numeric_right /= gcd;
+                        continue;
+                    }
                 }
-                .into(),
+                *new_terms.entry(term).or_insert(0) += exponent;
             }
-        }
-        Factor::Divide {
-            ref left,
-            ref right,
-        } => {
-            let mut new_left = Arc::clone(left);
-            let mut new_right = right.clone();
-            while let Factor::Divide {
-                left: ref left_left,
-                right: ref mid,
-            } = *new_left
-            {
-                // (left_left / mid) / right
-                let new_right_right = replace(&mut new_right, mid.clone());
-                new_right.extend(new_right_right);
-                new_left = Arc::clone(left_left);
-                // left_left / (mid * right)
+            if new_numeric_left != 1 {
+                *new_terms.entry(Numeric(new_numeric_left).into()).or_insert(0) += 1;
             }
-            let new_left = simplify(new_left);
-            let mut new_right: Vec<Arc<Factor>> = new_right
-                .into_iter()
-                .flat_map(|term| match *term {
-                    Numeric(1) => vec![],
-                    Multiply { ref terms } => terms.clone(),
-                    _ => vec![term],
-                })
-                .map(simplify)
-                .sorted_unstable()
-                .collect();
-            if let Some((index, _)) = new_right
-                .iter()
-                .enumerate()
-                .find(|(_, term)| **term == new_left)
-            {
-                new_right.remove(index);
+            if new_numeric_right != 1 {
+                *new_terms.entry(Numeric(new_numeric_right).into()).or_insert(0) -= 1;
             }
-            if new_right.is_empty() {
-                new_left
+            new_terms.retain(|_, exponent| *exponent != 0);
+            if new_terms.is_empty() {
+                Factor::one()
+            } else if new_terms.len() == 1 && let Some((new_term, 1)) = new_terms.iter().next() {
+                Arc::clone(new_term)
+            } else if new_terms == *terms {
+                expr
             } else {
-                Factor::Divide {
-                    left: new_left,
-                    right: new_right,
-                }
-                .into()
+                Factor::MultiplyDivide(new_terms).into()
             }
         }
         Factor::Power {
             ref base,
             ref exponent,
         } => {
-            let mut new_base = simplify(Arc::clone(base));
-            let mut new_exponent = simplify(Arc::clone(exponent));
-            if let Numeric(new_base_numeric) = *new_base {
-                if new_base_numeric == 1 {
-                    return Factor::one();
-                }
-                if let Some(new_exponent_numeric) = evaluate_as_numeric(&new_exponent) {
-                    let (factored_base, factored_exponent) =
-                        factor_power(new_base_numeric, new_exponent_numeric);
-                    if factored_exponent != new_exponent_numeric {
-                        new_base = Numeric(factored_base).into();
-                        new_exponent = Numeric(factored_exponent).into();
+            let new_base = simplify(Arc::clone(base));
+            let new_exponent = simplify(Arc::clone(exponent));
+            if let Some(new_exponent_numeric) = evaluate_as_numeric(&new_exponent) {
+                match new_exponent_numeric {
+                    0 => Factor::one(),
+                    1 => new_base,
+                    _ => {
+                        if let Numeric(new_base_numeric) = *new_base {
+                            if new_base_numeric == 1 {
+                                return Factor::one();
+                            }
+                            let (factored_base, factored_exponent) =
+                                factor_power(new_base_numeric, new_exponent_numeric);
+                                Factor::MultiplyDivide([(Numeric(factored_base).into(), factored_exponent as SignedNumberLength)].into()).into()
+                        } else {
+                            Factor::MultiplyDivide([(new_base.into(), new_exponent_numeric as SignedNumberLength)].into()).into()
+                        }
                     }
                 }
-            }
-            match *new_exponent {
-                Numeric(0) => Factor::one(),
-                Numeric(1) => new_base,
-                _ => Factor::Power {
-                    base: new_base,
-                    exponent: new_exponent,
-                }
-                .into(),
+            } else {
+                expr
             }
         }
         Factor::Factorial(ref term) | Factor::Primorial(ref term) => match **term {
@@ -1859,10 +1821,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                         Numeric(0).into()
                     } else {
                         simplify(
-                            Multiply {
-                                terms: vec![left, Factor::two()],
-                            }
-                            .into(),
+                            Factor::MultiplyDivide([(left, 1), (Factor::two(), 1)].into()).into()
                         )
                     };
                 }
@@ -1962,17 +1921,15 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
             1 => Some(1),
             base => base.checked_pow(u32::try_from(evaluate_as_numeric(exponent)?).ok()?),
         },
-        Factor::Divide { left, right } => {
-            let mut result = evaluate_as_numeric(left)?;
-            for term in right.iter() {
-                result = result.checked_div_exact(evaluate_as_numeric(term)?)?;
-            }
-            Some(result)
-        }
-        Multiply { terms } => {
+        MultiplyDivide(terms) => {
             let mut result: NumericFactor = 1;
-            for term in terms.iter() {
-                result = result.checked_mul(evaluate_as_numeric(term)?)?;
+            for (term, exponent) in terms.iter().sorted_by_key(|(_, exponent)| -*exponent) {
+                let term = evaluate_as_numeric(term)?;
+                if *exponent > 0 {
+                    result = result.checked_mul(term.checked_pow(*exponent as NumberLength)?)?;
+                } else {
+                    result = result.checked_div(term.checked_pow(exponent.unsigned_abs())?)?;
+                }
             }
             Some(result)
         }
@@ -2068,63 +2025,127 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             let base_factors = find_factors(base.clone());
             repeat_n(base_factors, power).flatten().collect()
         }
-        Factor::Divide {
-            ref left,
-            ref right,
-        } => {
-            // division
-            let mut left_recursive_factors = vec![];
-            let left_remaining_factors = find_factors(left.clone());
-            let mut left_remaining_factors = count_frequencies(left_remaining_factors);
-            while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
-                let subfactors = find_factors(factor.clone());
-                subfactors
-                    .into_iter()
-                    .filter(|subfactor| *subfactor != factor)
-                    .for_each(|subfactor| {
-                        *left_remaining_factors.entry(subfactor).or_insert(0) += exponent
-                    });
-                left_recursive_factors.push(factor);
+        Factor::MultiplyDivide(ref terms) => {
+            if terms.is_empty() {
+                return vec![];
             }
-            let mut right_remaining_factors = right.clone();
-            while let Some(factor) = right_remaining_factors.pop() {
-                let subfactors = find_factors(factor.clone());
-                if (subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor))
-                    && let Some((index, remove)) = left_recursive_factors
-                        .iter_mut()
-                        .enumerate()
-                        .flat_map(|(index, left_factor)| {
-                            if *left_factor == factor {
-                                return Some((index, true));
-                            }
-                            *left_factor = div_exact(left_factor, &factor)?;
-                            Some((index, false))
-                        })
-                        .next()
-                {
-                    if remove {
-                        left_recursive_factors.remove(index);
+            if terms.len() == 1 {
+                let (term, exponent) = terms.first_key_value().unwrap();
+                return match *exponent {
+                    ..=0 => vec![],
+                    1 => find_factors(Arc::clone(term)),
+                    2.. => vec![Factor::MultiplyDivide([(Arc::clone(term), exponent - 1)].into()).into()]
+                };
+            }
+            let mut right_irreducible_factors = Vec::new();
+            let mut left_numeric: NumericFactor = 1;
+            let mut right_numeric: NumericFactor = 1;
+            let mut left_remaining_factors = BTreeMap::new();
+            let mut right_remaining_factors = BTreeMap::new();
+            for (term, mut exponent) in terms.clone().into_iter() {
+                if let Some(term_numeric) = evaluate_as_numeric(&term) {
+                    while exponent > 0 {
+                        if let Some(new_right_numeric) = right_numeric.div_exact(term_numeric) {
+                            exponent -= 1;
+                            right_numeric = new_right_numeric;
+                        }
+                        if let Some(new_left_numeric) = left_numeric.checked_mul(term_numeric) {
+                            exponent -= 1;
+                            left_numeric = new_left_numeric;
+                        }
                     }
-                } else {
-                    right_remaining_factors.extend(
-                        subfactors
-                            .into_iter()
-                            .filter(|subfactor| *subfactor != factor),
-                    );
+                    while exponent < 0 {
+                        if let Some(new_left_numeric) = left_numeric.div_exact(term_numeric) {
+                            exponent += 1;
+                            left_numeric = new_left_numeric;
+                        }
+                        if let Some(new_right_numeric) = right_numeric.checked_mul(term_numeric) {
+                            exponent += 1;
+                            right_numeric = new_right_numeric;
+                        }
+                    }
+                }
+                if exponent > 0 {
+                    *left_remaining_factors.entry(term).or_insert(0) += exponent;
+                } else if exponent < 0 {
+                    *right_remaining_factors.entry(term).or_insert(0) += exponent;
                 }
             }
-            left_recursive_factors
-        }
-        Multiply { ref terms } => {
-            // multiplication
-            let mut factors = Vec::new();
-            for term in terms.iter() {
-                let term_factors = find_factors(term.clone());
-                if term_factors.is_empty() {
-                    factors.push(term.clone());
-                } else {
-                    factors.extend(term_factors);
+            while let Some((factor, mut exponent)) = right_remaining_factors.pop_first() {
+                if exponent == 0 || evaluate_as_numeric(&factor) == Some(1) {
+                    continue;
                 }
+                if left_remaining_factors.is_empty() {
+                    break;
+                }
+                let mut removable_left_exponent = left_remaining_factors.remove(&factor);
+                if removable_left_exponent.is_none() {
+                    let mut left_factor_to_split = None;
+                    let mut left_subfactors_to_split = BTreeMap::new();
+                    'search_left: for (left_factor, left_exponent) in left_remaining_factors.iter().rev() {
+                        if factor.may_be_proper_divisor_of(left_factor) {
+                            let left_subfactors = find_factors(Arc::clone(left_factor));
+                            if !left_subfactors.is_empty() && !(left_subfactors.len() == 1 && left_subfactors.contains(left_factor)) {
+                                left_factor_to_split = Some(Arc::clone(left_factor));
+                                count_frequencies(left_subfactors)
+                                    .into_iter()
+                                    .map(|(k, v)| (k, v as i32 * left_exponent))
+                                    .for_each(|(subfactor, subfactor_exponent)|
+                                        *left_subfactors_to_split.entry(subfactor).or_insert(0) += subfactor_exponent);
+                                break 'search_left;
+                            }
+                        }
+                    }
+                    if let Some(left_factor) = left_factor_to_split {
+                        left_remaining_factors.remove(&left_factor);
+                        left_subfactors_to_split.into_iter().for_each(|(subfactor, subfactor_exponent)|
+                            *if subfactor_exponent > 0 {
+                                left_remaining_factors.entry(subfactor)
+                            } else {
+                                right_remaining_factors.entry(subfactor)
+                            }.or_insert(0) += subfactor_exponent);
+                        *right_remaining_factors.entry(factor).or_insert(0) += exponent;
+                        continue;
+                    } else {
+                        // None found, so try breaking up right factor
+                        let right_subfactors = find_factors(Arc::clone(&factor));
+                        if !right_subfactors.is_empty() && !(right_subfactors.len() == 1 && right_subfactors.contains(&factor)) {
+                            count_frequencies(right_subfactors)
+                                .into_iter()
+                                .map(|(k, v)| (k, v as i32 * exponent))
+                                .for_each(|(subfactor, subfactor_exponent)|
+                                    *right_remaining_factors.entry(subfactor).or_insert(0) += subfactor_exponent);
+                        } else {
+                            right_irreducible_factors.push(factor);
+                            continue;
+                        }
+                    }
+                }
+                if let Some(left_exponent) = removable_left_exponent {
+                    let min_exponent = left_exponent.min(-exponent);
+                    if min_exponent < left_exponent {
+                        left_remaining_factors.insert(Arc::clone(&factor), left_exponent - min_exponent);
+                    }
+                    exponent += min_exponent;
+                    if exponent != 0 {
+                        right_remaining_factors.insert(factor, exponent);
+                    }
+                }
+            }
+            if left_remaining_factors.len() == 1 {
+                let (only_factor, exponent) = left_remaining_factors.first_key_value().unwrap();
+                if terms.get(only_factor).is_some_and(|original_exponent| original_exponent <= exponent) {
+                    return repeat_n(find_factors(Arc::clone(only_factor)), *exponent as usize).flatten().collect();
+                }
+            }
+            let gcd = left_remaining_factors.values().copied().reduce(|x, y| x.gcd(&y)).unwrap_or(1);
+            if gcd > 1 {
+                left_remaining_factors.values_mut().for_each(|x| *x /= gcd);
+                return vec![Factor::MultiplyDivide(left_remaining_factors).into()];
+            }
+            let mut factors: Vec<_> = left_remaining_factors.into_iter().flat_map(|(factor, exponent)| repeat_n(factor, exponent as usize)).collect();
+            if let Some(numeric) = left_numeric.div_exact(right_numeric) {
+                factors.extend(find_factors_of_numeric(numeric));
             }
             factors
         }
@@ -2283,9 +2304,10 @@ mod tests {
 
     #[test]
     fn test_precedence() {
+        let expr = Factor::from("(3^7396-928)/3309349849490834480566907-1");
         assert_eq!(
-            &Factor::from("(3^7396-928)/3309349849490834480566907-1").to_string(),
-            "((((3)^(7396))-(928))/(3309349849490834480566907))-(1)"
+            &expr.to_string(),
+            "(((((3)^7396)-(928))/(3309349849490834480566907)))-(1)"
         );
         assert_eq!(evaluate_as_numeric(&"(3^7-6)/727".into()), Some(3));
     }
@@ -2417,6 +2439,7 @@ mod tests {
     #[test]
     fn test_chain_2() {
         let factors = find_factors("(2^9+1)^2*7^2/361".into());
+        println!("{}", factors.iter().join(","));
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(7)));
         assert!(!factors.contains(&Numeric(19)));
@@ -2649,7 +2672,9 @@ mod tests {
         fn estimate_log10_internal(input: &str) -> (NumberLength, NumberLength) {
             crate::algebraic::estimate_log10_internal(Factor::from(input).into())
         }
-
+        let (lower, upper) =estimate_log10_internal("11*11");
+        assert_eq!(lower, 2);
+        assert!(upper >= 3);
         let (lower, upper) = estimate_log10_internal("99");
         assert_eq!(lower, 1);
         assert_eq!(upper, 2);
@@ -2699,9 +2724,6 @@ mod tests {
         let (lower, upper) = estimate_log10_internal("30-19".into());
         assert!(lower <= 1);
         assert_eq!(upper, 2);
-        let (lower, upper) = estimate_log10_internal("11*11".into());
-        assert_eq!(lower, 2);
-        assert!(upper >= 3);
         let (lower, upper) = estimate_log10_internal("(2^769-1)/1591805393".into());
         assert!(lower >= 219 && lower <= 222);
         assert!(upper >= 223 && upper <= 225);
@@ -2725,16 +2747,16 @@ mod tests {
         fn may_be_proper_divisor_of(left: &str, right: &str) -> bool {
             Factor::from(left).may_be_proper_divisor_of(&Factor::from(right))
         }
+        assert!(!may_be_proper_divisor_of(
+            "123456789123456789123456789123456789123456789",
+            "123456789123456789123456789123456789123456789/3"
+        ));
         assert!(may_be_proper_divisor_of("123", "369^2"));
         assert!(!may_be_proper_divisor_of("2", "34567"));
         assert!(may_be_proper_divisor_of("2", "345-67"));
         assert!(!may_be_proper_divisor_of("12345", "54321"));
         assert!(!may_be_proper_divisor_of("12345", "12345"));
         assert!(!may_be_proper_divisor_of("54321", "12345"));
-        assert!(!may_be_proper_divisor_of(
-            "123456789123456789123456789123456789123456789",
-            "123456789123456789123456789123456789123456789/3"
-        ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
     }
 }
