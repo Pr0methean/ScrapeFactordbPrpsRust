@@ -650,7 +650,7 @@ peg::parser! {
       --
       n:number() { n }
       --
-      n:$(['0'..='9']+ ".." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
+      n:$(['0'..='9']+ "..." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
       --
       "(" e:arithmetic() ")" { e }
     }
