@@ -760,10 +760,9 @@ pub async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 rule_out_divisibility(&mut data, factor_vid, root_vid);
-                let subfactors_found =
-                    !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
-                        .await
-                        .is_empty();
+                let subfactors_found = !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
+                    .await
+                    .is_empty();
                 any_failed_retryably |= subfactors_found;
                 if !subfactors_found && let Some(ref root_denominator) = root_denominator {
                     facts_of_mut(
@@ -1099,9 +1098,11 @@ pub async fn find_and_submit_factors(
                 }
                 DoesNotDivide => {
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
-                    let subfactors = add_factors_to_graph(http, &mut data, root_vid, factor_vid)
-                        .await;
-                    if subfactors.is_empty() && let Some(ref root_denominator) = root_denominator {
+                    let subfactors =
+                        add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
+                    if subfactors.is_empty()
+                        && let Some(ref root_denominator) = root_denominator
+                    {
                         let facts = facts_of_mut(
                             &mut data.number_facts_map,
                             factor_vid,
@@ -1140,27 +1141,27 @@ pub async fn find_and_submit_factors(
                         }
                     }
                     factors_to_submit.extend(subfactors.into_iter().sorted_by(|v1, v2| {
-                            compare_by_ref(
-                                &data.number_facts_map,
-                                &VertexRef {
-                                    id: *v2,
-                                    attr: get_vertex(
-                                        &data.divisibility_graph,
-                                        *v2,
-                                        &mut data.deleted_synonyms,
-                                    ),
-                                },
-                                &VertexRef {
-                                    id: *v1,
-                                    attr: get_vertex(
-                                        &data.divisibility_graph,
-                                        *v1,
-                                        &mut data.deleted_synonyms,
-                                    ),
-                                },
-                                &mut data.deleted_synonyms,
-                            )
-                        }));
+                        compare_by_ref(
+                            &data.number_facts_map,
+                            &VertexRef {
+                                id: *v2,
+                                attr: get_vertex(
+                                    &data.divisibility_graph,
+                                    *v2,
+                                    &mut data.deleted_synonyms,
+                                ),
+                            },
+                            &VertexRef {
+                                id: *v1,
+                                attr: get_vertex(
+                                    &data.divisibility_graph,
+                                    *v1,
+                                    &mut data.deleted_synonyms,
+                                ),
+                            },
+                            &mut data.deleted_synonyms,
+                        )
+                    }));
                     let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms)
                         .expect("Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
                     if cofactor_facts.needs_update() || !cofactor_facts.checked_for_listed_algebraic
