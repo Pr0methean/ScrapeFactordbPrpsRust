@@ -55,7 +55,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
-pub type NumberLength = usize;
+pub type NumberLength = u32;
 
 const MAX_START: EntryId = 100_000;
 const RETRY_DELAY: Duration = Duration::from_secs(3);

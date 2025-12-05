@@ -755,7 +755,7 @@ pub async fn find_and_submit_factors(
                     facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms).checked_with_root_denominator = true;
                     if root_denominator.may_be_proper_divisor_of(&factor) {
                         let divided = div_exact(&factor, &root_denominator)
-                            .unwrap_or_else(|| Factor::Divide { left: factor, right: Option::<&Vec<_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
+                            .unwrap_or_else(|| Factor::Divide { left: factor, right: Option::<&BTreeMap<_,_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
                         let (divided_vid, added) = add_factor_node(&mut data, divided, Some(root_vid), None, http);
                         if added {
                             // Don't apply this recursively, except when divided was already in
@@ -1072,7 +1072,7 @@ pub async fn find_and_submit_factors(
                         if !replace(&mut facts.checked_with_root_denominator, true) {
                             let factor = get_vertex(&data.divisibility_graph, factor_vid, &mut data.deleted_synonyms);
                             let divided = div_exact(&factor, &root_denominator)
-                                .unwrap_or_else(|| Factor::Divide { left: Arc::clone(factor), right: Option::<&Vec<_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
+                                .unwrap_or_else(|| Factor::Divide { left: Arc::clone(factor), right: Option::<&BTreeMap<_,_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
                             let (divided_vid, added) = add_factor_node(&mut data, divided, Some(root_vid), None, http);
                             if added {
                                 // Don't apply this recursively, except when divided was already in

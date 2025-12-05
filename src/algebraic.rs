@@ -6,7 +6,7 @@ use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
-use num_modular::ModularPow;
+use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
@@ -564,11 +564,11 @@ pub enum Factor {
         subtract: bool,
     },
     Multiply {
-        terms: Vec<Arc<Factor>>,
+        terms: BTreeMap<Arc<Factor>, NumberLength>,
     },
     Divide {
         left: Arc<Factor>,
-        right: Vec<Arc<Factor>>,
+        right: BTreeMap<Arc<Factor>, NumberLength>,
     },
     Power {
         base: Arc<Factor>,
@@ -596,21 +596,34 @@ peg::parser! {
       x:(@) "+" y:@ { AddSub { left: x.into(), right: y.into(), subtract: false } }
       x:(@) "-" y:@ { AddSub { left: x.into(), right: y.into(), subtract: true } }
       --
-      x:(@) "/" y:@ { let mut x = x;
+      x:(@) "/" y:@ {
+        let mut x = x;
+        let mut y = y;
         if let Factor::Divide { ref mut right, .. } = x {
-            right.push(y.into());
+            *right.entry(y.into()).or_insert(0) += 1;
             x
+        } else if let Factor::Divide { ref mut left, ref mut right } = y {
+            let old_left = core::mem::take(left);
+            *left = Factor::Multiply { terms: [(old_left, 1), (x.into(), 1)].into() }.into();
+            y
         } else {
-            Factor::Divide { left: x.into(), right: vec![y.into()] }
+            Factor::Divide { left: x.into(), right: [(y.into(), 1)].into() }
         }
       }
       --
-      x:(@) "*" y:@ { let mut x = x;
+      x:(@) "*" y:@ {
+        let mut x = x;
+        let mut y = y;
         if let Multiply { ref mut terms, .. } = x {
-            terms.push(y.into());
+            *terms.entry(y.into()).or_insert(0) += 1;
             x
+        } else if let Multiply { ref mut terms, .. } = y {
+            *terms.entry(x.into()).or_insert(0) += 1;
+            y
+        } else if x == y {
+            Multiply { terms: [(x.into(), 2)].into() }
         } else {
-            Multiply { terms: vec![x.into(), y.into()] }
+            Multiply { terms: [(x.into(), 1), (y.into(), 1)].into() }
         }
       }
       --
@@ -800,12 +813,22 @@ impl Display for Factor {
                 right,
                 subtract,
             } => f.write_fmt(format_args!(
-                "({left}){}({right})",
+                "({left}{}{right})",
                 if *subtract { '-' } else { '+' }
             )),
-            Multiply { terms } => f.write_fmt(format_args!("({})", terms.iter().join(")*("))),
+            Multiply { terms } => f.write_fmt(format_args!("({})",
+                   terms.iter().map(|(term, exponent)| if *exponent == 1 {
+                       term.to_string()
+                   } else {
+                       format!("({term})^{exponent}")
+                   }).join("*"))),
             Factor::Divide { left, right } => {
-                f.write_fmt(format_args!("({left})/({})", right.iter().join(")/(")))
+                f.write_fmt(format_args!("({left}/{})",
+                                         right.iter().map(|(term, exponent)| if *exponent == 1 {
+                                             term.to_string()
+                                         } else {
+                                             format!("({term})^{exponent}")
+                                         }).join("/")))
             }
             Factor::Power { base, exponent } => f.write_fmt(format_args!("({base})^({exponent})")),
             Factor::Factorial(input) => f.write_fmt(format_args!("({input}!)")),
@@ -821,7 +844,7 @@ thread_local! {
 }
 
 #[inline(always)]
-fn count_frequencies<T: Eq + Ord>(vec: Vec<T>) -> BTreeMap<T, usize> {
+fn count_frequencies<T: Eq + Ord>(vec: Vec<T>) -> BTreeMap<T, NumberLength> {
     let mut counts = BTreeMap::new();
     for item in vec {
         *counts.entry(item).or_insert(0) += 1;
@@ -843,7 +866,7 @@ fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec
     for (item, count1) in counts1.into_iter() {
         if let Some(&count2) = counts2.get(&item) {
             let min_count = count1.min(count2);
-            intersection_vec.extend(repeat_n(item, min_count));
+            intersection_vec.extend(repeat_n(item, min_count as usize));
         }
     }
     intersection_vec
@@ -867,7 +890,7 @@ fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
     }
     total_counts
         .into_iter()
-        .flat_map(|(item, count)| repeat_n(item, count))
+        .flat_map(|(item, count)| repeat_n(item, count as usize))
         .collect()
 }
 
@@ -1056,6 +1079,15 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
                     None
                 }
             }
+            Multiply {terms} => {
+                let gcd = terms.values().copied().reduce(|x, y| x.gcd(&y));
+                if let Some(gcd) = gcd && gcd > 1 {
+                    let mut new_terms = terms.clone();
+                    new_terms.iter_mut().for_each(|(_, exponent)| *exponent /= gcd);
+                    *term = Multiply { terms: new_terms }.into();
+                }
+                gcd.map(NumericFactor::from)
+            }
             _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
@@ -1069,43 +1101,52 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
                 })
         }
     }
-    if !subtract {
-        possible_factors.remove(&2);
-    }
     let total_factors = possible_factors.values().sum::<usize>();
     if total_factors <= 1 {
         return vec![];
     }
     let mut results = Vec::with_capacity(total_factors * 2);
     for (factor, factor_power) in possible_factors {
-        if let Some(left_root) = nth_root_exact(&new_left, factor)
+        if let Ok(factor) = NumberLength::try_from(factor)
+            && let Some(left_root) = nth_root_exact(&new_left, factor)
             && let Some(right_root) = nth_root_exact(&new_right, factor)
         {
-            if factor == 2 {
-                // a^(2*x) - b^(2*x) == (a^x - b^x)*(a^x + b^x)
-                results.extend(repeat_n(
+            if subtract {
+                if factor_power.is_multiple_of(2) {
+                    results.push(
+                        simplify(
+                            AddSub {
+                                left: Arc::clone(&left_root),
+                                right: Arc::clone(&right_root),
+                                subtract: false,
+                            }.into(),
+                        ),
+                    );
+                }
+                results.push(
                     simplify(
                         AddSub {
-                            left: Arc::clone(&left_root),
-                            right: Arc::clone(&right_root),
+                            left: left_root,
+                            right: right_root,
+                            subtract: true,
+                        }
+                            .into(),
+                    ),
+                );
+            } else if !factor_power.is_multiple_of(2) {
+                results.push(
+                    simplify(
+                        AddSub {
+                            left: left_root,
+                            right: right_root,
                             subtract: false,
                         }
-                        .into(),
+                            .into(),
                     ),
-                    factor_power,
-                ));
+                );
             }
-            results.extend(repeat_n(
-                simplify(
-                    AddSub {
-                        left: left_root,
-                        right: right_root,
-                        subtract,
-                    }
-                    .into(),
-                ),
-                factor_power,
-            ));
+
+
         }
     }
     results
@@ -1138,7 +1179,7 @@ pub fn to_like_powers_recursive_dedup(
                     {
                         *to_expand.entry(subfactor).or_insert(0) += exponent;
                     }
-                    results.extend(repeat_n(Arc::clone(&factor), exponent));
+                    results.extend(repeat_n(Arc::clone(&factor), exponent as usize));
                 }
                 Numeric(n) => {
                     results.extend(find_factors_of_numeric(n));
@@ -1186,12 +1227,13 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                     .into(),
                 ))
             } else if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
+                && let Ok(exponent_numeric) = NumberLength::try_from(exponent_numeric)
                 && let Some(divisor_root) = nth_root_exact(divisor, exponent_numeric)
             {
                 Some(simplify(
                     Factor::Power {
                         base: div_exact(base, &divisor_root)?,
-                        exponent: Numeric(exponent_numeric).into(),
+                        exponent: Numeric(exponent_numeric.into()).into(),
                     }
                     .into(),
                 ))
@@ -1202,42 +1244,42 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
         Multiply { ref terms } => {
             let mut divisor_terms = match **divisor {
                 Multiply { ref terms } => terms.clone(),
-                _ => vec![Arc::clone(divisor)],
+                _ => [(Arc::clone(divisor), 1)].into(),
             };
             let mut new_terms = terms.clone();
-            for index in 0..new_terms.len() {
-                let term = &new_terms[index];
-                if let Some((divisor_index, _)) = divisor_terms
-                    .iter()
-                    .enumerate()
-                    .find(|(_, divisor_term)| **term == ***divisor_term)
+            for (term, exponent) in new_terms.iter_mut() {
+                if let Some(divisor_exponent) = divisor_terms.get_mut(term)
                 {
-                    new_terms.remove(index);
-                    divisor_terms.remove(divisor_index);
-                    if divisor_terms.is_empty() {
-                        return Some(simplify(Multiply { terms: new_terms }.into()));
+                    let min_exponent = (*divisor_exponent).min(*exponent);
+                    *divisor_exponent -= min_exponent;
+                    if *divisor_exponent == 0 {
+                        divisor_terms.remove(term);
                     }
+                    *exponent -= min_exponent;
                 }
             }
-            let mut divisor = divisor_terms
+            new_terms.retain(|_, exponent| *exponent != 0);
+            divisor_terms.retain(|_, exponent| *exponent != 0);
+            if new_terms.is_empty() {
+                return if divisor_terms.is_empty() {
+                    Some(Factor::one())
+                } else {
+                    None
+                };
+            }
+            let divisor_numeric: NumericFactor = divisor_terms
                 .into_iter()
-                .map(|term| evaluate_as_numeric(&term))
+                .map(|(term, exponent)| evaluate_as_numeric(&term).and_then(|numeric| numeric.checked_pow(exponent)))
                 .collect::<Option<Vec<_>>>()?
                 .into_iter()
                 .product();
-            for term in new_terms.iter_mut() {
-                if let Some(term_numeric) = evaluate_as_numeric(term) {
-                    let gcd = term_numeric.gcd(&divisor);
-                    if gcd > 1 {
-                        *term = Numeric(term_numeric / gcd).into();
-                        divisor /= gcd;
-                        if divisor == 1 {
-                            return Some(simplify(Multiply { terms: new_terms }.into()));
-                        }
-                    }
-                }
-            }
-            None
+            let product_numeric: NumericFactor = terms
+                .into_iter()
+                .map(|(term, exponent)| evaluate_as_numeric(&term).and_then(|numeric| numeric.checked_pow(*exponent)))
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .product();
+            Some(Numeric(product_numeric.div_exact(divisor_numeric)?).into())
         }
         Factor::Divide {
             ref left,
@@ -1336,7 +1378,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
     }
 }
 
-pub fn nth_root_exact(factor: &Arc<Factor>, root: NumericFactor) -> Option<Arc<Factor>> {
+pub fn nth_root_exact(factor: &Arc<Factor>, root: NumberLength) -> Option<Arc<Factor>> {
     if root == 1 {
         return Some(Arc::clone(factor));
     }
@@ -1344,11 +1386,9 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumericFactor) -> Option<Arc<F
         if factor_numeric == 1 {
             return Some(Factor::one());
         }
-        if let Ok(root_u32) = root.try_into() {
-            return factor_numeric
-                .nth_root_exact(root_u32)
-                .map(|x| Numeric(x).into());
-        }
+        return factor_numeric
+            .nth_root_exact(root)
+            .map(|x| Numeric(x).into());
     }
     match **factor {
         Factor::Power {
@@ -1359,7 +1399,7 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumericFactor) -> Option<Arc<F
                 return Some(Factor::one());
             }
             return if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
-                && let Some(reduced_exponent) = exponent_numeric.div_exact(root)
+                && let Some(reduced_exponent) = exponent_numeric.div_exact(root.into())
             {
                 Some(
                     Factor::Power {
@@ -1395,11 +1435,17 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumericFactor) -> Option<Arc<F
     None
 }
 
-fn nth_root_of_product(terms: &[Arc<Factor>], root: NumericFactor) -> Option<Vec<Arc<Factor>>> {
+fn nth_root_of_product(terms: &BTreeMap<Arc<Factor>, NumberLength>, root: NumberLength) -> Option<BTreeMap<Arc<Factor>, NumberLength>> {
+    let root = NumberLength::try_from(root).ok()?;
     terms
         .iter()
-        .map(|term| nth_root_exact(term, root))
-        .collect::<Option<Vec<_>>>()
+        .map(|(term, exponent)|
+                 nth_root_exact(term, root)
+                     .map(|x| (x, *exponent))
+                     .or_else(|| Some((nth_root_exact(term, root.div_exact(*exponent)?)?, 1)))
+                     .or_else(|| Some((Arc::clone(term), exponent.div_exact(root)?)))
+        )
+        .collect()
 }
 
 #[inline(always)]
@@ -1551,18 +1597,20 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
     }
 }
 
-fn estimate_log10_of_product(right: &[Arc<Factor>]) -> (NumberLength, NumberLength) {
-    let (denom_lower, denom_upper) = right
-        .iter()
-        .map(|factor| estimate_log10_internal(factor.clone()))
-        .reduce(|(l1, u1), (l2, u2)| {
-            (
-                l1.saturating_add(l2),
-                u1.saturating_add(u2).saturating_add(1),
-            )
-        })
-        .unwrap();
-    (denom_lower, denom_upper)
+fn estimate_log10_of_product(terms: &BTreeMap<Arc<Factor>, NumberLength>) -> (NumberLength, NumberLength) {
+    let mut lower: NumberLength = 0;
+    let mut upper: NumberLength = 0;
+    for (term, exponent) in terms {
+        let (power_lower, power_upper)
+            = match *exponent {
+            0 => (0, 0),
+            1 => estimate_log10_internal(Arc::clone(term)),
+            x => estimate_log10_internal(Factor::Power { base: Arc::clone(term), exponent: Numeric(x as NumericFactor).into()}.into())
+        };
+        lower = lower.saturating_add(power_lower);
+        upper = upper.saturating_add(power_upper).saturating_add(1);
+    }
+    (lower, upper - 1)
 }
 
 pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
@@ -1622,8 +1670,8 @@ pub(crate) fn modulo_as_numeric(
             }
             Multiply { ref terms } => {
                 let mut product: NumericFactor = 1;
-                for term in terms.iter() {
-                    product = product.checked_mul(modulo_as_numeric(term, modulus)?)? % modulus;
+                for (term, exponent) in terms.iter() {
+                    product = product.checked_mul(modulo_as_numeric(term, modulus)?.powm(*exponent as NumericFactor, &modulus))? % modulus;
                 }
                 Some(product)
             }
@@ -1632,10 +1680,10 @@ pub(crate) fn modulo_as_numeric(
                 ref right,
             } => {
                 let mut result = modulo_as_numeric(left, modulus)?;
-                for term in right.iter() {
-                    let term_mod = modulo_as_numeric(term, modulus)?;
+                for (term, exponent) in right.iter() {
+                    let term_mod = modulo_as_numeric(term, modulus)?.powm(*exponent as NumericFactor, &modulus);
                     match modinv(term_mod, modulus) {
-                        Some(inv) => result = (result * inv) % modulus,
+                        Some(inv) => result = result.mulm(inv, &modulus),
                         None => result = result.div_exact(modulus)?,
                     }
                 }
@@ -1736,21 +1784,17 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     }
     match *expr {
         Multiply { ref terms } => {
-            let mut new_terms = count_frequencies(
-                terms
-                    .iter()
-                    .flat_map(|term| {
-                        if let Multiply { ref terms } = **term {
-                            terms.clone()
-                        } else {
-                            vec![Arc::clone(term)]
-                        }
-                        .into_iter()
-                    })
-                    .map(simplify)
-                    .collect(),
-            );
-            new_terms.remove(&Factor::one());
+            let mut new_terms = BTreeMap::new();
+            for (term, exponent) in terms.iter() {
+                if let Multiply { ref terms } = **term {
+                    terms.clone().into_iter()
+                        .map(|(term, term_exponent)| (simplify(term), term_exponent * exponent))
+                        .for_each(|(term, term_exponent)| *new_terms.entry(term).or_insert(0) += term_exponent);
+                } else {
+                    *new_terms.entry(Arc::clone(term)).or_insert(0) += exponent;
+                }
+            }
+            new_terms.retain(|factor, exponent| *factor != Factor::one() && *exponent != 0);
             match new_terms.len() {
                 0 => Factor::one(),
                 1 => {
@@ -1759,10 +1803,6 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 }
                 _ => Multiply {
                     terms: new_terms
-                        .into_iter()
-                        .map(|(factor, power)| factor_to_power(factor, power as NumericFactor))
-                        .sorted_unstable()
-                        .collect(),
                 }
                 .into(),
             }
@@ -1784,30 +1824,30 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 new_left = Arc::clone(left_left);
                 // left_left / (mid * right)
             }
-            let new_left = simplify(new_left);
-            let mut new_right: Vec<Arc<Factor>> = new_right
-                .into_iter()
-                .flat_map(|term| match *term {
-                    Numeric(1) => vec![],
-                    Multiply { ref terms } => terms.clone(),
-                    _ => vec![term],
-                })
-                .map(simplify)
-                .sorted_unstable()
-                .collect();
-            if let Some((index, _)) = new_right
-                .iter()
-                .enumerate()
-                .find(|(_, term)| **term == new_left)
-            {
-                new_right.remove(index);
+            let mut new_left = simplify(new_left);
+            let mut cloned_right = new_right.clone();
+            for (term, exponent) in new_right {
+                let simplified = simplify(Arc::clone(&term));
+                if let Multiply { ref terms } = *simplified {
+                    cloned_right.remove(&term);
+                    for (subterm, subterm_exponent) in terms {
+                        *cloned_right.entry(simplify(Arc::clone(subterm))).or_insert(0) += exponent * subterm_exponent;
+                    }
+                } else if simplified != term {
+                    *cloned_right.entry(simplified).or_insert(0) += cloned_right.remove(&term).unwrap();
+                }
             }
-            if new_right.is_empty() {
+            cloned_right.retain(|_, exponent| *exponent != 0);
+            if let Some(exponent) = cloned_right.get_mut(&new_left) {
+                *exponent -= 1;
+                new_left = Factor::one();
+            }
+            if cloned_right.is_empty() {
                 new_left
             } else {
                 Factor::Divide {
                     left: new_left,
-                    right: new_right,
+                    right: cloned_right,
                 }
                 .into()
             }
@@ -1860,7 +1900,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                     } else {
                         simplify(
                             Multiply {
-                                terms: vec![left, Factor::two()],
+                                terms: [(left, 1), (Factor::two(), 1)].into(),
                             }
                             .into(),
                         )
@@ -1964,15 +2004,15 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
         },
         Factor::Divide { left, right } => {
             let mut result = evaluate_as_numeric(left)?;
-            for term in right.iter() {
-                result = result.checked_div_exact(evaluate_as_numeric(term)?)?;
+            for (term, exponent) in right.iter() {
+                result = result.checked_div_exact(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
             }
             Some(result)
         }
         Multiply { terms } => {
             let mut result: NumericFactor = 1;
-            for term in terms.iter() {
-                result = result.checked_mul(evaluate_as_numeric(term)?)?;
+            for (term, exponent) in terms.iter() {
+                result = result.checked_mul(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
             }
             Some(result)
         }
@@ -2073,7 +2113,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             ref right,
         } => {
             // division
-            let mut left_recursive_factors = vec![];
+            let mut left_recursive_factors = BTreeMap::new();
             let left_remaining_factors = find_factors(left.clone());
             let mut left_remaining_factors = count_frequencies(left_remaining_factors);
             while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
@@ -2084,46 +2124,39 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                     .for_each(|subfactor| {
                         *left_remaining_factors.entry(subfactor).or_insert(0) += exponent
                     });
-                left_recursive_factors.push(factor);
+                *left_recursive_factors.entry(factor).or_insert(0) += exponent;
             }
             let mut right_remaining_factors = right.clone();
-            while let Some(factor) = right_remaining_factors.pop() {
-                let subfactors = find_factors(factor.clone());
+            while let Some((factor, exponent)) = right_remaining_factors.pop_last() {
+                let subfactors = find_factors(Arc::clone(&factor));
                 if (subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor))
-                    && let Some((index, remove)) = left_recursive_factors
-                        .iter_mut()
-                        .enumerate()
-                        .flat_map(|(index, left_factor)| {
-                            if *left_factor == factor {
-                                return Some((index, true));
-                            }
-                            *left_factor = div_exact(left_factor, &factor)?;
-                            Some((index, false))
-                        })
-                        .next()
+                        && let Some(left_exponent) = left_recursive_factors.get_mut(&factor)
                 {
-                    if remove {
-                        left_recursive_factors.remove(index);
+                    let min_exponent = (*left_exponent).min(exponent);
+                    *left_exponent -= min_exponent;
+                    if min_exponent != exponent {
+                        right_remaining_factors.insert(factor, exponent - min_exponent);
                     }
                 } else {
-                    right_remaining_factors.extend(
-                        subfactors
-                            .into_iter()
-                            .filter(|subfactor| *subfactor != factor),
+                right_remaining_factors.extend(
+                        count_frequencies(subfactors)
                     );
                 }
             }
             left_recursive_factors
+                .into_iter()
+                .flat_map(|(factor, exponent)| repeat_n(factor, exponent as usize))
+                .collect()
         }
         Multiply { ref terms } => {
             // multiplication
             let mut factors = Vec::new();
-            for term in terms.iter() {
-                let term_factors = find_factors(term.clone());
+            for (term, exponent) in terms {
+                let term_factors = find_factors(Arc::clone(term));
                 if term_factors.is_empty() {
-                    factors.push(term.clone());
+                    factors.extend(repeat_n(Arc::clone(term), *exponent as usize));
                 } else {
-                    factors.extend(term_factors);
+                    factors.extend(repeat_n(term_factors, *exponent as usize).flatten());
                 }
             }
             factors
@@ -2285,7 +2318,7 @@ mod tests {
     fn test_precedence() {
         assert_eq!(
             &Factor::from("(3^7396-928)/3309349849490834480566907-1").to_string(),
-            "((((3)^(7396))-(928))/(3309349849490834480566907))-(1)"
+            "((((3)^(7396)-928)/3309349849490834480566907)-1)"
         );
         assert_eq!(evaluate_as_numeric(&"(3^7-6)/727".into()), Some(3));
     }
@@ -2649,7 +2682,6 @@ mod tests {
         fn estimate_log10_internal(input: &str) -> (NumberLength, NumberLength) {
             crate::algebraic::estimate_log10_internal(Factor::from(input).into())
         }
-
         let (lower, upper) = estimate_log10_internal("99");
         assert_eq!(lower, 1);
         assert_eq!(upper, 2);
