@@ -2217,15 +2217,12 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
     if let Ok(num) = expr_short.parse::<NumericFactor>() {
         factors.extend(find_factors_of_numeric(num));
     } else {
+        let mut small_factors = Vec::new();
         match expr_short.chars().last() {
-            Some('5') => factors.push(Factor::five()),
-            Some('2' | '4' | '6' | '8') => factors.push(Factor::two()),
-            Some('1' | '3' | '7' | '9') => {
-                factors.push(Factor::from(expr_short).into());
-            }
-            x => {
-                error!("Invalid last digit: {x:?}");
-            }
+            Some('5') => small_factors.push(Factor::five()),
+            Some('2' | '4' | '6' | '8') => small_factors.push(Factor::two()),
+            // '0' is handled by strip_suffix
+            _ => {}
         }
         let sum_of_digits: NumericFactor = expr_short
             .chars()
@@ -2233,29 +2230,27 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
             .sum();
         match sum_of_digits % 9 {
             0 => {
-                factors.extend([Factor::three(), Factor::three()]);
+                small_factors.extend([Factor::three(), Factor::three()]);
             }
             3 | 6 => {
-                factors.push(Factor::three());
+                small_factors.push(Factor::three());
             }
             _ => {}
         }
-        if expr_short.len() >= 2 {
+        
+        if small_factors.is_empty() {
             factors.push(Factor::from(expr_short).into());
         } else {
-            // All other single-digit numbers are handled by the 2, 5, 3 and 9 cases
-            match expr_short {
-                "4" => {
-                    factors.push(Factor::two());
-                }
-                "7" => {
-                    factors.push(Numeric(7).into());
-                }
-                "8" => {
-                    factors.extend([Factor::two(), Factor::two()]);
-                }
-                _ => {}
+            let original = Factor::from(expr_short).into();
+            let mut divisor_map = BTreeMap::new();
+            for f in &small_factors {
+                factors.push(f.clone());
+                *divisor_map.entry(f.clone()).or_insert(0) += 1;
             }
+            factors.push(Factor::Divide {
+                left: original,
+                right: divisor_map
+            }.into());
         }
     }
     factors
@@ -2796,4 +2791,20 @@ mod tests {
         println!("Factors count: {}", factors.len());
     }
 
+    #[test]
+    fn test_factor_big_num_symbolic() {
+        // "1212...12" (50 times)
+        // Sum = (1+2)*50 = 150 (div by 3). Ends in 2 (div by 2).
+        let repeated_12 = "12".repeat(50);
+        let expr = super::expression_parser::arithmetic(&repeated_12).unwrap();
+        let factors = super::find_factors(expr.into());
+        
+        // Should contain 2 and 3.
+        assert!(factors.contains(&super::Factor::two()));
+        assert!(factors.contains(&super::Factor::three()));
+        
+        // Should contain a generic factor which is the Divide term
+        let has_divide = factors.iter().any(|f| matches!(**f, super::Factor::Divide { .. }));
+        assert!(has_divide, "Should return a symbolic Divide term");
+    }
 }
