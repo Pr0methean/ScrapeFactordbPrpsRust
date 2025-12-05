@@ -1,3 +1,4 @@
+use crate::algebraic::div_exact;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -256,6 +257,7 @@ pub fn add_factor_node(
                     checked_for_listed_algebraic: has_cached,
                     checked_in_factor_finder: has_cached,
                     expression_form_checked_in_factor_finder: has_cached,
+                    checked_with_root_denominator: has_cached,
                 },
             );
             (factor_vid, true)
@@ -431,6 +433,7 @@ pub struct NumberFacts {
     checked_for_listed_algebraic: bool,
     checked_in_factor_finder: bool,
     expression_form_checked_in_factor_finder: bool,
+    checked_with_root_denominator: bool,
 }
 
 impl PartialEq<Self> for NumberFacts {
@@ -563,6 +566,11 @@ impl NumberFacts {
                 && other.checked_in_factor_finder,
             expression_form_checked_in_factor_finder: self.expression_form_checked_in_factor_finder
                 && other.expression_form_checked_in_factor_finder,
+
+            // root_denominator only has to be done with one or the other, because it doesn't depend
+            // on the expression form among equivalents
+            checked_with_root_denominator: self.checked_with_root_denominator
+                || other.checked_with_root_denominator,
         }
     }
 }
@@ -678,6 +686,13 @@ pub async fn find_and_submit_factors(
     // Simplest case: try submitting all factors as factors of the root
     // Sort backwards so that we try to submit largest factors first
     let mut any_failed_retryably = false;
+    let (root_denominator_terms, root_denominator) = if let Factor::Divide {ref right, ..}
+            = **get_vertex(&mut data.divisibility_graph, root_vid, &mut data.deleted_synonyms) {
+        let terms = right.clone();
+        (Some(terms.clone()), Some(Arc::new(Factor::Multiply {terms})))
+    } else {
+        (None, None)
+    };
     let known_factors = vertex_ids_except::<Box<[_]>>(&mut data, root_vid);
     for factor_vid in known_factors.into_iter() {
         let factor = get_vertex(
@@ -736,6 +751,21 @@ pub async fn find_and_submit_factors(
                     !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
                         .await
                         .is_empty();
+                if let Some(ref root_denominator) = root_denominator {
+                    facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms).checked_with_root_denominator = true;
+                    if root_denominator.may_be_proper_divisor_of(&factor) {
+                        let divided = div_exact(&factor, &root_denominator)
+                            .unwrap_or_else(|| Factor::Divide { left: factor, right: Option::<&Vec<_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
+                        let (divided_vid, added) = add_factor_node(&mut data, divided, Some(root_vid), None, http);
+                        if added {
+                            // Don't apply this recursively, except when divided was already in
+                            // the graph for another reason
+                            facts_of_mut(&mut data.number_facts_map, divided_vid, &mut data.deleted_synonyms)
+                                .checked_with_root_denominator = true;
+                            any_failed_retryably = true;
+                        }
+                    }
+                }
             }
             OtherError => {
                 any_failed_retryably = true;
@@ -1037,6 +1067,22 @@ pub async fn find_and_submit_factors(
                 }
                 DoesNotDivide => {
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
+                    if let Some(ref root_denominator) = root_denominator {
+                        let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms);
+                        if !replace(&mut facts.checked_with_root_denominator, true) {
+                            let factor = get_vertex(&data.divisibility_graph, factor_vid, &mut data.deleted_synonyms);
+                            let divided = div_exact(&factor, &root_denominator)
+                                .unwrap_or_else(|| Factor::Divide { left: Arc::clone(factor), right: Option::<&Vec<_>>::cloned(root_denominator_terms.as_ref()).unwrap() }.into());
+                            let (divided_vid, added) = add_factor_node(&mut data, divided, Some(root_vid), None, http);
+                            if added {
+                                // Don't apply this recursively, except when divided was already in
+                                // the graph for another reason
+                                facts_of_mut(&mut data.number_facts_map, divided_vid, &mut data.deleted_synonyms)
+                                    .checked_with_root_denominator = true;
+                                factors_to_submit.push_back(divided_vid);
+                            }
+                        }
+                    }
                     factors_to_submit.extend_front(
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid)
                             .await
@@ -1146,6 +1192,7 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
     facts.checked_for_listed_algebraic = true;
     facts.checked_in_factor_finder = true;
     facts.expression_form_checked_in_factor_finder = true;
+    facts.checked_with_root_denominator = true;
     let no_other_factors = if let UpToDate(factors) = &facts.factors_known_to_factordb {
         if factors.len() == 1 {
             facts.last_known_status = Some(Prime);
