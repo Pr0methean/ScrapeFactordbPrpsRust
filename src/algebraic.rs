@@ -725,8 +725,8 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
-        if let Numeric(n) = self
-            && let Numeric(o) = other
+        if let Some(n) = evaluate_as_numeric(self)
+            && let Some(o) = evaluate_as_numeric(other)
         {
             return o > n && o.is_multiple_of(n);
         };
@@ -747,6 +747,15 @@ impl Factor {
         if let Factor::Divide { left, right } = self
             && !(Multiply {terms: right.clone()}.may_be_proper_divisor_of(left)) {
             // Can't be an integer, therefore can't be a divisor
+            return false;
+        }
+        if let Factor::Divide { left, right } = other
+            && !(Multiply {terms: right.clone()}.may_be_proper_divisor_of(left)) {
+            // other can't be an integer, so it has no divisors
+            return false;
+        }
+        if let Factor::Multiply { terms } = self
+            && terms.keys().any(|term| !term.may_be_proper_divisor_of(other)) {
             return false;
         }
         if let Factor::Divide { left, .. } = other
@@ -2776,7 +2785,8 @@ mod tests {
             "123456789123456789123456789123456789123456789",
             "123456789123456789123456789123456789123456789/3"
         ));
-        assert!(!may_be_proper_divisor_of("2/12345", "12345"));
+        assert!(!may_be_proper_divisor_of("2/1234512345123451234512345123451234512345", "1234512345123451234512345123451234512345"));
+        assert!(!may_be_proper_divisor_of("1234512345123451234512345123451234512345/2", "1234512345123451234512345123451234512345"));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
     }
     #[test]
