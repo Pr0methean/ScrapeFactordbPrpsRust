@@ -1261,12 +1261,11 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
             }
             new_terms.retain(|_, exponent| *exponent != 0);
             divisor_terms.retain(|_, exponent| *exponent != 0);
+            if divisor_terms.is_empty() {
+                return Some(simplify(Multiply { terms: new_terms }.into()));
+            }
             if new_terms.is_empty() {
-                return if divisor_terms.is_empty() {
-                    Some(Factor::one())
-                } else {
-                    None
-                };
+                return None;
             }
             let divisor_numeric: NumericFactor = divisor_terms
                 .into_iter()
