@@ -1083,7 +1083,7 @@ pub async fn find_and_submit_factors(
                             }
                         }
                     }
-                    factors_to_submit.extend_front(
+                    factors_to_submit.extend(
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid)
                             .await
                             .into_iter()
