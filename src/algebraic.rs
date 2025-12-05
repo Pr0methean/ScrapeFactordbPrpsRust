@@ -648,9 +648,9 @@ peg::parser! {
       --
       "lucas(" x:arithmetic() ")" { Factor::Lucas(x.into()) }
       --
-      n:number() { n }
-      --
       n:$(['0'..='9']+ "..." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
+      --
+      n:number() { n }
       --
       "(" e:arithmetic() ")" { e }
     }
@@ -2881,10 +2881,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parser_sanity() {
-        assert!(
-            matches!(Factor::from("20025433792284810863801624695138170069954824799360087619907573551803727319746587493776261114573137810793371441975422203540802400135196/2"),
-            super::Factor::Divide { ref right, .. } if right.contains_key(&Factor::two()))
-        );
+    fn test_parse_elided() {
+        assert!(matches!(Factor::from("2002...96"), Factor::ElidedNumber(_)));
     }
 }
