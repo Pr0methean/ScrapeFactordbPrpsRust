@@ -2221,10 +2221,10 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
     if let Ok(num) = expr_short.parse::<NumericFactor>() {
         factors.extend(find_factors_of_numeric(num));
     } else {
-        let mut small_factors = Vec::new();
+        let mut divisor_map = BTreeMap::new();
         match expr_short.chars().last() {
-            Some('5') => small_factors.push(Factor::five()),
-            Some('2' | '4' | '6' | '8') => small_factors.push(Factor::two()),
+            Some('5') => *divisor_map.entry(Factor::five()).or_insert(0) += 1,
+            Some('2' | '4' | '6' | '8') => *divisor_map.entry(Factor::two()).or_insert(0) += 1,
             // '0' is handled by strip_suffix
             _ => {}
         }
@@ -2234,23 +2234,19 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
             .sum();
         match sum_of_digits % 9 {
             0 => {
-                small_factors.extend([Factor::three(), Factor::three()]);
+                *divisor_map.entry(Factor::three()).or_insert(0) += 2;
             }
             3 | 6 => {
-                small_factors.push(Factor::three());
+                *divisor_map.entry(Factor::three()).or_insert(0) += 1;
             }
             _ => {}
         }
         
-        if small_factors.is_empty() {
+        if divisor_map.is_empty() {
             factors.push(Factor::from(expr_short).into());
         } else {
             let original = Factor::from(expr_short).into();
-            let mut divisor_map = BTreeMap::new();
-            for f in &small_factors {
-                factors.push(f.clone());
-                *divisor_map.entry(f.clone()).or_insert(0) += 1;
-            }
+            factors.extend(divisor_map.iter().flat_map(|(factor, exponent)| repeat_n(Arc::clone(factor), *exponent as usize)));
             factors.push(Factor::Divide {
                 left: original,
                 right: divisor_map
