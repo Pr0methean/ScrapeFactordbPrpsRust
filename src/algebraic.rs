@@ -1183,7 +1183,11 @@ pub fn to_like_powers_recursive_dedup(
                     results.extend(repeat_n(Arc::clone(&factor), exponent as usize));
                 }
                 Numeric(n) => {
-                    results.extend(find_factors_of_numeric(n));
+                    if n > (1 << 64) && !is_prime(n) {
+                        results.push(Numeric(n).into());
+                    } else {
+                        results.extend(find_factors_of_numeric(n));
+                    }
                 }
                 _ => {
                     results.push(Arc::clone(&factor));
@@ -2166,7 +2170,12 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             ref right,
             subtract,
         } => {
-            let mut factors = Vec::with_capacity(SMALL_PRIMES.len());
+            let algebraic =
+                to_like_powers_recursive_dedup(Arc::clone(left), Arc::clone(right), subtract);
+            if !algebraic.is_empty() {
+                return algebraic;
+            }
+            let mut factors = find_common_factors(Arc::clone(left), Arc::clone(right));
             for prime in SMALL_PRIMES {
                 let mut power = prime as NumericFactor;
                 let prime_factor: Arc<Factor> = Numeric(power).into();
@@ -2769,4 +2778,22 @@ mod tests {
         ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
     }
+    #[test]
+    fn test_find_factors_performance() {
+        use num_prime::detail::SMALL_PRIMES;
+        println!("SMALL_PRIMES length: {}", SMALL_PRIMES.len());
+        let start = std::time::Instant::now();
+        // 10^111+1
+        let expr = super::expression_parser::arithmetic("10^111+1").unwrap();
+        let factors = super::find_factors(expr.into());
+        println!("Time: {:?}", start.elapsed());
+        // Verify we found something useful
+        println!("Factors count: {}", factors.len());
+        let expr = super::expression_parser::arithmetic("((12527^1075-1)/(12527^215-1)/8586556973449927230597763048446094420249471522535704574960623985727884084794871403158551-1)/1804837429895850").unwrap();
+        let factors = super::find_factors(expr.into());
+        println!("Time: {:?}", start.elapsed());
+        // Verify we found something useful
+        println!("Factors count: {}", factors.len());
+    }
+
 }
