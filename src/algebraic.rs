@@ -21,7 +21,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
-use std::mem::{swap};
+use std::mem::swap;
 use std::sync::Arc;
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
@@ -734,7 +734,10 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
-        fn product_may_be_divisor_of(terms: &BTreeMap<Arc<Factor>, NumberLength>, other: &Factor) -> bool {
+        fn product_may_be_divisor_of(
+            terms: &BTreeMap<Arc<Factor>, NumberLength>,
+            other: &Factor,
+        ) -> bool {
             // FIXME: Check whether exponent is large enough
             terms
                 .keys()
