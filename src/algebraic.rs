@@ -1084,7 +1084,7 @@ fn modinv(a: NumericFactor, m: NumericFactor) -> Option<NumericFactor> {
 // Maximum number of times a factor will be repeated when raised to a power, to limit memory usage.
 const MAX_REPEATS: usize = 16;
 
-fn factor_power(a: NumericFactor, n: NumericFactor) -> (NumericFactor, NumericFactor) {
+fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
     if a == 1 {
         return (1, 1);
     }
@@ -1829,7 +1829,17 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     match *expr {
         Multiply { ref terms } => {
             let mut new_terms = BTreeMap::new();
-            for (term, exponent) in terms.iter() {
+            for (mut term, mut exponent) in terms.iter() {
+                let (term, exponent) = if let Numeric(n) = term {
+                    let (factored_term, factored_exponent) = factor_power(*n, *exponent);
+                    if factored_term != n {
+                        (Numeric(factored_term).into(), factored_exponent)
+                    } else {
+                        (Arc::clone(term), *exponent)
+                    }
+                } else {
+                    (Arc::clone(term), *exponent)
+                };
                 if let Multiply { ref terms } = **term {
                     terms
                         .clone()
