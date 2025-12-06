@@ -1121,17 +1121,9 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
                 }
             }
             Multiply { terms } => {
-                let gcd = terms.values().copied().reduce(|x, y| x.gcd(&y));
-                if let Some(gcd) = gcd
-                    && gcd > 1
-                {
-                    let mut new_terms = terms.clone();
-                    new_terms
-                        .iter_mut()
-                        .for_each(|(_, exponent)| *exponent /= gcd);
-                    *term = Multiply { terms: new_terms }.into();
-                }
-                gcd.map(NumericFactor::from)
+                // Return GCD of exponents without modifying the term
+                // nth_root_exact will handle the exponent division later
+                terms.values().copied().reduce(|x, y| x.gcd(&y)).map(NumericFactor::from)
             }
             _ => evaluate_as_numeric(term),
         };
@@ -1858,6 +1850,14 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             new_terms.retain(|factor, exponent| *factor != Factor::one() && *exponent != 0);
             match new_terms.len() {
                 0 => Factor::one(),
+                1 => {
+                    let (factor, power) = new_terms.into_iter().next().unwrap();
+                    if power == 1 {
+                        factor
+                    } else {
+                        Multiply { terms: [(factor, power)].into() }.into()
+                    }
+                }
                 _ => Multiply { terms: new_terms }.into(),
             }
         }
@@ -2390,7 +2390,7 @@ mod tests {
     fn test_precedence() {
         assert_eq!(
             &Factor::from("(3^7396-928)/3309349849490834480566907-1").to_string(),
-            "((((3)^(7396)-928)/3309349849490834480566907)-1)"
+            "(((((3)^7396)-928)/3309349849490834480566907)-1)"
         );
         assert_eq!(evaluate_as_numeric(&"(3^7-6)/727".into()), Some(3));
     }
