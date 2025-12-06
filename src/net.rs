@@ -7,12 +7,9 @@ use crate::monitor::Monitor;
 use crate::net::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
-use crate::{
-    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
-    MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS,
-};
+use crate::{EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS, MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, frame_sync};
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
-use async_backtrace::framed;
+use async_backtrace::{framed, location};
 use atomic_time::AtomicInstant;
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
@@ -192,7 +189,7 @@ impl RealFactorDbClient {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
-            let result = block_in_place(|| {
+            let result = frame_sync(location!().named(format!("curl: {}", &url[..200])), || block_in_place(|| {
                 CURL_CLIENT.with_borrow_mut(|curl| {
                     curl.get(true)
                         .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
@@ -210,7 +207,7 @@ impl RealFactorDbClient {
                             Ok(response_body)
                         })
                 })
-            });
+            }));
             drop(permit);
             result.and_then(|response_body| Ok(String::from_utf8(response_body)?))
         } else {

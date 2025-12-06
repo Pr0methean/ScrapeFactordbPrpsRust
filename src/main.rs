@@ -20,7 +20,7 @@ use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, ResourceLimits};
-use async_backtrace::framed;
+use async_backtrace::{framed, Location};
 use async_backtrace::taskdump_tree;
 use channel::PushbackReceiver;
 use cuckoofilter::CuckooFilter;
@@ -47,6 +47,7 @@ use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use async_backtrace::ඞ::Frame;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -78,6 +79,10 @@ static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
+
+pub fn frame_sync<T, F: FnOnce() -> T>(location: Location, function: F) -> T {
+    Box::pin(Frame::new(location)).as_mut().in_scope(function)
+}
 
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
@@ -411,7 +416,7 @@ async fn queue_composites(
     info!("Buffering {} more C's", c_buffered.len());
     let c_sender = c_sender.clone();
     let c_buffered = c_buffered.into_boxed_slice();
-    task::spawn(async_backtrace::location!().frame(async move {
+    task::spawn(async_backtrace::location!().named_const("Send buffered C's to channel").frame(async move {
         let count = c_buffered.len();
         let mut c_sent = 0;
         for c_task in c_buffered {
@@ -582,7 +587,7 @@ async fn main() -> anyhow::Result<()> {
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
     let mut do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
-    task::spawn(async_backtrace::location!().frame(async move {
+    task::spawn(async_backtrace::location!().named_const("Execute checks from channels").frame(async move {
         info!("do_checks task starting");
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let mut next_unknown_attempt = Instant::now();
@@ -913,11 +918,11 @@ async fn main() -> anyhow::Result<()> {
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
     let mut u_http = http.clone();
-    task::spawn(async_backtrace::location!().frame(async move {
+    task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
-                warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                warn!("Queue U's task received shutdown signal; exiting");
                 return;
             }
             let digits = u_digits.unwrap_or_else(|| {
