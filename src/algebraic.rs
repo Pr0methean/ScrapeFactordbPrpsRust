@@ -632,7 +632,7 @@ peg::parser! {
       --
       x:@ "^" y:number() {
                 if let Some(y_numeric) = evaluate_as_numeric(&y).and_then(|y| NumberLength::try_from(y).ok()) {
-                  Factor::Multiply { terms: [(x.into(), y_numeric)].into() }
+                  Multiply { terms: [(x.into(), y_numeric)].into() }
                 } else {
                   Factor::Power { base: x.into(), exponent: y.into() }
                 }
@@ -771,7 +771,7 @@ impl Factor {
             // other can't be an integer, so it has no divisors
             return false;
         }
-        if let Factor::Multiply { terms } = self
+        if let Multiply { terms } = self
             && terms
                 .keys()
                 .any(|term| !term.may_be_proper_divisor_of(other))
@@ -1111,7 +1111,7 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
-                    *term = Factor::Multiply {
+                    *term = Multiply {
                         terms: [(Numeric(a).into(), n as NumberLength)].into(),
                     }
                     .into();
@@ -1265,7 +1265,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                 && let Some(divisor_root) = nth_root_exact(divisor, exponent_numeric)
             {
                 Some(simplify(
-                    Factor::Multiply {
+                    Multiply {
                         terms: [(div_exact(base, &divisor_root)?, exponent_numeric)].into(),
                     }
                     .into(),
@@ -1437,7 +1437,7 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumberLength) -> Option<Arc<Fa
                 && let Some(reduced_exponent) = exponent_numeric.div_exact(root.into())
             {
                 Some(
-                    Factor::Multiply {
+                    Multiply {
                         terms: [(Arc::clone(base), reduced_exponent as NumberLength)].into(),
                     }
                     .into(),
@@ -2865,11 +2865,11 @@ mod tests {
         let factors = super::find_factors(expr.into());
 
         // Should contain 2 and 3.
-        assert!(factors.contains(&super::Factor::two()));
-        assert!(factors.contains(&super::Factor::three()));
+        assert!(factors.contains(&Factor::two()));
+        assert!(factors.contains(&Factor::three()));
 
         // Should contain a generic factor which is the Divide term
-        let has_divide = factors.iter().any(|f| matches!(**f, super::Factor::Divide { ref right, .. } if right.contains_key(&Factor::two())));
+        let has_divide = factors.iter().any(|f| matches!(**f, Factor::Divide { ref right, .. } if right.contains_key(&Factor::two())));
         assert!(has_divide, "Should return a symbolic Divide term");
 
         // Should prevent infinite recursion
