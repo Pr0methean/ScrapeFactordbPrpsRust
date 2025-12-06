@@ -734,6 +734,13 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
+        fn product_may_be_divisor_of(terms: &BTreeMap<Arc<Factor>, NumberLength>, other: &Factor) -> bool {
+            // FIXME: Check whether exponent is large enough
+            terms
+                .keys()
+                .all(|term| term.may_be_proper_divisor_of(other))
+        }
+
         if let Some(n) = evaluate_as_numeric(self)
             && let Some(o) = evaluate_as_numeric(other)
         {
@@ -754,27 +761,19 @@ impl Factor {
             return false;
         }
         if let Factor::Divide { left, right } = self
-            && !(Multiply {
-                terms: right.clone(),
-            }
-            .may_be_proper_divisor_of(left))
+            && !product_may_be_divisor_of(right, left)
         {
             // Can't be an integer, therefore can't be a divisor
             return false;
         }
         if let Factor::Divide { left, right } = other
-            && !(Multiply {
-                terms: right.clone(),
-            }
-            .may_be_proper_divisor_of(left))
+            && !product_may_be_divisor_of(right, left)
         {
             // other can't be an integer, so it has no divisors
             return false;
         }
         if let Multiply { terms } = self
-            && terms
-                .keys()
-                .any(|term| !term.may_be_proper_divisor_of(other))
+            && !product_may_be_divisor_of(terms, other)
         {
             return false;
         }

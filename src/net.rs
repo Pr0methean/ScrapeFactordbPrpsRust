@@ -423,7 +423,7 @@ impl FactorDbClient for RealFactorDbClient {
         )
         .into();
         self.expression_form_cache
-            .insert(entry_id, expression_form.clone());
+            .insert(entry_id, Arc::clone(&expression_form));
         Some(expression_form)
     }
 
