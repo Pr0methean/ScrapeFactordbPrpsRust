@@ -459,7 +459,7 @@ impl PartialEq<Self> for NumberFacts {
 /// last in Factor::Ord, and we hace a cycle. By comparing the upper bounds first, we break this
 /// cycle in favor of c < a < b, which is the actual numeric-value ordering. This is probably about
 /// as close as we can come to a total numeric-value ordering with no bignum math and no isk of
-/// cycles.
+/// cycles./
 fn compare(
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
     left_id: VertexId,
@@ -481,6 +481,18 @@ fn compare(
                 .cmp(&right_facts.lower_bound_log10)
         })
         .then_with(|| left.cmp(right))
+}
+
+fn compare_by_vertex_id(data: &mut FactorData, left_id: VertexId, right_id: VertexId) -> Ordering {
+    let left = Arc::clone(get_vertex(&mut data.divisibility_graph, left_id, &mut data.deleted_synonyms));
+    let right = get_vertex(&mut data.divisibility_graph, right_id, &mut data.deleted_synonyms);
+    compare(&mut data.number_facts_map,
+            left_id,
+            &left,
+            right_id,
+            right,
+            &mut data.deleted_synonyms
+    )
 }
 
 fn compare_by_ref(
@@ -1098,8 +1110,9 @@ pub async fn find_and_submit_factors(
                 }
                 DoesNotDivide => {
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
-                    let subfactors =
+                    let mut subfactors =
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
+                    subfactors.sort_unstable_by(|v1, v2| compare_by_vertex_id(&mut data, *v2, *v1));
                     if subfactors.is_empty()
                         && let Some(ref root_denominator) = root_denominator
                     {
