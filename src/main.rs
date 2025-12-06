@@ -1,10 +1,11 @@
 #![allow(stable_features)]
+#![allow(incomplete_features)]
 #![feature(duration_constructors_lite)]
 #![feature(float_gamma)]
-#![feature(deque_extend_front)]
 #![feature(exact_div)]
 #![feature(str_as_str)]
 #![feature(iterator_try_reduce)]
+#![feature(explicit_tail_calls)]
 extern crate alloc;
 extern crate core;
 

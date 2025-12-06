@@ -1095,7 +1095,7 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     ] {
         if let Some(root) = a.nth_root_exact(prime as u32) {
             return match n.checked_mul(prime as NumberLength) {
-                Some(product) => factor_power(root, product),
+                Some(product) => become factor_power(root, product),
                 None => (a, n),
             };
         }
