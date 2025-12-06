@@ -21,7 +21,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::Hash;
 use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
-use std::mem::{replace, swap};
+use std::mem::{swap};
 use std::sync::Arc;
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
@@ -1868,8 +1868,9 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             } = *new_left
             {
                 // (left_left / mid) / right
-                let new_right_right = replace(&mut new_right, mid.clone());
-                new_right.extend(new_right_right);
+                for (term, exponent) in mid.iter() {
+                    *new_right.entry(Arc::clone(term)).or_insert(0) += *exponent;
+                }
                 new_left = Arc::clone(left_left);
                 // left_left / (mid * right)
             }
