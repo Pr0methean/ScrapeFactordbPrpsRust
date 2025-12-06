@@ -2091,8 +2091,9 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
 
 #[inline(always)]
 fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
-    info!("find_factors: {expr}");
-    frame_sync(location!().named(format!("find_factors: {expr}")), || {
+    let expr_string = format!("find_factors: {expr}");
+    info!("{}", expr_string);
+    frame_sync(location!().named(expr_string), || {
         if let Some(n) = evaluate_as_numeric(&expr) {
             return find_factors_of_numeric(n);
         }
