@@ -2107,7 +2107,6 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
 fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
     let expr_string = format!("find_factors: {expr}");
     info!("{}", expr_string);
-    let expr = simplify(expr);
     frame_sync(location!().named(expr_string), || {
         if let Some(n) = evaluate_as_numeric(&expr) {
             return find_factors_of_numeric(n);
@@ -2178,7 +2177,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                     .and_then(|power| usize::try_from(power).ok())
                     .unwrap_or(MAX_REPEATS)
                     .min(MAX_REPEATS);
-                let base_factors = find_factors(base.clone());
+                let base_factors = find_factors(simplify(base.clone()));
                 repeat_n(base_factors, power).flatten().collect()
             }
             Factor::Divide {
@@ -2187,13 +2186,13 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             } => {
                 // division
                 let mut left_recursive_factors = BTreeMap::new();
-                let left_remaining_factors = find_factors(left.clone());
+                let left_remaining_factors = find_factors(simplify(left.clone())).into_iter().map(simplify).collect();
                 let mut left_remaining_factors = count_frequencies(left_remaining_factors);
                 while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
                     let subfactors = if factor == expr {
                         vec![Arc::clone(&factor)]
                     } else {
-                        find_factors(factor.clone())
+                        find_factors(Arc::clone(&factor))
                     };
                     subfactors
                         .into_iter()
@@ -2230,9 +2229,10 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 // multiplication
                 let mut factors = Vec::new();
                 for (term, exponent) in terms {
-                    let term_factors = find_factors(Arc::clone(term));
+                    let term = simplify(Arc::clone(term));
+                    let term_factors = find_factors(Arc::clone(&term));
                     if term_factors.is_empty() {
-                        factors.extend(repeat_n(Arc::clone(term), *exponent as usize));
+                        factors.extend(repeat_n(Arc::clone(&term), *exponent as usize));
                     } else {
                         factors.extend(repeat_n(term_factors, *exponent as usize).flatten());
                     }
@@ -2244,12 +2244,14 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 ref right,
                 subtract,
             } => {
+                let left = simplify(Arc::clone(left));
+                let right = simplify(Arc::clone(right));
                 let algebraic =
-                    to_like_powers_recursive_dedup(Arc::clone(left), Arc::clone(right), subtract);
+                    to_like_powers_recursive_dedup(Arc::clone(&left), Arc::clone(&right), subtract);
                 if !algebraic.is_empty() {
                     return algebraic;
                 }
-                let mut factors = find_common_factors(Arc::clone(left), Arc::clone(right));
+                let mut factors = find_common_factors(Arc::clone(&left), Arc::clone(&right));
                 for prime in SMALL_PRIMES {
                     let mut power = prime as NumericFactor;
                     let prime_factor: Arc<Factor> = Numeric(power).into();
@@ -2263,8 +2265,8 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 }
                 factors = multiset_union(vec![
                     factors,
-                    to_like_powers_recursive_dedup(Arc::clone(left), Arc::clone(right), subtract),
-                    find_common_factors(Arc::clone(left), Arc::clone(right)),
+                    to_like_powers_recursive_dedup(Arc::clone(&left), Arc::clone(&right), subtract),
+                    find_common_factors(Arc::clone(&left), Arc::clone(&right)),
                 ]);
                 let cofactors: Vec<_> = factors
                     .iter()
@@ -2361,7 +2363,8 @@ fn find_common_factors(expr1: Arc<Factor>, expr2: Arc<Factor>) -> Vec<Arc<Factor
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
-    let mut factors = find_factors(expr.clone());
+    let expr = simplify(expr);
+    let mut factors = find_factors(Arc::clone(&expr));
     factors.retain(|f| f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr));
     factors.sort_unstable();
     factors.dedup();
