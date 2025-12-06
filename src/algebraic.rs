@@ -2970,4 +2970,25 @@ mod tests {
     fn test_parse_elided() {
         assert!(matches!(Factor::from("2002...96"), Factor::ElidedNumber(_)));
     }
+
+    #[test]
+    fn test_fmt_optimization() {
+        let one = Factor::one();
+        let two = Factor::two();
+        let three = Factor::three();
+
+        // 1 + 2*3
+        // Multiply { terms: {2:1, 3:1} } -> (2*3) 
+        let mut terms2 = BTreeMap::new();
+        terms2.insert(two.clone(), 1);
+        terms2.insert(three.clone(), 1);
+        let prod2 = Arc::new(Factor::Multiply { terms: terms2 });
+        let sum_prod = Factor::AddSub {
+            left: one.clone(),
+            right: prod2,
+            subtract: false,
+        };
+        // We want "1+2*3"
+        assert_eq!(sum_prod.to_string(), "1+2*3");
+    }
 }
