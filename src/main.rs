@@ -20,8 +20,9 @@ use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, ResourceLimits};
-use async_backtrace::{framed, Location};
 use async_backtrace::taskdump_tree;
+use async_backtrace::ඞ::Frame;
+use async_backtrace::{Location, framed};
 use channel::PushbackReceiver;
 use cuckoofilter::CuckooFilter;
 use futures_util::FutureExt;
@@ -47,7 +48,6 @@ use std::process::exit;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use async_backtrace::ඞ::Frame;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -416,22 +416,26 @@ async fn queue_composites(
     info!("Buffering {} more C's", c_buffered.len());
     let c_sender = c_sender.clone();
     let c_buffered = c_buffered.into_boxed_slice();
-    task::spawn(async_backtrace::location!().named_const("Send buffered C's to channel").frame(async move {
-        let count = c_buffered.len();
-        let mut c_sent = 0;
-        for c_task in c_buffered {
-            let id = c_task.id;
-            if let Err(e) = c_sender.send(c_task).await {
-                error!("{id}: Dropping C because we failed to send it to channel: {e}");
-            } else {
-                c_sent += 1;
-            }
-            if c_sent == 1 {
-                info!("Sent first of {count} buffered C's to channel");
-            }
-        }
-        info!("Sent {c_sent} buffered C's to channel");
-    }))
+    task::spawn(
+        async_backtrace::location!()
+            .named_const("Send buffered C's to channel")
+            .frame(async move {
+                let count = c_buffered.len();
+                let mut c_sent = 0;
+                for c_task in c_buffered {
+                    let id = c_task.id;
+                    if let Err(e) = c_sender.send(c_task).await {
+                        error!("{id}: Dropping C because we failed to send it to channel: {e}");
+                    } else {
+                        c_sent += 1;
+                    }
+                    if c_sent == 1 {
+                        info!("Sent first of {count} buffered C's to channel");
+                    }
+                }
+                info!("Sent {c_sent} buffered C's to channel");
+            }),
+    )
 }
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);

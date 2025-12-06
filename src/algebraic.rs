@@ -1,7 +1,8 @@
 use crate::algebraic::Factor::{AddSub, Multiply, Numeric};
 use crate::graph::EntryId;
 use crate::net::BigNumber;
-use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, write_bignum, frame_sync};
+use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, write_bignum};
+use async_backtrace::location;
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -22,7 +23,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::{replace, swap};
 use std::sync::Arc;
-use async_backtrace::location;
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
@@ -1123,7 +1123,11 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
             Multiply { terms } => {
                 // Return GCD of exponents without modifying the term
                 // nth_root_exact will handle the exponent division later
-                terms.values().copied().reduce(|x, y| x.gcd(&y)).map(NumericFactor::from)
+                terms
+                    .values()
+                    .copied()
+                    .reduce(|x, y| x.gcd(&y))
+                    .map(NumericFactor::from)
             }
             _ => evaluate_as_numeric(term),
         };
@@ -1844,7 +1848,10 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                     if power == 1 {
                         factor
                     } else {
-                        Multiply { terms: [(factor, power)].into() }.into()
+                        Multiply {
+                            terms: [(factor, power)].into(),
+                        }
+                        .into()
                     }
                 }
                 _ => Multiply { terms: new_terms }.into(),
@@ -1921,8 +1928,9 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 Numeric(0) => Factor::one(),
                 Numeric(1) => new_base,
                 Numeric(n) => Multiply {
-                    terms: [(new_base, n as NumberLength)].into()
-                }.into(),
+                    terms: [(new_base, n as NumberLength)].into(),
+                }
+                .into(),
                 _ => Factor::Power {
                     base: new_base,
                     exponent: new_exponent,
