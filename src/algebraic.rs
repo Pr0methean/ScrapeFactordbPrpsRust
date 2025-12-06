@@ -1812,17 +1812,6 @@ fn pisano(
     }
 }
 
-fn factor_to_power(base: Arc<Factor>, exponent: NumericFactor) -> Arc<Factor> {
-    match exponent {
-        0 => Factor::one(),
-        1 => base,
-        _ => simplify(Factor::Multiply {
-                terms: [(base, exponent as NumberLength)].into(),
-            }.into())
-            ,
-    }
-}
-
 pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
         return if matches!(*expr, Numeric(_)) {
