@@ -1888,7 +1888,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             }
             let mut new_left = simplify(new_left);
             let mut cloned_right = new_right.clone();
-            for (term, exponent) in new_right {
+            for (mut term, exponent) in new_right {
                 let simplified = simplify(Arc::clone(&term));
                 if let Multiply { ref terms } = *simplified {
                     cloned_right.remove(&term);
@@ -1898,6 +1898,13 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                             .or_insert(0) += exponent * subterm_exponent;
                     }
                 } else if simplified != term {
+                    if let Numeric(l) = *new_left && let Numeric(r) = *term {
+                        let gcd = l.gcd(&r);
+                        if gcd > 1 && let Some(gcd_root) = gcd.nth_root_exact(exponent) {
+                            new_left = Numeric(l / gcd).into();
+                            term = Numeric(r / gcd_root).into();
+                        }
+                    }
                     *cloned_right.entry(simplified).or_insert(0) +=
                         cloned_right.remove(&term).unwrap();
                 }
