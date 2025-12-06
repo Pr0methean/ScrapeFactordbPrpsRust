@@ -630,6 +630,14 @@ peg::parser! {
       --
       x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
       --
+      x:@ "^" y:number() {
+                if let Some(y_numeric) = evaluate_as_numeric(&y).and_then(|y| NumberLength::try_from(y).ok()) {
+                  Factor::Multiply { terms: [(x.into(), y_numeric)].into() }
+                } else {
+                  Factor::Power { base: x.into(), exponent: y.into() }
+                }
+      }
+      --
       x:@ "!" { Factor::Factorial(x.into()) }
       x:@ y:$("#"+) {
                     let hashes = y.len();
@@ -1103,9 +1111,8 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
-                    *term = Factor::Power {
-                        base: Numeric(a).into(),
-                        exponent: Numeric(n).into(),
+                    *term = Factor::Multiply {
+                        terms: [(Numeric(a).into(), n as NumberLength)].into(),
                     }
                     .into();
                     Some(n)
@@ -1126,7 +1133,7 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
                 }
                 gcd.map(NumericFactor::from)
             }
-            _ => None,
+            _ => evaluate_as_numeric(term),
         };
         if let Some(exponent_numeric) = exponent_numeric {
             factorize128(exponent_numeric)
@@ -1266,9 +1273,8 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                 && let Some(divisor_root) = nth_root_exact(divisor, exponent_numeric)
             {
                 Some(simplify(
-                    Factor::Power {
-                        base: div_exact(base, &divisor_root)?,
-                        exponent: Numeric(exponent_numeric.into()).into(),
+                    Factor::Multiply {
+                        terms: [(div_exact(base, &divisor_root)?, exponent_numeric)].into(),
                     }
                     .into(),
                 ))
@@ -1439,9 +1445,8 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumberLength) -> Option<Arc<Fa
                 && let Some(reduced_exponent) = exponent_numeric.div_exact(root.into())
             {
                 Some(
-                    Factor::Power {
-                        base: Arc::clone(base),
-                        exponent: Numeric(reduced_exponent).into(),
+                    Factor::Multiply {
+                        terms: [(Arc::clone(base), reduced_exponent as NumberLength)].into(),
                     }
                     .into(),
                 )
@@ -1819,19 +1824,20 @@ fn factor_to_power(base: Arc<Factor>, exponent: NumericFactor) -> Arc<Factor> {
     match exponent {
         0 => Factor::one(),
         1 => base,
-        _ => simplify(
-            Factor::Power {
-                base,
-                exponent: Numeric(exponent).into(),
-            }
-            .into(),
-        ),
+        _ => simplify(Factor::Multiply {
+                terms: [(base, exponent as NumberLength)].into(),
+            }.into())
+            ,
     }
 }
 
 pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
-        return Numeric(expr_numeric).into();
+        return if matches!(*expr, Numeric(_)) {
+            expr
+        } else {
+            Numeric(expr_numeric).into()
+        };
     }
     match *expr {
         Multiply { ref terms } => {
@@ -1852,10 +1858,6 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             new_terms.retain(|factor, exponent| *factor != Factor::one() && *exponent != 0);
             match new_terms.len() {
                 0 => Factor::one(),
-                1 => {
-                    let (factor, power) = new_terms.into_iter().next().unwrap();
-                    factor_to_power(factor, power as NumericFactor)
-                }
                 _ => Multiply { terms: new_terms }.into(),
             }
         }
@@ -1929,6 +1931,9 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             match *new_exponent {
                 Numeric(0) => Factor::one(),
                 Numeric(1) => new_base,
+                Numeric(n) => Multiply {
+                    terms: [(new_base, n as NumberLength)].into()
+                }.into(),
                 _ => Factor::Power {
                     base: new_base,
                     exponent: new_exponent,
