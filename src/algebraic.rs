@@ -1094,7 +1094,7 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
         97, 101, 103, 107, 109, 113, 127,
     ] {
         if let Some(root) = a.nth_root_exact(prime as u32) {
-            return match n.checked_mul(prime as NumericFactor) {
+            return match n.checked_mul(prime as NumberLength) {
                 Some(product) => factor_power(root, product),
                 None => (a, n),
             };
@@ -1109,7 +1109,7 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
     let mut new_right = simplify(Arc::clone(&right));
     for term in [&mut new_left, &mut new_right] {
         let exponent_numeric = match &**term {
-            Factor::Power { exponent, .. } => evaluate_as_numeric(exponent),
+            Factor::Power { exponent, .. } => evaluate_as_numeric(exponent).and_then(|e| NumberLength::try_from(e).ok()),
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
@@ -1129,12 +1129,11 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
                     .values()
                     .copied()
                     .reduce(|x, y| x.gcd(&y))
-                    .map(NumericFactor::from)
             }
-            _ => evaluate_as_numeric(term),
+            _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
-            factorize128(exponent_numeric)
+            factorize128(exponent_numeric.into())
                 .into_iter()
                 .for_each(|(factor, factor_exponent)| {
                     possible_factors.insert(
@@ -1829,9 +1828,9 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     match *expr {
         Multiply { ref terms } => {
             let mut new_terms = BTreeMap::new();
-            for (mut term, mut exponent) in terms.iter() {
-                let (term, exponent) = if let Numeric(n) = term {
-                    let (factored_term, factored_exponent) = factor_power(*n, *exponent);
+            for (term, exponent) in terms.iter() {
+                let (term, exponent) = if let Numeric(n) = **term {
+                    let (factored_term, factored_exponent) = factor_power(n, *exponent);
                     if factored_term != n {
                         (Numeric(factored_term).into(), factored_exponent)
                     } else {
@@ -1840,7 +1839,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 } else {
                     (Arc::clone(term), *exponent)
                 };
-                if let Multiply { ref terms } = **term {
+                if let Multiply { ref terms } = *term {
                     terms
                         .clone()
                         .into_iter()
@@ -1849,7 +1848,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                             *new_terms.entry(term).or_insert(0) += term_exponent
                         });
                 } else {
-                    *new_terms.entry(Arc::clone(term)).or_insert(0) += exponent;
+                    *new_terms.entry(Arc::clone(&term)).or_insert(0) += exponent;
                 }
             }
             new_terms.retain(|factor, exponent| *factor != Factor::one() && *exponent != 0);
@@ -1928,12 +1927,12 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 if new_base_numeric == 1 {
                     return Factor::one();
                 }
-                if let Some(new_exponent_numeric) = evaluate_as_numeric(&new_exponent) {
+                if let Some(new_exponent_numeric) = evaluate_as_numeric(&new_exponent).and_then(|e| NumberLength::try_from(e).ok()) {
                     let (factored_base, factored_exponent) =
                         factor_power(new_base_numeric, new_exponent_numeric);
                     if factored_exponent != new_exponent_numeric {
                         new_base = Numeric(factored_base).into();
-                        new_exponent = Numeric(factored_exponent).into();
+                        new_exponent = Numeric(factored_exponent as NumericFactor).into();
                     }
                 }
             }
