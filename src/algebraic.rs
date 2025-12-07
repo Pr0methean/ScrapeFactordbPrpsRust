@@ -1566,23 +1566,10 @@ fn estimate_log10_internal(expr: &Arc<Factor>) -> (NumberLength, NumberLength) {
     let cached = FACTOR_CACHE.get_or_insert_with(expr, || Ok::<_,!>(Default::default())).unwrap();
     *cached.log10_estimate.get_or_init(|| {
         if let Some(Some(n)) = cached.eval_as_numeric.get() {
-            return (
-                n.ilog10() as NumberLength,
-                (n - 1).ilog10() as NumberLength + 1,
-            );
+            return log10_bounds(*n);
         }
         match **expr {
-            Numeric(n) => match n {
-                0 => {
-                    warn!("log10 estimate for 0 was requested");
-                    (0, 0)
-                }
-                1 => (0, 0),
-                n => (
-                    n.ilog10() as NumberLength,
-                    (n - 1).ilog10() as NumberLength + 1,
-                ),
-            },
+            Numeric(n) => log10_bounds(n),
             Factor::BigNumber(ref expr) => {
                 let len = expr.as_ref().len();
                 ((len - 1) as NumberLength, len as NumberLength)
@@ -1707,6 +1694,20 @@ fn estimate_log10_internal(expr: &Arc<Factor>) -> (NumberLength, NumberLength) {
             Factor::UnknownExpression(_) => (0, NumberLength::MAX),
         }
     })
+}
+
+fn log10_bounds(n: NumericFactor) -> (NumberLength, NumberLength) {
+    match n {
+        0 => {
+            warn!("log10 estimate for 0 was requested");
+            (0, 0)
+        }
+        1 => (0, 0),
+        n => (
+            n.ilog10() as NumberLength,
+            (n - 1).ilog10() as NumberLength + 1,
+        ),
+    }
 }
 
 fn estimate_log10_of_product(
