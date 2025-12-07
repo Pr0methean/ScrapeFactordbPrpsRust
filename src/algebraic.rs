@@ -795,10 +795,10 @@ impl Factor {
                 }
             }
             Factorial(ref term) => {
-                if let Some(term) = evaluate_as_numeric(&term) {
+                if let Some(term) = evaluate_as_numeric(term) {
                     match **other {
                         Factorial(ref other_term) => {
-                            if let Some(other_term) = evaluate_as_numeric(&other_term)
+                            if let Some(other_term) = evaluate_as_numeric(other_term)
                                 && other_term <= term
                             {
                                 return false;
@@ -829,7 +829,7 @@ impl Factor {
                             }
                         }
                         Primorial(ref other_term) => {
-                            if let Some(other_term) = evaluate_as_numeric(&other_term)
+                            if let Some(other_term) = evaluate_as_numeric(other_term)
                                 && (other_term <= term || (term..=other_term).any(is_prime))
                             {
                                 return false;
@@ -2075,7 +2075,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Arc<Factor>) -> Option<NumericFactor> {
         Numeric(n) => Some(n),
         Factor::BigNumber(_) => None,
         Factor::Lucas(ref term) => {
-            let term = evaluate_as_numeric(&term)?;
+            let term = evaluate_as_numeric(term)?;
             match term {
                 0 => Some(2),
                 1 => Some(1),
@@ -2095,7 +2095,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Arc<Factor>) -> Option<NumericFactor> {
             }
         }
         Factor::Fibonacci(ref term) => {
-            let term = evaluate_as_numeric(&term)?;
+            let term = evaluate_as_numeric(term)?;
             match term {
                 0 => Some(0),
                 1 | 2 => Some(1),
@@ -2144,13 +2144,13 @@ pub(crate) fn evaluate_as_numeric(expr: &Arc<Factor>) -> Option<NumericFactor> {
             }
         }
         Factor::ElidedNumber(_) => None,
-        Factor::Power { ref base, ref exponent } => match evaluate_as_numeric(&base)? {
+        Factor::Power { ref base, ref exponent } => match evaluate_as_numeric(base)? {
             0 => Some(0),
             1 => Some(1),
-            base => base.checked_pow(u32::try_from(evaluate_as_numeric(&exponent)?).ok()?),
+            base => base.checked_pow(u32::try_from(evaluate_as_numeric(exponent)?).ok()?),
         },
         Factor::Divide { ref left, ref right } => {
-            let mut result = evaluate_as_numeric(&left)?;
+            let mut result = evaluate_as_numeric(left)?;
             for (term, exponent) in right.iter() {
                 result =
                     result.checked_div_exact(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
