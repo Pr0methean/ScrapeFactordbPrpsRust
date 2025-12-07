@@ -1,4 +1,4 @@
-use crate::algebraic::Factor::{AddSub, Multiply, Numeric};
+use crate::algebraic::Factor::{AddSub, Factorial, Multiply, Numeric, Primorial};
 use crate::graph::EntryId;
 use crate::net::BigNumber;
 use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, write_bignum};
@@ -666,6 +666,16 @@ peg::parser! {
   }
 }
 
+fn largest_prime_le(mut given: NumericFactor) -> NumericFactor {
+    while given >= 2 {
+        if is_prime(given) {
+            return given;
+        }
+        given -= 1;
+    }
+    1
+}
+
 impl Factor {
     thread_local! {
         static ONE: Arc<Factor> = Arc::new(Numeric(1));
@@ -743,47 +753,81 @@ impl Factor {
                 .keys()
                 .all(|term| term.may_be_proper_divisor_of(other))
         }
-
+        if self == other {
+            return false;
+        }
         if let Some(n) = evaluate_as_numeric(self)
             && let Some(o) = evaluate_as_numeric(other)
         {
             return o > n && o.is_multiple_of(n);
         };
-        if let Factor::BigNumber(_) = self {
-            match other {
-                Numeric(_) => return false,
-                Factor::BigNumber(_) => {
-                    if self > other {
+        match self {
+            Factor::BigNumber(_) => {
+                match other {
+                    Numeric(_) => return false,
+                    Factor::BigNumber(_) => {
+                        if self > other {
+                            return false;
+                        }
+                    }
+                    _ => {}
+                }
+            },
+            Factor::Divide { left, right } => {
+                if !product_may_be_divisor_of(right, left) {
+                    // Can't be an integer, therefore can't be a divisor
+                    return false;
+                }
+            }
+            Multiply { terms } => {
+                if !product_may_be_divisor_of(terms, other) {
+                    return false;
+                }
+            }
+            Factorial(term) => {
+                if let Some(term) = evaluate_as_numeric(term) {
+                    match other {
+                        Factorial(other_term) => if let Some(other_term) = evaluate_as_numeric(other_term)
+                            && other_term <= term {
+                            return false;
+                        }
+                        Primorial(_) => if term >= 4 {
+                            // Primorials are squarefree, factorials of >=4 aren't
+                            return false;
+                        }
+                        _ => {}
+                    }
+                    if (2..=term).any(|i| !Numeric(i).may_be_proper_divisor_of(other)) {
                         return false;
                     }
                 }
-                _ => {}
             }
+            Primorial(term) => {
+                if let Some(term) = evaluate_as_numeric(term) {
+                    match other {
+                        Factorial(other_term) => if let Some(other_term) = evaluate_as_numeric(other_term)
+                            && other_term < largest_prime_le(term) {
+                            // factorials of 4+ aren't squarefree, but primorials are
+                            return false;
+                        }
+                        Primorial(other_term) => if let Some(other_term) = evaluate_as_numeric(other_term)
+                            && (other_term <= term
+                            || (term..=other_term).any(|factor| is_prime(factor))) {
+                            return false;
+                        }
+                        _ => {}
+                    }
+                    if (2..=term).any(| i | is_prime(i) & & !Numeric(i).may_be_proper_divisor_of(other)) {
+                        return false;
+                    }
+                }
+            }
+            _ => {}
         }
-        if self == other {
-            return false;
-        }
-        if let Factor::Divide { left, right } = self
-            && !product_may_be_divisor_of(right, left)
-        {
-            // Can't be an integer, therefore can't be a divisor
-            return false;
-        }
-        if let Factor::Divide { left, right } = other
-            && !product_may_be_divisor_of(right, left)
-        {
-            // other can't be an integer, so it has no divisors
-            return false;
-        }
-        if let Multiply { terms } = self
-            && !product_may_be_divisor_of(terms, other)
-        {
-            return false;
-        }
-        if let Factor::Divide { left, .. } = other
-            && !self.may_be_proper_divisor_of(left)
-        {
-            return false;
+        if let Factor::Divide { left, right } = other {
+            if !self.may_be_proper_divisor_of(left) || !product_may_be_divisor_of(right, left) {
+                return false;
+            }
         }
         let Some(last_digit) = self.last_digit() else {
             return true;
