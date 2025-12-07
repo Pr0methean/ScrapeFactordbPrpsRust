@@ -24,6 +24,7 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
 use std::sync::{Arc, LazyLock, OnceLock};
+use tokio::task;
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
@@ -2207,7 +2208,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
         .unwrap();
     cached
         .factors
-        .get_or_init(|| {
+        .get_or_init(|| task::block_in_place({
             let expr_string = format!("find_factors: {expr}");
             info!("{}", expr_string);
             frame_sync(location!().named(expr_string), || {
@@ -2393,7 +2394,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                 }
             })
         })
-        .clone()
+        .clone())
 }
 
 fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
