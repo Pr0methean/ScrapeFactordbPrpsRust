@@ -1031,7 +1031,7 @@ fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Arc<Fac
     } else if !subset_recursion {
         vec![Factor::Fibonacci(Numeric(term).into()).into()]
     } else {
-        let factors_of_term = factorize128(term);
+        let factors_of_term = find_raw_factors_of_numeric(term);
         let mut factors_of_term = factors_of_term
             .into_iter()
             .flat_map(|(key, value)| repeat_n(key, value))
@@ -1063,7 +1063,7 @@ fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Arc<Factor>
     } else if !subset_recursion {
         vec![Factor::Lucas(Numeric(term).into()).into()]
     } else {
-        let mut factors_of_term = factorize128(term);
+        let mut factors_of_term = find_raw_factors_of_numeric(term);
         let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as NumericFactor;
         let mut factors_of_term = factors_of_term
             .into_iter()
@@ -1209,7 +1209,7 @@ pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -
             _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
-            factorize128(exponent_numeric.into()).into_iter().for_each(
+            find_raw_factors_of_numeric(exponent_numeric.into()).into_iter().for_each(
                 |(factor, factor_exponent)| {
                     possible_factors.insert(
                         factor,
@@ -1560,10 +1560,15 @@ fn nth_root_of_product(
 #[inline(always)]
 pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Box<[Arc<Factor>]> {
     debug_assert_ne!(input, 0);
-    factorize128(input)
+    find_raw_factors_of_numeric(input)
         .into_iter()
         .flat_map(|(factor, power)| repeat_n(Numeric(factor).into(), power))
         .collect()
+}
+
+#[inline(always)]
+pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<NumericFactor, usize> {
+    task::block_in_place(|| factorize128(input))
 }
 
 #[inline(always)]
