@@ -2195,7 +2195,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
     let expr_string = format!("find_factors: {expr}");
     info!("{}", expr_string);
     frame_sync(location!().named(expr_string), || {
-        if let Some(n) = evaluate_as_numeric(&expr) {
+        if let Some(n) = evaluate_as_numeric(expr) {
             return find_factors_of_numeric(n);
         }
         match **expr {
@@ -2345,7 +2345,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                 for prime in SMALL_PRIMES {
                     let mut power = prime as NumericFactor;
                     let prime_factor: Arc<Factor> = Numeric(power).into();
-                    while modulo_as_numeric(&expr, power) == Some(0) {
+                    while modulo_as_numeric(expr, power) == Some(0) {
                         factors.push(prime_factor.clone());
                         let Some(new_power) = power.checked_mul(prime as NumericFactor) else {
                             break;
@@ -2361,7 +2361,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                 let cofactors: Vec<_> = factors
                     .iter()
                     .unique()
-                    .flat_map(|factor: &Arc<Factor>| div_exact(&expr, factor))
+                    .flat_map(|factor: &Arc<Factor>| div_exact(expr, factor))
                     .collect();
                 factors = multiset_union(vec![factors, cofactors]);
                 factors
