@@ -762,16 +762,14 @@ impl Factor {
             return o > n && o.is_multiple_of(n);
         };
         match self {
-            Factor::BigNumber(_) => {
-                match other {
-                    Numeric(_) => return false,
-                    Factor::BigNumber(_) => {
-                        if self > other {
-                            return false;
-                        }
+            Factor::BigNumber(_) => match other {
+                Numeric(_) => return false,
+                Factor::BigNumber(_) => {
+                    if self > other {
+                        return false;
                     }
-                    _ => {}
                 }
+                _ => {}
             },
             Factor::Divide { left, right } => {
                 if !product_may_be_divisor_of(right, left) {
@@ -787,13 +785,18 @@ impl Factor {
             Factorial(term) => {
                 if let Some(term) = evaluate_as_numeric(term) {
                     match other {
-                        Factorial(other_term) => if let Some(other_term) = evaluate_as_numeric(other_term)
-                            && other_term <= term {
-                            return false;
+                        Factorial(other_term) => {
+                            if let Some(other_term) = evaluate_as_numeric(other_term)
+                                && other_term <= term
+                            {
+                                return false;
+                            }
                         }
-                        Primorial(_) => if term >= 4 {
-                            // Primorials are squarefree, factorials of >=4 aren't
-                            return false;
+                        Primorial(_) => {
+                            if term >= 4 {
+                                // Primorials are squarefree, factorials of >=4 aren't
+                                return false;
+                            }
                         }
                         _ => {}
                     }
@@ -805,19 +808,26 @@ impl Factor {
             Primorial(term) => {
                 if let Some(term) = evaluate_as_numeric(term) {
                     match other {
-                        Factorial(other_term) => if let Some(other_term) = evaluate_as_numeric(other_term)
-                            && other_term < largest_prime_le(term) {
-                            // factorials of 4+ aren't squarefree, but primorials are
-                            return false;
+                        Factorial(other_term) => {
+                            if let Some(other_term) = evaluate_as_numeric(other_term)
+                                && other_term < largest_prime_le(term)
+                            {
+                                // factorials of 4+ aren't squarefree, but primorials are
+                                return false;
+                            }
                         }
-                        Primorial(other_term) => if let Some(other_term) = evaluate_as_numeric(other_term)
-                            && (other_term <= term
-                            || (term..=other_term).any(is_prime)) {
-                            return false;
+                        Primorial(other_term) => {
+                            if let Some(other_term) = evaluate_as_numeric(other_term)
+                                && (other_term <= term || (term..=other_term).any(is_prime))
+                            {
+                                return false;
+                            }
                         }
                         _ => {}
                     }
-                    if (2..=term).any(| i | is_prime(i) && !Numeric(i).may_be_proper_divisor_of(other)) {
+                    if (2..=term)
+                        .any(|i| is_prime(i) && !Numeric(i).may_be_proper_divisor_of(other))
+                    {
                         return false;
                     }
                 }
@@ -825,9 +835,10 @@ impl Factor {
             _ => {}
         }
         if let Factor::Divide { left, right } = other
-            && (!self.may_be_proper_divisor_of(left) || !product_may_be_divisor_of(right, left)) {
-                return false;
-            }
+            && (!self.may_be_proper_divisor_of(left) || !product_may_be_divisor_of(right, left))
+        {
+            return false;
+        }
         let Some(last_digit) = self.last_digit() else {
             return true;
         };
@@ -1152,7 +1163,9 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
     let mut new_right = simplify(Arc::clone(&right));
     for term in [&mut new_left, &mut new_right] {
         let exponent_numeric = match &**term {
-            Factor::Power { exponent, .. } => evaluate_as_numeric(exponent).and_then(|e| NumberLength::try_from(e).ok()),
+            Factor::Power { exponent, .. } => {
+                evaluate_as_numeric(exponent).and_then(|e| NumberLength::try_from(e).ok())
+            }
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
@@ -1168,22 +1181,19 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
             Multiply { terms } => {
                 // Return GCD of exponents without modifying the term
                 // nth_root_exact will handle the exponent division later
-                terms
-                    .values()
-                    .copied()
-                    .reduce(|x, y| x.gcd(&y))
+                terms.values().copied().reduce(|x, y| x.gcd(&y))
             }
             _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
-            factorize128(exponent_numeric.into())
-                .into_iter()
-                .for_each(|(factor, factor_exponent)| {
+            factorize128(exponent_numeric.into()).into_iter().for_each(
+                |(factor, factor_exponent)| {
                     possible_factors.insert(
                         factor,
                         factor_exponent.max(possible_factors.get(&factor).copied().unwrap_or(0)),
                     );
-                })
+                },
+            )
         }
     }
     let total_factors = possible_factors.values().sum::<usize>();
@@ -1941,9 +1951,13 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                             .or_insert(0) += exponent * subterm_exponent;
                     }
                 } else if simplified != term {
-                    if let Numeric(l) = *new_left && let Numeric(r) = *term {
+                    if let Numeric(l) = *new_left
+                        && let Numeric(r) = *term
+                    {
                         let gcd = l.gcd(&r);
-                        if gcd > 1 && let Some(gcd_root) = gcd.nth_root_exact(exponent) {
+                        if gcd > 1
+                            && let Some(gcd_root) = gcd.nth_root_exact(exponent)
+                        {
                             new_left = Numeric(l / gcd).into();
                             term = Numeric(r / gcd_root).into();
                         }
@@ -1977,7 +1991,9 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 if new_base_numeric == 1 {
                     return Factor::one();
                 }
-                if let Some(new_exponent_numeric) = evaluate_as_numeric(&new_exponent).and_then(|e| NumberLength::try_from(e).ok()) {
+                if let Some(new_exponent_numeric) =
+                    evaluate_as_numeric(&new_exponent).and_then(|e| NumberLength::try_from(e).ok())
+                {
                     let (factored_base, factored_exponent) =
                         factor_power(new_base_numeric, new_exponent_numeric);
                     if factored_exponent != new_exponent_numeric {
@@ -2236,7 +2252,10 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             } => {
                 // division
                 let mut left_recursive_factors = BTreeMap::new();
-                let left_remaining_factors = find_factors(simplify(left.clone())).into_iter().map(simplify).collect();
+                let left_remaining_factors = find_factors(simplify(left.clone()))
+                    .into_iter()
+                    .map(simplify)
+                    .collect();
                 let mut left_remaining_factors = count_frequencies(left_remaining_factors);
                 while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
                     let subfactors = if factor == expr {
