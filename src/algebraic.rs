@@ -812,23 +812,22 @@ impl Factor {
                         }
                         Primorial(other_term) => if let Some(other_term) = evaluate_as_numeric(other_term)
                             && (other_term <= term
-                            || (term..=other_term).any(|factor| is_prime(factor))) {
+                            || (term..=other_term).any(is_prime)) {
                             return false;
                         }
                         _ => {}
                     }
-                    if (2..=term).any(| i | is_prime(i) & & !Numeric(i).may_be_proper_divisor_of(other)) {
+                    if (2..=term).any(| i | is_prime(i) && !Numeric(i).may_be_proper_divisor_of(other)) {
                         return false;
                     }
                 }
             }
             _ => {}
         }
-        if let Factor::Divide { left, right } = other {
-            if !self.may_be_proper_divisor_of(left) || !product_may_be_divisor_of(right, left) {
+        if let Factor::Divide { left, right } = other
+            && (!self.may_be_proper_divisor_of(left) || !product_may_be_divisor_of(right, left)) {
                 return false;
             }
-        }
         let Some(last_digit) = self.last_digit() else {
             return true;
         };

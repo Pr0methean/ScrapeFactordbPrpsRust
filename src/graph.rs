@@ -484,9 +484,9 @@ fn compare(
 }
 
 fn compare_by_vertex_id(data: &mut FactorData, left_id: VertexId, right_id: VertexId) -> Ordering {
-    let left = Arc::clone(get_vertex(&mut data.divisibility_graph, left_id, &mut data.deleted_synonyms));
-    let right = get_vertex(&mut data.divisibility_graph, right_id, &mut data.deleted_synonyms);
-    compare(&mut data.number_facts_map,
+    let left = Arc::clone(get_vertex(&data.divisibility_graph, left_id, &mut data.deleted_synonyms));
+    let right = get_vertex(&data.divisibility_graph, right_id, &mut data.deleted_synonyms);
+    compare(&data.number_facts_map,
             left_id,
             &left,
             right_id,
