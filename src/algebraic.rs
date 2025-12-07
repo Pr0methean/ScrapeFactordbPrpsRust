@@ -593,7 +593,7 @@ pub struct LocalFactorData {
 static FACTOR_CACHE: LazyLock<Cache<Arc<Factor>, Arc<LocalFactorData>>> =
     LazyLock::new(|| Cache::new(1 << 20));
 
-#[allow(type_complexity)]
+#[allow(clippy::type_complexity)]
 static UNIQUE_FACTOR_CACHE: LazyLock<Cache<Arc<Factor>, Box<[Arc<Factor>]>>> =
     LazyLock::new(|| Cache::new(1 << 14));
 
