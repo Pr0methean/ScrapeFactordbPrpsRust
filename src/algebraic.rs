@@ -1169,10 +1169,10 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     (a, n)
 }
 
-pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> Vec<Arc<Factor>> {
+pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -> Vec<Arc<Factor>> {
     let mut possible_factors = BTreeMap::new();
-    let mut new_left = simplify(Arc::clone(&left));
-    let mut new_right = simplify(Arc::clone(&right));
+    let mut new_left = simplify(Arc::clone(left));
+    let mut new_right = simplify(Arc::clone(right));
     for term in [&mut new_left, &mut new_right] {
         let exponent_numeric = match &**term {
             Factor::Power { exponent, .. } => {
@@ -1252,14 +1252,14 @@ pub fn to_like_powers(left: Arc<Factor>, right: Arc<Factor>, subtract: bool) -> 
     results
 }
 pub fn to_like_powers_recursive_dedup(
-    left: Arc<Factor>,
-    right: Arc<Factor>,
+    left: &Arc<Factor>,
+    right: &Arc<Factor>,
     subtract: bool,
 ) -> Vec<Arc<Factor>> {
     let mut results = Vec::new();
     let mut to_expand = count_frequencies(to_like_powers(
-        Arc::clone(&left),
-        Arc::clone(&right),
+        left,
+        right,
         subtract,
     ));
     let mut already_expanded = BTreeSet::new();
@@ -1272,7 +1272,7 @@ pub fn to_like_powers_recursive_dedup(
                     subtract,
                 } => {
                     let subfactors =
-                        to_like_powers(Arc::clone(factor_left), Arc::clone(factor_right), subtract);
+                        to_like_powers(factor_left, factor_right, subtract);
                     for subfactor in subfactors
                         .into_iter()
                         .filter(|subfactor| subfactor != &factor)
@@ -1561,11 +1561,17 @@ pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Vec<Arc<Factor>> 
 }
 
 #[inline(always)]
-fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
+fn estimate_log10_internal(expr: &Arc<Factor>) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
-    let cached = FACTOR_CACHE.get_or_insert_with(&expr, || Ok::<_,!>(Default::default())).unwrap();
+    let cached = FACTOR_CACHE.get_or_insert_with(expr, || Ok::<_,!>(Default::default())).unwrap();
     *cached.log10_estimate.get_or_init(|| {
-        match *expr {
+        if let Some(Some(n)) = cached.eval_as_numeric.get() {
+            return (
+                n.ilog10() as NumberLength,
+                (n - 1).ilog10() as NumberLength + 1,
+            );
+        }
+        match **expr {
             Numeric(n) => match n {
                 0 => {
                     warn!("log10 estimate for 0 was requested");
@@ -1652,7 +1658,7 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
                     let upper = (base as f64).log10().next_up() * (exponent as f64).next_up();
                     (lower.floor() as NumberLength, upper.ceil() as NumberLength)
                 } else {
-                    let (base_lower, base_upper) = estimate_log10_internal(base.clone());
+                    let (base_lower, base_upper) = estimate_log10_internal(base);
                     (
                         base_lower.saturating_mul(exponent),
                         base_upper.saturating_mul(exponent),
@@ -1663,7 +1669,7 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
                 ref left,
                 ref right,
             } => {
-                let (num_lower, num_upper) = estimate_log10_internal(left.clone());
+                let (num_lower, num_upper) = estimate_log10_internal(left);
                 let (denom_lower, denom_upper) = estimate_log10_of_product(right);
                 let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
                 let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
@@ -1680,8 +1686,8 @@ fn estimate_log10_internal(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
                 subtract,
             } => {
                 // addition/subtraction
-                let (left_lower, left_upper) = estimate_log10_internal(left.clone());
-                let (right_lower, right_upper) = estimate_log10_internal(right.clone());
+                let (left_lower, left_upper) = estimate_log10_internal(left);
+                let (right_lower, right_upper) = estimate_log10_internal(right);
                 let combined_lower = if subtract {
                     if right_upper >= left_lower - 1 {
                         0
@@ -1711,9 +1717,9 @@ fn estimate_log10_of_product(
     for (term, exponent) in terms {
         let (power_lower, power_upper) = match *exponent {
             0 => (0, 0),
-            1 => estimate_log10_internal(Arc::clone(term)),
+            1 => estimate_log10_internal(term),
             x => estimate_log10_internal(
-                Factor::Power {
+                &Factor::Power {
                     base: Arc::clone(term),
                     exponent: Numeric(x as NumericFactor).into(),
                 }
@@ -1726,8 +1732,8 @@ fn estimate_log10_of_product(
     (lower, upper - 1)
 }
 
-pub(crate) fn estimate_log10(expr: Arc<Factor>) -> (NumberLength, NumberLength) {
-    let (lbound, ubound) = estimate_log10_internal(expr.clone());
+pub(crate) fn estimate_log10(expr: &Arc<Factor>) -> (NumberLength, NumberLength) {
+    let (lbound, ubound) = estimate_log10_internal(expr);
     if lbound > ubound {
         error!(
             "{expr}: estimate_log10 produced inconsistent bounds: lower bound {lbound}, upper bound {ubound}"
@@ -2182,8 +2188,8 @@ pub(crate) fn evaluate_as_numeric(expr: &Arc<Factor>) -> Option<NumericFactor> {
 }
 
 #[inline(always)]
-fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
-    let cached = FACTOR_CACHE.get_or_insert_with(&expr, || Ok::<_,!>(Default::default())).unwrap();
+fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
+    let cached = FACTOR_CACHE.get_or_insert_with(expr, || Ok::<_,!>(Default::default())).unwrap();
     cached.factors.get_or_init(|| {
     let expr_string = format!("find_factors: {expr}");
     info!("{}", expr_string);
@@ -2191,14 +2197,14 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
         if let Some(n) = evaluate_as_numeric(&expr) {
             return find_factors_of_numeric(n);
         }
-        match *expr {
+        match **expr {
             Numeric(n) => find_factors_of_numeric(n),
             Factor::BigNumber(ref expr) => factor_big_num(expr.clone()),
             Factor::Lucas(ref term) => {
                 // Lucas number
                 let Some(term_number) = evaluate_as_numeric(term) else {
                     warn!("Could not parse term number of a Lucas number: {}", term);
-                    return vec![expr];
+                    return vec![Arc::clone(expr)];
                 };
                 lucas_factors(term_number, true)
             }
@@ -2209,7 +2215,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                         "Could not parse term number of a Fibonacci number: {}",
                         term
                     );
-                    return vec![expr];
+                    return vec![Arc::clone(expr)];
                 };
                 fibonacci_factors(term_number, true)
             }
@@ -2217,7 +2223,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 // factorial
                 let Some(input) = evaluate_as_numeric(term) else {
                     warn!("Could not parse input to factorial function: {}", term);
-                    return vec![expr];
+                    return vec![Arc::clone(expr)];
                 };
                 let mut factors = Vec::new();
                 for i in 2..=input {
@@ -2229,7 +2235,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 // primorial
                 let Some(input) = evaluate_as_numeric(term) else {
                     warn!("Could not parse input to primorial function: {}", term);
-                    return vec![expr];
+                    return vec![Arc::clone(expr)];
                 };
                 let mut factors = Vec::new();
                 for i in 2..=input {
@@ -2257,7 +2263,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                     .and_then(|power| usize::try_from(power).ok())
                     .unwrap_or(MAX_REPEATS)
                     .min(MAX_REPEATS);
-                let base_factors = find_factors(simplify(base.clone()));
+                let base_factors = find_factors(&simplify(Arc::clone(base)));
                 repeat_n(base_factors, power).flatten().collect()
             }
             Factor::Divide {
@@ -2266,16 +2272,16 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
             } => {
                 // division
                 let mut left_recursive_factors = BTreeMap::new();
-                let left_remaining_factors = find_factors(simplify(left.clone()))
+                let left_remaining_factors = find_factors(&simplify(Arc::clone(left)))
                     .into_iter()
                     .map(simplify)
                     .collect();
                 let mut left_remaining_factors = count_frequencies(left_remaining_factors);
                 while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
-                    let subfactors = if factor == expr {
+                    let subfactors = if factor == *expr {
                         vec![Arc::clone(&factor)]
                     } else {
-                        find_factors(Arc::clone(&factor))
+                        find_factors(&factor)
                     };
                     subfactors
                         .into_iter()
@@ -2287,7 +2293,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 }
                 let mut right_remaining_factors = right.clone();
                 while let Some((factor, exponent)) = right_remaining_factors.pop_last() {
-                    let subfactors = find_factors(Arc::clone(&factor));
+                    let subfactors = find_factors(&factor);
                     if subfactors.is_empty() || (subfactors.len() == 1 && subfactors[0] == factor) {
                         if let Some(left_exponent) = left_recursive_factors.get_mut(&factor) {
                             let min_exponent = (*left_exponent).min(exponent);
@@ -2313,7 +2319,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 let mut factors = Vec::new();
                 for (term, exponent) in terms {
                     let term = simplify(Arc::clone(term));
-                    let term_factors = find_factors(Arc::clone(&term));
+                    let term_factors = find_factors(&term);
                     if term_factors.is_empty() {
                         factors.extend(repeat_n(Arc::clone(&term), *exponent as usize));
                     } else {
@@ -2330,11 +2336,11 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 let left = simplify(Arc::clone(left));
                 let right = simplify(Arc::clone(right));
                 let algebraic =
-                    to_like_powers_recursive_dedup(Arc::clone(&left), Arc::clone(&right), subtract);
+                    to_like_powers_recursive_dedup(&left, &right, subtract);
                 if !algebraic.is_empty() {
                     return algebraic;
                 }
-                let mut factors = find_common_factors(Arc::clone(&left), Arc::clone(&right));
+                let mut factors = find_common_factors(&left, &right);
                 for prime in SMALL_PRIMES {
                     let mut power = prime as NumericFactor;
                     let prime_factor: Arc<Factor> = Numeric(power).into();
@@ -2348,8 +2354,8 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 }
                 factors = multiset_union(vec![
                     factors,
-                    to_like_powers_recursive_dedup(Arc::clone(&left), Arc::clone(&right), subtract),
-                    find_common_factors(Arc::clone(&left), Arc::clone(&right)),
+                    to_like_powers_recursive_dedup(&left, &right, subtract),
+                    find_common_factors(&left, &right),
                 ]);
                 let cofactors: Vec<_> = factors
                     .iter()
@@ -2359,7 +2365,7 @@ fn find_factors(expr: Arc<Factor>) -> Vec<Arc<Factor>> {
                 factors = multiset_union(vec![factors, cofactors]);
                 factors
             }
-            Factor::UnknownExpression(_) => vec![expr],
+            Factor::UnknownExpression(_) => vec![Arc::clone(expr)],
         }
     })}).clone()
 }
@@ -2420,12 +2426,12 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
 }
 
 #[inline]
-fn find_common_factors(expr1: Arc<Factor>, expr2: Arc<Factor>) -> Vec<Arc<Factor>> {
-    let num1 = evaluate_as_numeric(&expr1);
+fn find_common_factors(expr1: &Arc<Factor>, expr2: &Arc<Factor>) -> Vec<Arc<Factor>> {
+    let num1 = evaluate_as_numeric(expr1);
     if num1 == Some(1) {
         return vec![];
     }
-    let num2 = evaluate_as_numeric(&expr2);
+    let num2 = evaluate_as_numeric(expr2);
     if num2 == Some(1) {
         return vec![];
     }
@@ -2447,7 +2453,7 @@ fn find_common_factors(expr1: Arc<Factor>, expr2: Arc<Factor>) -> Vec<Arc<Factor
 #[inline(always)]
 pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
     let expr = simplify(expr);
-    let mut factors = find_factors(Arc::clone(&expr));
+    let mut factors = find_factors(&expr);
     factors.retain(|f| f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr));
     factors.sort_unstable();
     factors.dedup();
@@ -2476,7 +2482,7 @@ mod tests {
     use std::sync::Arc;
 
     fn find_factors(input: &str) -> Vec<Factor> {
-        crate::algebraic::find_factors(Factor::from(input).into())
+        crate::algebraic::find_factors(&Factor::from(input).into())
             .into_iter()
             .map(Arc::unwrap_or_clone)
             .collect()
@@ -2698,7 +2704,7 @@ mod tests {
         find_factors(&expr);
         evaluate_as_numeric(&expr);
         let expr = Arc::new(Factor::from(expr));
-        crate::algebraic::estimate_log10_internal(Arc::clone(&expr));
+        crate::algebraic::estimate_log10_internal(&expr);
     }
 
     #[test]
@@ -2848,7 +2854,7 @@ mod tests {
     #[test]
     fn test_estimate_log10() {
         fn estimate_log10_internal(input: &str) -> (NumberLength, NumberLength) {
-            crate::algebraic::estimate_log10_internal(Factor::from(input).into())
+            crate::algebraic::estimate_log10_internal(&Factor::from(input).into())
         }
         let (lower, upper) = estimate_log10_internal("99");
         assert_eq!(lower, 1);
@@ -2952,12 +2958,12 @@ mod tests {
         let start = std::time::Instant::now();
         // 10^111+1
         let expr = super::expression_parser::arithmetic("10^111+1").unwrap();
-        let factors = super::find_factors(expr.into());
+        let factors = super::find_factors(&expr.into());
         println!("Time: {:?}", start.elapsed());
         // Verify we found something useful
         println!("Factors count: {}", factors.len());
         let expr = super::expression_parser::arithmetic("((12527^1075-1)/(12527^215-1)/8586556973449927230597763048446094420249471522535704574960623985727884084794871403158551-1)/1804837429895850").unwrap();
-        let factors = super::find_factors(expr.into());
+        let factors = super::find_factors(&expr.into());
         println!("Time: {:?}", start.elapsed());
         // Verify we found something useful
         println!("Factors count: {}", factors.len());
@@ -2969,7 +2975,7 @@ mod tests {
         // Sum = (1+2)*50 = 150 (div by 3). Ends in 2 (div by 2).
         let repeated_12 = "12".repeat(50);
         let expr = super::expression_parser::arithmetic(&repeated_12).unwrap();
-        let factors = super::find_factors(expr.into());
+        let factors = super::find_factors(&expr.into());
 
         // Should contain 2 and 3.
         assert!(factors.contains(&Factor::two()));
@@ -2981,7 +2987,7 @@ mod tests {
 
         // Should prevent infinite recursion
         factors.into_iter().for_each(|f| {
-            super::find_factors(f);
+            super::find_factors(&f);
         });
     }
 

@@ -209,7 +209,7 @@ pub fn add_factor_node(
             data.vertex_id_by_expr
                 .insert(Arc::clone(&factor), factor_vid);
             let factor_numeric = evaluate_as_numeric(&factor);
-            let (lower_bound_log10, upper_bound_log10) = estimate_log10(Arc::clone(&factor));
+            let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
             let specifier = as_specifier(factor_vid, data, None);
             let cached = http
                 .cached_factors(&specifier)
@@ -1528,7 +1528,7 @@ fn merge_equivalent_expressions(
                 data, root_vid, factor_vid, entry_id, http,
             ));
         }
-        let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(equivalent.clone());
+        let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
         let facts = facts_of_mut(
             &mut data.number_facts_map,
             factor_vid,
