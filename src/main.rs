@@ -365,7 +365,6 @@ async fn queue_composites(
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZero<NumberLength>>,
 ) -> JoinHandle<()> {
-    info!("Retrieving {digits}-digit C's starting from {start}");
     let mut c_buffered = Vec::with_capacity(C_RESULTS_PER_PAGE);
     while c_buffered.is_empty() {
         let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
@@ -373,15 +372,16 @@ async fn queue_composites(
         } else {
             rng().random_range(0..=MAX_START)
         };
-        let digits = digits.unwrap_or_else(|| {
-            rng()
-                .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
-                .try_into()
-                .unwrap()
-        });
         let mut results_per_page = C_RESULTS_PER_PAGE;
         let mut composites_page = None;
         while composites_page.is_none() && results_per_page > 0 {
+            let digits = digits.unwrap_or_else(|| {
+                rng()
+                    .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
+                    .try_into()
+                    .unwrap()
+            });
+            info!("Retrieving {digits}-digit C's starting from {start}");
             composites_page = http.try_get_and_decode(
                 &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}")
             ).await;
