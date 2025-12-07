@@ -221,7 +221,7 @@ pub fn add_factor_node(
                         } else {
                             FullyFactored
                         }),
-                        factors: factors.into_boxed_slice(),
+                        factors,
                         id: Numeric(eval).known_id(),
                     }
                 }));

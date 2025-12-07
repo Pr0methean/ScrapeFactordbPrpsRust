@@ -587,11 +587,14 @@ pub enum Factor {
 pub struct LocalFactorData {
     log10_estimate: OnceLock<(NumberLength, NumberLength)>,
     eval_as_numeric: OnceLock<Option<NumericFactor>>,
-    factors: OnceLock<Vec<Arc<Factor>>>,
+    factors: OnceLock<Box<[Arc<Factor>]>>,
 }
 
 static FACTOR_CACHE: LazyLock<Cache<Arc<Factor>, Arc<LocalFactorData>>> =
     LazyLock::new(|| Cache::new(1 << 20));
+
+static UNIQUE_FACTOR_CACHE: LazyLock<Cache<Arc<Factor>, Box<[Arc<Factor>]>>> =
+    LazyLock::new(|| Cache::new(1 << 14));
 
 impl Default for Factor {
     fn default() -> Self {
@@ -961,7 +964,7 @@ thread_local! {
 }
 
 #[inline(always)]
-fn count_frequencies<T: Eq + Ord>(vec: Vec<T>) -> BTreeMap<T, NumberLength> {
+fn count_frequencies<T: Eq + Ord>(vec: Box<[T]>) -> BTreeMap<T, NumberLength> {
     let mut counts = BTreeMap::new();
     for item in vec {
         *counts.entry(item).or_insert(0) += 1;
@@ -970,7 +973,7 @@ fn count_frequencies<T: Eq + Ord>(vec: Vec<T>) -> BTreeMap<T, NumberLength> {
 }
 
 #[inline(always)]
-fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Vec<T>, vec2: Vec<T>) -> Vec<T> {
+fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Box<[T]>, vec2: Box<[T]>) -> Vec<T> {
     if vec1.is_empty() || vec2.is_empty() {
         return vec![];
     }
@@ -999,7 +1002,7 @@ fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
     }
     let mut total_counts = BTreeMap::new();
     for vec in vecs {
-        let counts = count_frequencies(vec);
+        let counts = count_frequencies(vec.into());
         for (item, count) in counts {
             let total = total_counts.entry(item).or_insert(count);
             *total = (*total).max(count);
@@ -1176,7 +1179,7 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     (a, n)
 }
 
-pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -> Vec<Arc<Factor>> {
+pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -> Box<[Arc<Factor>]> {
     let mut possible_factors = BTreeMap::new();
     let mut new_left = simplify(Arc::clone(left));
     let mut new_right = simplify(Arc::clone(right));
@@ -1217,7 +1220,7 @@ pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -
     }
     let total_factors = possible_factors.values().sum::<usize>();
     if total_factors <= 1 {
-        return vec![];
+        return [].into();
     }
     let mut results = Vec::with_capacity(total_factors * 2);
     for (factor, _factor_power) in possible_factors {
@@ -1256,7 +1259,7 @@ pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -
             }
         }
     }
-    results
+    results.into()
 }
 pub fn to_like_powers_recursive_dedup(
     left: &Arc<Factor>,
@@ -1554,7 +1557,7 @@ fn nth_root_of_product(
 }
 
 #[inline(always)]
-pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Vec<Arc<Factor>> {
+pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Box<[Arc<Factor>]> {
     debug_assert_ne!(input, 0);
     factorize128(input)
         .into_iter()
@@ -2202,7 +2205,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Arc<Factor>) -> Option<NumericFactor> {
 }
 
 #[inline(always)]
-fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
+fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
     let cached = FACTOR_CACHE
         .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
         .unwrap();
@@ -2222,9 +2225,9 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                         // Lucas number
                         let Some(term_number) = evaluate_as_numeric(term) else {
                             warn!("Could not parse term number of a Lucas number: {}", term);
-                            return vec![Arc::clone(expr)];
+                            return [Arc::clone(expr)].into();
                         };
-                        lucas_factors(term_number, true)
+                        lucas_factors(term_number, true).into_boxed_slice()
                     }
                     Factor::Fibonacci(ref term) => {
                         // Fibonacci number
@@ -2233,27 +2236,27 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                                 "Could not parse term number of a Fibonacci number: {}",
                                 term
                             );
-                            return vec![Arc::clone(expr)];
+                            return [Arc::clone(expr)].into();
                         };
-                        fibonacci_factors(term_number, true)
+                        fibonacci_factors(term_number, true).into_boxed_slice()
                     }
                     Factor::Factorial(ref term) => {
                         // factorial
                         let Some(input) = evaluate_as_numeric(term) else {
                             warn!("Could not parse input to factorial function: {}", term);
-                            return vec![Arc::clone(expr)];
+                            return [Arc::clone(expr)].into();
                         };
                         let mut factors = Vec::new();
                         for i in 2..=input {
                             factors.extend(find_factors_of_numeric(i));
                         }
-                        factors
+                        factors.into_boxed_slice()
                     }
                     Factor::Primorial(ref term) => {
                         // primorial
                         let Some(input) = evaluate_as_numeric(term) else {
                             warn!("Could not parse input to primorial function: {}", term);
-                            return vec![Arc::clone(expr)];
+                            return [Arc::clone(expr)].into();
                         };
                         let mut factors = Vec::new();
                         for i in 2..=input {
@@ -2261,16 +2264,16 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                                 factors.push(Numeric(i).into());
                             }
                         }
-                        factors
+                        factors.into_boxed_slice()
                     }
                     Factor::ElidedNumber(ref n) => match n.chars().last() {
-                        Some('0') => vec![Factor::two(), Factor::five()],
-                        Some('5') => vec![Factor::five()],
-                        Some('2' | '4' | '6' | '8') => vec![Factor::two()],
-                        Some('1' | '3' | '7' | '9') => vec![],
+                        Some('0') => [Factor::two(), Factor::five()].into(),
+                        Some('5') => [Factor::five()].into(),
+                        Some('2' | '4' | '6' | '8') => [Factor::two()].into(),
+                        Some('1' | '3' | '7' | '9') => [].into(),
                         x => {
                             error!("Invalid last digit: {x:?}");
-                            vec![]
+                            [].into()
                         }
                     },
                     Factor::Power {
@@ -2297,7 +2300,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                         let mut left_remaining_factors = count_frequencies(left_remaining_factors);
                         while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
                             let subfactors = if factor == *expr {
-                                vec![Arc::clone(&factor)]
+                                [Arc::clone(&factor)].into()
                             } else {
                                 find_factors(&factor)
                             };
@@ -2351,7 +2354,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                                     .extend(repeat_n(term_factors, *exponent as usize).flatten());
                             }
                         }
-                        factors
+                        factors.into_boxed_slice()
                     }
                     AddSub {
                         ref left,
@@ -2362,7 +2365,7 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                         let right = simplify(Arc::clone(right));
                         let algebraic = to_like_powers_recursive_dedup(&left, &right, subtract);
                         if !algebraic.is_empty() {
-                            return algebraic;
+                            return algebraic.into_boxed_slice();
                         }
                         let mut factors = find_common_factors(&left, &right);
                         for prime in SMALL_PRIMES {
@@ -2388,16 +2391,16 @@ fn find_factors(expr: &Arc<Factor>) -> Vec<Arc<Factor>> {
                             .flat_map(|factor: &Arc<Factor>| div_exact(expr, factor))
                             .collect();
                         factors = multiset_union(vec![factors, cofactors]);
-                        factors
+                        factors.into_boxed_slice()
                     }
-                    Factor::UnknownExpression(_) => vec![Arc::clone(expr)],
+                    Factor::UnknownExpression(_) => [Arc::clone(expr)].into(),
                 }
             })
         })
     ).clone()
 }
 
-fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
+fn factor_big_num(expr: BigNumber) -> Box<[Arc<Factor>]> {
     let mut factors = Vec::new();
     let mut expr_short = expr.as_ref();
     while expr_short != "0"
@@ -2449,7 +2452,7 @@ fn factor_big_num(expr: BigNumber) -> Vec<Arc<Factor>> {
             );
         }
     }
-    factors
+    factors.into_boxed_slice()
 }
 
 #[inline]
@@ -2465,7 +2468,7 @@ fn find_common_factors(expr1: &Arc<Factor>, expr2: &Arc<Factor>) -> Vec<Arc<Fact
     if let Some(num1) = num1
         && let Some(num2) = num2
     {
-        find_factors_of_numeric(num1.gcd(&num2))
+        find_factors_of_numeric(num1.gcd(&num2)).into_vec()
     } else {
         let expr1_factors = find_factors(expr1);
         if expr1_factors.is_empty() {
@@ -2479,20 +2482,22 @@ fn find_common_factors(expr1: &Arc<Factor>, expr2: &Arc<Factor>) -> Vec<Arc<Fact
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
-    let expr = simplify(expr);
-    let mut factors = find_factors(&expr);
-    factors.retain(|f| f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr));
-    factors.sort_unstable();
-    factors.dedup();
-    if factors.is_empty() {
-        warn!("No factors found for expression {expr}");
-    } else {
-        info!(
+    UNIQUE_FACTOR_CACHE.get_or_insert_with(&Arc::clone(&expr), || {
+        let expr = simplify(expr);
+        let mut factors = find_factors(&expr).into_vec();
+        factors.retain(|f| f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr));
+        factors.sort_unstable();
+        factors.dedup();
+        if factors.is_empty() {
+            warn!("No factors found for expression {expr}");
+        } else {
+            info!(
             "Found factors of expression {expr}: {}",
             factors.iter().join(", ")
         );
-    }
-    factors.into_boxed_slice()
+        }
+        Ok::<_,!>(factors.into_boxed_slice())
+    }).unwrap()
 }
 
 #[cfg(test)]
@@ -2873,7 +2878,7 @@ mod tests {
     fn test_multiset_intersection() {
         let multiset_1 = vec![2, 2, 3, 3, 5, 7];
         let multiset_2 = vec![2, 3, 3, 5, 11];
-        let mut intersection = multiset_intersection(multiset_1, multiset_2);
+        let mut intersection = multiset_intersection(multiset_1.into(), multiset_2.into());
         intersection.sort_unstable();
         assert_eq!(intersection, vec![2, 3, 3, 5]);
     }

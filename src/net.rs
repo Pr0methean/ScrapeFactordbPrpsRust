@@ -572,7 +572,7 @@ impl FactorDbClient for RealFactorDbClient {
             && entry_id <= MAX_ID_EQUAL_TO_VALUE
         {
             debug!("Specially handling numeric expression {entry_id}");
-            let factors = find_factors_of_numeric(entry_id).into_boxed_slice();
+            let factors = find_factors_of_numeric(entry_id);
             return Some(ProcessedStatusApiResponse {
                 status: Some(if factors.len() > 1 {
                     FullyFactored
