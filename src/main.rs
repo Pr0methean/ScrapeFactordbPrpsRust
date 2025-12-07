@@ -6,6 +6,7 @@
 #![feature(str_as_str)]
 #![feature(iterator_try_reduce)]
 #![feature(explicit_tail_calls)]
+#![feature(never_type)]
 extern crate alloc;
 extern crate core;
 
