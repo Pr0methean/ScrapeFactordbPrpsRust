@@ -2013,7 +2013,11 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             let mut left = simplify(Arc::clone(left));
             let mut right = simplify(Arc::clone(right));
             match left.cmp(&right) {
-                Ordering::Less => {}
+                Ordering::Less => {
+                    if !subtract {
+                        swap(&mut left, &mut right);
+                    }
+                }
                 Ordering::Equal => {
                     return if subtract {
                         Numeric(0).into()
@@ -2026,11 +2030,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                         )
                     };
                 }
-                Ordering::Greater => {
-                    if !subtract && left > right {
-                        swap(&mut left, &mut right);
-                    }
-                }
+                Ordering::Greater => {}
             }
             AddSub {
                 left,
