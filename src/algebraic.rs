@@ -1,4 +1,5 @@
-use crate::algebraic::Factor::{AddSub, Factorial, Multiply, Numeric, Primorial};
+use crate::Factor::Power;
+use crate::algebraic::Factor::{AddSub, Divide, ElidedNumber, Factorial, Fibonacci, Lucas, Multiply, Numeric, Primorial};
 use crate::graph::EntryId;
 use crate::net::BigNumber;
 use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, write_bignum};
@@ -558,6 +559,39 @@ static SMALL_LUCAS_FACTORS: [&[NumericFactor]; 202] = [
 pub type NumericFactor = u128;
 pub type SignedNumericFactor = i128;
 
+#[derive(Clone,PartialEq,Eq,Hash,PartialOrd,Ord)]
+pub enum FactorBeingParsed {
+    Numeric(NumericFactor),
+    BigNumber(BigNumber),
+    ElidedNumber(HipStr<'static>),
+    AddSub {
+        left: Box<FactorBeingParsed>,
+        right: Box<FactorBeingParsed>,
+        subtract: bool,
+    },
+    Multiply {
+        terms: BTreeMap<FactorBeingParsed, NumberLength>,
+    },
+    Divide {
+        left: Box<FactorBeingParsed>,
+        right: BTreeMap<FactorBeingParsed, NumberLength>,
+    },
+    Power {
+        base: Box<FactorBeingParsed>,
+        exponent: Box<FactorBeingParsed>,
+    },
+    Fibonacci(Box<FactorBeingParsed>),
+    Lucas(Box<FactorBeingParsed>),
+    Factorial(Box<FactorBeingParsed>),
+    Primorial(Box<FactorBeingParsed>),
+}
+
+impl Default for FactorBeingParsed {
+    fn default() -> Self {
+        FactorBeingParsed::Numeric(1)
+    }
+}
+
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Factor {
     Numeric(NumericFactor),
@@ -586,6 +620,26 @@ pub enum Factor {
     Primorial(ArcIntern<Factor>),
 }
 
+impl From<FactorBeingParsed> for Factor {
+    fn from(value: FactorBeingParsed) -> Self {
+        match value {
+            FactorBeingParsed::Numeric(n) => Numeric(n),
+            FactorBeingParsed::BigNumber(n) => Factor::BigNumber(n),
+            FactorBeingParsed::ElidedNumber(n) => ElidedNumber(n),
+            FactorBeingParsed::AddSub { left, right, subtract } =>
+                AddSub { left: Factor::from(*left).into(), right: Factor::from(*right).into(), subtract },
+            FactorBeingParsed::Multiply { terms } =>
+                Multiply { terms: terms.into_iter().map(|(term, power)| (Factor::from(term).into(), power)).collect() },
+            FactorBeingParsed::Divide { left, right } => Divide { left: Factor::from(*left).into(), right: right.into_iter().map(|(term, power)| (Factor::from(term).into(), power)).collect() },
+            FactorBeingParsed::Power { base, exponent } => Power { base: Factor::from(*base).into(), exponent: Factor::from(*exponent).into() },
+            FactorBeingParsed::Fibonacci(term) => Fibonacci(Factor::from(*term).into()),
+            FactorBeingParsed::Lucas(term) => Lucas(Factor::from(*term).into()),
+            FactorBeingParsed::Factorial(term) => Factorial(Factor::from(*term).into()),
+            FactorBeingParsed::Primorial(term) => Primorial(Factor::from(*term).into()),
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct LocalFactorData {
     log10_estimate: OnceLock<(NumberLength, NumberLength)>,
@@ -608,76 +662,75 @@ impl Default for Factor {
 
 peg::parser! {
   pub grammar expression_parser() for str {
-    pub rule number() -> Factor
-      = n:$(['0'..='9']+) { n.parse::<NumericFactor>().map(Numeric).unwrap_or_else(|_| Factor::BigNumber(n.into())) }
+    pub rule number() -> FactorBeingParsed
+      = n:$(['0'..='9']+) { n.parse::<NumericFactor>().map(FactorBeingParsed::Numeric).unwrap_or_else(|_| FactorBeingParsed::BigNumber(n.into())) }
 
     #[cache_left_rec]
-    pub rule arithmetic() -> Factor = precedence!{
-      x:(@) "+" y:@ { AddSub { left: x.into(), right: y.into(), subtract: false } }
-      x:(@) "-" y:@ { AddSub { left: x.into(), right: y.into(), subtract: true } }
+    pub rule arithmetic() -> FactorBeingParsed = precedence!{
+      x:(@) "+" y:@ { FactorBeingParsed::AddSub { left: x.into(), right: y.into(), subtract: false } }
+      x:(@) "-" y:@ { FactorBeingParsed::AddSub { left: x.into(), right: y.into(), subtract: true } }
       --
       x:(@) "/" y:@ {
         let mut x = x;
         let mut y = y;
-        if let Factor::Divide { ref mut right, .. } = x {
-            *right.entry(y.into()).or_insert(0) += 1;
+        if let FactorBeingParsed::Divide { ref mut right, .. } = x {
+            *right.entry(y).or_insert(0) += 1;
             x
-        } else if let Factor::Divide { ref mut left, ref mut right } = y {
+        } else if let FactorBeingParsed::Divide { ref mut left, ref mut right } = y {
             let old_left = core::mem::take(left);
-            *left = Multiply { terms: [(old_left, 1), (x.into(), 1)].into() }.into();
+            **left = FactorBeingParsed::Multiply { terms: [(*old_left, 1), (x, 1)].into() };
             y
         } else {
-            Factor::Divide { left: x.into(), right: [(y.into(), 1)].into() }
+            FactorBeingParsed::Divide { left: x.into(), right: [(y, 1)].into() }
         }
       }
       --
       x:(@) "*" y:@ {
         let mut x = x;
         let mut y = y;
-        if let Multiply { ref mut terms, .. } = x {
+        if let FactorBeingParsed::Multiply { ref mut terms, .. } = x {
             *terms.entry(y.into()).or_insert(0) += 1;
             x
-        } else if let Multiply { ref mut terms, .. } = y {
+        } else if let FactorBeingParsed::Multiply { ref mut terms, .. } = y {
             *terms.entry(x.into()).or_insert(0) += 1;
             y
         } else if x == y {
-            Multiply { terms: [(x.into(), 2)].into() }
+            FactorBeingParsed::Multiply { terms: [(x.into(), 2)].into() }
         } else {
-            Multiply { terms: [(x.into(), 1), (y.into(), 1)].into() }
+            FactorBeingParsed::Multiply { terms: [(x.into(), 1), (y.into(), 1)].into() }
         }
       }
       --
-      x:@ "^" y:(@) { Factor::Power { base: x.into(), exponent: y.into() } }
+      x:@ "^" y:(@) { FactorBeingParsed::Power { base: x.into(), exponent: y.into() } }
       --
       x:@ "^" y:number() {
-                let y = y.into();
-                if let Some(y_numeric) = evaluate_as_numeric(&y).and_then(|y| NumberLength::try_from(y).ok()) {
-                  Multiply { terms: [(x.into(), y_numeric)].into() }
+                if let Some(y_numeric) = evaluate_as_numeric(&Factor::from(y.clone()).into()).and_then(|y| NumberLength::try_from(y).ok()) {
+                  FactorBeingParsed::Multiply { terms: [(x.into(), y_numeric)].into() }
                 } else {
-                  Factor::Power { base: x.into(), exponent: y }
+                  FactorBeingParsed::Power { base: x.into(), exponent: y.into() }
                 }
       }
       --
-      x:@ "!" { Factor::Factorial(x.into()) }
+      x:@ "!" { FactorBeingParsed::Factorial(x.into()) }
       x:@ y:$("#"+) {
                     let hashes = y.len();
                     let mut output = x;
                     for _ in 0..(hashes >> 1) {
-                        output = Factor::Primorial(Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_numeric(&output.into()).unwrap() as u64)) as NumericFactor).into());
+                        output = FactorBeingParsed::Primorial(FactorBeingParsed::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_numeric(&Factor::from(output).into()).unwrap() as u64)) as NumericFactor).into());
                     }
                     if !hashes.is_multiple_of(2) {
-                        output = Factor::Primorial(output.into())
+                        output = FactorBeingParsed::Primorial(output.into())
                     };
                     output
                 }
       --
-      "M" x:@ { AddSub { left: Factor::Power { base: Factor::two(), exponent: ArcIntern::new(x) }.into(), right: Factor::one(), subtract: true } }
+      "M" x:@ { FactorBeingParsed::AddSub { left: FactorBeingParsed::Power { base: FactorBeingParsed::Numeric(2).into(), exponent: Box::new(x) }.into(), right: FactorBeingParsed::Numeric(1).into(), subtract: true } }
       --
-      "I" x:@ { Factor::Fibonacci(x.into()) }
+      "I" x:@ { FactorBeingParsed::Fibonacci(x.into()) }
       --
-      "lucas(" x:arithmetic() ")" { Factor::Lucas(x.into()) }
+      "lucas(" x:arithmetic() ")" { FactorBeingParsed::Lucas(x.into()) }
       --
-      n:$(['0'..='9']+ "..." ['0'..='9']+) { Factor::ElidedNumber(n.into()) }
+      n:$(['0'..='9']+ "..." ['0'..='9']+) { FactorBeingParsed::ElidedNumber(n.into()) }
       --
       n:number() { n }
       --
@@ -902,6 +955,7 @@ macro_rules! factor_from_str {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
+                    .map(Factor::from)
                     .map(|factor| simplify(factor.into()).as_ref().clone())
                     .unwrap_or_else(|e| {
                         error!("Error parsing expression {value}: {e}");
@@ -3077,7 +3131,7 @@ use crate::NumberLength;
         // Sum = (1+2)*50 = 150 (div by 3). Ends in 2 (div by 2).
         let repeated_12 = "12".repeat(50);
         let expr = super::expression_parser::arithmetic(&repeated_12).unwrap();
-        let factors = super::find_factors(&expr.into());
+        let factors = super::find_factors(&Factor::from(expr).into());
 
         // Should contain 2 and 3.
         assert!(factors.contains(&Factor::two()));
