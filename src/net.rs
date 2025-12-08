@@ -40,6 +40,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
+use arc_interner::ArcIntern;
 use tokio::sync::Semaphore;
 use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep, sleep_until};
@@ -92,7 +93,7 @@ pub trait FactorDbClient {
     ) -> Option<ResourceLimits>;
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
     -> impl Iterator<Item = (EntryId, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Arc<Factor>>;
+    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<ArcIntern<Factor>>;
     async fn known_factors_as_digits(
         &mut self,
         id: NumberSpecifier,
@@ -123,8 +124,8 @@ pub struct RealFactorDbClient {
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
     by_id_cache: BasicCache<EntryId, ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<Arc<Factor>, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<EntryId, Arc<Factor>>,
+    by_expr_cache: BasicCache<ArcIntern<Factor>, ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<EntryId, ArcIntern<Factor>>,
 }
 
 pub struct ResourceLimits {
@@ -404,7 +405,7 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Arc<Factor>> {
+    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<ArcIntern<Factor>> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
             return Some(Factor::from(entry_id).into());
         }
@@ -415,7 +416,7 @@ impl FactorDbClient for RealFactorDbClient {
         let response = self
             .try_get_and_decode(&format!("https://factordb.com/index.php?id={entry_id}"))
             .await?;
-        let expression_form: Arc<Factor> = Factor::from(
+        let expression_form: ArcIntern<Factor> = Factor::from(
             self.expression_form_regex
                 .captures(&response)?
                 .get(1)?
@@ -423,7 +424,7 @@ impl FactorDbClient for RealFactorDbClient {
         )
         .into();
         self.expression_form_cache
-            .insert(entry_id, Arc::clone(&expression_form));
+            .insert(entry_id, ArcIntern::clone(&expression_form));
         Some(expression_form)
     }
 
@@ -547,7 +548,7 @@ impl FactorDbClient for RealFactorDbClient {
             }
             if let Some(expr) = expr_key {
                 self.by_expr_cache
-                    .insert(Arc::clone(expr), processed.clone());
+                    .insert(ArcIntern::clone(expr), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -716,7 +717,7 @@ impl<T: Into<HipStr<'static>>> From<T> for BigNumber {
 #[derive(Clone, Default, Debug)]
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
-    pub factors: Box<[Arc<Factor>]>,
+    pub factors: Box<[ArcIntern<Factor>]>,
     pub id: Option<EntryId>,
 }
 

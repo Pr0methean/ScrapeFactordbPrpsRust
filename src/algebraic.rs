@@ -24,6 +24,7 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
 use std::sync::{Arc, LazyLock, OnceLock};
+use arc_interner::ArcIntern;
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::{Preferences, factor};
@@ -564,39 +565,39 @@ pub enum Factor {
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
     AddSub {
-        left: Arc<Factor>,
-        right: Arc<Factor>,
+        left: ArcIntern<Factor>,
+        right: ArcIntern<Factor>,
         subtract: bool,
     },
     Multiply {
-        terms: BTreeMap<Arc<Factor>, NumberLength>,
+        terms: BTreeMap<ArcIntern<Factor>, NumberLength>,
     },
     Divide {
-        left: Arc<Factor>,
-        right: BTreeMap<Arc<Factor>, NumberLength>,
+        left: ArcIntern<Factor>,
+        right: BTreeMap<ArcIntern<Factor>, NumberLength>,
     },
     Power {
-        base: Arc<Factor>,
-        exponent: Arc<Factor>,
+        base: ArcIntern<Factor>,
+        exponent: ArcIntern<Factor>,
     },
-    Fibonacci(Arc<Factor>),
-    Lucas(Arc<Factor>),
-    Factorial(Arc<Factor>),
-    Primorial(Arc<Factor>),
+    Fibonacci(ArcIntern<Factor>),
+    Lucas(ArcIntern<Factor>),
+    Factorial(ArcIntern<Factor>),
+    Primorial(ArcIntern<Factor>),
 }
 
 #[derive(Default)]
 pub struct LocalFactorData {
     log10_estimate: OnceLock<(NumberLength, NumberLength)>,
     eval_as_numeric: OnceLock<Option<NumericFactor>>,
-    factors: OnceLock<Box<[Arc<Factor>]>>,
+    factors: OnceLock<Box<[ArcIntern<Factor>]>>,
 }
 
-static FACTOR_CACHE: LazyLock<Cache<Arc<Factor>, Arc<LocalFactorData>>> =
+static FACTOR_CACHE: LazyLock<Cache<ArcIntern<Factor>, Arc<LocalFactorData>>> =
     LazyLock::new(|| Cache::new(1 << 20));
 
 #[allow(clippy::type_complexity)]
-static UNIQUE_FACTOR_CACHE: LazyLock<Cache<Arc<Factor>, Box<[Arc<Factor>]>>> =
+static UNIQUE_FACTOR_CACHE: LazyLock<Cache<ArcIntern<Factor>, Box<[ArcIntern<Factor>]>>> =
     LazyLock::new(|| Cache::new(1 << 14));
 
 impl Default for Factor {
@@ -670,7 +671,7 @@ peg::parser! {
                     output
                 }
       --
-      "M" x:@ { AddSub { left: Factor::Power { base: Factor::two(), exponent: Arc::new(x) }.into(), right: Factor::one(), subtract: true } }
+      "M" x:@ { AddSub { left: Factor::Power { base: Factor::two(), exponent: ArcIntern::new(x) }.into(), right: Factor::one(), subtract: true } }
       --
       "I" x:@ { Factor::Fibonacci(x.into()) }
       --
@@ -697,22 +698,22 @@ fn largest_prime_le(mut given: NumericFactor) -> NumericFactor {
 
 impl Factor {
     thread_local! {
-        static ONE: Arc<Factor> = Arc::new(Numeric(1));
-        static TWO: Arc<Factor> = Arc::new(Numeric(2));
-        static THREE: Arc<Factor> = Arc::new(Numeric(3));
-        static FIVE: Arc<Factor> = Arc::new(Numeric(5));
+        static ONE: ArcIntern<Factor> = ArcIntern::new(Numeric(1));
+        static TWO: ArcIntern<Factor> = ArcIntern::new(Numeric(2));
+        static THREE: ArcIntern<Factor> = ArcIntern::new(Numeric(3));
+        static FIVE: ArcIntern<Factor> = ArcIntern::new(Numeric(5));
     }
-    pub fn one() -> Arc<Factor> {
-        Factor::ONE.with(Arc::clone)
+    pub fn one() -> ArcIntern<Factor> {
+        Factor::ONE.with(ArcIntern::clone)
     }
-    pub fn two() -> Arc<Factor> {
-        Factor::TWO.with(Arc::clone)
+    pub fn two() -> ArcIntern<Factor> {
+        Factor::TWO.with(ArcIntern::clone)
     }
-    pub fn three() -> Arc<Factor> {
-        Factor::THREE.with(Arc::clone)
+    pub fn three() -> ArcIntern<Factor> {
+        Factor::THREE.with(ArcIntern::clone)
     }
-    pub fn five() -> Arc<Factor> {
-        Factor::FIVE.with(Arc::clone)
+    pub fn five() -> ArcIntern<Factor> {
+        Factor::FIVE.with(ArcIntern::clone)
     }
     #[inline(always)]
     pub fn known_id(&self) -> Option<EntryId> {
@@ -762,10 +763,10 @@ impl Factor {
     }
 
     #[inline]
-    pub fn may_be_proper_divisor_of(self: &Arc<Self>, other: &Arc<Factor>) -> bool {
+    pub fn may_be_proper_divisor_of(self: &ArcIntern<Self>, other: &ArcIntern<Factor>) -> bool {
         fn product_may_be_divisor_of(
-            terms: &BTreeMap<Arc<Factor>, NumberLength>,
-            other: &Arc<Factor>,
+            terms: &BTreeMap<ArcIntern<Factor>, NumberLength>,
+            other: &ArcIntern<Factor>,
         ) -> bool {
             // FIXME: Check whether exponent is large enough
             terms
@@ -822,7 +823,7 @@ impl Factor {
                         }
                         _ => {}
                     }
-                    if (2..=term).any(|i| !Arc::from(Numeric(i)).may_be_proper_divisor_of(other)) {
+                    if (2..=term).any(|i| !ArcIntern::from(Numeric(i)).may_be_proper_divisor_of(other)) {
                         return false;
                     }
                 }
@@ -848,7 +849,7 @@ impl Factor {
                         _ => {}
                     }
                     if (2..=term).any(|i| {
-                        is_prime(i) && !Arc::from(Numeric(i)).may_be_proper_divisor_of(other)
+                        is_prime(i) && !ArcIntern::from(Numeric(i)).may_be_proper_divisor_of(other)
                     }) {
                         return false;
                     }
@@ -901,7 +902,7 @@ macro_rules! factor_from_str {
             #[inline(always)]
             fn from(value: $type) -> Self {
                 expression_parser::arithmetic(value.as_str())
-                    .map(|factor| Arc::unwrap_or_clone(simplify(factor.into())))
+                    .map(|factor| simplify(factor.into()).as_ref().clone())
                     .unwrap_or_else(|e| {
                         error!("Error parsing expression {value}: {e}");
                         Factor::UnknownExpression(value.into())
@@ -1018,7 +1019,7 @@ fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
 }
 
 #[inline]
-fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Arc<Factor>> {
+fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> Vec<ArcIntern<Factor>> {
     debug!("fibonacci_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_FIBONACCI_FACTORS.len() as NumericFactor {
         SMALL_FIBONACCI_FACTORS[term as usize]
@@ -1054,7 +1055,7 @@ fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Arc<Fac
 }
 
 #[inline]
-fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Arc<Factor>> {
+fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> Vec<ArcIntern<Factor>> {
     debug!("lucas_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_LUCAS_FACTORS.len() as NumericFactor {
         SMALL_LUCAS_FACTORS[term as usize]
@@ -1183,13 +1184,13 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
 }
 
 pub fn to_like_powers(
-    left: &Arc<Factor>,
-    right: &Arc<Factor>,
+    left: &ArcIntern<Factor>,
+    right: &ArcIntern<Factor>,
     subtract: bool,
-) -> Box<[Arc<Factor>]> {
+) -> Box<[ArcIntern<Factor>]> {
     let mut possible_factors = BTreeMap::new();
-    let mut new_left = simplify(Arc::clone(left));
-    let mut new_right = simplify(Arc::clone(right));
+    let mut new_left = simplify(ArcIntern::clone(left));
+    let mut new_right = simplify(ArcIntern::clone(right));
     for term in [&mut new_left, &mut new_right] {
         let exponent_numeric = match &**term {
             Factor::Power { exponent, .. } => {
@@ -1238,8 +1239,8 @@ pub fn to_like_powers(
             if subtract {
                 results.push(simplify(
                     AddSub {
-                        left: Arc::clone(&left_root),
-                        right: Arc::clone(&right_root),
+                        left: ArcIntern::clone(&left_root),
+                        right: ArcIntern::clone(&right_root),
                         subtract: true,
                     }
                     .into(),
@@ -1269,16 +1270,16 @@ pub fn to_like_powers(
     results.into()
 }
 pub fn to_like_powers_recursive_dedup(
-    left: &Arc<Factor>,
-    right: &Arc<Factor>,
+    left: &ArcIntern<Factor>,
+    right: &ArcIntern<Factor>,
     subtract: bool,
-) -> Vec<Arc<Factor>> {
+) -> Vec<ArcIntern<Factor>> {
     let mut results = Vec::new();
     let mut to_expand = count_frequencies(to_like_powers(left, right, subtract));
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
-            match *simplify(Arc::clone(&factor)) {
+            match *simplify(ArcIntern::clone(&factor)) {
                 AddSub {
                     left: ref factor_left,
                     right: ref factor_right,
@@ -1291,13 +1292,13 @@ pub fn to_like_powers_recursive_dedup(
                     {
                         *to_expand.entry(subfactor).or_insert(0) += exponent;
                     }
-                    results.extend(repeat_n(Arc::clone(&factor), exponent as usize));
+                    results.extend(repeat_n(ArcIntern::clone(&factor), exponent as usize));
                 }
                 Numeric(n) => {
                     results.extend(find_factors_of_numeric(n));
                 }
                 _ => {
-                    results.push(Arc::clone(&factor));
+                    results.push(ArcIntern::clone(&factor));
                 }
             }
             already_expanded.insert(factor);
@@ -1306,7 +1307,7 @@ pub fn to_like_powers_recursive_dedup(
     results
 }
 
-pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Factor>> {
+pub fn div_exact(product: &ArcIntern<Factor>, divisor: &ArcIntern<Factor>) -> Option<ArcIntern<Factor>> {
     if product == divisor {
         return Some(Factor::one());
     }
@@ -1326,10 +1327,10 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
                 // x^y / x -> x^(y-1)
                 Some(simplify(
                     Factor::Power {
-                        base: Arc::clone(base),
+                        base: ArcIntern::clone(base),
                         exponent: simplify(
                             AddSub {
-                                left: Arc::clone(exponent),
+                                left: ArcIntern::clone(exponent),
                                 right: Factor::one(),
                                 subtract: true,
                             }
@@ -1355,7 +1356,7 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
         Multiply { ref terms } => {
             let mut divisor_terms = match **divisor {
                 Multiply { ref terms } => terms.clone(),
-                _ => [(Arc::clone(divisor), 1)].into(),
+                _ => [(ArcIntern::clone(divisor), 1)].into(),
             };
             let mut new_terms = terms.clone();
             for (term, exponent) in new_terms.iter_mut() {
@@ -1491,9 +1492,9 @@ pub fn div_exact(product: &Arc<Factor>, divisor: &Arc<Factor>) -> Option<Arc<Fac
     }
 }
 
-pub fn nth_root_exact(factor: &Arc<Factor>, root: NumberLength) -> Option<Arc<Factor>> {
+pub fn nth_root_exact(factor: &ArcIntern<Factor>, root: NumberLength) -> Option<ArcIntern<Factor>> {
     if root == 1 {
-        return Some(Arc::clone(factor));
+        return Some(ArcIntern::clone(factor));
     }
     if let Some(factor_numeric) = evaluate_as_numeric(factor) {
         if factor_numeric == 1 {
@@ -1516,7 +1517,7 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumberLength) -> Option<Arc<Fa
             {
                 Some(
                     Multiply {
-                        terms: [(Arc::clone(base), reduced_exponent as NumberLength)].into(),
+                        terms: [(ArcIntern::clone(base), reduced_exponent as NumberLength)].into(),
                     }
                     .into(),
                 )
@@ -1548,9 +1549,9 @@ pub fn nth_root_exact(factor: &Arc<Factor>, root: NumberLength) -> Option<Arc<Fa
 }
 
 fn nth_root_of_product(
-    terms: &BTreeMap<Arc<Factor>, NumberLength>,
+    terms: &BTreeMap<ArcIntern<Factor>, NumberLength>,
     root: NumberLength,
-) -> Option<BTreeMap<Arc<Factor>, NumberLength>> {
+) -> Option<BTreeMap<ArcIntern<Factor>, NumberLength>> {
     let root = NumberLength::try_from(root).ok()?;
     terms
         .iter()
@@ -1558,13 +1559,13 @@ fn nth_root_of_product(
             nth_root_exact(term, root)
                 .map(|x| (x, *exponent))
                 .or_else(|| Some((nth_root_exact(term, root.div_exact(*exponent)?)?, 1)))
-                .or_else(|| Some((Arc::clone(term), exponent.div_exact(root)?)))
+                .or_else(|| Some((ArcIntern::clone(term), exponent.div_exact(root)?)))
         })
         .collect()
 }
 
 #[inline(always)]
-pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Box<[Arc<Factor>]> {
+pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Box<[ArcIntern<Factor>]> {
     debug_assert_ne!(input, 0);
     find_raw_factors_of_numeric(input)
         .into_iter()
@@ -1590,7 +1591,7 @@ pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<Nume
 }
 
 #[inline(always)]
-fn estimate_log10_internal(expr: &Arc<Factor>) -> (NumberLength, NumberLength) {
+fn estimate_log10_internal(expr: &ArcIntern<Factor>) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
     let cached = FACTOR_CACHE
         .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
@@ -1743,7 +1744,7 @@ fn log10_bounds(n: NumericFactor) -> (NumberLength, NumberLength) {
 }
 
 fn estimate_log10_of_product(
-    terms: &BTreeMap<Arc<Factor>, NumberLength>,
+    terms: &BTreeMap<ArcIntern<Factor>, NumberLength>,
 ) -> (NumberLength, NumberLength) {
     let mut lower: NumberLength = 0;
     let mut upper: NumberLength = 0;
@@ -1753,7 +1754,7 @@ fn estimate_log10_of_product(
             1 => estimate_log10_internal(term),
             x => estimate_log10_internal(
                 &Factor::Power {
-                    base: Arc::clone(term),
+                    base: ArcIntern::clone(term),
                     exponent: Numeric(x as NumericFactor).into(),
                 }
                 .into(),
@@ -1765,7 +1766,7 @@ fn estimate_log10_of_product(
     (lower, upper - 1)
 }
 
-pub(crate) fn estimate_log10(expr: &Arc<Factor>) -> (NumberLength, NumberLength) {
+pub(crate) fn estimate_log10(expr: &ArcIntern<Factor>) -> (NumberLength, NumberLength) {
     let (lbound, ubound) = estimate_log10_internal(expr);
     if lbound > ubound {
         error!(
@@ -1778,7 +1779,7 @@ pub(crate) fn estimate_log10(expr: &Arc<Factor>) -> (NumberLength, NumberLength)
 }
 
 pub(crate) fn modulo_as_numeric(
-    expr: &Arc<Factor>,
+    expr: &ArcIntern<Factor>,
     modulus: NumericFactor,
 ) -> Option<NumericFactor> {
     if let Some(eval) = evaluate_as_numeric(expr) {
@@ -1920,7 +1921,7 @@ fn pisano(
     }
 }
 
-pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
+pub(crate) fn simplify(expr: ArcIntern<Factor>) -> ArcIntern<Factor> {
     match *expr {
         Multiply { ref terms } => {
             let mut new_terms = BTreeMap::new();
@@ -1930,10 +1931,10 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                     if factored_term != n {
                         (Numeric(factored_term).into(), factored_exponent)
                     } else {
-                        (Arc::clone(term), *exponent)
+                        (ArcIntern::clone(term), *exponent)
                     }
                 } else {
-                    (Arc::clone(term), *exponent)
+                    (ArcIntern::clone(term), *exponent)
                 };
                 if let Multiply { ref terms } = *term {
                     terms
@@ -1944,7 +1945,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                             *new_terms.entry(term).or_insert(0) += term_exponent
                         });
                 } else {
-                    *new_terms.entry(Arc::clone(&term)).or_insert(0) += exponent;
+                    *new_terms.entry(ArcIntern::clone(&term)).or_insert(0) += exponent;
                 }
             }
             new_terms.retain(|factor, exponent| *factor != Factor::one() && *exponent != 0);
@@ -1968,7 +1969,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             ref left,
             ref right,
         } => {
-            let mut new_left = Arc::clone(left);
+            let mut new_left = ArcIntern::clone(left);
             let mut new_right = right.clone();
             while let Factor::Divide {
                 left: ref left_left,
@@ -1977,20 +1978,20 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             {
                 // (left_left / mid) / right
                 for (term, exponent) in mid.iter() {
-                    *new_right.entry(Arc::clone(term)).or_insert(0) += *exponent;
+                    *new_right.entry(ArcIntern::clone(term)).or_insert(0) += *exponent;
                 }
-                new_left = Arc::clone(left_left);
+                new_left = ArcIntern::clone(left_left);
                 // left_left / (mid * right)
             }
             let mut new_left = simplify(new_left);
             let mut cloned_right = new_right.clone();
             for (mut term, exponent) in new_right {
-                let simplified = simplify(Arc::clone(&term));
+                let simplified = simplify(ArcIntern::clone(&term));
                 if let Multiply { ref terms } = *simplified {
                     cloned_right.remove(&term);
                     for (subterm, subterm_exponent) in terms {
                         *cloned_right
-                            .entry(simplify(Arc::clone(subterm)))
+                            .entry(simplify(ArcIntern::clone(subterm)))
                             .or_insert(0) += exponent * subterm_exponent;
                     }
                 } else if simplified != term {
@@ -2028,8 +2029,8 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             ref base,
             ref exponent,
         } => {
-            let mut new_base = simplify(Arc::clone(base));
-            let mut new_exponent = simplify(Arc::clone(exponent));
+            let mut new_base = simplify(ArcIntern::clone(base));
+            let mut new_exponent = simplify(ArcIntern::clone(exponent));
             if let Numeric(new_base_numeric) = *new_base {
                 if new_base_numeric == 1 {
                     return Factor::one();
@@ -2068,8 +2069,8 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
             ref right,
             subtract,
         } => {
-            let mut left = simplify(Arc::clone(left));
-            let mut right = simplify(Arc::clone(right));
+            let mut left = simplify(ArcIntern::clone(left));
+            let mut right = simplify(ArcIntern::clone(right));
             match left.cmp(&right) {
                 Ordering::Less => {
                     if !subtract {
@@ -2110,7 +2111,7 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
     }
 }
 
-pub(crate) fn evaluate_as_numeric(expr: &Arc<Factor>) -> Option<NumericFactor> {
+pub(crate) fn evaluate_as_numeric(expr: &ArcIntern<Factor>) -> Option<NumericFactor> {
     let cached = FACTOR_CACHE
         .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
         .unwrap();
@@ -2231,7 +2232,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Arc<Factor>) -> Option<NumericFactor> {
 }
 
 #[inline(always)]
-fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
+fn find_factors(expr: &ArcIntern<Factor>) -> Box<[ArcIntern<Factor>]> {
     let cached = FACTOR_CACHE
         .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
         .unwrap();
@@ -2312,7 +2313,7 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
                                 .and_then(|power| usize::try_from(power).ok())
                                 .unwrap_or(MAX_REPEATS)
                                 .min(MAX_REPEATS);
-                            let base_factors = find_factors(&simplify(Arc::clone(base)));
+                            let base_factors = find_factors(&simplify(ArcIntern::clone(base)));
                             repeat_n(base_factors, power).flatten().collect()
                         }
                         Factor::Divide {
@@ -2321,7 +2322,7 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
                         } => {
                             // division
                             let mut left_recursive_factors = BTreeMap::new();
-                            let left_remaining_factors = find_factors(&simplify(Arc::clone(left)))
+                            let left_remaining_factors = find_factors(&simplify(ArcIntern::clone(left)))
                                 .into_iter()
                                 .map(simplify)
                                 .collect();
@@ -2378,10 +2379,10 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
                             // multiplication
                             let mut factors = Vec::new();
                             for (term, exponent) in terms {
-                                let term = simplify(Arc::clone(term));
+                                let term = simplify(ArcIntern::clone(term));
                                 let term_factors = find_factors(&term);
                                 if term_factors.is_empty() {
-                                    factors.extend(repeat_n(Arc::clone(&term), *exponent as usize));
+                                    factors.extend(repeat_n(ArcIntern::clone(&term), *exponent as usize));
                                 } else {
                                     factors.extend(
                                         repeat_n(term_factors, *exponent as usize).flatten(),
@@ -2395,8 +2396,8 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
                             ref right,
                             subtract,
                         } => {
-                            let left = simplify(Arc::clone(left));
-                            let right = simplify(Arc::clone(right));
+                            let left = simplify(ArcIntern::clone(left));
+                            let right = simplify(ArcIntern::clone(right));
                             let algebraic = to_like_powers_recursive_dedup(&left, &right, subtract);
                             if !algebraic.is_empty() {
                                 algebraic.into_boxed_slice()
@@ -2404,7 +2405,7 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
                                 let mut factors = find_common_factors(&left, &right);
                                 for prime in SMALL_PRIMES {
                                     let mut power = prime as NumericFactor;
-                                    let prime_factor: Arc<Factor> = Numeric(power).into();
+                                    let prime_factor: ArcIntern<Factor> = Numeric(power).into();
                                     while modulo_as_numeric(expr, power) == Some(0) {
                                         factors.push(prime_factor.clone());
                                         let Some(new_power) =
@@ -2423,19 +2424,19 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
                                 let cofactors: Vec<_> = factors
                                     .iter()
                                     .unique()
-                                    .flat_map(|factor: &Arc<Factor>| div_exact(expr, factor))
+                                    .flat_map(|factor: &ArcIntern<Factor>| div_exact(expr, factor))
                                     .collect();
                                 factors = multiset_union(vec![factors, cofactors]);
                                 factors.into_boxed_slice()
                             }
                         }
-                        Factor::UnknownExpression(_) => return [Arc::clone(expr)].into(),
+                        Factor::UnknownExpression(_) => return [ArcIntern::clone(expr)].into(),
                     };
                     if factors.is_empty() {
                         if let Some(n) = evaluate_as_numeric(expr) {
                             find_factors_of_numeric(n)
                         } else {
-                            [Arc::clone(expr)].into()
+                            [ArcIntern::clone(expr)].into()
                         }
                     } else {
                         factors
@@ -2446,7 +2447,7 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
         .clone()
 }
 
-fn factor_big_num(expr: BigNumber) -> Box<[Arc<Factor>]> {
+fn factor_big_num(expr: BigNumber) -> Box<[ArcIntern<Factor>]> {
     let mut factors = Vec::new();
     let mut expr_short = expr.as_ref();
     while expr_short != "0"
@@ -2486,7 +2487,7 @@ fn factor_big_num(expr: BigNumber) -> Box<[Arc<Factor>]> {
             let original = Factor::from(expr_short).into();
             factors.extend(
                 divisor_map.iter().flat_map(|(factor, exponent)| {
-                    repeat_n(Arc::clone(factor), *exponent as usize)
+                    repeat_n(ArcIntern::clone(factor), *exponent as usize)
                 }),
             );
             factors.push(
@@ -2502,7 +2503,7 @@ fn factor_big_num(expr: BigNumber) -> Box<[Arc<Factor>]> {
 }
 
 #[inline]
-fn find_common_factors(expr1: &Arc<Factor>, expr2: &Arc<Factor>) -> Vec<Arc<Factor>> {
+fn find_common_factors(expr1: &ArcIntern<Factor>, expr2: &ArcIntern<Factor>) -> Vec<ArcIntern<Factor>> {
     let num1 = evaluate_as_numeric(expr1);
     if num1 == Some(1) {
         return vec![];
@@ -2527,9 +2528,9 @@ fn find_common_factors(expr1: &Arc<Factor>, expr2: &Arc<Factor>) -> Vec<Arc<Fact
 
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
-pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
+pub fn find_unique_factors(expr: ArcIntern<Factor>) -> Box<[ArcIntern<Factor>]> {
     UNIQUE_FACTOR_CACHE
-        .get_or_insert_with(&Arc::clone(&expr), || {
+        .get_or_insert_with(&ArcIntern::clone(&expr), || {
             let expr = simplify(expr);
             let mut factors = find_factors(&expr)
                 .into_iter()
@@ -2560,7 +2561,8 @@ pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
 
 #[cfg(test)]
 mod tests {
-    use crate::NumberLength;
+    use arc_interner::ArcIntern;
+use crate::NumberLength;
     use crate::algebraic::Factor::Numeric;
     use crate::algebraic::{
         Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power,
@@ -2569,12 +2571,11 @@ mod tests {
     };
     use itertools::Itertools;
     use std::iter::repeat_n;
-    use std::sync::Arc;
 
     fn find_factors(input: &str) -> Vec<Factor> {
         crate::algebraic::find_factors(&Factor::from(input).into())
             .into_iter()
-            .map(Arc::unwrap_or_clone)
+            .map(|arc| arc.as_ref().clone())
             .collect()
     }
 
@@ -2793,7 +2794,7 @@ mod tests {
         let expr = repeat_n("(2^9+1)", 1 << 16).join("*");
         find_factors(&expr);
         evaluate_as_numeric(&expr);
-        let expr = Arc::new(Factor::from(expr));
+        let expr = ArcIntern::new(Factor::from(expr));
         crate::algebraic::estimate_log10_internal(&expr);
     }
 
@@ -3019,7 +3020,7 @@ mod tests {
     #[test]
     fn test_may_be_proper_divisor_of() {
         fn may_be_proper_divisor_of(left: &str, right: &str) -> bool {
-            Arc::from(Factor::from(left)).may_be_proper_divisor_of(&Arc::from(Factor::from(right)))
+            ArcIntern::from(Factor::from(left)).may_be_proper_divisor_of(&ArcIntern::from(Factor::from(right)))
         }
         assert!(may_be_proper_divisor_of("123", "369^2"));
         assert!(!may_be_proper_divisor_of("2", "34567"));
