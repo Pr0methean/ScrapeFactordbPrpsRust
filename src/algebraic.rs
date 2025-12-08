@@ -9,10 +9,9 @@ use log::{debug, error, info, warn};
 use num_integer::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
-use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
-use num_prime::nt_funcs::factorize128;
+use num_prime::nt_funcs::{factorize128};
 use quick_cache::sync::Cache;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
@@ -24,7 +23,10 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
 use std::sync::{Arc, LazyLock, OnceLock};
+use num_prime::Primality::No;
 use tokio::task;
+use yamaquasi::Algo::Siqs;
+use yamaquasi::{factor, Preferences};
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
@@ -961,7 +963,7 @@ impl Display for Factor {
 }
 
 thread_local! {
-    static SIEVE: RefCell<NaiveBuffer> = RefCell::new(NaiveBuffer::new());
+    pub static SIEVE: RefCell<NaiveBuffer> = RefCell::new(NaiveBuffer::new());
 }
 
 #[inline(always)]
@@ -1568,7 +1570,17 @@ pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Box<[Arc<Factor>]
 
 #[inline(always)]
 pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<NumericFactor, usize> {
-    task::block_in_place(|| factorize128(input))
+    task::block_in_place(|| {
+        if input <= 1 << 85 {
+            factorize128(input)
+        } else {
+            let mut factors = BTreeMap::new();
+            for factor in factor(input.into(), Siqs, &Preferences::default()).unwrap() {
+                *factors.entry(NumericFactor::try_from(factor).unwrap()).or_insert(0) += 1;
+            }
+            factors
+        }
+    })
 }
 
 #[inline(always)]
@@ -3004,18 +3016,13 @@ mod tests {
         ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
     }
+
     #[test]
-    fn test_find_factors_performance() {
-        use num_prime::detail::SMALL_PRIMES;
-        println!("SMALL_PRIMES length: {}", SMALL_PRIMES.len());
+    fn test_find_factors_performance_2() {
         let start = std::time::Instant::now();
-        // 10^111+1
-        let expr = super::expression_parser::arithmetic("10^111+1").unwrap();
-        let factors = super::find_factors(&expr.into());
-        println!("Time: {:?}", start.elapsed());
-        // Verify we found something useful
-        println!("Factors count: {}", factors.len());
-        let expr = super::expression_parser::arithmetic("((12527^1075-1)/(12527^215-1)/8586556973449927230597763048446094420249471522535704574960623985727884084794871403158551-1)/1804837429895850").unwrap();
+        const LARGEST_64BIT_PRIME: NumericFactor = 18446744073709551557;
+        const OTHER_LARGE_64BIT_PRIME: NumericFactor = 18446744069414584289; // largest prime below 1<<64 - 1<<32
+        let expr = Numeric(LARGEST_64BIT_PRIME * OTHER_LARGE_64BIT_PRIME);
         let factors = super::find_factors(&expr.into());
         println!("Time: {:?}", start.elapsed());
         // Verify we found something useful
