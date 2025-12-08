@@ -1593,140 +1593,144 @@ pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<Nume
 #[inline(always)]
 fn estimate_log10_internal(expr: &ArcIntern<Factor>) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
-    let cached = FACTOR_CACHE
-        .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-        .unwrap();
-    *cached.log10_estimate.get_or_init(|| {
-        if let Some(Some(n)) = cached.eval_as_numeric.get() {
-            return log10_bounds(*n);
-        }
-        match **expr {
-            Numeric(n) => log10_bounds(n),
-            Factor::BigNumber(ref expr) => {
-                let len = expr.as_ref().len();
-                ((len - 1) as NumberLength, len as NumberLength)
+    let cached = FACTOR_CACHE.get(expr);
+    match cached.and_then(|data| data.log10_estimate.get().copied()) {
+        Some(cached) => cached,
+        None => {
+            if let Some(ref data) = FACTOR_CACHE.get(expr) && let Some(Some(numeric)) = data.eval_as_numeric.get().copied() {
+                return *data.log10_estimate.get_or_init(|| log10_bounds(numeric));
             }
-            Factor::Fibonacci(ref x) | Factor::Lucas(ref x) => {
-                // Fibonacci or Lucas number
-                let Some(term_number) = evaluate_as_numeric(x) else {
-                    warn!("Could not parse term number of a Lucas number: {}", x);
-                    return (0, NumberLength::MAX);
-                };
-                let est_log = term_number as f64 * 0.20898;
-                (
-                    est_log.floor() as NumberLength,
-                    est_log.ceil() as NumberLength + 1,
-                )
-            }
-            Factor::Factorial(ref input) => {
-                // factorial
-                let Some(input) = evaluate_as_numeric(input) else {
-                    warn!("Could not parse input to a factorial: {}", input);
-                    return (0, NumberLength::MAX);
-                };
-                let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
-
-                // LN_10 is already rounded up
-                let log_factorial_lower_bound = ln_factorial.next_down() / LN_10;
-                let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
-
-                (
-                    log_factorial_lower_bound.floor() as NumberLength,
-                    log_factorial_upper_bound.ceil() as NumberLength,
-                )
-            }
-            Factor::Primorial(ref input) => {
-                // primorial
-                let Some(input) = evaluate_as_numeric(input) else {
-                    warn!("Could not parse input to a factorial: {}", input);
-                    return (0, NumberLength::MAX);
-                };
-
-                // Lower bound is from
-                // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
-                // "Approximate formulas for some functions of prime numbers".
-                // Illinois Journal of Mathematics 6 (1), p. 70
-                // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
-                // (p. 7 of PDF)
-                let lower_bound = if input >= 563 {
-                    (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil()
-                        as NumberLength
-                } else if input >= 41 {
-                    (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil()
-                        as NumberLength
-                } else {
-                    0
-                };
-                let upper_bound = (1.01624 / LN_10 * input as f64).floor() as NumberLength;
-                (lower_bound, upper_bound)
-            }
-            Factor::ElidedNumber(_) => {
-                // Elided numbers from factordb are always at least 51 digits
-                (50, NumberLength::MAX)
-            }
-            Factor::Power {
-                ref base,
-                ref exponent,
-            } => {
-                let Some(exponent) = evaluate_as_numeric(exponent)
-                    .and_then(|exponent| NumberLength::try_from(exponent).ok())
-                else {
-                    return (0, NumberLength::MAX);
-                };
-                if let Some(base) = evaluate_as_numeric(base) {
-                    let lower = (base as f64).log10().next_down() * exponent as f64;
-                    let upper = (base as f64).log10().next_up() * (exponent as f64).next_up();
-                    (lower.floor() as NumberLength, upper.ceil() as NumberLength)
-                } else {
-                    let (base_lower, base_upper) = estimate_log10_internal(base);
+            let bounds = match **expr {
+                Numeric(n) => log10_bounds(n),
+                Factor::BigNumber(ref expr) => {
+                    let len = expr.as_ref().len();
+                    ((len - 1) as NumberLength, len as NumberLength)
+                }
+                Factor::Fibonacci(ref x) | Factor::Lucas(ref x) => {
+                    // Fibonacci or Lucas number
+                    let Some(term_number) = evaluate_as_numeric(x) else {
+                        warn!("Could not parse term number of a Lucas number: {}", x);
+                        return (0, NumberLength::MAX);
+                    };
+                    let est_log = term_number as f64 * 0.20898;
                     (
-                        base_lower.saturating_mul(exponent),
-                        base_upper.saturating_mul(exponent),
+                        est_log.floor() as NumberLength,
+                        est_log.ceil() as NumberLength + 1,
                     )
                 }
-            }
-            Factor::Divide {
-                ref left,
-                ref right,
-            } => {
-                let (num_lower, num_upper) = estimate_log10_internal(left);
-                let (denom_lower, denom_upper) = estimate_log10_of_product(right);
-                let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
-                let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
-                (lower, upper)
-            }
-            Multiply { ref terms } => {
-                // multiplication
-                let (product_lower, product_upper) = estimate_log10_of_product(terms);
-                (product_lower, product_upper)
-            }
-            AddSub {
-                ref left,
-                ref right,
-                subtract,
-            } => {
-                // addition/subtraction
-                let (left_lower, left_upper) = estimate_log10_internal(left);
-                let (right_lower, right_upper) = estimate_log10_internal(right);
-                let combined_lower = if subtract {
-                    if right_upper >= left_lower - 1 {
-                        0
+                Factor::Factorial(ref input) => {
+                    // factorial
+                    let Some(input) = evaluate_as_numeric(input) else {
+                        warn!("Could not parse input to a factorial: {}", input);
+                        return (0, NumberLength::MAX);
+                    };
+                    let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
+
+                    // LN_10 is already rounded up
+                    let log_factorial_lower_bound = ln_factorial.next_down() / LN_10;
+                    let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
+
+                    (
+                        log_factorial_lower_bound.floor() as NumberLength,
+                        log_factorial_upper_bound.ceil() as NumberLength,
+                    )
+                }
+                Factor::Primorial(ref input) => {
+                    // primorial
+                    let Some(input) = evaluate_as_numeric(input) else {
+                        warn!("Could not parse input to a factorial: {}", input);
+                        return (0, NumberLength::MAX);
+                    };
+
+                    // Lower bound is from
+                    // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
+                    // "Approximate formulas for some functions of prime numbers".
+                    // Illinois Journal of Mathematics 6 (1), p. 70
+                    // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
+                    // (p. 7 of PDF)
+                    let lower_bound = if input >= 563 {
+                        (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil()
+                            as NumberLength
+                    } else if input >= 41 {
+                        (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil()
+                            as NumberLength
                     } else {
-                        left_lower.saturating_sub(1)
+                        0
+                    };
+                    let upper_bound = (1.01624 / LN_10 * input as f64).floor() as NumberLength;
+                    (lower_bound, upper_bound)
+                }
+                Factor::ElidedNumber(_) => {
+                    // Elided numbers from factordb are always at least 51 digits
+                    (50, NumberLength::MAX)
+                }
+                Factor::Power {
+                    ref base,
+                    ref exponent,
+                } => {
+                    let Some(exponent) = evaluate_as_numeric(exponent)
+                        .and_then(|exponent| NumberLength::try_from(exponent).ok())
+                    else {
+                        return (0, NumberLength::MAX);
+                    };
+                    if let Some(base) = evaluate_as_numeric(base) {
+                        let lower = (base as f64).log10().next_down() * exponent as f64;
+                        let upper = (base as f64).log10().next_up() * (exponent as f64).next_up();
+                        (lower.floor() as NumberLength, upper.ceil() as NumberLength)
+                    } else {
+                        let (base_lower, base_upper) = estimate_log10_internal(base);
+                        (
+                            base_lower.saturating_mul(exponent),
+                            base_upper.saturating_mul(exponent),
+                        )
                     }
-                } else {
-                    left_lower.max(right_lower)
-                };
-                let combined_upper = if subtract {
-                    left_upper
-                } else {
-                    left_upper.max(right_upper).saturating_add(1)
-                };
-                (combined_lower, combined_upper)
-            }
-            Factor::UnknownExpression(_) => (0, NumberLength::MAX),
+                }
+                Factor::Divide {
+                    ref left,
+                    ref right,
+                } => {
+                    let (num_lower, num_upper) = estimate_log10_internal(left);
+                    let (denom_lower, denom_upper) = estimate_log10_of_product(right);
+                    let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
+                    let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
+                    (lower, upper)
+                }
+                Multiply { ref terms } => {
+                    // multiplication
+                    let (product_lower, product_upper) = estimate_log10_of_product(terms);
+                    (product_lower, product_upper)
+                }
+                AddSub {
+                    ref left,
+                    ref right,
+                    subtract,
+                } => {
+                    // addition/subtraction
+                    let (left_lower, left_upper) = estimate_log10_internal(left);
+                    let (right_lower, right_upper) = estimate_log10_internal(right);
+                    let combined_lower = if subtract {
+                        if right_upper >= left_lower - 1 {
+                            0
+                        } else {
+                            left_lower.saturating_sub(1)
+                        }
+                    } else {
+                        left_lower.max(right_lower)
+                    };
+                    let combined_upper = if subtract {
+                        left_upper
+                    } else {
+                        left_upper.max(right_upper).saturating_add(1)
+                    };
+                    (combined_lower, combined_upper)
+                }
+                Factor::UnknownExpression(_) => (0, NumberLength::MAX),
+            };
+            FACTOR_CACHE.get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
+                .unwrap().log10_estimate.get_or_init(|| bounds);
+            bounds
         }
-    })
+    }
 }
 
 fn log10_bounds(n: NumericFactor) -> (NumberLength, NumberLength) {
@@ -2112,134 +2116,139 @@ pub(crate) fn simplify(expr: ArcIntern<Factor>) -> ArcIntern<Factor> {
 }
 
 pub(crate) fn evaluate_as_numeric(expr: &ArcIntern<Factor>) -> Option<NumericFactor> {
-    let cached = FACTOR_CACHE
-        .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-        .unwrap();
-    *cached.eval_as_numeric.get_or_init(|| match **expr {
-        Numeric(n) => Some(n),
-        Factor::BigNumber(_) => None,
-        Factor::Lucas(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            match term {
-                0 => Some(2),
-                1 => Some(1),
-                185.. => None,
-                n => {
-                    let mut a: NumericFactor = 2;
-                    let mut b: NumericFactor = 1;
-                    let mut result: NumericFactor = 0;
+    let cached = FACTOR_CACHE.get(expr);
+    match cached.and_then(|data| data.eval_as_numeric.get().copied()) {
+        Some(numeric) => numeric,
+        None => {
+            let numeric = match **expr {
+                Numeric(n) => Some(n),
+                Factor::BigNumber(_) => None,
+                Factor::Lucas(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    match term {
+                        0 => Some(2),
+                        1 => Some(1),
+                        185.. => None,
+                        n => {
+                            let mut a: NumericFactor = 2;
+                            let mut b: NumericFactor = 1;
+                            let mut result: NumericFactor = 0;
 
-                    for _ in 2..=n {
-                        result = a + b;
-                        a = b;
-                        b = result;
+                            for _ in 2..=n {
+                                result = a + b;
+                                a = b;
+                                b = result;
+                            }
+                            Some(result)
+                        }
+                    }
+                }
+                Factor::Fibonacci(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    match term {
+                        0 => Some(0),
+                        1 | 2 => Some(1),
+                        186.. => None,
+                        n => {
+                            let mut a: NumericFactor = 1;
+                            let mut b: NumericFactor = 1;
+                            let mut result: NumericFactor = 0;
+                            for _ in 3..=n {
+                                result = a + b;
+                                a = b;
+                                b = result;
+                            }
+                            Some(result)
+                        }
+                    }
+                }
+                Factor::Factorial(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    match term {
+                        0 | 1 => Some(1),
+                        35.. => None,
+                        x => {
+                            let mut result = 1;
+                            for i in 2..=x {
+                                result *= i;
+                            }
+                            Some(result)
+                        }
+                    }
+                }
+                Factor::Primorial(ref term) => {
+                    let term = evaluate_as_numeric(term)?;
+                    match term {
+                        0 | 1 => Some(1),
+                        103.. => None,
+                        x => Some(
+                            // SMALL_PRIMES always has all the primes we need
+                            SMALL_PRIMES
+                                .iter()
+                                .copied()
+                                .map(NumericFactor::from)
+                                .take_while(|p| *p <= x)
+                                .product(),
+                        ),
+                    }
+                }
+                Factor::ElidedNumber(_) => None,
+                Factor::Power {
+                    ref base,
+                    ref exponent,
+                } => match evaluate_as_numeric(base)? {
+                    0 => Some(0),
+                    1 => Some(1),
+                    base => base.checked_pow(u32::try_from(evaluate_as_numeric(exponent)?).ok()?),
+                },
+                Factor::Divide {
+                    ref left,
+                    ref right,
+                } => {
+                    let mut result = evaluate_as_numeric(left)?;
+                    for (term, exponent) in right.iter() {
+                        result =
+                            result.checked_div_exact(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
                     }
                     Some(result)
                 }
-            }
-        }
-        Factor::Fibonacci(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            match term {
-                0 => Some(0),
-                1 | 2 => Some(1),
-                186.. => None,
-                n => {
-                    let mut a: NumericFactor = 1;
-                    let mut b: NumericFactor = 1;
-                    let mut result: NumericFactor = 0;
-                    for _ in 3..=n {
-                        result = a + b;
-                        a = b;
-                        b = result;
+                Multiply { ref terms } => {
+                    let mut result: NumericFactor = 1;
+                    for (term, exponent) in terms.iter() {
+                        result = result.checked_mul(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
                     }
                     Some(result)
                 }
-            }
-        }
-        Factor::Factorial(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            match term {
-                0 | 1 => Some(1),
-                35.. => None,
-                x => {
-                    let mut result = 1;
-                    for i in 2..=x {
-                        result *= i;
+                AddSub {
+                    ref left,
+                    ref right,
+                    subtract,
+                } => {
+                    let left = evaluate_as_numeric(left)?;
+                    let right = evaluate_as_numeric(right)?;
+                    if subtract {
+                        left.checked_sub(right)
+                    } else {
+                        left.checked_add(right)
                     }
-                    Some(result)
                 }
-            }
+                Factor::UnknownExpression(_) => None,
+            };
+            FACTOR_CACHE
+                .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
+                .unwrap().eval_as_numeric.get_or_init(|| numeric);
+            numeric
         }
-        Factor::Primorial(ref term) => {
-            let term = evaluate_as_numeric(term)?;
-            match term {
-                0 | 1 => Some(1),
-                103.. => None,
-                x => Some(
-                    // SMALL_PRIMES always has all the primes we need
-                    SMALL_PRIMES
-                        .iter()
-                        .copied()
-                        .map(NumericFactor::from)
-                        .take_while(|p| *p <= x)
-                        .product(),
-                ),
-            }
-        }
-        Factor::ElidedNumber(_) => None,
-        Factor::Power {
-            ref base,
-            ref exponent,
-        } => match evaluate_as_numeric(base)? {
-            0 => Some(0),
-            1 => Some(1),
-            base => base.checked_pow(u32::try_from(evaluate_as_numeric(exponent)?).ok()?),
-        },
-        Factor::Divide {
-            ref left,
-            ref right,
-        } => {
-            let mut result = evaluate_as_numeric(left)?;
-            for (term, exponent) in right.iter() {
-                result =
-                    result.checked_div_exact(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
-            }
-            Some(result)
-        }
-        Multiply { ref terms } => {
-            let mut result: NumericFactor = 1;
-            for (term, exponent) in terms.iter() {
-                result = result.checked_mul(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
-            }
-            Some(result)
-        }
-        AddSub {
-            ref left,
-            ref right,
-            subtract,
-        } => {
-            let left = evaluate_as_numeric(left)?;
-            let right = evaluate_as_numeric(right)?;
-            if subtract {
-                left.checked_sub(right)
-            } else {
-                left.checked_add(right)
-            }
-        }
-        Factor::UnknownExpression(_) => None,
-    })
+    }
 }
 
 #[inline(always)]
 fn find_factors(expr: &ArcIntern<Factor>) -> Box<[ArcIntern<Factor>]> {
-    let cached = FACTOR_CACHE
-        .get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-        .unwrap();
-    cached
-        .factors
-        .get_or_init(|| {
-            task::block_in_place(|| {
+    let cached = FACTOR_CACHE.get(expr);
+    match cached.and_then(|data| data.factors.get().cloned()) {
+        Some(cached) => cached,
+        None => {
+            let factors = task::block_in_place(|| {
                 let expr_string = format!("find_factors: {expr}");
                 info!("{}", expr_string);
                 frame_sync(location!().named(expr_string), || {
@@ -2442,9 +2451,12 @@ fn find_factors(expr: &ArcIntern<Factor>) -> Box<[ArcIntern<Factor>]> {
                         factors
                     }
                 })
-            })
-        })
-        .clone()
+            });
+            FACTOR_CACHE.get_or_insert_with(expr, || Ok::<_,!>(Default::default()))
+                .unwrap().factors.get_or_init(|| factors.clone());
+            factors
+        }
+    }
 }
 
 fn factor_big_num(expr: BigNumber) -> Box<[ArcIntern<Factor>]> {
@@ -2529,8 +2541,10 @@ fn find_common_factors(expr1: &ArcIntern<Factor>, expr2: &ArcIntern<Factor>) -> 
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: ArcIntern<Factor>) -> Box<[ArcIntern<Factor>]> {
-    UNIQUE_FACTOR_CACHE
-        .get_or_insert_with(&ArcIntern::clone(&expr), || {
+    let cached = UNIQUE_FACTOR_CACHE.get(&expr);
+    return match cached {
+        Some(cached) => cached,
+        None => {
             let expr = simplify(expr);
             let mut factors = find_factors(&expr)
                 .into_iter()
@@ -2554,9 +2568,11 @@ pub fn find_unique_factors(expr: ArcIntern<Factor>) -> Box<[ArcIntern<Factor>]> 
                     factors.iter().join(", ")
                 );
             }
-            Ok::<_, !>(factors.into_boxed_slice())
-        })
-        .unwrap()
+            let factors = factors.into_boxed_slice();
+            UNIQUE_FACTOR_CACHE.insert(ArcIntern::clone(&expr), factors.clone());
+            factors
+        }
+    }
 }
 
 #[cfg(test)]
