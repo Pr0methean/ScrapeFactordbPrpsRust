@@ -9,9 +9,10 @@ use log::{debug, error, info, warn};
 use num_integer::Integer;
 use num_modular::{ModularCoreOps, ModularPow};
 use num_prime::ExactRoots;
+use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
-use num_prime::nt_funcs::{factorize128};
+use num_prime::nt_funcs::factorize128;
 use quick_cache::sync::Cache;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
@@ -23,10 +24,9 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
 use std::sync::{Arc, LazyLock, OnceLock};
-use num_prime::Primality::No;
 use tokio::task;
 use yamaquasi::Algo::Siqs;
-use yamaquasi::{factor, Preferences};
+use yamaquasi::{Preferences, factor};
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
@@ -1182,7 +1182,11 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     (a, n)
 }
 
-pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -> Box<[Arc<Factor>]> {
+pub fn to_like_powers(
+    left: &Arc<Factor>,
+    right: &Arc<Factor>,
+    subtract: bool,
+) -> Box<[Arc<Factor>]> {
     let mut possible_factors = BTreeMap::new();
     let mut new_left = simplify(Arc::clone(left));
     let mut new_right = simplify(Arc::clone(right));
@@ -1211,14 +1215,14 @@ pub fn to_like_powers(left: &Arc<Factor>, right: &Arc<Factor>, subtract: bool) -
             _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
-            find_raw_factors_of_numeric(exponent_numeric.into()).into_iter().for_each(
-                |(factor, factor_exponent)| {
+            find_raw_factors_of_numeric(exponent_numeric.into())
+                .into_iter()
+                .for_each(|(factor, factor_exponent)| {
                     possible_factors.insert(
                         factor,
                         factor_exponent.max(possible_factors.get(&factor).copied().unwrap_or(0)),
                     );
-                },
-            )
+                })
         }
     }
     let total_factors = possible_factors.values().sum::<usize>();
@@ -1576,7 +1580,9 @@ pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<Nume
         } else {
             let mut factors = BTreeMap::new();
             for factor in factor(input.into(), Siqs, &Preferences::default()).unwrap() {
-                *factors.entry(NumericFactor::try_from(factor).unwrap()).or_insert(0) += 1;
+                *factors
+                    .entry(NumericFactor::try_from(factor).unwrap())
+                    .or_insert(0) += 1;
             }
             factors
         }
@@ -2088,14 +2094,19 @@ pub(crate) fn simplify(expr: Arc<Factor>) -> Arc<Factor> {
                 left,
                 right,
                 subtract,
-            }.into();
-            evaluate_as_numeric(&result).map(|x| Numeric(x).into()).unwrap_or(result)
+            }
+            .into();
+            evaluate_as_numeric(&result)
+                .map(|x| Numeric(x).into())
+                .unwrap_or(result)
         }
-        _ => if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
-            Numeric(expr_numeric).into()
-        } else {
-            expr
-        },
+        _ => {
+            if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
+                Numeric(expr_numeric).into()
+            } else {
+                expr
+            }
+        }
     }
 }
 
@@ -2226,204 +2237,213 @@ fn find_factors(expr: &Arc<Factor>) -> Box<[Arc<Factor>]> {
         .unwrap();
     cached
         .factors
-        .get_or_init(|| task::block_in_place(|| {
-            let expr_string = format!("find_factors: {expr}");
-            info!("{}", expr_string);
-            frame_sync(location!().named(expr_string), || {
-                let factors = match **expr {
-                    Numeric(n) => find_factors_of_numeric(n),
-                    Factor::BigNumber(ref expr) => factor_big_num(expr.clone()),
-                    Factor::Lucas(ref term) => {
-                        // Lucas number
-                        if let Some(term_number) = evaluate_as_numeric(term) {
-                            lucas_factors(term_number, true).into_boxed_slice()
-                        } else {
-                            warn!("Could not parse term number of a Lucas number: {}", term);
-                            [].into()
-                        }
-                    }
-                    Factor::Fibonacci(ref term) => {
-                        // Fibonacci number
-                        if let Some(term_number) = evaluate_as_numeric(term) {
-                            fibonacci_factors(term_number, true).into_boxed_slice()
-                        } else {
-                            warn!(
-                                "Could not parse term number of a Fibonacci number: {}",
-                                term
-                            );
-                            [].into()
-                        }
-                    }
-                    Factor::Factorial(ref term) => {
-                        // factorial
-                        if let Some(input) = evaluate_as_numeric(term) {
-                            let mut factors = Vec::new();
-                            for i in 2..=input {
-                                factors.extend(find_factors_of_numeric(i));
-                            }
-                            factors.into_boxed_slice()
-                        } else {
-                            warn!("Could not parse input to factorial function: {}", term);
-                            [].into()
-                        }
-                    }
-                    Factor::Primorial(ref term) => {
-                        // primorial
-                        if let Some(input) = evaluate_as_numeric(term) {
-                            let mut factors = Vec::new();
-                            for i in 2..=input {
-                                if is_prime(i) {
-                                    factors.push(Numeric(i).into());
-                                }
-                            }
-                            factors.into_boxed_slice()
-                        } else {
-                            warn!("Could not parse input to primorial function: {}", term);
-                            [].into()
-                        }
-                    }
-                    Factor::ElidedNumber(ref n) => match n.chars().last() {
-                        Some('0') => [Factor::two(), Factor::five()].into(),
-                        Some('5') => [Factor::five()].into(),
-                        Some('2' | '4' | '6' | '8') => [Factor::two()].into(),
-                        Some('1' | '3' | '7' | '9') => [].into(),
-                        x => {
-                            error!("Invalid last digit: {x:?}");
-                            [].into()
-                        }
-                    },
-                    Factor::Power {
-                        ref base,
-                        ref exponent,
-                    } => {
-                        let power = evaluate_as_numeric(exponent)
-                            .and_then(|power| usize::try_from(power).ok())
-                            .unwrap_or(MAX_REPEATS)
-                            .min(MAX_REPEATS);
-                        let base_factors = find_factors(&simplify(Arc::clone(base)));
-                        repeat_n(base_factors, power).flatten().collect()
-                    }
-                    Factor::Divide {
-                        ref left,
-                        ref right,
-                    } => {
-                        // division
-                        let mut left_recursive_factors = BTreeMap::new();
-                        let left_remaining_factors = find_factors(&simplify(Arc::clone(left)))
-                            .into_iter()
-                            .map(simplify)
-                            .collect();
-                        let mut left_remaining_factors = count_frequencies(left_remaining_factors);
-                        while let Some((factor, exponent)) = left_remaining_factors.pop_first() {
-                            let subfactors = if factor == *expr {
-                                [].into()
+        .get_or_init(|| {
+            task::block_in_place(|| {
+                let expr_string = format!("find_factors: {expr}");
+                info!("{}", expr_string);
+                frame_sync(location!().named(expr_string), || {
+                    let factors = match **expr {
+                        Numeric(n) => find_factors_of_numeric(n),
+                        Factor::BigNumber(ref expr) => factor_big_num(expr.clone()),
+                        Factor::Lucas(ref term) => {
+                            // Lucas number
+                            if let Some(term_number) = evaluate_as_numeric(term) {
+                                lucas_factors(term_number, true).into_boxed_slice()
                             } else {
-                                find_factors(&factor)
-                            };
-                            subfactors
-                                .into_iter()
-                                .filter(|subfactor| *subfactor != factor)
-                                .for_each(|subfactor| {
-                                    *left_remaining_factors.entry(subfactor).or_insert(0) +=
-                                        exponent
-                                });
-                            *left_recursive_factors.entry(factor).or_insert(0) += exponent;
+                                warn!("Could not parse term number of a Lucas number: {}", term);
+                                [].into()
+                            }
                         }
-                        let mut right_remaining_factors = right.clone();
-                        while let Some((factor, exponent)) = right_remaining_factors.pop_last() {
-                            let subfactors = find_factors(&factor);
-                            if subfactors.is_empty()
-                                || (subfactors.len() == 1 && subfactors[0] == factor)
-                            {
-                                if let Some(left_exponent) = left_recursive_factors.get_mut(&factor)
-                                {
-                                    let min_exponent = (*left_exponent).min(exponent);
-                                    *left_exponent -= min_exponent;
-                                    if min_exponent != exponent && min_exponent != 0 {
-                                        right_remaining_factors
-                                            .insert(factor, exponent - min_exponent);
+                        Factor::Fibonacci(ref term) => {
+                            // Fibonacci number
+                            if let Some(term_number) = evaluate_as_numeric(term) {
+                                fibonacci_factors(term_number, true).into_boxed_slice()
+                            } else {
+                                warn!(
+                                    "Could not parse term number of a Fibonacci number: {}",
+                                    term
+                                );
+                                [].into()
+                            }
+                        }
+                        Factor::Factorial(ref term) => {
+                            // factorial
+                            if let Some(input) = evaluate_as_numeric(term) {
+                                let mut factors = Vec::new();
+                                for i in 2..=input {
+                                    factors.extend(find_factors_of_numeric(i));
+                                }
+                                factors.into_boxed_slice()
+                            } else {
+                                warn!("Could not parse input to factorial function: {}", term);
+                                [].into()
+                            }
+                        }
+                        Factor::Primorial(ref term) => {
+                            // primorial
+                            if let Some(input) = evaluate_as_numeric(term) {
+                                let mut factors = Vec::new();
+                                for i in 2..=input {
+                                    if is_prime(i) {
+                                        factors.push(Numeric(i).into());
                                     }
                                 }
+                                factors.into_boxed_slice()
                             } else {
-                                for (subfactor, subfactor_exponent) in count_frequencies(subfactors)
-                                {
-                                    *right_remaining_factors.entry(subfactor).or_insert(0) +=
-                                        subfactor_exponent;
-                                }
+                                warn!("Could not parse input to primorial function: {}", term);
+                                [].into()
                             }
                         }
-                        left_recursive_factors
-                            .into_iter()
-                            .flat_map(|(factor, exponent)| repeat_n(factor, exponent as usize))
-                            .collect()
-                    }
-                    Multiply { ref terms } => {
-                        // multiplication
-                        let mut factors = Vec::new();
-                        for (term, exponent) in terms {
-                            let term = simplify(Arc::clone(term));
-                            let term_factors = find_factors(&term);
-                            if term_factors.is_empty() {
-                                factors.extend(repeat_n(Arc::clone(&term), *exponent as usize));
-                            } else {
-                                factors
-                                    .extend(repeat_n(term_factors, *exponent as usize).flatten());
+                        Factor::ElidedNumber(ref n) => match n.chars().last() {
+                            Some('0') => [Factor::two(), Factor::five()].into(),
+                            Some('5') => [Factor::five()].into(),
+                            Some('2' | '4' | '6' | '8') => [Factor::two()].into(),
+                            Some('1' | '3' | '7' | '9') => [].into(),
+                            x => {
+                                error!("Invalid last digit: {x:?}");
+                                [].into()
                             }
+                        },
+                        Factor::Power {
+                            ref base,
+                            ref exponent,
+                        } => {
+                            let power = evaluate_as_numeric(exponent)
+                                .and_then(|power| usize::try_from(power).ok())
+                                .unwrap_or(MAX_REPEATS)
+                                .min(MAX_REPEATS);
+                            let base_factors = find_factors(&simplify(Arc::clone(base)));
+                            repeat_n(base_factors, power).flatten().collect()
                         }
-                        factors.into_boxed_slice()
-                    }
-                    AddSub {
-                        ref left,
-                        ref right,
-                        subtract,
-                    } => {
-                        let left = simplify(Arc::clone(left));
-                        let right = simplify(Arc::clone(right));
-                        let algebraic = to_like_powers_recursive_dedup(&left, &right, subtract);
-                        if !algebraic.is_empty() {
-                            algebraic.into_boxed_slice()
-                        } else {
-                            let mut factors = find_common_factors(&left, &right);
-                            for prime in SMALL_PRIMES {
-                                let mut power = prime as NumericFactor;
-                                let prime_factor: Arc<Factor> = Numeric(power).into();
-                                while modulo_as_numeric(expr, power) == Some(0) {
-                                    factors.push(prime_factor.clone());
-                                    let Some(new_power) = power.checked_mul(prime as NumericFactor)
-                                    else {
-                                        break;
-                                    };
-                                    power = new_power;
-                                }
-                            }
-                            factors = multiset_union(vec![
-                                factors,
-                                to_like_powers_recursive_dedup(&left, &right, subtract),
-                                find_common_factors(&left, &right),
-                            ]);
-                            let cofactors: Vec<_> = factors
-                                .iter()
-                                .unique()
-                                .flat_map(|factor: &Arc<Factor>| div_exact(expr, factor))
+                        Factor::Divide {
+                            ref left,
+                            ref right,
+                        } => {
+                            // division
+                            let mut left_recursive_factors = BTreeMap::new();
+                            let left_remaining_factors = find_factors(&simplify(Arc::clone(left)))
+                                .into_iter()
+                                .map(simplify)
                                 .collect();
-                            factors = multiset_union(vec![factors, cofactors]);
+                            let mut left_remaining_factors =
+                                count_frequencies(left_remaining_factors);
+                            while let Some((factor, exponent)) = left_remaining_factors.pop_first()
+                            {
+                                let subfactors = if factor == *expr {
+                                    [].into()
+                                } else {
+                                    find_factors(&factor)
+                                };
+                                subfactors
+                                    .into_iter()
+                                    .filter(|subfactor| *subfactor != factor)
+                                    .for_each(|subfactor| {
+                                        *left_remaining_factors.entry(subfactor).or_insert(0) +=
+                                            exponent
+                                    });
+                                *left_recursive_factors.entry(factor).or_insert(0) += exponent;
+                            }
+                            let mut right_remaining_factors = right.clone();
+                            while let Some((factor, exponent)) = right_remaining_factors.pop_last()
+                            {
+                                let subfactors = find_factors(&factor);
+                                if subfactors.is_empty()
+                                    || (subfactors.len() == 1 && subfactors[0] == factor)
+                                {
+                                    if let Some(left_exponent) =
+                                        left_recursive_factors.get_mut(&factor)
+                                    {
+                                        let min_exponent = (*left_exponent).min(exponent);
+                                        *left_exponent -= min_exponent;
+                                        if min_exponent != exponent && min_exponent != 0 {
+                                            right_remaining_factors
+                                                .insert(factor, exponent - min_exponent);
+                                        }
+                                    }
+                                } else {
+                                    for (subfactor, subfactor_exponent) in
+                                        count_frequencies(subfactors)
+                                    {
+                                        *right_remaining_factors.entry(subfactor).or_insert(0) +=
+                                            subfactor_exponent;
+                                    }
+                                }
+                            }
+                            left_recursive_factors
+                                .into_iter()
+                                .flat_map(|(factor, exponent)| repeat_n(factor, exponent as usize))
+                                .collect()
+                        }
+                        Multiply { ref terms } => {
+                            // multiplication
+                            let mut factors = Vec::new();
+                            for (term, exponent) in terms {
+                                let term = simplify(Arc::clone(term));
+                                let term_factors = find_factors(&term);
+                                if term_factors.is_empty() {
+                                    factors.extend(repeat_n(Arc::clone(&term), *exponent as usize));
+                                } else {
+                                    factors.extend(
+                                        repeat_n(term_factors, *exponent as usize).flatten(),
+                                    );
+                                }
+                            }
                             factors.into_boxed_slice()
                         }
-                    }
-                    Factor::UnknownExpression(_) => return [Arc::clone(expr)].into(),
-                };
-                if factors.is_empty() {
-                    if let Some(n) = evaluate_as_numeric(expr) {
-                        find_factors_of_numeric(n)
+                        AddSub {
+                            ref left,
+                            ref right,
+                            subtract,
+                        } => {
+                            let left = simplify(Arc::clone(left));
+                            let right = simplify(Arc::clone(right));
+                            let algebraic = to_like_powers_recursive_dedup(&left, &right, subtract);
+                            if !algebraic.is_empty() {
+                                algebraic.into_boxed_slice()
+                            } else {
+                                let mut factors = find_common_factors(&left, &right);
+                                for prime in SMALL_PRIMES {
+                                    let mut power = prime as NumericFactor;
+                                    let prime_factor: Arc<Factor> = Numeric(power).into();
+                                    while modulo_as_numeric(expr, power) == Some(0) {
+                                        factors.push(prime_factor.clone());
+                                        let Some(new_power) =
+                                            power.checked_mul(prime as NumericFactor)
+                                        else {
+                                            break;
+                                        };
+                                        power = new_power;
+                                    }
+                                }
+                                factors = multiset_union(vec![
+                                    factors,
+                                    to_like_powers_recursive_dedup(&left, &right, subtract),
+                                    find_common_factors(&left, &right),
+                                ]);
+                                let cofactors: Vec<_> = factors
+                                    .iter()
+                                    .unique()
+                                    .flat_map(|factor: &Arc<Factor>| div_exact(expr, factor))
+                                    .collect();
+                                factors = multiset_union(vec![factors, cofactors]);
+                                factors.into_boxed_slice()
+                            }
+                        }
+                        Factor::UnknownExpression(_) => return [Arc::clone(expr)].into(),
+                    };
+                    if factors.is_empty() {
+                        if let Some(n) = evaluate_as_numeric(expr) {
+                            find_factors_of_numeric(n)
+                        } else {
+                            [Arc::clone(expr)].into()
+                        }
                     } else {
-                        [Arc::clone(expr)].into()
+                        factors
                     }
-                } else {
-                    factors
-                }
+                })
             })
         })
-    ).clone()
+        .clone()
 }
 
 fn factor_big_num(expr: BigNumber) -> Box<[Arc<Factor>]> {
@@ -2508,29 +2528,34 @@ fn find_common_factors(expr1: &Arc<Factor>, expr2: &Arc<Factor>) -> Vec<Arc<Fact
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: Arc<Factor>) -> Box<[Arc<Factor>]> {
-    UNIQUE_FACTOR_CACHE.get_or_insert_with(&Arc::clone(&expr), || {
-        let expr = simplify(expr);
-        let mut factors = find_factors(&expr).into_iter().flat_map(|f| {
-            if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr) {
-                let f = simplify(f);
-                if f.may_be_proper_divisor_of(&expr) {
-                    return Some(f);
-                }
+    UNIQUE_FACTOR_CACHE
+        .get_or_insert_with(&Arc::clone(&expr), || {
+            let expr = simplify(expr);
+            let mut factors = find_factors(&expr)
+                .into_iter()
+                .flat_map(|f| {
+                    if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr) {
+                        let f = simplify(f);
+                        if f.may_be_proper_divisor_of(&expr) {
+                            return Some(f);
+                        }
+                    }
+                    None
+                })
+                .collect::<Vec<_>>();
+            factors.sort_unstable();
+            factors.dedup();
+            if factors.is_empty() {
+                warn!("No factors found for expression {expr}");
+            } else {
+                info!(
+                    "Found factors of expression {expr}: {}",
+                    factors.iter().join(", ")
+                );
             }
-            None
-        }).collect::<Vec<_>>();
-        factors.sort_unstable();
-        factors.dedup();
-        if factors.is_empty() {
-            warn!("No factors found for expression {expr}");
-        } else {
-            info!(
-            "Found factors of expression {expr}: {}",
-            factors.iter().join(", ")
-        );
-        }
-        Ok::<_,!>(factors.into_boxed_slice())
-    }).unwrap()
+            Ok::<_, !>(factors.into_boxed_slice())
+        })
+        .unwrap()
 }
 
 #[cfg(test)]
