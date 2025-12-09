@@ -27,6 +27,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::{Preferences, factor};
+use yamaquasi::Verbosity::Silent;
 use crate::algebraic::ComplexFactor::{AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial};
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
@@ -1582,8 +1583,10 @@ pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<Nume
         if input <= 1 << 85 {
             factorize128(input)
         } else {
+            let mut prefs = Preferences::default();
+            prefs.verbosity = Silent;
             let mut factors = BTreeMap::new();
-            for factor in factor(input.into(), Siqs, &Preferences::default()).unwrap() {
+            for factor in factor(input.into(), Siqs, &prefs).unwrap() {
                 *factors
                     .entry(NumericFactor::try_from(factor).unwrap())
                     .or_insert(0) += 1;
