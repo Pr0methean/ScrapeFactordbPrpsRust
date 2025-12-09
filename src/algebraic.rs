@@ -2166,12 +2166,10 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             let (factor, power) = new_terms.into_iter().next().unwrap();
             if power == 1 {
                 Some(factor)
+            } else if terms.len() == 1 && terms.first_key_value() == Some((&factor, &power)) {
+                None
             } else {
-                if terms.len() == 1 && terms.first_key_value() == Some((&factor, &power)) {
-                    None
-                } else {
-                    Some(Factor::multiply(once((factor, power))))
-                }
+                Some(Factor::multiply(once((factor, power))))
             }
         }
         _ => if new_terms == *terms {
