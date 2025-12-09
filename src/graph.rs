@@ -499,7 +499,7 @@ fn compare_by_vertex_id(data: &mut FactorData, left_id: VertexId, right_id: Vert
     compare(
         &data.number_facts_map,
         left_id,
-        &left,
+        left,
         right_id,
         right,
         &mut data.deleted_synonyms,
@@ -766,7 +766,7 @@ pub async fn find_and_submit_factors(
             }
             _ => {}
         }
-        match http.try_report_factor(Id(id), &factor).await {
+        match http.try_report_factor(Id(id), factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
                 replace_with_or_abort(
@@ -1415,7 +1415,7 @@ async fn add_factors_to_graph(
                 facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms).checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(&listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
-                    let factor = Factor::from(factor_digits_or_expr).into();
+                    let factor = Factor::from(factor_digits_or_expr);
                     let (subfactor_vid, is_new) = add_factor_node(
                         data,
                         factor,

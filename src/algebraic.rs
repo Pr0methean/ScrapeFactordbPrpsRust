@@ -638,11 +638,11 @@ impl From<FactorBeingParsed> for Factor {
             FactorBeingParsed::BigNumber(n) => Factor::BigNumber(n),
             FactorBeingParsed::ElidedNumber(n) => ElidedNumber(n),
             FactorBeingParsed::AddSub { left, right, subtract } =>
-                Complex(AddSub { left: Factor::from(*left).into(), right: Factor::from(*right).into(), subtract }.into()),
+                Complex(AddSub { left: Factor::from(*left), right: Factor::from(*right), subtract }.into()),
             FactorBeingParsed::Multiply { terms } =>
-                Complex(Multiply { terms: terms.into_iter().map(|(term, power)| (Factor::from(term).into(), power)).collect() }.into()),
-            FactorBeingParsed::Divide { left, right } => Complex(Divide { left: Factor::from(*left).into(), right: right.into_iter().map(|(term, power)| (Factor::from(term).into(), power)).collect() }.into()),
-            FactorBeingParsed::Power { base, exponent } => Complex(Power { base: Factor::from(*base).into(), exponent: Factor::from(*exponent) }.into()),
+                Complex(Multiply { terms: terms.into_iter().map(|(term, power)| (Factor::from(term), power)).collect() }.into()),
+            FactorBeingParsed::Divide { left, right } => Complex(Divide { left: Factor::from(*left), right: right.into_iter().map(|(term, power)| (Factor::from(term), power)).collect() }.into()),
+            FactorBeingParsed::Power { base, exponent } => Complex(Power { base: Factor::from(*base), exponent: Factor::from(*exponent) }.into()),
             FactorBeingParsed::Fibonacci(term) => Complex(Fibonacci(Factor::from(*term)).into()),
             FactorBeingParsed::Lucas(term) => Complex(Lucas(Factor::from(*term)).into()),
             FactorBeingParsed::Factorial(term) => Complex(Factorial(Factor::from(*term)).into()),
@@ -700,23 +700,23 @@ peg::parser! {
         let mut x = x;
         let mut y = y;
         if let FactorBeingParsed::Multiply { ref mut terms, .. } = x {
-            *terms.entry(y.into()).or_insert(0) += 1;
+            *terms.entry(y).or_insert(0) += 1;
             x
         } else if let FactorBeingParsed::Multiply { ref mut terms, .. } = y {
-            *terms.entry(x.into()).or_insert(0) += 1;
+            *terms.entry(x).or_insert(0) += 1;
             y
         } else if x == y {
-            FactorBeingParsed::Multiply { terms: [(x.into(), 2)].into() }
+            FactorBeingParsed::Multiply { terms: [(x, 2)].into() }
         } else {
-            FactorBeingParsed::Multiply { terms: [(x.into(), 1), (y.into(), 1)].into() }
+            FactorBeingParsed::Multiply { terms: [(x, 1), (y, 1)].into() }
         }
       }
       --
       x:@ "^" y:(@) { FactorBeingParsed::Power { base: x.into(), exponent: y.into() } }
       --
       x:@ "^" y:number() {
-                if let Some(y_numeric) = evaluate_as_numeric(&Factor::from(y.clone()).into()).and_then(|y| NumberLength::try_from(y).ok()) {
-                  FactorBeingParsed::Multiply { terms: [(x.into(), y_numeric)].into() }
+                if let Some(y_numeric) = evaluate_as_numeric(&Factor::from(y.clone())).and_then(|y| NumberLength::try_from(y).ok()) {
+                  FactorBeingParsed::Multiply { terms: [(x, y_numeric)].into() }
                 } else {
                   FactorBeingParsed::Power { base: x.into(), exponent: y.into() }
                 }
@@ -727,7 +727,7 @@ peg::parser! {
                     let hashes = y.len();
                     let mut output = x;
                     for _ in 0..(hashes >> 1) {
-                        output = FactorBeingParsed::Primorial(FactorBeingParsed::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_numeric(&Factor::from(output).into()).unwrap() as u64)) as NumericFactor).into());
+                        output = FactorBeingParsed::Primorial(FactorBeingParsed::Numeric(SIEVE.with_borrow_mut(|sieve| sieve.nth_prime(evaluate_as_numeric(&Factor::from(output)).unwrap() as u64)) as NumericFactor).into());
                     }
                     if !hashes.is_multiple_of(2) {
                         output = FactorBeingParsed::Primorial(output.into())
@@ -821,7 +821,7 @@ impl Factor {
     }
 
     #[inline]
-    pub fn may_be_proper_divisor_of(self: &Self, other: &Factor) -> bool {
+    pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
         fn product_may_be_divisor_of(
             terms: &BTreeMap<Factor, NumberLength>,
             other: &Factor,
@@ -966,7 +966,7 @@ impl From<&str> for Factor {
             .map(Factor::from)
             .unwrap_or_else(|e| {
                 error!("Error parsing expression {value}: {e}");
-                UnknownExpression(value.into()).into()
+                UnknownExpression(value.into())
             })
     }
 }
@@ -1082,7 +1082,7 @@ fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Factor>
         SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
             .copied()
-            .map(|x| Numeric(x).into())
+            .map(Numeric)
             .collect()
     } else if term.is_multiple_of(2) {
         let mut factors = fibonacci_factors(term >> 1, subset_recursion);
@@ -1118,7 +1118,7 @@ fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Factor> {
         SMALL_LUCAS_FACTORS[term as usize]
             .iter()
             .copied()
-            .map(|x| Numeric(x).into())
+            .map(Numeric)
             .collect()
     } else if !subset_recursion {
         vec![Complex(Lucas(Numeric(term)).into())]
@@ -1254,7 +1254,7 @@ pub fn to_like_powers(
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
                     *term = Multiply {
-                        terms: [(Numeric(a).into(), n as NumberLength)].into(),
+                        terms: [(Numeric(a), n as NumberLength)].into(),
                     }
                     .into();
                     Some(n)
@@ -1379,7 +1379,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
     {
         return product_numeric
             .div_exact(divisor_numeric)
-            .map(|divided| Numeric(divided).into());
+            .map(Numeric);
     }
     match *product {
         Complex(ref c) => match **c {
@@ -1458,7 +1458,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     .collect::<Option<Vec<_>>>()?
                     .into_iter()
                     .product();
-                Some(Numeric(product_numeric.div_exact(divisor_numeric)?).into())
+                Some(Numeric(product_numeric.div_exact(divisor_numeric)?))
             }
             Divide {
                 ref left,
@@ -1478,7 +1478,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     while let Some(divisor) = divisor.div_exact(new_term) {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(Factorial(Numeric(new_term).into()).into()));
+                            return Some(simplify(Factorial(Numeric(new_term)).into()));
                         }
                     }
                 }
@@ -1497,7 +1497,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(Primorial(Numeric(new_term).into()).into()));
+                            return Some(simplify(Primorial(Numeric(new_term)).into()));
                         }
                     }
                 }
@@ -1536,7 +1536,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                         n_reduced = &n_reduced[0..(n_reduced.len() - 1)];
                         d_reduced /= 10;
                     }
-                    Some(Numeric(d_reduced).into())
+                    Some(Numeric(d_reduced))
                 }
                 Factor::BigNumber(ref d) => {
                     let mut d_reduced = d.as_ref();
@@ -1569,7 +1569,7 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
         }
         return factor_numeric
             .nth_root_exact(root)
-            .map(|x| Numeric(x).into());
+            .map(Numeric);
     }
     if let Complex(ref c) = *factor {
         match **c {
@@ -1580,7 +1580,7 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
                 if evaluate_as_numeric(base) == Some(1) {
                     return Some(Factor::one());
                 }
-                return if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
+                if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
                     && let Some(reduced_exponent) = exponent_numeric.div_exact(root.into())
                 {
                     Some(
@@ -1591,11 +1591,11 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
                     )
                 } else {
                     None
-                };
+                }
             }
             Multiply { ref terms } => {
                 let new_terms = nth_root_of_product(terms, root)?;
-                return Some(simplify(Multiply { terms: new_terms }.into()));
+                Some(simplify(Multiply { terms: new_terms }.into()))
             }
             Divide {
                 ref left,
@@ -1603,13 +1603,13 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
             } => {
                 let new_left = nth_root_exact(left, root)?;
                 let new_right = nth_root_of_product(right, root)?;
-                return Some(simplify(
+                Some(simplify(
                     Divide {
                         left: new_left,
                         right: new_right,
                     }
                         .into(),
-                ));
+                ))
             }
             _ => None
         }
@@ -1639,7 +1639,7 @@ pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Box<[Factor]> {
     debug_assert_ne!(input, 0);
     find_raw_factors_of_numeric(input)
         .into_iter()
-        .flat_map(|(factor, power)| repeat_n(Numeric(factor).into(), power))
+        .flat_map(|(factor, power)| repeat_n(Numeric(factor), power))
         .collect()
 }
 
@@ -1831,7 +1831,7 @@ fn estimate_log10_of_product(
             x => estimate_log10_internal(
                 &Power {
                     base: term.clone(),
-                    exponent: Numeric(x as NumericFactor).into(),
+                    exponent: Numeric(x as NumericFactor),
                 }
                 .into(),
             ),
@@ -2008,7 +2008,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                     let (term, exponent) = if let Numeric(n) = *term {
                         let (factored_term, factored_exponent) = factor_power(n, *exponent);
                         if factored_term != n {
-                            (Numeric(factored_term).into(), factored_exponent)
+                            (Numeric(factored_term), factored_exponent)
                         } else {
                             (term.clone(), *exponent)
                         }
@@ -2082,8 +2082,8 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                             if gcd > 1
                                 && let Some(gcd_root) = gcd.nth_root_exact(exponent)
                             {
-                                new_left = Numeric(l / gcd).into();
-                                term = Numeric(r / gcd_root).into();
+                                new_left = Numeric(l / gcd);
+                                term = Numeric(r / gcd_root);
                             }
                         }
                         *cloned_right.entry(simplified).or_insert(0) +=
@@ -2121,8 +2121,8 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                         let (factored_base, factored_exponent) =
                             factor_power(new_base_numeric, new_exponent_numeric);
                         if factored_exponent != new_exponent_numeric {
-                            new_base = Numeric(factored_base).into();
-                            new_exponent = Numeric(factored_exponent as NumericFactor).into();
+                            new_base = Numeric(factored_base);
+                            new_exponent = Numeric(factored_exponent as NumericFactor);
                         }
                     }
                 }
@@ -2159,7 +2159,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                     }
                     Ordering::Equal => {
                         return if subtract {
-                            Numeric(0).into()
+                            Numeric(0)
                         } else {
                             simplify(
                                 Multiply {
@@ -2178,14 +2178,14 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                 }
                     .into();
                 evaluate_as_numeric(&result)
-                    .map(|x| Numeric(x).into())
+                    .map(Numeric)
                     .unwrap_or(result)
             }
             _ => expr
         }
         _ => {
             if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
-                Numeric(expr_numeric).into()
+                Numeric(expr_numeric)
             } else {
                 expr
             }
@@ -2376,7 +2376,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     let mut factors = Vec::new();
                                     for i in 2..=input {
                                         if is_prime(i) {
-                                            factors.push(Numeric(i).into());
+                                            factors.push(Numeric(i));
                                         }
                                     }
                                     factors.into_boxed_slice()
@@ -2485,7 +2485,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     let mut factors = find_common_factors(&left, &right);
                                     for prime in SMALL_PRIMES {
                                         let mut power = prime as NumericFactor;
-                                        let prime_factor: Factor = Numeric(power).into();
+                                        let prime_factor: Factor = Numeric(power);
                                         while modulo_as_numeric(expr, power) == Some(0) {
                                             factors.push(prime_factor.clone());
                                             let Some(new_power) =
@@ -2623,7 +2623,7 @@ fn find_common_factors(expr1: &Factor, expr2: &Factor) -> Vec<Factor> {
 #[inline(always)]
 pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
     let cached = UNIQUE_FACTOR_CACHE.get(expr);
-    return match cached {
+    match cached {
         Some(cached) => cached,
         None => {
             let expr = simplify(expr.clone());

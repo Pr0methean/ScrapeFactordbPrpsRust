@@ -406,7 +406,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
-            return Some(Factor::from(entry_id).into());
+            return Some(Factor::from(entry_id));
         }
         if let Some(response) = self.expression_form_cache.get(&entry_id) {
             info!("Expression-form cache hit for {entry_id}");
@@ -494,7 +494,7 @@ impl FactorDbClient for RealFactorDbClient {
                     let factors = {
                         let mut factors: Vec<_> = factors
                             .into_iter()
-                            .map(|(factor, _exponent)| Factor::from(factor.as_str()).into())
+                            .map(|(factor, _exponent)| Factor::from(factor.as_str()))
                             .collect();
                         factors.sort_unstable();
                         factors.dedup();
