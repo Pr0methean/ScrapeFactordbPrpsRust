@@ -663,6 +663,9 @@ pub struct LocalFactorData {
 type FactorCache = BasicCache<Factor, Arc<LocalFactorData>>;
 type UniqueFactorCache = BasicCache<Factor, Box<[Factor]>>;
 
+// Object pools are used to avoid discarding a thread-local cache's contents when the thread exits,
+// in case another thread started later can use them.
+
 static FACTOR_CACHE_POOL: OnceLock<Pool<FactorCache>> = OnceLock::new();
 static UNIQUE_FACTOR_CACHE_POOL: OnceLock<Pool<UniqueFactorCache>> = OnceLock::new();
 const CACHE_POOL_SIZE: usize = 16;
