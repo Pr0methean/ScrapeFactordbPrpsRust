@@ -37,6 +37,8 @@ hipstr = { version = "0.8", default-features = false, features = ["serde"] }
 futures-util = "0.3"
 peg = "0.8"
 yamaquasi = { git = "https://github.com/remyoudompheng/yamaquasi.git" }
+derivative = "2.2"
+ahash = "0.8"
 
 [dev-dependencies]
 mockall = "0.14"

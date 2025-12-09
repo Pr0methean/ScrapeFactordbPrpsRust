@@ -1,3 +1,4 @@
+use crate::BasicCache;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -7,10 +8,7 @@ use crate::monitor::Monitor;
 use crate::net::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
-use crate::{
-    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
-    MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, frame_sync,
-};
+use crate::{EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS, MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, frame_sync, create_cache};
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use async_backtrace::{framed, location};
 use atomic_time::AtomicInstant;
@@ -23,9 +21,6 @@ use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
-use quick_cache::unsync::Cache;
-use quick_cache::unsync::DefaultLifecycle;
-use quick_cache::{DefaultHashBuilder, UnitWeighter};
 use regex::{Regex, RegexBuilder};
 use reqwest::Client;
 use reqwest::Response;
@@ -73,8 +68,6 @@ impl Collector {
         out
     }
 }
-
-type BasicCache<K, V> = Cache<K, V, UnitWeighter, DefaultHashBuilder, DefaultLifecycle<K, V>>;
 
 #[cfg_attr(test, mockall::automock)]
 pub trait FactorDbClient {
@@ -186,9 +179,9 @@ impl RealFactorDbClient {
             id_and_expr_regex: id_and_expr_regex.into(),
             digits_fallback_regex: digits_fallback_regex.into(),
             expression_form_regex: expression_form_regex.into(),
-            by_id_cache: Cache::new(256),
-            by_expr_cache: Cache::new(128),
-            expression_form_cache: Cache::new(128),
+            by_id_cache: create_cache(256),
+            by_expr_cache: create_cache(128),
+            expression_form_cache: create_cache(128),
         }
     }
 

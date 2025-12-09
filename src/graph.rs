@@ -31,7 +31,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
 use gryf::adapt::Subgraph;
-use crate::algebraic::ComplexFactor::{Divide, Multiply};
+use crate::algebraic::ComplexFactor::{Multiply};
 
 pub type EntryId = u128;
 
@@ -727,11 +727,14 @@ pub async fn find_and_submit_factors(
             &data.divisibility_graph,
             root_vid,
             &mut data.deleted_synonyms,
-        ) && let ComplexFactor::Divide { ref right, .. } = **c {
-        let terms = right.clone();
+        ) && let ComplexFactor::Divide { ref right, right_hash, .. } = **c {
+        let multiply = Complex(Multiply {
+            terms_hash: right_hash,
+            terms: right.clone()
+        }.into());
         (
-            Some(terms.clone()),
-            Some(Complex(Multiply { terms }.into())),
+            Some(right.clone()),
+            Some(multiply),
         )
     } else {
         (None, None)
@@ -803,14 +806,7 @@ pub async fn find_and_submit_factors(
                     .checked_with_root_denominator = true;
                     if root_denominator.may_be_proper_divisor_of(&factor) {
                         let divided = div_exact(&factor, root_denominator).unwrap_or_else(|| {
-                            Complex(Divide {
-                                left: factor.clone(),
-                                right: Option::<&BTreeMap<_, _>>::cloned(
-                                    root_denominator_terms.as_ref(),
-                                )
-                                .unwrap(),
-                            }
-                            .into())
+                            Factor::divide(factor.clone(), root_denominator_terms.clone().unwrap().into_iter())
                         });
                         let (divided_vid, added) =
                             add_factor_node(&mut data, divided, Some(root_vid), None, http);
@@ -1147,14 +1143,7 @@ pub async fn find_and_submit_factors(
                             );
                             let divided =
                                 div_exact(factor, root_denominator).unwrap_or_else(|| {
-                                    Complex(Divide {
-                                        left: factor.clone(),
-                                        right: Option::<&BTreeMap<_, _>>::cloned(
-                                            root_denominator_terms.as_ref(),
-                                        )
-                                        .unwrap(),
-                                    }
-                                    .into())
+                                    Factor::divide(factor.clone(), root_denominator_terms.clone().unwrap().into_iter())
                                 });
                             let (divided_vid, added) =
                                 add_factor_node(&mut data, divided, Some(root_vid), None, http);
