@@ -956,12 +956,12 @@ impl From<&str> for Factor {
     #[inline(always)]
     fn from(value: &str) -> Self {
         info!("Parsing expression {value}");
-        expression_parser::arithmetic(value)
+        task::block_in_place(|| expression_parser::arithmetic(value)
             .map(Factor::from)
             .unwrap_or_else(|e| {
                 error!("Error parsing expression {value}: {e}");
                 UnknownExpression(value.into())
-            })
+            }))
     }
 }
 
