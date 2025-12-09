@@ -1619,14 +1619,19 @@ pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<Nume
 #[inline(always)]
 fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
-    let cached = FACTOR_CACHE.with(|cache|
-        cache.borrow().get(expr)?.log10_estimate.get().copied()
+    let cached = FACTOR_CACHE.with_borrow(|cache|
+        cache.get(expr)?.log10_estimate.get().copied()
     );
     match cached {
         Some(cached) => cached,
         None => {
-            if let Some(ref data) = FACTOR_CACHE.with(|cache| cache.borrow().get(expr).cloned()) && let Some(Some(numeric)) = data.eval_as_numeric.get().copied() {
-                return *data.log10_estimate.get_or_init(|| log10_bounds(numeric));
+            if let Some(log10_bounds) = FACTOR_CACHE.with_borrow_mut(|cache| {
+                let data = cache.get_mut(expr)?;
+                let log10_bounds = log10_bounds(data.eval_as_numeric.get().copied()??);
+                data.log10_estimate.get_or_init(|| log10_bounds);
+                Some(log10_bounds)
+            }) {
+                return log10_bounds;
             }
             let bounds = match *expr {
                 Numeric(n) => log10_bounds(n),
@@ -1741,7 +1746,7 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                 }
                 UnknownExpression(_) => (0, NumberLength::MAX),
             };
-            FACTOR_CACHE.with(|cache| if let Ok(Some(facts)) = cache.borrow_mut().get_or_insert_with(expr, || Ok::<_, !>(Default::default())) {
+            FACTOR_CACHE.with_borrow_mut(|cache| if let Ok(Some(facts)) = cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default())) {
                 facts.log10_estimate.get_or_init(|| bounds);
             });
             bounds
@@ -2185,8 +2190,8 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
     if let Numeric(n) = expr {
         return Some(*n);
     }
-    let cached = FACTOR_CACHE.with(|cache|
-        cache.borrow().get(expr)?.eval_as_numeric.get().copied());
+    let cached = FACTOR_CACHE.with_borrow(|cache|
+        cache.get(expr)?.eval_as_numeric.get().copied());
     match cached {
         Some(numeric) => numeric,
         None => {
@@ -2306,8 +2311,8 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                 UnknownExpression(_) => None,
             };
             FACTOR_CACHE
-                .with(|cache|
-                    if let Ok(Some(facts)) = cache.borrow_mut().get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
+                .with_borrow_mut(|cache|
+                    if let Ok(Some(facts)) = cache.get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
                         facts.eval_as_numeric.get_or_init(|| numeric);
                     });
             numeric
@@ -2320,7 +2325,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
     if let Numeric(n) = expr && *n < 1<<64 {
         return find_factors_of_numeric(*n);
     }
-    let cached = FACTOR_CACHE.with(|cache| cache.borrow().get(expr)?.factors.get().cloned());
+    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr)?.factors.get().cloned());
     match cached {
         Some(cached) => cached,
         None => {
@@ -2529,8 +2534,8 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                     }
                 })
             });
-            FACTOR_CACHE.with(|cache| {
-                if let Ok(Some(facts)) = cache.borrow_mut().get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
+            FACTOR_CACHE.with_borrow_mut(|cache| {
+                if let Ok(Some(facts)) = cache.get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
                     facts.factors.get_or_init(|| factors.clone());
                 }
             });
@@ -2614,7 +2619,7 @@ fn find_common_factors(expr1: &Factor, expr2: &Factor) -> Vec<Factor> {
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
-    let cached = UNIQUE_FACTOR_CACHE.with(|cache| cache.borrow().get(expr).cloned());
+    let cached = UNIQUE_FACTOR_CACHE.with_borrow(|cache| cache.get(expr).cloned());
     match cached {
         Some(cached) => cached,
         None => {
@@ -2642,7 +2647,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 );
             }
             let factors = factors.into_boxed_slice();
-            UNIQUE_FACTOR_CACHE.with(|cache| cache.borrow_mut().insert(expr.clone(), factors.clone()));
+            UNIQUE_FACTOR_CACHE.with_borrow_mut(|cache| cache.insert(expr.clone(), factors.clone()));
             factors
         }
     }
