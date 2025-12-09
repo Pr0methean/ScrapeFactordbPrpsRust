@@ -955,6 +955,7 @@ impl From<BigNumber> for Factor {
 impl From<&str> for Factor {
     #[inline(always)]
     fn from(value: &str) -> Self {
+        info!("Parsing expression {value}");
         expression_parser::arithmetic(value)
             .map(Factor::from)
             .unwrap_or_else(|e| {
