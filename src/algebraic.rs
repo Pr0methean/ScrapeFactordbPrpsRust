@@ -956,6 +956,9 @@ impl From<BigNumber> for Factor {
 impl From<&str> for Factor {
     #[inline(always)]
     fn from(value: &str) -> Self {
+        if let Ok(numeric) = value.parse() {
+            return Numeric(numeric);
+        }
         info!("Parsing expression {value}");
         task::block_in_place(|| expression_parser::arithmetic(value)
             .map(Factor::from)
