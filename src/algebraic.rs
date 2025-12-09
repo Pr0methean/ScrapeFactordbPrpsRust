@@ -3,7 +3,7 @@ use derivative::Derivative;
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
 use crate::graph::EntryId;
 use crate::net::BigNumber;
-use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, write_bignum, create_cache, hash};
+use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, write_bignum, create_cache, hash, BasicCache};
 use async_backtrace::location;
 use hipstr::HipStr;
 use itertools::Itertools;
@@ -15,7 +15,6 @@ use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
-use quick_cache::unsync::Cache;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
@@ -26,6 +25,7 @@ use std::hint::unreachable_unchecked;
 use std::iter::{once, repeat_n};
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
+use object_pool::{Pool, Reusable};
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::{Preferences, factor};
@@ -660,9 +660,16 @@ pub struct LocalFactorData {
     factors: OnceLock<Box<[Factor]>>,
 }
 
+type FactorCache = BasicCache<Factor, Arc<LocalFactorData>>;
+type UniqueFactorCache = BasicCache<Factor, Box<[Factor]>>;
+
+static FACTOR_CACHE_POOL: OnceLock<Pool<FactorCache>> = OnceLock::new();
+static UNIQUE_FACTOR_CACHE_POOL: OnceLock<Pool<UniqueFactorCache>> = OnceLock::new();
+const CACHE_POOL_SIZE: usize = 8;
+
 thread_local! {
-    static FACTOR_CACHE: RefCell<Cache<Factor, Arc<LocalFactorData>>> = RefCell::new(create_cache(1 << 20));
-    static UNIQUE_FACTOR_CACHE: RefCell<Cache<Factor, Box<[Factor]>>> = RefCell::new(create_cache(1 << 14));
+    static FACTOR_CACHE: RefCell<Reusable<'static, FactorCache>> = RefCell::new(FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 20))).try_pull().unwrap());
+    static UNIQUE_FACTOR_CACHE: RefCell<Reusable<'static, UniqueFactorCache>> = RefCell::new(UNIQUE_FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 14))).try_pull().unwrap());
 }
 
 
