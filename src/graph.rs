@@ -15,7 +15,7 @@ use crate::net::{FactorDbClient, NumberStatus, NumberStatusExt, ProcessedStatusA
 use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use async_backtrace::framed;
 use gryf::Graph;
-use gryf::algo::ShortestPaths;
+use gryf::algo::{Connected};
 use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
@@ -30,6 +30,8 @@ use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
+use gryf::adapt::Subgraph;
+use gryf::algo::connected::ConnectedBuilder;
 use crate::algebraic::ComplexFactor::{Divide, Multiply};
 
 pub type EntryId = u128;
@@ -374,12 +376,10 @@ pub fn is_known_factor(
             &mut data.deleted_synonyms
         ),
         Some(Direct) | Some(Transitive)
-    ) || ShortestPaths::on(&data.divisibility_graph)
-        .edge_weight_fn(|edge| if *edge == NotFactor { 1usize } else { 0usize })
-        .goal(factor_vid)
-        .run(composite_vid)
-        .ok()
-        .and_then(|paths| paths.dist(factor_vid).copied())
+    ) || Connected::on(Subgraph::new(data.divisibility_graph)
+            .filter_edge(|edge_id, graph, _| *graph.edge(edge_id) != NotFactor))
+        .between(&factor_vid, &composite_vid)
+        .run()
         == Some(0)
 }
 
