@@ -24,7 +24,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::repeat_n;
 use std::mem::swap;
 use std::sync::{Arc, LazyLock, OnceLock};
-use arc_interner::ArcIntern;
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::{Preferences, factor};
@@ -622,7 +621,7 @@ pub enum Factor {
     BigNumber(BigNumber),
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
-    Complex(ArcIntern<ComplexFactor>),
+    Complex(Arc<ComplexFactor>),
 }
 
 impl From<FactorBeingParsed> for Factor {
@@ -876,7 +875,7 @@ impl Factor {
                             }
                             _ => {}
                         }
-                        if (2..=term).any(|i| !ArcIntern::from(Numeric(i)).may_be_proper_divisor_of(other)) {
+                        if (2..=term).any(|i| !Numeric(i).may_be_proper_divisor_of(other)) {
                             return false;
                         }
                     }
@@ -903,7 +902,7 @@ impl Factor {
                             _ => {}
                         }
                         if (2..=term).any(|i| {
-                            is_prime(i) && !ArcIntern::from(Numeric(i)).may_be_proper_divisor_of(other)
+                            is_prime(i) && !Numeric(i).may_be_proper_divisor_of(other)
                         }) {
                             return false;
                         }
