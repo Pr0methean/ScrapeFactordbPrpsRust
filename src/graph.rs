@@ -31,7 +31,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
 use gryf::adapt::Subgraph;
-use gryf::algo::connected::ConnectedBuilder;
 use crate::algebraic::ComplexFactor::{Divide, Multiply};
 
 pub type EntryId = u128;
@@ -56,6 +55,18 @@ pub struct FactorData {
     pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
     pub vertex_id_by_expr: BTreeMap<Factor, VertexId>,
     pub vertex_id_by_entry_id: BTreeMap<EntryId, VertexId>,
+}
+
+impl Default for FactorData {
+    fn default() -> Self {
+        FactorData {
+            divisibility_graph: Graph::new_directed_in(AdjMatrix::new()).stabilize(),
+            deleted_synonyms: BTreeMap::new(),
+            number_facts_map: BTreeMap::new(),
+            vertex_id_by_entry_id: BTreeMap::new(),
+            vertex_id_by_expr: BTreeMap::new(),
+        }
+    }
 }
 
 pub fn rule_out_divisibility(data: &mut FactorData, nonfactor: VertexId, dest: VertexId) {
@@ -368,7 +379,7 @@ pub fn is_known_factor(
     factor_vid: VertexId,
     composite_vid: VertexId,
 ) -> bool {
-    matches!(
+    factor_vid != composite_vid && (matches!(
         get_edge(
             &data.divisibility_graph,
             factor_vid,
@@ -376,11 +387,13 @@ pub fn is_known_factor(
             &mut data.deleted_synonyms
         ),
         Some(Direct) | Some(Transitive)
-    ) || Connected::on(Subgraph::new(data.divisibility_graph)
-            .filter_edge(|edge_id, graph, _| *graph.edge(edge_id) != NotFactor))
+    ) || Connected::on(&Subgraph::new(&data.divisibility_graph)
+            .filter_edge(|edge_id, graph, _|
+                graph.edge(edge_id).copied() != Some(NotFactor)))
         .between(&factor_vid, &composite_vid)
+        .strong()
         .run()
-        == Some(0)
+        .is())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -612,13 +625,7 @@ pub async fn find_and_submit_factors(
     skip_looking_up_known: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
-    let mut data = FactorData {
-        divisibility_graph: Graph::new_directed_in(AdjMatrix::new()).stabilize(),
-        deleted_synonyms: BTreeMap::new(),
-        number_facts_map: BTreeMap::new(),
-        vertex_id_by_entry_id: BTreeMap::new(),
-        vertex_id_by_expr: BTreeMap::new(),
-    };
+    let mut data = FactorData::default();
     let root_factor = Factor::from(digits_or_expr.as_str());
     let (root_vid, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
         add_factor_node(
@@ -1605,35 +1612,82 @@ pub fn facts_of_mut<'a>(
         .unwrap()
 }
 
-#[test]
-fn test_find_and_submit() {
-    use crate::RealFactorDbClient;
-    use crate::monitor::Monitor;
+#[cfg(test)]
+mod tests {
     use nonzero::nonzero;
-    use rand::RngCore;
-    use rand::rng;
-    use std::env::temp_dir;
-    use std::fs::File;
-    use tokio::runtime::Runtime;
-    use tokio::sync::Mutex;
+    use crate::algebraic::Factor;
+    use crate::FAILED_U_SUBMISSIONS_OUT;
+    use crate::graph::{add_factor_node, find_and_submit_factors, is_known_factor, propagate_divisibility, FactorData};
+    use crate::monitor::Monitor;
+    use crate::net::RealFactorDbClient;
 
-    simple_log::console("info").unwrap();
-    let runtime = Runtime::new().unwrap();
-    runtime.block_on(async {
-        FAILED_U_SUBMISSIONS_OUT
-            .get_or_init(async || {
-                Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
-            })
-            .await;
-        let (_channel, shutdown) = Monitor::new();
-        let mut http = RealFactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
-        find_and_submit_factors(
-            &mut http,
-            11_000_000_004_420_33401,
-            format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19).into(),
-            true,
-        )
-        .await
-    });
-    runtime.shutdown_background();
+    #[test]
+    fn test_is_known_factor() {
+        // TODO: Make this a mock
+        let (_, monitor) =  Monitor::new();
+        let http = RealFactorDbClient::new(nonzero!(10000u32), 0, monitor);
+
+        let mut data = FactorData::default();
+        let (node1, added) = add_factor_node(&mut data, Factor::from("2^16-1"), None, None, &http);
+        assert!(added);
+        let (node2, added) = add_factor_node(&mut data, Factor::from("2^8-1"), Some(node1), None, &http);
+        assert!(added);
+        let (node3, added) = add_factor_node(&mut data, Factor::from("2^4-1"), Some(node1), None, &http);
+        assert!(added);
+        let (node4, added) = add_factor_node(&mut data, Factor::from("2^4+1"), Some(node1), None, &http);
+        assert!(added);
+        let (node5, added) = add_factor_node(&mut data, Factor::from("2^8+1"), Some(node1), None, &http);
+        assert!(added);
+        propagate_divisibility(&mut data, node2, node1, false);
+        propagate_divisibility(&mut data, node3, node2, false);
+        propagate_divisibility(&mut data, node4, node2, false);
+        propagate_divisibility(&mut data, node5, node1, false);
+        assert!(!is_known_factor(&mut data, node1, node1));
+        assert!(is_known_factor(&mut data, node2, node1));
+        assert!(is_known_factor(&mut data, node3, node1));
+        assert!(is_known_factor(&mut data, node4, node1));
+        assert!(is_known_factor(&mut data, node5, node1));
+        assert!(!is_known_factor(&mut data, node1, node2));
+        assert!(!is_known_factor(&mut data, node2, node2));
+        assert!(is_known_factor(&mut data, node3, node2));
+        assert!(is_known_factor(&mut data, node4, node2));
+        for divisibility_leaf in [node3, node4, node5] {
+            for other_node in [node1, node2, node3, node4, node5] {
+                assert!(!is_known_factor(&mut data, other_node, divisibility_leaf));
+            }
+        }
+    }
+
+    #[test]
+    fn test_find_and_submit() {
+        use crate::RealFactorDbClient;
+        use crate::monitor::Monitor;
+        use nonzero::nonzero;
+        use rand::RngCore;
+        use rand::rng;
+        use std::env::temp_dir;
+        use std::fs::File;
+        use tokio::runtime::Runtime;
+        use tokio::sync::Mutex;
+
+        simple_log::console("info").unwrap();
+        let runtime = Runtime::new().unwrap();
+        runtime.block_on(async {
+            FAILED_U_SUBMISSIONS_OUT
+                .get_or_init(async || {
+                    Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
+                })
+                .await;
+            let (_channel, shutdown) = Monitor::new();
+            let mut http = RealFactorDbClient::new(nonzero!(10_000u32), 2, shutdown);
+            find_and_submit_factors(
+                &mut http,
+                11_000_000_004_420_33401,
+                format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19).into(),
+                true,
+            )
+                .await
+        });
+        runtime.shutdown_background();
+    }
 }
