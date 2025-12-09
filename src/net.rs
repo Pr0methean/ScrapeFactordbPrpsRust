@@ -40,7 +40,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use arc_interner::ArcIntern;
 use tokio::sync::Semaphore;
 use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep, sleep_until};
@@ -93,7 +92,7 @@ pub trait FactorDbClient {
     ) -> Option<ResourceLimits>;
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
     -> impl Iterator<Item = (EntryId, &'a str)>;
-    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<ArcIntern<Factor>>;
+    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor>;
     async fn known_factors_as_digits(
         &mut self,
         id: NumberSpecifier,
@@ -124,8 +123,8 @@ pub struct RealFactorDbClient {
     digits_fallback_regex: Arc<Regex>,
     expression_form_regex: Arc<Regex>,
     by_id_cache: BasicCache<EntryId, ProcessedStatusApiResponse>,
-    by_expr_cache: BasicCache<ArcIntern<Factor>, ProcessedStatusApiResponse>,
-    expression_form_cache: BasicCache<EntryId, ArcIntern<Factor>>,
+    by_expr_cache: BasicCache<Factor, ProcessedStatusApiResponse>,
+    expression_form_cache: BasicCache<EntryId, Factor>,
 }
 
 pub struct ResourceLimits {
@@ -405,7 +404,7 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<ArcIntern<Factor>> {
+    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
             return Some(Factor::from(entry_id).into());
         }
@@ -416,15 +415,14 @@ impl FactorDbClient for RealFactorDbClient {
         let response = self
             .try_get_and_decode(&format!("https://factordb.com/index.php?id={entry_id}"))
             .await?;
-        let expression_form: ArcIntern<Factor> = Factor::from(
+        let expression_form = Factor::from(
             self.expression_form_regex
                 .captures(&response)?
                 .get(1)?
                 .as_str(),
-        )
-        .into();
+        );
         self.expression_form_cache
-            .insert(entry_id, ArcIntern::clone(&expression_form));
+            .insert(entry_id, expression_form.clone());
         Some(expression_form)
     }
 
@@ -496,7 +494,7 @@ impl FactorDbClient for RealFactorDbClient {
                     let factors = {
                         let mut factors: Vec<_> = factors
                             .into_iter()
-                            .map(|(factor, _exponent)| Factor::from(factor).into())
+                            .map(|(factor, _exponent)| Factor::from(factor.as_str()).into())
                             .collect();
                         factors.sort_unstable();
                         factors.dedup();
@@ -526,9 +524,9 @@ impl FactorDbClient for RealFactorDbClient {
                                     .as_str()
                                     .chars()
                                     .filter(char::is_ascii_digit)
-                                    .collect::<String>(),
+                                    .collect::<String>()
+                                    .as_str(),
                             )
-                            .into(),
                         ]
                     })
                     .unwrap_or_default();
@@ -548,7 +546,7 @@ impl FactorDbClient for RealFactorDbClient {
             }
             if let Some(expr) = expr_key {
                 self.by_expr_cache
-                    .insert(ArcIntern::clone(expr), processed.clone());
+                    .insert(expr.clone(), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -562,7 +560,7 @@ impl FactorDbClient for RealFactorDbClient {
         let numeric_or_id = match id {
             Id(entry_id) => Some(*entry_id),
             Expression(x) => {
-                if let Numeric(n) = **x {
+                if let Numeric(n) = *x {
                     Some(n)
                 } else {
                     None
@@ -609,7 +607,7 @@ impl FactorDbClient for RealFactorDbClient {
         factor: &Factor,
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
-            Expression(ref x) => match **x {
+            Expression(ref x) => match *x {
                 Numeric(_) => return AlreadyFullyFactored,
                 _ => (None, Some(x.to_owned_string())),
             },
@@ -717,7 +715,7 @@ impl<T: Into<HipStr<'static>>> From<T> for BigNumber {
 #[derive(Clone, Default, Debug)]
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
-    pub factors: Box<[ArcIntern<Factor>]>,
+    pub factors: Box<[Factor]>,
     pub id: Option<EntryId>,
 }
 

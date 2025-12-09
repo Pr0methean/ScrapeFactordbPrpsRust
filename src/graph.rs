@@ -1,3 +1,5 @@
+use crate::Factor::Complex;
+use crate::algebraic::ComplexFactor;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -28,7 +30,7 @@ use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
-use arc_interner::ArcIntern;
+use crate::algebraic::ComplexFactor::{Divide, Multiply};
 
 pub type EntryId = u128;
 
@@ -40,17 +42,17 @@ pub enum Divisibility {
 }
 
 pub type DivisibilityGraph = Graph<
-    ArcIntern<Factor>,
+    Factor,
     Divisibility,
     Directed,
-    Stable<AdjMatrix<ArcIntern<Factor>, Divisibility, Directed, DefaultId>>,
+    Stable<AdjMatrix<Factor, Divisibility, Directed, DefaultId>>,
 >;
 
 pub struct FactorData {
     pub divisibility_graph: DivisibilityGraph,
     pub deleted_synonyms: BTreeMap<VertexId, VertexId>,
     pub number_facts_map: BTreeMap<VertexId, NumberFacts>,
-    pub vertex_id_by_expr: BTreeMap<ArcIntern<Factor>, VertexId>,
+    pub vertex_id_by_expr: BTreeMap<Factor, VertexId>,
     pub vertex_id_by_entry_id: BTreeMap<EntryId, VertexId>,
 }
 
@@ -136,7 +138,7 @@ pub fn propagate_divisibility(
 fn as_specifier(
     factor_vid: VertexId,
     data: &mut FactorData,
-    factor: Option<&ArcIntern<Factor>>,
+    factor: Option<&Factor>,
 ) -> NumberSpecifier {
     if let Some(facts) = facts_of(
         &data.number_facts_map,
@@ -159,7 +161,7 @@ fn as_specifier(
         factor
             .known_id()
             .map(Id)
-            .unwrap_or_else(|| Expression(ArcIntern::clone(factor)))
+            .unwrap_or_else(|| Expression(factor.clone()))
     }
 }
 
@@ -189,7 +191,7 @@ pub fn get_edge_mut(
 
 pub fn add_factor_node(
     data: &mut FactorData,
-    factor: ArcIntern<Factor>,
+    factor: Factor,
     root_vid: Option<VertexId>,
     mut entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
@@ -205,9 +207,9 @@ pub fn add_factor_node(
         .or(matching_vid)
         .map(|x| (x, false))
         .unwrap_or_else(|| {
-            let factor_vid = data.divisibility_graph.add_vertex(ArcIntern::clone(&factor));
+            let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
             data.vertex_id_by_expr
-                .insert(ArcIntern::clone(&factor), factor_vid);
+                .insert(factor.clone(), factor_vid);
             let factor_numeric = evaluate_as_numeric(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
             let specifier = as_specifier(factor_vid, data, None);
@@ -353,7 +355,7 @@ pub fn get_vertex<'a, 'b: 'a>(
     divisibility_graph: &'b DivisibilityGraph,
     vertex_id: VertexId,
     deleted_synonyms: &'a mut BTreeMap<VertexId, VertexId>,
-) -> &'b ArcIntern<Factor> {
+) -> &'b Factor {
     divisibility_graph
         .vertex(to_real_vertex_id(vertex_id, deleted_synonyms))
         .unwrap()
@@ -463,9 +465,9 @@ impl PartialEq<Self> for NumberFacts {
 fn compare(
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
     left_id: VertexId,
-    left: &ArcIntern<Factor>,
+    left: &Factor,
     right_id: VertexId,
-    right: &ArcIntern<Factor>,
+    right: &Factor,
     deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
 ) -> Ordering {
     let left_facts = facts_of(number_facts_map, left_id, deleted_synonyms)
@@ -484,11 +486,11 @@ fn compare(
 }
 
 fn compare_by_vertex_id(data: &mut FactorData, left_id: VertexId, right_id: VertexId) -> Ordering {
-    let left = ArcIntern::clone(get_vertex(
+    let left = get_vertex(
         &data.divisibility_graph,
         left_id,
         &mut data.deleted_synonyms,
-    ));
+    );
     let right = get_vertex(
         &data.divisibility_graph,
         right_id,
@@ -506,8 +508,8 @@ fn compare_by_vertex_id(data: &mut FactorData, left_id: VertexId, right_id: Vert
 
 fn compare_by_ref(
     number_facts_map: &BTreeMap<VertexId, NumberFacts>,
-    left: &VertexRef<VertexId, ArcIntern<Factor>>,
-    right: &VertexRef<VertexId, ArcIntern<Factor>>,
+    left: &VertexRef<VertexId, Factor>,
+    right: &VertexRef<VertexId, Factor>,
     deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
 ) -> Ordering {
     compare(
@@ -617,10 +619,11 @@ pub async fn find_and_submit_factors(
         vertex_id_by_entry_id: BTreeMap::new(),
         vertex_id_by_expr: BTreeMap::new(),
     };
+    let root_factor = Factor::from(digits_or_expr.as_str());
     let (root_vid, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
         add_factor_node(
             &mut data,
-            Factor::from(digits_or_expr.clone()).into(),
+            root_factor,
             None,
             Some(id),
             http,
@@ -635,7 +638,6 @@ pub async fn find_and_submit_factors(
             warn!("{id}: Already fully factored");
             return true;
         }
-        let root_factor = Factor::from(digits_or_expr.clone()).into();
         match known_factors.len() {
             0 => add_factor_node(&mut data, root_factor, None, Some(id), http),
             _ => {
@@ -713,16 +715,16 @@ pub async fn find_and_submit_factors(
     // Simplest case: try submitting all factors as factors of the root
     // Sort backwards so that we try to submit largest factors first
     let mut any_failed_retryably = false;
-    let (root_denominator_terms, root_denominator) = if let Factor::Divide { ref right, .. } =
-        **get_vertex(
+    let (root_denominator_terms, root_denominator) = if let Complex(c) =
+        get_vertex(
             &data.divisibility_graph,
             root_vid,
             &mut data.deleted_synonyms,
-        ) {
+        ) && let ComplexFactor::Divide { ref right, .. } = **c {
         let terms = right.clone();
         (
             Some(terms.clone()),
-            Some(ArcIntern::new(Factor::Multiply { terms })),
+            Some(Complex(Multiply { terms }.into())),
         )
     } else {
         (None, None)
@@ -751,7 +753,6 @@ pub async fn find_and_submit_factors(
             // out the ID later
             continue;
         }
-        let factor = ArcIntern::clone(factor);
         match get_edge(
             &data.divisibility_graph,
             factor_vid,
@@ -780,6 +781,7 @@ pub async fn find_and_submit_factors(
                 propagate_divisibility(&mut data, factor_vid, root_vid, false);
             }
             DoesNotDivide => {
+                let factor = factor.clone();
                 rule_out_divisibility(&mut data, factor_vid, root_vid);
                 let subfactors_found = !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
                     .await
@@ -794,14 +796,14 @@ pub async fn find_and_submit_factors(
                     .checked_with_root_denominator = true;
                     if root_denominator.may_be_proper_divisor_of(&factor) {
                         let divided = div_exact(&factor, root_denominator).unwrap_or_else(|| {
-                            Factor::Divide {
-                                left: factor,
+                            Complex(Divide {
+                                left: factor.clone(),
                                 right: Option::<&BTreeMap<_, _>>::cloned(
                                     root_denominator_terms.as_ref(),
                                 )
                                 .unwrap(),
                             }
-                            .into()
+                            .into())
                         });
                         let (divided_vid, added) =
                             add_factor_node(&mut data, divided, Some(root_vid), None, http);
@@ -963,7 +965,7 @@ pub async fn find_and_submit_factors(
                 continue;
             }
             // NumericFactor entries are already fully factored
-            if let Numeric(_) = **cofactor {
+            if let Numeric(_) = cofactor {
                 debug!(
                     "{id}: Skipping submission of {factor} to {cofactor} because the number is too small"
                 );
@@ -988,7 +990,6 @@ pub async fn find_and_submit_factors(
             }
             let cofactor_lower_bound_log10 = cofactor_facts.lower_bound_log10;
             let cofactor_upper_bound_log10 = cofactor_facts.upper_bound_log10;
-            let cofactor = ArcIntern::clone(cofactor);
             if let UpToDate(ref known_factor_vids) | NotUpToDate(ref known_factor_vids) =
                 cofactor_facts.factors_known_to_factordb
                 && !known_factor_vids.is_empty()
@@ -1047,6 +1048,7 @@ pub async fn find_and_submit_factors(
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 continue;
             }
+            let cofactor = cofactor.clone();
             if is_known_factor(&mut data, cofactor_vid, factor_vid) {
                 // factor is transitively divisible by dest_factor
                 propagate_divisibility(&mut data, cofactor_vid, factor_vid, true);
@@ -1138,14 +1140,14 @@ pub async fn find_and_submit_factors(
                             );
                             let divided =
                                 div_exact(factor, root_denominator).unwrap_or_else(|| {
-                                    Factor::Divide {
-                                        left: ArcIntern::clone(factor),
+                                    Complex(Divide {
+                                        left: factor.clone(),
                                         right: Option::<&BTreeMap<_, _>>::cloned(
                                             root_denominator_terms.as_ref(),
                                         )
                                         .unwrap(),
                                     }
-                                    .into()
+                                    .into())
                                 });
                             let (divided_vid, added) =
                                 add_factor_node(&mut data, divided, Some(root_vid), None, http);
@@ -1348,7 +1350,7 @@ async fn add_factors_to_graph(
                     data,
                     Some(root_vid),
                     factor_vid,
-                    ArcIntern::clone(known_factor),
+                    known_factor.clone(),
                     http,
                 );
             }
@@ -1464,11 +1466,11 @@ async fn add_factors_to_graph(
                 data,
                 Some(root_vid),
                 factor_vid,
-                ArcIntern::clone(&expression_form),
+                expression_form.clone(),
                 http,
             );
             added.extend(added_via_equiv);
-            let factors = find_unique_factors(expression_form);
+            let factors = find_unique_factors(&expression_form);
             added.extend(factors.into_iter().flat_map(|factor| {
                 let (vertex_id, added) = add_factor_node(data, factor, Some(root_vid), None, http);
                 if added { Some(vertex_id) } else { None }
@@ -1489,7 +1491,7 @@ fn merge_equivalent_expressions(
     data: &mut FactorData,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
-    equivalent: ArcIntern<Factor>,
+    equivalent: Factor,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     let current = get_vertex(
@@ -1560,11 +1562,11 @@ fn add_factor_finder_factor_vertices_to_graph(
     entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
-    find_unique_factors(ArcIntern::clone(get_vertex(
+    find_unique_factors(get_vertex(
         &data.divisibility_graph,
         factor_vid,
         &mut data.deleted_synonyms,
-    )))
+    ))
     .into_iter()
     .map(|new_factor| {
         let entry_id = if new_factor

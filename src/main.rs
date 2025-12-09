@@ -7,7 +7,6 @@
 #![feature(iterator_try_reduce)]
 #![feature(explicit_tail_calls)]
 #![feature(never_type)]
-#![feature(arbitrary_self_types)]
 extern crate alloc;
 extern crate core;
 
@@ -50,7 +49,6 @@ use std::panic;
 use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use arc_interner::ArcIntern;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -230,7 +228,7 @@ async fn check_composite(
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier {
     Id(EntryId),
-    Expression(ArcIntern<Factor>),
+    Expression(Factor),
 }
 
 impl Display for NumberSpecifier {
