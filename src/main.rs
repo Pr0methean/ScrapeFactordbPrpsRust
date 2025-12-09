@@ -21,7 +21,7 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
-use crate::net::{FactorDbClient, ResourceLimits};
+use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
 use async_backtrace::taskdump_tree;
 use async_backtrace::ඞ::Frame;
 use async_backtrace::{Location, framed};
@@ -122,7 +122,7 @@ struct FactorSubmission<'a> {
 #[framed]
 async fn composites_while_waiting(
     end: Instant,
-    http: &mut impl FactorDbClient,
+    http: &mut impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
 ) {
@@ -150,7 +150,7 @@ async fn composites_while_waiting(
 
 #[framed]
 async fn check_composite(
-    http: &mut impl FactorDbClient,
+    http: &mut impl FactorDbClientReadIdsAndExprs,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     id: EntryId,
     digits_or_expr: HipStr<'static>,
@@ -283,7 +283,7 @@ static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[framed]
 async fn throttle_if_necessary(
-    http: &mut impl FactorDbClient,
+    http: &mut impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
@@ -360,7 +360,7 @@ async fn throttle_if_necessary(
 #[allow(clippy::async_yields_async)]
 #[framed]
 async fn queue_composites(
-    http: &impl FactorDbClient,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZero<NumberLength>>,
 ) -> JoinHandle<()> {

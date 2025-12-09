@@ -11,7 +11,7 @@ use crate::algebraic::{
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
 use crate::net::NumberStatus::{FullyFactored, Prime};
-use crate::net::{FactorDbClient, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse};
+use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse};
 use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use async_backtrace::framed;
 use gryf::Graph;
@@ -619,7 +619,7 @@ impl NumberFacts {
 
 #[framed]
 pub async fn find_and_submit_factors(
-    http: &mut impl FactorDbClient,
+    http: &mut impl FactorDbClientReadIdsAndExprs,
     id: EntryId,
     digits_or_expr: HipStr<'static>,
     skip_looking_up_known: bool,
@@ -1320,7 +1320,7 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
 
 #[framed]
 async fn add_factors_to_graph(
-    http: &mut impl FactorDbClient,
+    http: &mut impl FactorDbClientReadIdsAndExprs,
     data: &mut FactorData,
     root_vid: VertexId,
     factor_vid: VertexId,
@@ -1614,18 +1614,23 @@ pub fn facts_of_mut<'a>(
 
 #[cfg(test)]
 mod tests {
-    use nonzero::nonzero;
     use crate::algebraic::Factor;
     use crate::FAILED_U_SUBMISSIONS_OUT;
     use crate::graph::{add_factor_node, find_and_submit_factors, is_known_factor, propagate_divisibility, FactorData};
-    use crate::monitor::Monitor;
-    use crate::net::RealFactorDbClient;
 
     #[test]
     fn test_is_known_factor() {
-        // TODO: Make this a mock
-        let (_, monitor) =  Monitor::new();
-        let http = RealFactorDbClient::new(nonzero!(10000u32), 0, monitor);
+        use crate::net::MockFactorDbClient;
+        let mut http = MockFactorDbClient::new();
+        http.expect_known_factors_as_digits().never();
+        http.expect_cached_factors().return_const(None);
+        http.expect_parse_resource_limits().never();
+        http.expect_report_numeric_factor().never();
+        http.expect_retrying_get_and_decode().never();
+        http.expect_try_get_and_decode().never();
+        http.expect_try_get_expression_form().never();
+        http.expect_try_get_resource_limits().never();
+        http.expect_try_report_factor().never();
 
         let mut data = FactorData::default();
         let (node1, added) = add_factor_node(&mut data, Factor::from("2^16-1"), None, None, &http);
@@ -1638,6 +1643,7 @@ mod tests {
         assert!(added);
         let (node5, added) = add_factor_node(&mut data, Factor::from("2^8+1"), Some(node1), None, &http);
         assert!(added);
+        drop(http);
         propagate_divisibility(&mut data, node2, node1, false);
         propagate_divisibility(&mut data, node3, node2, false);
         propagate_divisibility(&mut data, node4, node2, false);

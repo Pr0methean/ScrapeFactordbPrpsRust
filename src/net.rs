@@ -76,6 +76,7 @@ impl Collector {
 
 type BasicCache<K, V> = Cache<K, V, UnitWeighter, DefaultHashBuilder, DefaultLifecycle<K, V>>;
 
+#[cfg_attr(test, mockall::automock)]
 pub trait FactorDbClient {
     async fn parse_resource_limits(
         &self,
@@ -90,8 +91,6 @@ pub trait FactorDbClient {
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
-    fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
-    -> impl Iterator<Item = (EntryId, &'a str)>;
     async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor>;
     async fn known_factors_as_digits(
         &mut self,
@@ -107,6 +106,12 @@ pub trait FactorDbClient {
         u_id: EntryId,
         factor: NumericFactor,
     ) -> ReportFactorResult;
+}
+
+/// Separates a method that mockall can't currently mock.
+pub trait FactorDbClientReadIdsAndExprs : FactorDbClient {
+    fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
+                              -> impl Iterator<Item = (EntryId, &'a str)>;
 }
 
 #[derive(Clone)]
@@ -374,34 +379,6 @@ impl FactorDbClient for RealFactorDbClient {
         self.parse_resource_limits(bases_before_next_cpu_check, &response)
             .await
     }
-
-    fn read_ids_and_exprs<'a>(
-        &self,
-        haystack: &'a str,
-    ) -> impl Iterator<Item = (EntryId, &'a str)> {
-        self.id_and_expr_regex
-            .captures_iter(haystack)
-            .flat_map(move |capture| {
-                let Some(id) = capture.get(1) else {
-                    error!("Failed to get ID for expression in\n{haystack}");
-                    return None;
-                };
-                let id = match id.as_str().parse::<EntryId>() {
-                    Ok(id) => id,
-                    Err(e) => {
-                        error!("Failed to parse ID {}: {e}", id.as_str());
-                        return None;
-                    }
-                };
-                let Some(expr) = capture.get(2) else {
-                    error!("Failed to get expression for ID {id} in\n{haystack}");
-                    return None;
-                };
-                Some((id, expr.as_str()))
-            })
-            .unique()
-    }
-
     #[inline]
     #[framed]
     async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor> {
@@ -671,6 +648,36 @@ impl FactorDbClient for RealFactorDbClient {
             Err(e) => error!("{u_id}: failed to write {factor} to failed submissions file: {e}"),
         }
         OtherError // factor that we failed to submit may still have been valid
+    }
+}
+
+impl FactorDbClientReadIdsAndExprs for RealFactorDbClient {
+
+    fn read_ids_and_exprs<'a>(
+        &self,
+        haystack: &'a str,
+    ) -> impl Iterator<Item = (EntryId, &'a str)> {
+        self.id_and_expr_regex
+            .captures_iter(haystack)
+            .flat_map(move |capture| {
+                let Some(id) = capture.get(1) else {
+                    error!("Failed to get ID for expression in\n{haystack}");
+                    return None;
+                };
+                let id = match id.as_str().parse::<EntryId>() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        error!("Failed to parse ID {}: {e}", id.as_str());
+                        return None;
+                    }
+                };
+                let Some(expr) = capture.get(2) else {
+                    error!("Failed to get expression for ID {id} in\n{haystack}");
+                    return None;
+                };
+                Some((id, expr.as_str()))
+            })
+            .unique()
     }
 }
 
