@@ -1429,7 +1429,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     while let Some(divisor) = divisor.div_exact(new_term) {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(Complex(Factorial(Numeric(new_term).into()).into())));
+                            return Some(simplify(Complex(Factorial(Numeric(new_term)).into())));
                         }
                     }
                 }
@@ -1448,7 +1448,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(Complex(Primorial(Numeric(new_term)).into()).into()));
+                            return Some(simplify(Complex(Primorial(Numeric(new_term)).into())));
                         }
                     }
                 }
@@ -1766,7 +1766,7 @@ fn estimate_log10_of_product(
         let (power_lower, power_upper) = match *exponent {
             0 => (0, 0),
             1 => estimate_log10_internal(term),
-            x => estimate_log10_power(&term, &Numeric(x as NumericFactor)),
+            x => estimate_log10_power(term, &Numeric(x as NumericFactor)),
         };
         lower = lower.saturating_add(power_lower);
         upper = upper.saturating_add(power_upper).saturating_add(1);
