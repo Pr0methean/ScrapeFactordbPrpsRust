@@ -1741,8 +1741,9 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                 }
                 UnknownExpression(_) => (0, NumberLength::MAX),
             };
-            FACTOR_CACHE.with(|cache| *cache.borrow_mut().get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-                .unwrap().unwrap().log10_estimate.get_or_init(|| bounds));
+            FACTOR_CACHE.with(|cache| if let Ok(Some(facts)) = cache.borrow_mut().get_or_insert_with(expr, || Ok::<_, !>(Default::default())) {
+                facts.log10_estimate.get_or_init(|| bounds);
+            });
             bounds
         }
     }
@@ -2305,8 +2306,10 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                 UnknownExpression(_) => None,
             };
             FACTOR_CACHE
-                .with(|cache| *cache.borrow_mut().get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-                .unwrap().unwrap().eval_as_numeric.get_or_init(|| numeric));
+                .with(|cache|
+                    if let Ok(Some(facts)) = cache.borrow_mut().get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
+                        facts.eval_as_numeric.get_or_init(|| numeric);
+                    });
             numeric
         }
     }
@@ -2527,8 +2530,9 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                 })
             });
             FACTOR_CACHE.with(|cache| {
-                let _ = cache.borrow_mut().get_or_insert_with(expr, || Ok::<_,!>(Default::default()))
-                    .unwrap().unwrap().factors.get_or_init(|| factors.clone());
+                if let Ok(Some(facts)) = cache.borrow_mut().get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
+                    facts.factors.get_or_init(|| factors.clone());
+                }
             });
             factors
         }
