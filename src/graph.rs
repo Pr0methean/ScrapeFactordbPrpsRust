@@ -948,7 +948,7 @@ pub async fn find_and_submit_factors(
                     get_edge(&data.divisibility_graph, factor_vid, *dest_vid, &mut data.deleted_synonyms).is_none())
             .collect::<Box<[_]>>();
         if dest_factors.is_empty() {
-            let factor = get_vertex(&mut data.divisibility_graph, factor_vid, &mut data.deleted_synonyms);
+            let factor = get_vertex(&data.divisibility_graph, factor_vid, &mut data.deleted_synonyms);
             info!("{id}: Skipping {factor} because there are no more cofactors it can divide");
             continue;
         };
