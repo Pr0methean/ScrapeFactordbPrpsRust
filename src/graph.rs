@@ -843,7 +843,7 @@ pub async fn find_and_submit_factors(
                 dnd_since_last_shuffle += 1;
                 if dnd_since_last_accepted == DESPERATION_SHUFFLE_THRESHOLD {
                     warn!(
-                        "Switching to graph-based approach because we've received 30 'Does not divide' responses since the last accepted one."
+                        "{id}: Switching to graph-based approach due to too many 'Does not divide' responses since the last accepted one."
                     );
                 }
             }
@@ -1248,7 +1248,7 @@ pub async fn find_and_submit_factors(
         }
         if !factors_to_submit.is_empty() && dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD
         {
-            warn!("Shuffling factors_to_submit due to too many 'Does not divide' responses");
+            warn!("{id}: Shuffling factors_to_submit due to too many 'Does not divide' responses");
             factors_to_submit.make_contiguous().shuffle(&mut rng());
             dnd_since_last_shuffle = 0;
         }
