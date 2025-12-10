@@ -2596,7 +2596,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                 left_recursive_factors
                                     .into_iter()
                                     .flat_map(|(factor, exponent)| {
-                                        repeat_n(factor, exponent.min(MAX_REPEATS) as usize)
+                                        repeat_n(factor, (exponent as usize).min(MAX_REPEATS))
                                     })
                                     .collect()
                             }
@@ -2616,7 +2616,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                 // multiplication
                                 let mut factors = Vec::new();
                                 for (term, exponent) in terms {
-                                    let capped_exponent = (*exponent).min(MAX_REPEATS) as usize;
+                                    let capped_exponent = (*exponent as usize).min(MAX_REPEATS);
                                     let term = simplify(term.clone());
                                     let term_factors = find_factors(&term);
                                     if term_factors.is_empty() {
