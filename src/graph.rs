@@ -772,7 +772,7 @@ pub async fn find_and_submit_factors(
                 factor_vid,
                 &mut data.deleted_synonyms,
             )
-            .expect("Tried to check for entry_id for a number not entered in number_facts_map")
+            .expect("{id}: Tried to check for entry_id for a number not entered in number_facts_map")
             .entry_id
             .is_none()
         {
@@ -880,7 +880,7 @@ pub async fn find_and_submit_factors(
     // Sort backwards so that we try to submit largest factors first
     info!("{id}: {} factors left to submit after first pass", factors_to_submit_in_graph.len());
     'graph_iter: while !facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms)
-        .expect("Reached 'graph_iter when root not entered in number_facts_map")
+        .expect("{id}: Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
         && let node_count = data.divisibility_graph.vertex_count()
         && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
@@ -967,7 +967,7 @@ pub async fn find_and_submit_factors(
                     &mut data.deleted_synonyms,
                 );
                 info!(
-                    "Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
+                    "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
                 );
                 // This factor already known.
                 // If transitive, submit to a smaller cofactor instead.
@@ -976,7 +976,7 @@ pub async fn find_and_submit_factors(
                 continue;
             }
             let factor_facts = facts_of(&data.number_facts_map, factor_vid, &mut data.deleted_synonyms)
-                .expect("Reached factors_known_to_factordb check for a number not entered in number_facts_map");
+                .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             match factor_facts.factors_known_to_factordb {
                 UpToDate(ref already_known_factors) | NotUpToDate(ref already_known_factors) => {
                     if already_known_factors.contains(&cofactor_vid) {
@@ -986,7 +986,7 @@ pub async fn find_and_submit_factors(
                             &mut data.deleted_synonyms,
                         );
                         info!(
-                            "Skipping submission of {factor} to {cofactor} because it's already known (based on FactorDB check)"
+                            "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on FactorDB check)"
                         );
                         propagate_divisibility(&mut data, cofactor_vid, factor_vid, false);
                         continue;
@@ -997,7 +997,7 @@ pub async fn find_and_submit_factors(
                             &mut data.deleted_synonyms,
                         );
                         info!(
-                            "Skipping submission of {factor} to {cofactor} because it's already fully factored (based on FactorDB check)"
+                            "{id}: Skipping submission of {factor} to {cofactor} because it's already fully factored (based on FactorDB check)"
                         );
                         rule_out_divisibility(&mut data, cofactor_vid, factor_vid);
                         continue;
@@ -1017,7 +1017,7 @@ pub async fn find_and_submit_factors(
             );
             if !factor.may_be_proper_divisor_of(cofactor) {
                 info!(
-                    "Skipping submission of {factor} to {cofactor} because it fails a divisibility \
+                    "{id}: Skipping submission of {factor} to {cofactor} because it fails a divisibility \
                     test"
                 );
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
@@ -1039,10 +1039,10 @@ pub async fn find_and_submit_factors(
                 cofactor_vid,
                 &mut data.deleted_synonyms,
             )
-            .expect("Reached cofactor_facts check for a number not entered in number_facts_map");
+            .expect("{id}: Reached cofactor_facts check for a number not entered in number_facts_map");
             if cofactor_facts.is_known_fully_factored() {
                 info!(
-                    "Skipping submission of {factor} to {cofactor} because {cofactor} is \
+                    "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is \
                 already fully factored"
                 );
                 if cofactor_vid == root_vid {
@@ -1069,7 +1069,7 @@ pub async fn find_and_submit_factors(
                             get_vertex(&data.divisibility_graph, known_factor_vid, &mut data.deleted_synonyms),
                         ) && cofactor_lower_bound_log10
                             <= facts_of(&data.number_facts_map, known_factor_vid, &mut data.deleted_synonyms)
-                            .expect("known_factor_statuses included a number not entered in number_facts_map")
+                            .expect("{id}: known_factor_statuses included a number not entered in number_facts_map")
                             .upper_bound_log10 {
                             Some((false, known_factor_vid))
                         } else {
@@ -1098,7 +1098,7 @@ pub async fn find_and_submit_factors(
                     ) == Some(Direct)
                 }) {
                     info!(
-                        "Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
+                        "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
                     );
                     // Submit to one of the known_factors instead
                     propagate_divisibility(&mut data, factor_vid, cofactor_vid, true);
@@ -1110,11 +1110,11 @@ pub async fn find_and_submit_factors(
                     .into_iter()
                     .filter(|(_, divisibility)| *divisibility != NotFactor)
                     .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &mut data.deleted_synonyms)
-                        .expect("known_factors_upper_bound called for a number with a factor not entered in number_facts_map")
+                        .expect("{id}: known_factors_upper_bound called for a number with a factor not entered in number_facts_map")
                         .lower_bound_log10)
                     .sum());
             let factor_facts = facts_of(&data.number_facts_map, factor_vid, &mut data.deleted_synonyms)
-                .expect("Reached factors_known_to_factordb check for a number not entered in number_facts_map");
+                .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             if factor_facts.lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
                 info!("{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)");
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
@@ -1152,7 +1152,7 @@ pub async fn find_and_submit_factors(
                     &mut data.deleted_synonyms,
                 )
                 .expect(
-                    "Tried to check for entry_id for a cofactor not entered in number_facts_map",
+                    "{id}: Tried to check for entry_id for a cofactor not entered in number_facts_map",
                 )
                 .entry_id
                 .is_none()
@@ -1280,7 +1280,7 @@ pub async fn find_and_submit_factors(
                         )
                     }));
                     let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms)
-                        .expect("Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
+                        .expect("{id}: Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
                     if cofactor_facts.needs_update() || !cofactor_facts.checked_for_listed_algebraic
                     {
                         // An error must have occurred while fetching cofactor's factors
