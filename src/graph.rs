@@ -1051,6 +1051,7 @@ pub async fn find_and_submit_factors(
                             >= facts_of(&data.number_facts_map, known_factor_vid, &mut data.deleted_synonyms)
                             .expect("{id}: known_factor_statuses included a number not entered in number_facts_map")
                             .lower_bound_log10 {
+                            // possible that cofactor == known_factor * x == factor * x * y
                             Some((true, known_factor_vid))
                         } else {
                             Some((false, known_factor_vid))
