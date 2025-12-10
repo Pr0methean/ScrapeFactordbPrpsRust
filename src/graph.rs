@@ -862,7 +862,12 @@ pub async fn find_and_submit_factors(
     let mut iters_without_progress = 0;
     let mut node_count = 1; // print graph stats on first loop iteration
     // Sort backwards so that we try to submit largest factors first
-    let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid, dnd_since_last_shuffle < DESPERATION_SHUFFLE_THRESHOLD);
+    let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid, if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
+        dnd_since_last_shuffle = 0;
+        false
+    } else {
+        true
+    });
     'graph_iter: while !facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms)
         .expect("Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
