@@ -891,10 +891,7 @@ pub async fn find_and_submit_factors(
             node_count = data.divisibility_graph.vertex_count();
             let edge_count = data.divisibility_graph.edge_count();
             let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
-            if edge_count == complete_graph_edge_count
-                || factors_to_submit.is_empty()
-                || iters_without_progress >= node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
-            {
+            if edge_count == complete_graph_edge_count {
                 info!("{id}: {accepted_factors} factors accepted");
                 // Graph is fully connected, meaning none are left to try
                 return accepted_factors > 0;
