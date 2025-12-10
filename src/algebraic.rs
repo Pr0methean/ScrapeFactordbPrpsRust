@@ -1150,7 +1150,7 @@ thread_local! {
 }
 
 #[inline(always)]
-fn count_frequencies<T: Eq + Ord>(vec: Box<[T]>) -> BTreeMap<T, NumberLength> {
+fn count_frequencies<T: Eq + Ord>(vec: impl Iterator<Item=T>) -> BTreeMap<T, NumberLength> {
     let mut counts = BTreeMap::new();
     for item in vec {
         *counts.entry(item).or_insert(0) += 1;
@@ -1164,8 +1164,8 @@ fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Box<[T]>, vec2: Box<[T]>) ->
         return vec![];
     }
     let mut intersection_vec = Vec::with_capacity(vec1.len().min(vec2.len()));
-    let mut counts1 = count_frequencies(vec1);
-    let mut counts2 = count_frequencies(vec2);
+    let mut counts1 = count_frequencies(vec1.into_iter());
+    let mut counts2 = count_frequencies(vec2.into_iter());
     if counts2.len() < counts1.len() {
         swap(&mut counts1, &mut counts2);
     }
@@ -1188,7 +1188,7 @@ fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
     }
     let mut total_counts = BTreeMap::new();
     for vec in vecs {
-        let counts = count_frequencies(vec.into());
+        let counts = count_frequencies(vec.into_iter());
         for (item, count) in counts {
             let total = total_counts.entry(item).or_insert(count);
             *total = (*total).max(count);
@@ -1432,7 +1432,7 @@ pub fn to_like_powers_recursive_dedup(
     subtract: bool,
 ) -> Vec<Factor> {
     let mut results = Vec::new();
-    let mut to_expand = count_frequencies(to_like_powers(left, right, subtract));
+    let mut to_expand = count_frequencies(to_like_powers(left, right, subtract).into_iter());
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
@@ -2555,68 +2555,75 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                             } => {
                                 // division
                                 let mut left_recursive_factors = BTreeMap::new();
-                                let left_remaining_factors = find_factors(&simplify(left.clone()))
-                                    .into_iter()
-                                    .map(simplify)
-                                    .collect();
-                                let mut left_remaining_factors =
-                                    count_frequencies(left_remaining_factors);
+                                let mut left_remaining_factors = count_frequencies(find_factors(&simplify(left.clone()))
+                                    .into_iter());
                                 let mut right_remaining_factors = right.clone();
-                                for (factor, exponent) in right_remaining_factors.iter_mut() {
+                                while let Some((factor, exponent)) =
+                                    left_remaining_factors.pop_first()
+                                {
+                                    if exponent == 0 {
+                                        continue;
+                                    }
                                     // Can't be rewritten with or_else due to borrow-checker rules
-                                    let left_exponent = match left_remaining_factors.get_mut(factor) {
+                                    let right_exponent = match right_remaining_factors.get_mut(&factor) {
                                         Some(e) => Some(e),
-                                        None => left_remaining_factors.get_mut(&simplify(factor.clone()))
+                                        None => right_remaining_factors.get_mut(&simplify(factor.clone()))
                                     };
-                                    if let Some(left_exponent) = left_exponent {
-                                        let min_exponent = (*exponent).min(*left_exponent);
-                                        *exponent -= min_exponent;
-                                        *left_exponent -= min_exponent;
+                                    if let Some(right_exponent) = right_exponent && *right_exponent != 0 {
+                                        let min_exponent = exponent.min(*right_exponent);
+                                        *right_exponent -= min_exponent;
+                                        let left_exponent = exponent - min_exponent;
+                                        if left_exponent > 0 {
+                                            left_remaining_factors.insert(factor, left_exponent);
+                                        }
+                                    } else {
+                                        let subfactors = if factor == *expr {
+                                            [].into()
+                                        } else {
+                                            find_factors(&factor)
+                                        };
+                                        for (subfactor, subfactor_exponent) in
+                                            count_frequencies(subfactors
+                                                .into_iter()
+                                                .filter(|subfactor| *subfactor != factor))
+                                        {
+                                            if subfactor_exponent != 0 {
+                                                *left_remaining_factors
+                                                    .entry(subfactor)
+                                                    .or_insert(0) += subfactor_exponent * exponent;
+                                            }
+                                        }
+                                        *left_recursive_factors.entry(factor).or_insert(0) += exponent;
                                     }
                                 }
                                 left_remaining_factors.retain(|_, exponent| *exponent != 0);
                                 right_remaining_factors.retain(|_, exponent| *exponent != 0);
                                 while let Some((factor, exponent)) =
-                                    left_remaining_factors.pop_first()
-                                {
-                                    let subfactors = if factor == *expr {
-                                        [].into()
-                                    } else {
-                                        find_factors(&factor)
-                                    };
-                                    subfactors
-                                        .into_iter()
-                                        .filter(|subfactor| *subfactor != factor)
-                                        .for_each(|subfactor| {
-                                            *left_remaining_factors.entry(subfactor).or_insert(0) +=
-                                                exponent
-                                        });
-                                    *left_recursive_factors.entry(factor).or_insert(0) += exponent;
-                                }
-                                while let Some((factor, exponent)) =
                                     right_remaining_factors.pop_last()
                                 {
-                                    let subfactors = find_factors(&factor);
-                                    if subfactors.is_empty()
-                                        || (subfactors.len() == 1 && subfactors[0] == factor)
+                                    if exponent == 0 {
+                                        continue;
+                                    }
+                                    if let Some(left_exponent) =
+                                        left_recursive_factors.get_mut(&factor) && *left_exponent != 0
                                     {
-                                        if let Some(left_exponent) =
-                                            left_recursive_factors.get_mut(&factor)
-                                        {
-                                            let min_exponent = (*left_exponent).min(exponent);
-                                            *left_exponent -= min_exponent;
-                                            if min_exponent != exponent && min_exponent != 0 {
-                                                right_remaining_factors
-                                                    .insert(factor, exponent - min_exponent);
-                                            }
+                                        let min_exponent = (*left_exponent).min(exponent);
+                                        *left_exponent -= min_exponent;
+                                        let right_exponent = exponent - min_exponent;
+                                        if right_exponent != 0 {
+                                            right_remaining_factors
+                                                .insert(factor, right_exponent);
                                         }
                                     } else {
+                                        let subfactors = find_factors(&factor);
                                         for (subfactor, subfactor_exponent) in
-                                            count_frequencies(subfactors)
+                                            count_frequencies(subfactors
+                                                .into_iter()
+                                                .filter(|subfactor| *subfactor != factor))
                                         {
                                             *right_remaining_factors
                                                 .entry(subfactor)
-                                                .or_insert(0) += subfactor_exponent;
+                                                .or_insert(0) += subfactor_exponent * exponent;
                                         }
                                     }
                                 }
