@@ -990,7 +990,7 @@ pub async fn find_and_submit_factors(
                         );
                         propagate_divisibility(&mut data, cofactor_vid, factor_vid, false);
                         continue;
-                    } else if factor_facts.is_final() {
+                    } else if facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms).expect("{id}: cofactor not in number_facts_map").is_final() {
                         let [factor, cofactor] = get_vertices(
                             &data.divisibility_graph,
                             [factor_vid, cofactor_vid],
