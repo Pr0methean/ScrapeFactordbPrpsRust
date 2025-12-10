@@ -1181,7 +1181,7 @@ pub async fn find_and_submit_factors(
                                 div_exact(factor, root_denominator).unwrap_or_else(|| {
                                     Factor::divide(
                                         factor.clone(),
-                                        root_denominator_terms.clone().unwrap().into_iter(),
+                                        root_denominator_terms.clone().unwrap(),
                                     )
                                 });
                             let (divided_vid, added) =
