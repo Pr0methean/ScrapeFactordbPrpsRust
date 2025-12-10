@@ -944,7 +944,7 @@ pub async fn find_and_submit_factors(
             factors_to_submit_in_graph.push_back(factor_vid);
             continue;
         }
-        let dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid, dnd_since_last_shuffle < DESPERATION_SHUFFLE_THRESHOLD)
+        let dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid, true)
             .into_iter()
             .filter(|dest_vid|
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
