@@ -653,7 +653,7 @@ impl PartialEq for ComplexFactor {
                 subtract,
             } => matches!(other, AddSub {terms: (ox, oy), subtract: os} if
                 os == subtract
-            && (x == ox && y == oy) || (!subtract && x == oy && y == ox)),
+            && ((x == ox && y == oy) || (!subtract && x == oy && y == ox))),
             ComplexFactor::Multiply { terms_hash, terms } => {
                 matches!(other, Multiply { terms_hash: other_terms_hash, terms: other_terms }
                 if terms_hash == other_terms_hash && terms == other_terms)
