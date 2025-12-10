@@ -909,12 +909,12 @@ pub async fn find_and_submit_factors(
         {accepted_factors} factors accepted so far. {} fully factored numbers. {} known entry IDs",
                 edge_count as f64 * 100.0 / complete_graph_edge_count as f64,
                 data.number_facts_map
-                    .iter()
-                    .filter(|(_, facts)| facts.is_known_fully_factored())
+                    .values()
+                    .filter(|facts| facts.is_known_fully_factored())
                     .count(),
                 data.number_facts_map
-                    .iter()
-                    .filter(|(_, facts)| facts.entry_id.is_some())
+                    .values()
+                    .filter(|facts| facts.entry_id.is_some())
                     .count()
             );
         }
