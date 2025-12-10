@@ -724,7 +724,6 @@ pub async fn find_and_submit_factors(
     }
     // Simplest case: try submitting all factors as factors of the root
     // Sort backwards so that we try to submit largest factors first
-    let mut need_to_traverse_graph = false;
     let (root_denominator_terms, root_denominator) = if let Complex(c) = get_vertex(
         &data.divisibility_graph,
         root_vid,
@@ -749,6 +748,7 @@ pub async fn find_and_submit_factors(
     let mut dnd_since_last_accepted = 0;
     let mut dnd_since_last_shuffle = 0;
     let known_factors = vertex_ids_except::<Box<[_]>>(&mut data, root_vid, true);
+    let mut factors_to_submit_in_graph = VecDeque::new();
     for factor_vid in known_factors.into_iter() {
         let factor = get_vertex(
             &data.divisibility_graph,
@@ -770,6 +770,7 @@ pub async fn find_and_submit_factors(
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
+            factors_to_submit_in_graph.push_back(factor_vid);
             continue;
         }
         match get_edge(
@@ -784,6 +785,10 @@ pub async fn find_and_submit_factors(
                 continue;
             }
             _ => {}
+        }
+        if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
+            factors_to_submit_in_graph.push_back(factor_vid);
+            continue;
         }
         match http.try_report_factor(Id(id), factor).await {
             AlreadyFullyFactored => return true,
@@ -803,11 +808,10 @@ pub async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 let factor = factor.clone();
-                rule_out_divisibility(&mut data, factor_vid, root_vid);
-                let subfactors_found = !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
-                    .await
-                    .is_empty();
-                need_to_traverse_graph |= subfactors_found;
+                let subfactors = add_factors_to_graph(http, &mut data, root_vid, factor_vid)
+                    .await;
+                let subfactors_found = !subfactors.is_empty();
+                factors_to_submit_in_graph.extend(subfactors);
                 if !subfactors_found && let Some(ref root_denominator) = root_denominator {
                     facts_of_mut(
                         &mut data.number_facts_map,
@@ -825,6 +829,7 @@ pub async fn find_and_submit_factors(
                         let (divided_vid, added) =
                             add_factor_node(&mut data, divided, Some(root_vid), None, http);
                         if added {
+                            factors_to_submit_in_graph.push_back(divided_vid);
                             // Don't apply this recursively, except when divided was already in
                             // the graph for another reason
                             facts_of_mut(
@@ -833,26 +838,18 @@ pub async fn find_and_submit_factors(
                                 &mut data.deleted_synonyms,
                             )
                             .checked_with_root_denominator = true;
-                            need_to_traverse_graph = true;
                         }
                     }
                 }
                 dnd_since_last_accepted += 1;
                 dnd_since_last_shuffle += 1;
-                if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
-                    warn!(
-                        "{id}: Switching to graph-based approach due to too many 'Does not divide' responses since the last accepted one."
-                    );
-                    need_to_traverse_graph = true;
-                    break;
-                }
             }
             OtherError => {
-                need_to_traverse_graph = true;
+                factors_to_submit_in_graph.push_back(factor_vid);
             }
         }
     }
-    if !need_to_traverse_graph {
+    if factors_to_submit_in_graph.is_empty() {
         info!("{id}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
     }
@@ -869,23 +866,13 @@ pub async fn find_and_submit_factors(
     let mut iters_without_progress = 0;
     let mut iters_to_next_report = 0;
     // Sort backwards so that we try to submit largest factors first
-    let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(
-        &mut data,
-        root_vid,
-        if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
-            dnd_since_last_shuffle = 0;
-            false
-        } else {
-            true
-        },
-    );
-    info!("{id}: {} factors left to submit after first pass", factors_to_submit.len());
+    info!("{id}: {} factors left to submit after first pass");
     'graph_iter: while !facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms)
         .expect("Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
         && let node_count = data.divisibility_graph.vertex_count()
         && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
-        && let Some(factor_vid) = factors_to_submit.pop_front()
+        && let Some(factor_vid) = factors_to_submit_in_graph.pop_front()
         && let edge_count = data.divisibility_graph.edge_count()
         && let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count)
         && edge_count < complete_graph_edge_count
@@ -918,6 +905,12 @@ pub async fn find_and_submit_factors(
                     .count()
             );
         }
+        if dnd_since_last_shuffle >= crate::graph::DESPERATION_SHUFFLE_THRESHOLD
+        {
+            warn!("{id}: Shuffling factors_to_submit due to too many 'Does not divide' responses");
+            factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+            dnd_since_last_shuffle = 0;
+        }
         iters_without_progress += 1;
         iters_to_next_report -= 1;
         // root can't be a factor of any other number we'll encounter
@@ -935,7 +928,10 @@ pub async fn find_and_submit_factors(
             .as_str_non_numeric()
             .is_some_and(|expr| expr.contains("..."))
         {
-            factors_to_submit.push_back(factor_vid);
+            // Can't submit factor right now because we don't have it in a representable form, but
+            // running add_factors_to_graph may provide an equivalent expression
+            factors_to_submit_in_graph.extend(add_factors_to_graph(http, &mut data, root_vid, factor_vid).await);
+            factors_to_submit_in_graph.push_back(factor_vid);
             continue;
         }
         let dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid, dnd_since_last_shuffle < DESPERATION_SHUFFLE_THRESHOLD)
@@ -1051,9 +1047,7 @@ pub async fn find_and_submit_factors(
                         rule_out_divisibility(&mut data, factor_vid, unknown_non_factor);
                     }
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
-                    if cofactor_vid == root_vid {
-                        continue 'graph_iter;
-                    }
+
                     continue;
                 } else if possible_factors.into_iter().all(|possible_factor_vid| {
                     get_edge(
@@ -1149,7 +1143,9 @@ pub async fn find_and_submit_factors(
                     iters_without_progress = 0;
                     propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
                     // Move newly-accepted factor to the back of the list
-                    factors_to_submit.push_back(factor_vid);
+                    if cofactor_vid != root_vid {
+                        factors_to_submit_in_graph.push_back(factor_vid);
+                    }
                     continue 'graph_iter;
                 }
                 DoesNotDivide => {
@@ -1197,11 +1193,11 @@ pub async fn find_and_submit_factors(
                                     &mut data.deleted_synonyms,
                                 )
                                 .checked_with_root_denominator = true;
-                                factors_to_submit.push_back(divided_vid);
+                                factors_to_submit_in_graph.push_back(divided_vid);
                             }
                         }
                     }
-                    factors_to_submit.extend(subfactors.into_iter().sorted_by(|v1, v2| {
+                    factors_to_submit_in_graph.extend(subfactors.into_iter().sorted_by(|v1, v2| {
                         compare_by_ref(
                             &data.number_facts_map,
                             &VertexRef {
@@ -1242,14 +1238,8 @@ pub async fn find_and_submit_factors(
                 }
             }
         }
-        if !factors_to_submit.is_empty() && dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD
-        {
-            warn!("{id}: Shuffling factors_to_submit due to too many 'Does not divide' responses");
-            factors_to_submit.make_contiguous().shuffle(&mut rng());
-            dnd_since_last_shuffle = 0;
-        }
         if submission_errors {
-            factors_to_submit.push_back(factor_vid);
+            factors_to_submit_in_graph.push_back(factor_vid);
         }
     }
 
@@ -1373,16 +1363,16 @@ async fn add_factors_to_graph(
     .expect("add_factors_to_graph called on a number that's not entered in number_facts_map");
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
-
+    let elided = matches!(get_vertex(&mut data.divisibility_graph, factor_vid, &mut data.deleted_synonyms), Some(Factor::ElidedNumber(_)));
     // First, check factordb.com/api for already-known factors
-    if facts.needs_update() {
+    if facts.needs_update() || elided {
         let factor_specifier = as_specifier(factor_vid, data, None);
         let ProcessedStatusApiResponse {
             status,
             factors: known_factors,
             id: new_id,
         } = http
-            .known_factors_as_digits(factor_specifier, true, false)
+            .known_factors_as_digits(factor_specifier, true, elided)
             .await;
         let known_factor_count = known_factors.len();
         if known_factor_count == 1 {
