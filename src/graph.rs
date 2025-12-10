@@ -869,6 +869,7 @@ pub async fn find_and_submit_factors(
     //     cofactors, so we need to report it to *all* of them to ensure FactorDB knows its full
     //     exponent.
     let mut iters_without_progress = 0;
+    let mut iters_to_next_report = 0;
     let mut node_count = 1; // print graph stats on first loop iteration
     // Sort backwards so that we try to submit largest factors first
     let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(
@@ -890,7 +891,8 @@ pub async fn find_and_submit_factors(
         && let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count)
         && edge_count < complete_graph_edge_count
     {
-        if iters_without_progress.is_multiple_of(node_count) {
+        if iters_to_next_report == 0 {
+            iters_to_next_report = node_count;
             node_count = data.divisibility_graph.vertex_count();
             let (direct_divisors, non_factors) = data
                 .divisibility_graph
@@ -919,6 +921,7 @@ pub async fn find_and_submit_factors(
             );
         }
         iters_without_progress += 1;
+        iters_to_next_report -= 1;
         if is_known_factor(&mut data, factor_vid, root_vid)
             && facts_of(&data.number_facts_map, factor_vid, &mut data.deleted_synonyms).expect("Tried to compare log10 bounds for a number not entered in number_facts_map").lower_bound_log10
             > facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms).expect("Tried to compare log10 bounds for entry_id for a number not entered in number_facts_map").upper_bound_log10
