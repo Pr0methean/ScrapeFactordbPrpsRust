@@ -1034,7 +1034,6 @@ pub async fn find_and_submit_factors(
                 &mut data.deleted_synonyms,
             )
             .expect("{id}: Reached cofactor_facts check for a number not entered in number_facts_map");
-            let cofactor_lower_bound_log10 = cofactor_facts.lower_bound_log10;
             let cofactor_upper_bound_log10 = cofactor_facts.upper_bound_log10;
             if let UpToDate(ref known_factor_vids) | NotUpToDate(ref known_factor_vids) =
                 cofactor_facts.factors_known_to_factordb
@@ -1048,13 +1047,13 @@ pub async fn find_and_submit_factors(
                             None
                         } else if factor.may_be_proper_divisor_of(
                             get_vertex(&data.divisibility_graph, known_factor_vid, &mut data.deleted_synonyms),
-                        ) && cofactor_lower_bound_log10
-                            <= facts_of(&data.number_facts_map, known_factor_vid, &mut data.deleted_synonyms)
+                        ) && cofactor_upper_bound_log10
+                            >= facts_of(&data.number_facts_map, known_factor_vid, &mut data.deleted_synonyms)
                             .expect("{id}: known_factor_statuses included a number not entered in number_facts_map")
-                            .upper_bound_log10 {
-                            Some((false, known_factor_vid))
-                        } else {
+                            .lower_bound_log10 {
                             Some((true, known_factor_vid))
+                        } else {
+                            Some((false, known_factor_vid))
                         }
                     })
                     .into_group_map();
@@ -1068,7 +1067,9 @@ pub async fn find_and_submit_factors(
                         rule_out_divisibility(&mut data, factor_vid, unknown_non_factor);
                     }
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
-
+                    factors_to_submit_in_graph.extend(add_factors_to_graph(
+                        http, &mut data, root_vid, factor_vid
+                    ).await);
                     continue;
                 } else if possible_factors.into_iter().all(|possible_factor_vid| {
                     get_edge(
