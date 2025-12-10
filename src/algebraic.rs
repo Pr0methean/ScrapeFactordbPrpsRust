@@ -2561,6 +2561,21 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     .collect();
                                 let mut left_remaining_factors =
                                     count_frequencies(left_remaining_factors);
+                                let mut right_remaining_factors = right.clone();
+                                for (factor, exponent) in right_remaining_factors.iter_mut() {
+                                    // Can't be rewritten with or_else due to borrow-checker rules
+                                    let left_exponent = match left_remaining_factors.get_mut(factor) {
+                                        Some(e) => Some(e),
+                                        None => left_remaining_factors.get_mut(&simplify(factor.clone()))
+                                    };
+                                    if let Some(left_exponent) = left_exponent {
+                                        let min_exponent = (*exponent).min(*left_exponent);
+                                        *exponent -= min_exponent;
+                                        *left_exponent -= min_exponent;
+                                    }
+                                }
+                                left_remaining_factors.retain(|_, exponent| *exponent != 0);
+                                right_remaining_factors.retain(|_, exponent| *exponent != 0);
                                 while let Some((factor, exponent)) =
                                     left_remaining_factors.pop_first()
                                 {
@@ -2578,7 +2593,6 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                         });
                                     *left_recursive_factors.entry(factor).or_insert(0) += exponent;
                                 }
-                                let mut right_remaining_factors = right.clone();
                                 while let Some((factor, exponent)) =
                                     right_remaining_factors.pop_last()
                                 {
