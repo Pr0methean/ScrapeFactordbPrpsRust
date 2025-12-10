@@ -1138,6 +1138,7 @@ pub async fn find_and_submit_factors(
                     );
                     accepted_factors += 1;
                     dnd_since_last_accepted = 0;
+                    dnd_since_last_shuffle = 0;
                     iters_without_progress = 0;
                     propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
                     // Move newly-accepted factor to the back of the list
@@ -1146,6 +1147,7 @@ pub async fn find_and_submit_factors(
                 }
                 DoesNotDivide => {
                     dnd_since_last_accepted += 1;
+                    dnd_since_last_shuffle += 1;
                     if dnd_since_last_accepted == DESPERATION_ABORT_THRESHOLD {
                         error!("{id}: Aborting find_and_submit_factors due to too many 'Does not divide' responses!");
                         return accepted_factors > 0;
