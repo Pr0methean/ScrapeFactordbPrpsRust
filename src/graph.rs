@@ -726,7 +726,7 @@ pub async fn find_and_submit_factors(
     }
     // Simplest case: try submitting all factors as factors of the root
     // Sort backwards so that we try to submit largest factors first
-    let mut any_failed_retryably = false;
+    let mut need_to_traverse_graph = false;
     let (root_denominator_terms, root_denominator) = if let Complex(c) = get_vertex(
         &data.divisibility_graph,
         root_vid,
@@ -809,7 +809,7 @@ pub async fn find_and_submit_factors(
                 let subfactors_found = !add_factors_to_graph(http, &mut data, root_vid, factor_vid)
                     .await
                     .is_empty();
-                any_failed_retryably |= subfactors_found;
+                need_to_traverse_graph |= subfactors_found;
                 if !subfactors_found && let Some(ref root_denominator) = root_denominator {
                     facts_of_mut(
                         &mut data.number_facts_map,
@@ -835,24 +835,26 @@ pub async fn find_and_submit_factors(
                                 &mut data.deleted_synonyms,
                             )
                             .checked_with_root_denominator = true;
-                            any_failed_retryably = true;
+                            need_to_traverse_graph = true;
                         }
                     }
                 }
                 dnd_since_last_accepted += 1;
                 dnd_since_last_shuffle += 1;
-                if dnd_since_last_accepted == DESPERATION_SHUFFLE_THRESHOLD {
+                if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
                     warn!(
                         "{id}: Switching to graph-based approach due to too many 'Does not divide' responses since the last accepted one."
                     );
+                    need_to_traverse_graph = true;
+                    break;
                 }
             }
             OtherError => {
-                any_failed_retryably = true;
+                need_to_traverse_graph = true;
             }
         }
     }
-    if !any_failed_retryably {
+    if !need_to_traverse_graph {
         info!("{id}: {accepted_factors} factors accepted in a single pass");
         return accepted_factors > 0;
     }
