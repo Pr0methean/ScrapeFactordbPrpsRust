@@ -767,17 +767,10 @@ pub async fn find_and_submit_factors(
         if factor
             .as_str_non_numeric()
             .is_some_and(|expr| expr.contains("..."))
-            && facts_of(
-                &data.number_facts_map,
-                factor_vid,
-                &mut data.deleted_synonyms,
-            )
-            .expect("{id}: Tried to check for entry_id for a number not entered in number_facts_map")
-            .entry_id
-            .is_none()
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
+            info!("{id}: Temporarily skipping {factor} because digits are missing");
             factors_to_submit_in_graph.push_back(factor_vid);
             continue;
         }
@@ -788,6 +781,7 @@ pub async fn find_and_submit_factors(
             &mut data.deleted_synonyms,
         ) {
             Some(Direct) | Some(NotFactor) => {
+                info!("{id}: Skipping {factor} because it's already linked to {digits_or_expr}");
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
                 continue;
@@ -940,7 +934,7 @@ pub async fn find_and_submit_factors(
             .as_str_non_numeric()
             .is_some_and(|expr| expr.contains("..."))
         {
-            info!("{id}: Skipping {factor} temporarily because digits are missing");
+            info!("{id}: Temporarily skipping {factor} because digits are missing");
             // Can't submit factor right now because we don't have it in a representable form, but
             // running add_factors_to_graph may provide an equivalent expression
             factors_to_submit_in_graph.extend(add_factors_to_graph(http, &mut data, root_vid, factor_vid).await);
