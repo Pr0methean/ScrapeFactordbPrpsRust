@@ -372,6 +372,20 @@ pub fn get_vertex<'a, 'b: 'a>(
         .unwrap()
 }
 
+#[inline(always)]
+pub fn get_vertices<'a, 'b: 'a, const N: usize>(
+    divisibility_graph: &'b DivisibilityGraph,
+    vertex_ids: [VertexId; N],
+    deleted_synonyms: &'a mut BTreeMap<VertexId, VertexId>,
+) -> [&'b Factor; N] {
+    vertex_ids.into_iter().map(|vertex_id|
+    divisibility_graph
+        .vertex(to_real_vertex_id(vertex_id, deleted_synonyms))
+        .unwrap()
+    ).collect::<Vec<_>>().try_into().unwrap()
+}
+
+
 pub fn is_known_factor(
     data: &mut FactorData,
     factor_vid: VertexId,
@@ -926,6 +940,7 @@ pub async fn find_and_submit_factors(
             .as_str_non_numeric()
             .is_some_and(|expr| expr.contains("..."))
         {
+            info!("{id}: Skipping {factor} temporarily because digits are missing");
             // Can't submit factor right now because we don't have it in a representable form, but
             // running add_factors_to_graph may provide an equivalent expression
             factors_to_submit_in_graph.extend(add_factors_to_graph(http, &mut data, root_vid, factor_vid).await);
@@ -939,11 +954,21 @@ pub async fn find_and_submit_factors(
                     get_edge(&data.divisibility_graph, factor_vid, *dest_vid, &mut data.deleted_synonyms).is_none())
             .collect::<Box<[_]>>();
         if dest_factors.is_empty() {
+            let factor = get_vertex(&mut data.divisibility_graph, factor_vid, &mut data.deleted_synonyms);
+            info!("{id}: Skipping {factor} because there are no more cofactors it can divide");
             continue;
         };
-        let mut submission_errors = false;
+        let mut put_factor_back_into_queue = false;
         for cofactor_vid in dest_factors.into_iter() {
             if is_known_factor(&mut data, factor_vid, cofactor_vid) {
+                let [factor, cofactor] = get_vertices(
+                    &data.divisibility_graph,
+                    [factor_vid, cofactor_vid],
+                    &mut data.deleted_synonyms,
+                );
+                info!(
+                    "Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
+                );
                 // This factor already known.
                 // If transitive, submit to a smaller cofactor instead.
                 // If direct, nothing left to do.
@@ -955,9 +980,25 @@ pub async fn find_and_submit_factors(
             match factor_facts.factors_known_to_factordb {
                 UpToDate(ref already_known_factors) | NotUpToDate(ref already_known_factors) => {
                     if already_known_factors.contains(&cofactor_vid) {
+                        let [factor, cofactor] = get_vertices(
+                            &data.divisibility_graph,
+                            [factor_vid, cofactor_vid],
+                            &mut data.deleted_synonyms,
+                        );
+                        info!(
+                            "Skipping submission of {factor} to {cofactor} because it's already known (based on FactorDB check)"
+                        );
                         propagate_divisibility(&mut data, cofactor_vid, factor_vid, false);
                         continue;
                     } else if factor_facts.is_final() {
+                        let [factor, cofactor] = get_vertices(
+                            &data.divisibility_graph,
+                            [factor_vid, cofactor_vid],
+                            &mut data.deleted_synonyms,
+                        );
+                        info!(
+                            "Skipping submission of {factor} to {cofactor} because it's already fully factored (based on FactorDB check)"
+                        );
                         rule_out_divisibility(&mut data, cofactor_vid, factor_vid);
                         continue;
                     }
@@ -975,9 +1016,9 @@ pub async fn find_and_submit_factors(
                 &mut data.deleted_synonyms,
             );
             if !factor.may_be_proper_divisor_of(cofactor) {
-                debug!(
-                    "Skipping submission of {factor} to {cofactor} because {cofactor} is \
-                    smaller or equal or fails last-digit test"
+                info!(
+                    "Skipping submission of {factor} to {cofactor} because it fails a divisibility \
+                    test"
                 );
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 if cofactor_vid == root_vid {
@@ -987,7 +1028,7 @@ pub async fn find_and_submit_factors(
             }
             // NumericFactor entries are already fully factored
             if let Numeric(_) = cofactor {
-                debug!(
+                info!(
                     "{id}: Skipping submission of {factor} to {cofactor} because the number is too small"
                 );
                 propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
@@ -1000,7 +1041,7 @@ pub async fn find_and_submit_factors(
             )
             .expect("Reached cofactor_facts check for a number not entered in number_facts_map");
             if cofactor_facts.is_known_fully_factored() {
-                debug!(
+                info!(
                     "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                 already fully factored"
                 );
@@ -1040,6 +1081,7 @@ pub async fn find_and_submit_factors(
                 let unknown_non_factors = by_status.remove(&false).unwrap_or(vec![]);
                 drop(by_status);
                 if possible_factors.is_empty() {
+                    info!("{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on FactorDB check)");
                     // No possible path from factor to cofactor
                     for unknown_non_factor in unknown_non_factors {
                         rule_out_divisibility(&mut data, factor_vid, unknown_non_factor);
@@ -1055,6 +1097,9 @@ pub async fn find_and_submit_factors(
                         &mut data.deleted_synonyms,
                     ) == Some(Direct)
                 }) {
+                    info!(
+                        "Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
+                    );
                     // Submit to one of the known_factors instead
                     propagate_divisibility(&mut data, factor_vid, cofactor_vid, true);
                     continue;
@@ -1071,6 +1116,7 @@ pub async fn find_and_submit_factors(
             let factor_facts = facts_of(&data.number_facts_map, factor_vid, &mut data.deleted_synonyms)
                 .expect("Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             if factor_facts.lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
+                info!("{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)");
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 if cofactor_vid == root_vid {
                     continue 'graph_iter;
@@ -1079,6 +1125,12 @@ pub async fn find_and_submit_factors(
             }
             if is_known_factor(&mut data, cofactor_vid, factor_vid) {
                 // factor is transitively divisible by dest_factor
+                let [factor, cofactor] = get_vertices(
+                    &data.divisibility_graph,
+                    [factor_vid, cofactor_vid],
+                    &mut data.deleted_synonyms,
+                );
+                info!("{id}: Skipping submission of {factor} to {cofactor} because it's a multiple");
                 propagate_divisibility(&mut data, cofactor_vid, factor_vid, true);
                 continue;
             }
@@ -1105,9 +1157,15 @@ pub async fn find_and_submit_factors(
                 .entry_id
                 .is_none()
             {
-                debug!(
-                    "{id}: Can't submit to {cofactor} right now because we don't know its full specifier"
+                let factor = get_vertex(
+                    &data.divisibility_graph,
+                    factor_vid,
+                    &mut data.deleted_synonyms,
                 );
+                info!(
+                    "{id}: Temporarily skipping submission of {factor} to {cofactor} because we can't unambiguously identify the destination"
+                );
+                put_factor_back_into_queue = true;
                 continue;
             }
             let dest_specifier = as_specifier(cofactor_vid, &mut data);
@@ -1226,11 +1284,11 @@ pub async fn find_and_submit_factors(
                     if cofactor_facts.needs_update() || !cofactor_facts.checked_for_listed_algebraic
                     {
                         // An error must have occurred while fetching cofactor's factors
-                        submission_errors = true;
+                        put_factor_back_into_queue = true;
                     }
                 }
                 OtherError => {
-                    submission_errors = true;
+                    put_factor_back_into_queue = true;
                     if !add_factors_to_graph(http, &mut data, root_vid, cofactor_vid)
                         .await
                         .is_empty()
@@ -1240,7 +1298,7 @@ pub async fn find_and_submit_factors(
                 }
             }
         }
-        if submission_errors {
+        if put_factor_back_into_queue {
             factors_to_submit_in_graph.push_back(factor_vid);
         }
     }
