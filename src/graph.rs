@@ -886,16 +886,12 @@ pub async fn find_and_submit_factors(
         .is_known_fully_factored()
         && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
         && let Some(factor_vid) = factors_to_submit.pop_front()
+        && let edge_count = data.divisibility_graph.edge_count()
+        && let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count)
+        && edge_count < complete_graph_edge_count
     {
         if iters_without_progress.is_multiple_of(node_count) {
             node_count = data.divisibility_graph.vertex_count();
-            let edge_count = data.divisibility_graph.edge_count();
-            let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count);
-            if edge_count == complete_graph_edge_count {
-                info!("{id}: {accepted_factors} factors accepted");
-                // Graph is fully connected, meaning none are left to try
-                return accepted_factors > 0;
-            }
             let (direct_divisors, non_factors) = data
                 .divisibility_graph
                 .edges()
