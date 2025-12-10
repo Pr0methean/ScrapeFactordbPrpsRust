@@ -623,13 +623,37 @@ pub enum ComplexFactor {
     Primorial(Factor),
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Debug, Hash, Ord, PartialOrd, Eq)]
 pub enum Factor {
     Numeric(NumericFactor),
     BigNumber(BigNumber),
     ElidedNumber(HipStr<'static>),
     UnknownExpression(HipStr<'static>),
     Complex(Arc<ComplexFactor>),
+}
+
+impl PartialEq for Factor {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            Numeric(n) => matches!(other, Numeric(other_n) if other_n == n),
+            Factor::BigNumber(n) => matches!(other, Factor::BigNumber(other_n) if other_n == n),
+            ElidedNumber(n) => matches!(other, ElidedNumber(other_n) if other_n == n),
+            UnknownExpression(n) => matches!(other, UnknownExpression(other_n) if other_n == n),
+            Complex(c) => if let Complex(other_c) = other {
+                if other_c == c {
+                    true
+                } else if let AddSub {left: ref x, right: ref y, subtract: false} = **c {
+                    matches!(**other_c, AddSub {left: ref other_x, right: ref other_y, subtract: false}
+                            if other_x == y && other_y == x)
+
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
+    }
 }
 
 impl From<FactorBeingParsed> for Factor {
@@ -1344,8 +1368,10 @@ pub fn to_like_powers_recursive_dedup(
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
-            match simplify(factor.clone()) {
-                Complex(c) => match *c {
+            let factor = simplify(factor.clone());
+            let factor_clone = factor.clone();
+            match factor {
+                Complex(ref c) => match **c {
                         AddSub {
                             left: ref factor_left,
                             right: ref factor_right,
@@ -1358,18 +1384,18 @@ pub fn to_like_powers_recursive_dedup(
                             {
                                 *to_expand.entry(subfactor).or_insert(0) += exponent;
                             }
-                            results.extend(repeat_n(factor.clone(), exponent as usize));
+                            results.extend(repeat_n(factor, exponent as usize));
                         }
-                        _ => results.push(factor.clone()),
+                        _ => results.push(factor),
                 }
                 Numeric(n) => {
                     results.extend(find_factors_of_numeric(n));
                 }
                 _ => {
-                    results.push(factor.clone());
+                    results.push(factor);
                 }
             }
-            already_expanded.insert(factor);
+            already_expanded.insert(factor_clone);
         }
     }
     results
@@ -2466,6 +2492,17 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     .collect()
                             }
                             Multiply { ref terms, .. } => {
+                                if terms.is_empty() {
+                                    return [].into();
+                                }
+                                if terms.len() == 1 {
+                                    let (factor, power) = terms.first_key_value().unwrap();
+                                    return match power {
+                                        0 => [].into(),
+                                        1 => find_factors(&simplify(factor.clone())),
+                                        _ => repeat_n(simplify(factor.clone()), *power as usize).collect()
+                                    };
+                                }
                                 // multiplication
                                 let mut factors = Vec::new();
                                 for (term, exponent) in terms {
@@ -2515,8 +2552,10 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                         .iter()
                                         .unique()
                                         .flat_map(|factor: &Factor| div_exact(expr, factor))
+                                        .map(simplify)
                                         .collect();
                                     factors = multiset_union(vec![factors, cofactors]);
+                                    factors.sort_unstable();
                                     factors.into_boxed_slice()
                                 }
                             }
