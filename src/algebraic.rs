@@ -604,7 +604,7 @@ fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
     let invariant_hasher_state = RandomState::with_seed(0x1337c0de);
     let left_hash = invariant_hasher_state.hash_one(left);
     let right_hash = invariant_hasher_state.hash_one(right);
-    state.write_u64(left_hash.rotate_left(32).wrapping_add(right_hash));
+    state.write_u64(left_hash.wrapping_add(right_hash));
 }
 
 #[derive(Derivative, PartialOrd, Ord)]
