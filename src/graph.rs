@@ -1087,6 +1087,7 @@ pub async fn find_and_submit_factors(
                 }
                 continue;
             }
+            let cofactor = cofactor.clone();
             if is_known_factor(&mut data, cofactor_vid, factor_vid) {
                 // factor is transitively divisible by dest_factor
                 propagate_divisibility(&mut data, cofactor_vid, factor_vid, true);
