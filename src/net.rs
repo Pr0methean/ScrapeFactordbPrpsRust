@@ -8,7 +8,11 @@ use crate::monitor::Monitor;
 use crate::net::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
-use crate::{EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS, MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, frame_sync, create_cache};
+use crate::{
+    EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
+    MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, create_cache,
+    frame_sync,
+};
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use async_backtrace::{framed, location};
 use atomic_time::AtomicInstant;
@@ -102,9 +106,9 @@ pub trait FactorDbClient {
 }
 
 /// Separates a method that mockall can't currently mock.
-pub trait FactorDbClientReadIdsAndExprs : FactorDbClient {
+pub trait FactorDbClientReadIdsAndExprs: FactorDbClient {
     fn read_ids_and_exprs<'a>(&self, haystack: &'a str)
-                              -> impl Iterator<Item = (EntryId, &'a str)>;
+    -> impl Iterator<Item = (EntryId, &'a str)>;
 }
 
 #[derive(Clone)]
@@ -488,16 +492,14 @@ impl FactorDbClient for RealFactorDbClient {
                     .captures(&fallback_response)
                     .and_then(|c| c.get(1))
                     .map(|digits_cell| {
-                        vec![
-                            Factor::from(
-                                digits_cell
-                                    .as_str()
-                                    .chars()
-                                    .filter(char::is_ascii_digit)
-                                    .collect::<String>()
-                                    .as_str(),
-                            )
-                        ]
+                        vec![Factor::from(
+                            digits_cell
+                                .as_str()
+                                .chars()
+                                .filter(char::is_ascii_digit)
+                                .collect::<String>()
+                                .as_str(),
+                        )]
                     })
                     .unwrap_or_default();
                 ProcessedStatusApiResponse {
@@ -515,8 +517,7 @@ impl FactorDbClient for RealFactorDbClient {
                 self.by_id_cache.insert(id, processed.clone());
             }
             if let Some(expr) = expr_key {
-                self.by_expr_cache
-                    .insert(expr.clone(), processed.clone());
+                self.by_expr_cache.insert(expr.clone(), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -645,7 +646,6 @@ impl FactorDbClient for RealFactorDbClient {
 }
 
 impl FactorDbClientReadIdsAndExprs for RealFactorDbClient {
-
     fn read_ids_and_exprs<'a>(
         &self,
         haystack: &'a str,

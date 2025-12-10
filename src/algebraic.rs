@@ -1,10 +1,15 @@
-use std::default::Default;
-use derivative::Derivative;
+use crate::algebraic::ComplexFactor::{
+    AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
+};
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
 use crate::graph::EntryId;
 use crate::net::BigNumber;
-use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, write_bignum, create_cache, hash, BasicCache};
+use crate::{
+    BasicCache, MAX_ID_EQUAL_TO_VALUE, NumberLength, create_cache, frame_sync, hash, write_bignum,
+};
+use ahash::RandomState;
 use async_backtrace::location;
+use derivative::Derivative;
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
@@ -15,9 +20,11 @@ use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
+use object_pool::{Pool, Reusable};
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
+use std::default::Default;
 use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
@@ -25,13 +32,10 @@ use std::hint::unreachable_unchecked;
 use std::iter::{once, repeat_n};
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
-use ahash::RandomState;
-use object_pool::{Pool, Reusable};
 use tokio::task;
 use yamaquasi::Algo::Siqs;
-use yamaquasi::{Preferences, factor};
 use yamaquasi::Verbosity::Silent;
-use crate::algebraic::ComplexFactor::{AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial};
+use yamaquasi::{Preferences, factor};
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
     &[0],
@@ -562,7 +566,7 @@ static SMALL_LUCAS_FACTORS: [&[NumericFactor]; 202] = [
 pub type NumericFactor = u128;
 pub type SignedNumericFactor = i128;
 
-#[derive(Clone,PartialEq,Eq,Hash,PartialOrd,Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FactorBeingParsed {
     Numeric(NumericFactor),
     BigNumber(BigNumber),
@@ -607,7 +611,7 @@ fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
 #[derivative(Clone, Debug, Hash, Eq)]
 pub enum ComplexFactor {
     AddSub {
-        #[derivative(Hash(hash_with="crate::algebraic::hash_add_sub"))]
+        #[derivative(Hash(hash_with = "crate::algebraic::hash_add_sub"))]
         terms: (Factor, Factor),
         subtract: bool,
     },
@@ -644,15 +648,28 @@ pub enum Factor {
 impl PartialEq for ComplexFactor {
     fn eq(&self, other: &Self) -> bool {
         match self {
-            AddSub {terms: (x, y), subtract} => matches!(other, AddSub {terms: (ox, oy), subtract: os} if
+            AddSub {
+                terms: (x, y),
+                subtract,
+            } => matches!(other, AddSub {terms: (ox, oy), subtract: os} if
                 os == subtract
             && (x == ox && y == oy) || (!subtract && x == oy && y == ox)),
-            ComplexFactor::Multiply { terms_hash, terms } => matches!(other, Multiply { terms_hash: other_terms_hash, terms: other_terms }
-                if terms_hash == other_terms_hash && terms == other_terms),
-            ComplexFactor::Divide { left, right_hash, right } => matches!(other, Divide {left: other_left, right_hash: other_right_hash, right: other_right }
-                if right_hash == other_right_hash && left == other_left && right == other_right),
-            ComplexFactor::Power { base, exponent } => matches!(other, Power {base: other_base, exponent: other_exponent}
-                if base == other_base && exponent == other_exponent),
+            ComplexFactor::Multiply { terms_hash, terms } => {
+                matches!(other, Multiply { terms_hash: other_terms_hash, terms: other_terms }
+                if terms_hash == other_terms_hash && terms == other_terms)
+            }
+            ComplexFactor::Divide {
+                left,
+                right_hash,
+                right,
+            } => {
+                matches!(other, Divide {left: other_left, right_hash: other_right_hash, right: other_right }
+                if right_hash == other_right_hash && left == other_left && right == other_right)
+            }
+            ComplexFactor::Power { base, exponent } => {
+                matches!(other, Power {base: other_base, exponent: other_exponent}
+                if base == other_base && exponent == other_exponent)
+            }
             Fibonacci(term) => matches!(other, Fibonacci(other_term) if term == other_term),
             Lucas(term) => matches!(other, Lucas(other_term) if term == other_term),
             Factorial(term) => matches!(other, Factorial(other_term) if term == other_term),
@@ -668,12 +685,35 @@ impl From<FactorBeingParsed> for Factor {
             FactorBeingParsed::Numeric(n) => Numeric(n),
             FactorBeingParsed::BigNumber(n) => Factor::BigNumber(n),
             FactorBeingParsed::ElidedNumber(n) => ElidedNumber(n),
-            FactorBeingParsed::AddSub { left, right, subtract } =>
-                Complex(AddSub { terms: (Factor::from(*left), Factor::from(*right)), subtract }.into()),
-            FactorBeingParsed::Multiply { terms } =>
-                Factor::multiply(terms.into_iter().map(|(term, power)| (Factor::from(term), power))),
-            FactorBeingParsed::Divide { left, right } => Factor::divide((*left).into(), right.into_iter().map(|(term, power)| (Factor::from(term), power))),
-            FactorBeingParsed::Power { base, exponent } => Complex(Power { base: Factor::from(*base), exponent: Factor::from(*exponent) }.into()),
+            FactorBeingParsed::AddSub {
+                left,
+                right,
+                subtract,
+            } => Complex(
+                AddSub {
+                    terms: (Factor::from(*left), Factor::from(*right)),
+                    subtract,
+                }
+                .into(),
+            ),
+            FactorBeingParsed::Multiply { terms } => Factor::multiply(
+                terms
+                    .into_iter()
+                    .map(|(term, power)| (Factor::from(term), power)),
+            ),
+            FactorBeingParsed::Divide { left, right } => Factor::divide(
+                (*left).into(),
+                right
+                    .into_iter()
+                    .map(|(term, power)| (Factor::from(term), power)),
+            ),
+            FactorBeingParsed::Power { base, exponent } => Complex(
+                Power {
+                    base: Factor::from(*base),
+                    exponent: Factor::from(*exponent),
+                }
+                .into(),
+            ),
             FactorBeingParsed::Fibonacci(term) => Complex(Fibonacci(Factor::from(*term)).into()),
             FactorBeingParsed::Lucas(term) => Complex(Lucas(Factor::from(*term)).into()),
             FactorBeingParsed::Factorial(term) => Complex(Factorial(Factor::from(*term)).into()),
@@ -703,7 +743,6 @@ thread_local! {
     static FACTOR_CACHE: RefCell<Reusable<'static, FactorCache>> = RefCell::new(FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 20))).pull(|| create_cache(1 << 20)));
     static UNIQUE_FACTOR_CACHE: RefCell<Reusable<'static, UniqueFactorCache>> = RefCell::new(UNIQUE_FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 14))).pull(|| create_cache(1 << 14)));
 }
-
 
 impl Default for Factor {
     fn default() -> Self {
@@ -812,16 +851,23 @@ impl Factor {
         Numeric(5)
     }
 
-    pub fn multiply(terms: impl Iterator<Item=(Factor, NumberLength)>) -> Self {
+    pub fn multiply(terms: impl Iterator<Item = (Factor, NumberLength)>) -> Self {
         let terms = terms.collect();
         let terms_hash = hash(&terms);
         Complex(Multiply { terms, terms_hash }.into())
     }
 
-    pub fn divide(left: Factor, right: impl Iterator<Item=(Factor, NumberLength)>) -> Self {
+    pub fn divide(left: Factor, right: impl Iterator<Item = (Factor, NumberLength)>) -> Self {
         let right = right.collect();
         let right_hash = hash(&right);
-        Complex(Divide { left, right_hash, right }.into())
+        Complex(
+            Divide {
+                left,
+                right_hash,
+                right,
+            }
+            .into(),
+        )
     }
 
     #[inline(always)]
@@ -918,7 +964,8 @@ impl Factor {
                 }
                 Factorial(ref term) => {
                     if let Some(term) = evaluate_as_numeric(term)
-                            && let Complex(ref c) = *other {
+                        && let Complex(ref c) = *other
+                    {
                         match **c {
                             Factorial(ref other_term) => {
                                 if let Some(other_term) = evaluate_as_numeric(other_term)
@@ -942,7 +989,8 @@ impl Factor {
                 }
                 Primorial(ref term) => {
                     if let Some(term) = evaluate_as_numeric(term)
-                            && let Complex(ref c) = *other {
+                        && let Complex(ref c) = *other
+                    {
                         match **c {
                             Factorial(ref other_term) => {
                                 if let Some(other_term) = evaluate_as_numeric(other_term)
@@ -961,23 +1009,23 @@ impl Factor {
                             }
                             _ => {}
                         }
-                        if (2..=term).any(|i| {
-                            is_prime(i) && !Numeric(i).may_be_proper_divisor_of(other)
-                        }) {
+                        if (2..=term)
+                            .any(|i| is_prime(i) && !Numeric(i).may_be_proper_divisor_of(other))
+                        {
                             return false;
                         }
                     }
                 }
                 _ => {}
-            }
+            },
             _ => {}
         }
         if let Complex(ref c) = *other
-        && let Divide {
-            ref left,
-            ref right,
-            ..
-        } = **c
+            && let Divide {
+                ref left,
+                ref right,
+                ..
+            } = **c
             && (!self.may_be_proper_divisor_of(left) || !product_may_be_divisor_of(right, left))
         {
             return false;
@@ -1020,12 +1068,14 @@ impl From<&str> for Factor {
             return Numeric(numeric);
         }
         info!("Parsing expression {value}");
-        task::block_in_place(|| expression_parser::arithmetic(value)
-            .map(Factor::from)
-            .unwrap_or_else(|e| {
-                error!("Error parsing expression {value}: {e}");
-                UnknownExpression(value.into())
-            }))
+        task::block_in_place(|| {
+            expression_parser::arithmetic(value)
+                .map(Factor::from)
+                .unwrap_or_else(|e| {
+                    error!("Error parsing expression {value}: {e}");
+                    UnknownExpression(value.into())
+                })
+        })
     }
 }
 
@@ -1056,7 +1106,11 @@ impl Display for Factor {
                         })
                         .join("*")
                 )),
-                Divide { ref left, ref right, .. } => f.write_fmt(format_args!(
+                Divide {
+                    ref left,
+                    ref right,
+                    ..
+                } => f.write_fmt(format_args!(
                     "({left}/{})",
                     right
                         .iter()
@@ -1067,12 +1121,15 @@ impl Display for Factor {
                         })
                         .join("/")
                 )),
-                Power { ref base, ref exponent } => f.write_fmt(format_args!("({base})^({exponent})")),
+                Power {
+                    ref base,
+                    ref exponent,
+                } => f.write_fmt(format_args!("({base})^({exponent})")),
                 Factorial(ref input) => f.write_fmt(format_args!("({input}!)")),
                 Primorial(ref input) => f.write_fmt(format_args!("({input}#)")),
                 Fibonacci(ref input) => f.write_fmt(format_args!("I({input})")),
                 Lucas(ref input) => f.write_fmt(format_args!("lucas({input})")),
-            }
+            },
         }
     }
 }
@@ -1297,11 +1354,7 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     (a, n)
 }
 
-pub fn to_like_powers(
-    left: &Factor,
-    right: &Factor,
-    subtract: bool,
-) -> Box<[Factor]> {
+pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Box<[Factor]> {
     let mut possible_factors = BTreeMap::new();
     let mut new_left = simplify(left.clone());
     let mut new_right = simplify(right.clone());
@@ -1325,8 +1378,8 @@ pub fn to_like_powers(
                     // nth_root_exact will handle the exponent division later
                     terms.values().copied().reduce(|x, y| x.gcd(&y))
                 }
-                _ => None
-            }
+                _ => None,
+            },
             _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
@@ -1376,21 +1429,21 @@ pub fn to_like_powers_recursive_dedup(
             let factor_clone = factor.clone();
             match factor {
                 Complex(ref c) => match **c {
-                        AddSub {
-                            terms: (ref factor_left, ref factor_right),
-                            subtract,
-                        } => {
-                            let subfactors = to_like_powers(factor_left, factor_right, subtract);
-                            for subfactor in subfactors
-                                .into_iter()
-                                .filter(|subfactor| subfactor != &factor)
-                            {
-                                *to_expand.entry(subfactor).or_insert(0) += exponent;
-                            }
-                            results.extend(repeat_n(factor, exponent as usize));
+                    AddSub {
+                        terms: (ref factor_left, ref factor_right),
+                        subtract,
+                    } => {
+                        let subfactors = to_like_powers(factor_left, factor_right, subtract);
+                        for subfactor in subfactors
+                            .into_iter()
+                            .filter(|subfactor| subfactor != &factor)
+                        {
+                            *to_expand.entry(subfactor).or_insert(0) += exponent;
                         }
-                        _ => results.push(factor),
-                }
+                        results.extend(repeat_n(factor, exponent as usize));
+                    }
+                    _ => results.push(factor),
+                },
                 Numeric(n) => {
                     results.extend(find_factors_of_numeric(n));
                 }
@@ -1411,9 +1464,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
     if let Some(product_numeric) = evaluate_as_numeric(product)
         && let Some(divisor_numeric) = evaluate_as_numeric(divisor)
     {
-        return product_numeric
-            .div_exact(divisor_numeric)
-            .map(Numeric);
+        return product_numeric.div_exact(divisor_numeric).map(Numeric);
     }
     match *product {
         Complex(ref c) => match **c {
@@ -1423,19 +1474,25 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
             } => {
                 if base == divisor {
                     // x^y / x -> x^(y-1)
-                    Some(simplify_power(base,
-                                        &simplify_add_sub(exponent, &Factor::one(), true)))
+                    Some(simplify_power(
+                        base,
+                        &simplify_add_sub(exponent, &Factor::one(), true),
+                    ))
                 } else if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
                     && let Ok(exponent_numeric) = NumberLength::try_from(exponent_numeric)
                     && let Some(divisor_root) = nth_root_exact(divisor, exponent_numeric)
                 {
-                    Some(simplify_multiply(&[(div_exact(base, &divisor_root)?, exponent_numeric)].into()))
+                    Some(simplify_multiply(
+                        &[(div_exact(base, &divisor_root)?, exponent_numeric)].into(),
+                    ))
                 } else {
                     None
                 }
             }
             Multiply { ref terms, .. } => {
-                let mut divisor_terms = if let Complex(ref c) = *divisor && let Multiply { ref terms, .. } = **c {
+                let mut divisor_terms = if let Complex(ref c) = *divisor
+                    && let Multiply { ref terms, .. } = **c
+                {
                     terms.clone()
                 } else {
                     [(divisor.clone(), 1)].into()
@@ -1479,9 +1536,9 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
             }
             Divide {
                 ref left,
-                ref right, .. } => Some(simplify_divide(
-                    &div_exact(left, divisor)?,
-                    right)),
+                ref right,
+                ..
+            } => Some(simplify_divide(&div_exact(left, divisor)?, right)),
             Factorial(ref term) => {
                 if let Some(divisor) = evaluate_as_numeric(divisor)
                     && let Some(term) = evaluate_as_numeric(term)
@@ -1503,9 +1560,9 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     let mut new_term = term;
                     while !is_prime(new_term)
                         || divisor
-                        .div_exact(new_term)
-                        .inspect(|new_divisor| divisor = *new_divisor)
-                        .is_some()
+                            .div_exact(new_term)
+                            .inspect(|new_divisor| divisor = *new_divisor)
+                            .is_some()
                     {
                         new_term -= 1;
                         if divisor == 1 {
@@ -1527,8 +1584,8 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     None
                 }
             }
-            _ => None
-        }
+            _ => None,
+        },
         Factor::BigNumber(ref n) => {
             let mut n_reduced = n.as_ref();
             let mut reduced = false;
@@ -1571,9 +1628,7 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
         if factor_numeric == 1 {
             return Some(Factor::one());
         }
-        return factor_numeric
-            .nth_root_exact(root)
-            .map(Numeric);
+        return factor_numeric.nth_root_exact(root).map(Numeric);
     }
     if let Complex(ref c) = *factor {
         match **c {
@@ -1587,7 +1642,9 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
                 if let Some(exponent_numeric) = evaluate_as_numeric(exponent)
                     && let Some(reduced_exponent) = exponent_numeric.div_exact(root.into())
                 {
-                    Some(simplify_multiply(&[(base.clone(), reduced_exponent as NumberLength)].into()))
+                    Some(simplify_multiply(
+                        &[(base.clone(), reduced_exponent as NumberLength)].into(),
+                    ))
                 } else {
                     None
                 }
@@ -1598,12 +1655,14 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
             }
             Divide {
                 ref left,
-                ref right, .. } => {
+                ref right,
+                ..
+            } => {
                 let new_left = nth_root_exact(left, root)?;
                 let new_right = nth_root_of_product(right, root)?;
                 Some(simplify_divide(&new_left, &new_right))
             }
-            _ => None
+            _ => None,
         }
     } else {
         None
@@ -1657,9 +1716,7 @@ pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<Nume
 #[inline(always)]
 fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
-    let cached = FACTOR_CACHE.with_borrow(|cache|
-        cache.get(expr)?.log10_estimate.get().copied()
-    );
+    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr)?.log10_estimate.get().copied());
     match cached {
         Some(cached) => cached,
         None => {
@@ -1735,12 +1792,11 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                     Power {
                         ref base,
                         ref exponent,
-                    } => {
-                        estimate_log10_power(base, exponent)
-                    }
+                    } => estimate_log10_power(base, exponent),
                     Divide {
                         ref left,
-                        ref right, ..
+                        ref right,
+                        ..
                     } => {
                         let (num_lower, num_upper) = estimate_log10_internal(left);
                         let (denom_lower, denom_upper) = estimate_log10_of_product(right);
@@ -1776,15 +1832,19 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                         };
                         (combined_lower, combined_upper)
                     }
-                }
+                },
                 ElidedNumber(_) => {
                     // Elided numbers from factordb are always at least 51 digits
                     (50, NumberLength::MAX)
                 }
                 UnknownExpression(_) => (0, NumberLength::MAX),
             };
-            FACTOR_CACHE.with_borrow_mut(|cache| if let Ok(Some(facts)) = cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default())) {
-                facts.log10_estimate.get_or_init(|| bounds);
+            FACTOR_CACHE.with_borrow_mut(|cache| {
+                if let Ok(Some(facts)) =
+                    cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
+                {
+                    facts.log10_estimate.get_or_init(|| bounds);
+                }
             });
             bounds
         }
@@ -1793,8 +1853,8 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
 
 #[inline]
 fn estimate_log10_power(base: &Factor, exponent: &Factor) -> (NumberLength, NumberLength) {
-    let Some(exponent) = evaluate_as_numeric(exponent)
-        .and_then(|exponent| NumberLength::try_from(exponent).ok())
+    let Some(exponent) =
+        evaluate_as_numeric(exponent).and_then(|exponent| NumberLength::try_from(exponent).ok())
     else {
         return (0, NumberLength::MAX);
     };
@@ -1854,10 +1914,7 @@ pub(crate) fn estimate_log10(expr: &Factor) -> (NumberLength, NumberLength) {
     }
 }
 
-pub(crate) fn modulo_as_numeric(
-    expr: &Factor,
-    modulus: NumericFactor,
-) -> Option<NumericFactor> {
+pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
     if let Some(eval) = evaluate_as_numeric(expr) {
         return Some(eval % modulus);
     }
@@ -1909,7 +1966,9 @@ pub(crate) fn modulo_as_numeric(
                 }
                 Divide {
                     ref left,
-                    ref right, .. } => {
+                    ref right,
+                    ..
+                } => {
                     let mut result = modulo_as_numeric(left, modulus)?;
                     for (term, exponent) in right.iter() {
                         let term_mod = modulo_as_numeric(term, modulus)?
@@ -1967,8 +2026,8 @@ pub(crate) fn modulo_as_numeric(
                     }
                     Some(result)
                 }
-            }
-        }
+            },
+        },
     }
 }
 
@@ -2000,14 +2059,12 @@ fn pisano(
 pub(crate) fn simplify(expr: Factor) -> Factor {
     match expr {
         Complex(ref c) => match **c {
-            Multiply { ref terms, .. } => {
-                simplify_multiply_internal(terms).unwrap_or(expr)
-            }
+            Multiply { ref terms, .. } => simplify_multiply_internal(terms).unwrap_or(expr),
             Divide {
                 ref left,
-                ref right, .. } => {
-                simplify_divide_internal(left, right).unwrap_or(expr)
-            }
+                ref right,
+                ..
+            } => simplify_divide_internal(left, right).unwrap_or(expr),
             Power {
                 ref base,
                 ref exponent,
@@ -2020,8 +2077,8 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                 terms: (ref left, ref right),
                 subtract,
             } => simplify_add_sub_internal(left, right, subtract).unwrap_or(expr),
-            _ => expr
-        }
+            _ => expr,
+        },
         _ => {
             if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
                 Numeric(expr_numeric)
@@ -2033,7 +2090,15 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
 }
 
 fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
-    simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| Complex(AddSub {terms: (left.clone(), right.clone()), subtract}.into()))
+    simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| {
+        Complex(
+            AddSub {
+                terms: (left.clone(), right.clone()),
+                subtract,
+            }
+            .into(),
+        )
+    })
 }
 
 fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> Option<Factor> {
@@ -2049,30 +2114,45 @@ fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> O
             return if subtract {
                 Some(Numeric(0))
             } else {
-                Some(simplify_multiply(&[(new_left, 1), (Factor::two(), 1)].into()))
+                Some(simplify_multiply(
+                    &[(new_left, 1), (Factor::two(), 1)].into(),
+                ))
             };
         }
         Ordering::Greater => {}
     }
     let result_numeric = if subtract {
-        evaluate_as_numeric(&new_left).and_then(|left| left.checked_sub(evaluate_as_numeric(&new_right)?))
+        evaluate_as_numeric(&new_left)
+            .and_then(|left| left.checked_sub(evaluate_as_numeric(&new_right)?))
     } else {
-        evaluate_as_numeric(&new_left).and_then(|left| left.checked_add(evaluate_as_numeric(&new_right)?))
+        evaluate_as_numeric(&new_left)
+            .and_then(|left| left.checked_add(evaluate_as_numeric(&new_right)?))
     };
     if let Some(result_numeric) = result_numeric {
         Some(Numeric(result_numeric))
     } else if new_left != *left || new_right != *right {
-        Some(Complex(AddSub {
-            terms: (new_left, new_right),
-            subtract,
-        }.into()))
+        Some(Complex(
+            AddSub {
+                terms: (new_left, new_right),
+                subtract,
+            }
+            .into(),
+        ))
     } else {
         None
     }
 }
 
 fn simplify_power(base: &Factor, exponent: &Factor) -> Factor {
-    simplify_power_internal(base, exponent).unwrap_or_else(|| Complex(Power {base: base.clone(), exponent: exponent.clone()}.into()))
+    simplify_power_internal(base, exponent).unwrap_or_else(|| {
+        Complex(
+            Power {
+                base: base.clone(),
+                exponent: exponent.clone(),
+            }
+            .into(),
+        )
+    })
 }
 
 fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
@@ -2097,29 +2177,39 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
         Some(0) => Some(Factor::one()),
         Some(1) => Some(new_base),
         Some(n) => Some(Factor::multiply(once((new_base, n as NumberLength)))),
-        None => if *base == new_base && *exponent == new_exponent {
-            None
-        } else {
-            Some(Complex(Power {
-                base: new_base,
-                exponent: new_exponent,
-            }.into()))
+        None => {
+            if *base == new_base && *exponent == new_exponent {
+                None
+            } else {
+                Some(Complex(
+                    Power {
+                        base: new_base,
+                        exponent: new_exponent,
+                    }
+                    .into(),
+                ))
+            }
         }
     }
 }
 
 fn simplify_divide(left: &Factor, right: &BTreeMap<Factor, NumberLength>) -> Factor {
-    simplify_divide_internal(left, right).unwrap_or_else(|| Factor::divide(left.clone(), right.clone().into_iter()))
+    simplify_divide_internal(left, right)
+        .unwrap_or_else(|| Factor::divide(left.clone(), right.clone().into_iter()))
 }
 
-fn simplify_divide_internal(left: &Factor, right: &BTreeMap<Factor, NumberLength>) -> Option<Factor> {
+fn simplify_divide_internal(
+    left: &Factor,
+    right: &BTreeMap<Factor, NumberLength>,
+) -> Option<Factor> {
     let mut new_left = left.clone();
     let mut new_right = right.clone();
-    while let Complex(ref c) = new_left && let Divide {
-        left: ref left_left,
-        right: ref mid,
-        ..
-    } = **c
+    while let Complex(ref c) = new_left
+        && let Divide {
+            left: ref left_left,
+            right: ref mid,
+            ..
+        } = **c
     {
         // (left_left / mid) / right
         for (term, exponent) in mid.iter() {
@@ -2133,12 +2223,12 @@ fn simplify_divide_internal(left: &Factor, right: &BTreeMap<Factor, NumberLength
     for (term, exponent) in new_right {
         let mut simplified = simplify(term.clone());
         if let Complex(ref c) = simplified
-            && let Multiply { ref terms, .. } = **c {
+            && let Multiply { ref terms, .. } = **c
+        {
             cloned_right.remove(&term);
             for (subterm, subterm_exponent) in terms {
-                *cloned_right
-                    .entry(simplify(subterm.clone()))
-                    .or_insert(0) += exponent * subterm_exponent;
+                *cloned_right.entry(simplify(subterm.clone())).or_insert(0) +=
+                    exponent * subterm_exponent;
             }
         } else if simplified != term {
             if let Numeric(l) = new_left
@@ -2152,8 +2242,7 @@ fn simplify_divide_internal(left: &Factor, right: &BTreeMap<Factor, NumberLength
                     simplified = Numeric(r / gcd_root);
                 }
             }
-            *cloned_right.entry(simplified).or_insert(0) +=
-                cloned_right.remove(&term).unwrap();
+            *cloned_right.entry(simplified).or_insert(0) += cloned_right.remove(&term).unwrap();
         }
     }
     cloned_right.retain(|_, exponent| *exponent != 0);
@@ -2187,7 +2276,9 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
         } else {
             (term.clone(), *exponent)
         };
-        if let Complex(ref c) = term && let Multiply { ref terms, .. } = **c {
+        if let Complex(ref c) = term
+            && let Multiply { ref terms, .. } = **c
+        {
             terms
                 .clone()
                 .into_iter()
@@ -2212,11 +2303,13 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
                 Some(Factor::multiply(once((factor, power))))
             }
         }
-        _ => if new_terms == *terms {
-            None
-        } else {
-            Some(Factor::multiply(new_terms.into_iter()))
-        },
+        _ => {
+            if new_terms == *terms {
+                None
+            } else {
+                Some(Factor::multiply(new_terms.into_iter()))
+            }
+        }
     }
 }
 
@@ -2224,8 +2317,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
     if let Numeric(n) = expr {
         return Some(*n);
     }
-    let cached = FACTOR_CACHE.with_borrow(|cache|
-        cache.get(expr)?.eval_as_numeric.get().copied());
+    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr)?.eval_as_numeric.get().copied());
     match cached {
         Some(numeric) => numeric,
         None => {
@@ -2308,22 +2400,28 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                     } => match evaluate_as_numeric(base)? {
                         0 => Some(0),
                         1 => Some(1),
-                        base => base.checked_pow(u32::try_from(evaluate_as_numeric(exponent)?).ok()?),
+                        base => {
+                            base.checked_pow(u32::try_from(evaluate_as_numeric(exponent)?).ok()?)
+                        }
                     },
                     Divide {
                         ref left,
-                        ref right, .. } => {
+                        ref right,
+                        ..
+                    } => {
                         let mut result = evaluate_as_numeric(left)?;
                         for (term, exponent) in right.iter() {
-                            result =
-                                result.checked_div_exact(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
+                            result = result.checked_div_exact(
+                                evaluate_as_numeric(term)?.checked_pow(*exponent)?,
+                            )?;
                         }
                         Some(result)
                     }
                     Multiply { ref terms, .. } => {
                         let mut result: NumericFactor = 1;
                         for (term, exponent) in terms.iter() {
-                            result = result.checked_mul(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
+                            result = result
+                                .checked_mul(evaluate_as_numeric(term)?.checked_pow(*exponent)?)?;
                         }
                         Some(result)
                     }
@@ -2339,15 +2437,17 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                             left.checked_add(right)
                         }
                     }
-                }
+                },
                 ElidedNumber(_) => None,
                 UnknownExpression(_) => None,
             };
-            FACTOR_CACHE
-                .with_borrow_mut(|cache|
-                    if let Ok(Some(facts)) = cache.get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
-                        facts.eval_as_numeric.get_or_init(|| numeric);
-                    });
+            FACTOR_CACHE.with_borrow_mut(|cache| {
+                if let Ok(Some(facts)) =
+                    cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
+                {
+                    facts.eval_as_numeric.get_or_init(|| numeric);
+                }
+            });
             numeric
         }
     }
@@ -2355,7 +2455,9 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
 
 #[inline(always)]
 fn find_factors(expr: &Factor) -> Box<[Factor]> {
-    if let Numeric(n) = expr && *n < 1<<64 {
+    if let Numeric(n) = expr
+        && *n < 1 << 64
+    {
         return find_factors_of_numeric(*n);
     }
     let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr)?.factors.get().cloned());
@@ -2375,7 +2477,10 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                 if let Some(term_number) = evaluate_as_numeric(term) {
                                     lucas_factors(term_number, true).into_boxed_slice()
                                 } else {
-                                    warn!("Could not parse term number of a Lucas number: {}", term);
+                                    warn!(
+                                        "Could not parse term number of a Lucas number: {}",
+                                        term
+                                    );
                                     [].into()
                                 }
                             }
@@ -2432,7 +2537,9 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                             }
                             Divide {
                                 ref left,
-                                ref right, .. } => {
+                                ref right,
+                                ..
+                            } => {
                                 // division
                                 let mut left_recursive_factors = BTreeMap::new();
                                 let left_remaining_factors = find_factors(&simplify(left.clone()))
@@ -2441,7 +2548,8 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     .collect();
                                 let mut left_remaining_factors =
                                     count_frequencies(left_remaining_factors);
-                                while let Some((factor, exponent)) = left_remaining_factors.pop_first()
+                                while let Some((factor, exponent)) =
+                                    left_remaining_factors.pop_first()
                                 {
                                     let subfactors = if factor == *expr {
                                         [].into()
@@ -2458,7 +2566,8 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     *left_recursive_factors.entry(factor).or_insert(0) += exponent;
                                 }
                                 let mut right_remaining_factors = right.clone();
-                                while let Some((factor, exponent)) = right_remaining_factors.pop_last()
+                                while let Some((factor, exponent)) =
+                                    right_remaining_factors.pop_last()
                                 {
                                     let subfactors = find_factors(&factor);
                                     if subfactors.is_empty()
@@ -2478,14 +2587,17 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                         for (subfactor, subfactor_exponent) in
                                             count_frequencies(subfactors)
                                         {
-                                            *right_remaining_factors.entry(subfactor).or_insert(0) +=
-                                                subfactor_exponent;
+                                            *right_remaining_factors
+                                                .entry(subfactor)
+                                                .or_insert(0) += subfactor_exponent;
                                         }
                                     }
                                 }
                                 left_recursive_factors
                                     .into_iter()
-                                    .flat_map(|(factor, exponent)| repeat_n(factor, exponent as usize))
+                                    .flat_map(|(factor, exponent)| {
+                                        repeat_n(factor, exponent as usize)
+                                    })
                                     .collect()
                             }
                             Multiply { ref terms, .. } => {
@@ -2497,7 +2609,8 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     return match power {
                                         0 => [].into(),
                                         1 => find_factors(&simplify(factor.clone())),
-                                        _ => repeat_n(simplify(factor.clone()), *power as usize).collect()
+                                        _ => repeat_n(simplify(factor.clone()), *power as usize)
+                                            .collect(),
                                     };
                                 }
                                 // multiplication
@@ -2521,7 +2634,8 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                             } => {
                                 let left = simplify(left.clone());
                                 let right = simplify(right.clone());
-                                let algebraic = to_like_powers_recursive_dedup(&left, &right, subtract);
+                                let algebraic =
+                                    to_like_powers_recursive_dedup(&left, &right, subtract);
                                 if !algebraic.is_empty() {
                                     algebraic.into_boxed_slice()
                                 } else {
@@ -2555,7 +2669,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     factors.into_boxed_slice()
                                 }
                             }
-                        }
+                        },
                         ElidedNumber(ref n) => match n.chars().last() {
                             Some('0') => [Factor::two(), Factor::five()].into(),
                             Some('5') => [Factor::five()].into(),
@@ -2580,7 +2694,9 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                 })
             });
             FACTOR_CACHE.with_borrow_mut(|cache| {
-                if let Ok(Some(facts)) = cache.get_or_insert_with(expr, || Ok::<_,!>(Default::default())) {
+                if let Ok(Some(facts)) =
+                    cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
+                {
                     facts.factors.get_or_init(|| factors.clone());
                 }
             });
@@ -2627,9 +2743,9 @@ fn factor_big_num(expr: BigNumber) -> Box<[Factor]> {
             factors.push(original);
         } else {
             factors.extend(
-                divisor_map.iter().flat_map(|(factor, exponent)| {
-                    repeat_n(factor.clone(), *exponent as usize)
-                }),
+                divisor_map
+                    .iter()
+                    .flat_map(|(factor, exponent)| repeat_n(factor.clone(), *exponent as usize)),
             );
             factors.push(Factor::divide(original, divisor_map.into_iter()));
         }
@@ -2692,7 +2808,8 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 );
             }
             let factors = factors.into_boxed_slice();
-            UNIQUE_FACTOR_CACHE.with_borrow_mut(|cache| cache.insert(expr.clone(), factors.clone()));
+            UNIQUE_FACTOR_CACHE
+                .with_borrow_mut(|cache| cache.insert(expr.clone(), factors.clone()));
             factors
         }
     }
@@ -2700,12 +2817,16 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
 
 #[cfg(test)]
 mod tests {
-use crate::NumberLength;
+    use crate::NumberLength;
+    use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union, power_multiset};
+    use crate::algebraic::{
+        Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power,
+        fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union,
+        power_multiset,
+    };
     use itertools::Itertools;
     use std::iter::repeat_n;
-    use crate::algebraic::ComplexFactor::Divide;
 
     impl From<String> for Factor {
         fn from(value: String) -> Self {

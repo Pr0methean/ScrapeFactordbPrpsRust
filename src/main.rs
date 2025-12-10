@@ -22,6 +22,7 @@ use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
+use ahash::RandomState;
 use async_backtrace::taskdump_tree;
 use async_backtrace::ඞ::Frame;
 use async_backtrace::{Location, framed};
@@ -34,6 +35,8 @@ use net::NumberStatus::FullyFactored;
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use primitive_types::U256;
+use quick_cache::UnitWeighter;
+use quick_cache::unsync::{Cache, DefaultLifecycle};
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
 use regex::Regex;
@@ -47,12 +50,9 @@ use std::num::{NonZero, NonZeroU32};
 use std::ops::Add;
 use std::panic;
 use std::process::exit;
+use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use std::sync::OnceLock;
-use ahash::RandomState;
-use quick_cache::UnitWeighter;
-use quick_cache::unsync::{Cache, DefaultLifecycle};
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -69,7 +69,13 @@ fn get_random_state() -> &'static RandomState {
 }
 
 pub fn create_cache<T: Eq + Hash, U>(capacity: usize) -> BasicCache<T, U> {
-    Cache::with(capacity, Default::default(), Default::default(), get_random_state().clone(), Default::default())
+    Cache::with(
+        capacity,
+        Default::default(),
+        Default::default(),
+        get_random_state().clone(),
+        Default::default(),
+    )
 }
 
 pub fn hash(input: impl Hash) -> u64 {

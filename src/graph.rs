@@ -1,7 +1,8 @@
 use crate::Factor::Complex;
-use crate::algebraic::ComplexFactor;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
+use crate::algebraic::ComplexFactor;
+use crate::algebraic::ComplexFactor::Multiply;
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::div_exact;
 use crate::algebraic::{
@@ -11,11 +12,15 @@ use crate::algebraic::{
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
 use crate::net::NumberStatus::{FullyFactored, Prime};
-use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt, ProcessedStatusApiResponse};
+use crate::net::{
+    FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
+    ProcessedStatusApiResponse,
+};
 use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use async_backtrace::framed;
 use gryf::Graph;
-use gryf::algo::{Connected};
+use gryf::adapt::Subgraph;
+use gryf::algo::Connected;
 use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
@@ -24,16 +29,14 @@ use gryf::storage::{AdjMatrix, Stable};
 use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
+use rand::rng;
+use rand::seq::SliceRandom;
 use replace_with::replace_with_or_abort;
 use std::cmp::Ordering;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
-use gryf::adapt::Subgraph;
-use rand::rng;
-use rand::seq::SliceRandom;
-use crate::algebraic::ComplexFactor::{Multiply};
 
 pub type EntryId = u128;
 
@@ -223,8 +226,7 @@ pub fn add_factor_node(
         .map(|x| (x, false))
         .unwrap_or_else(|| {
             let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
-            data.vertex_id_by_expr
-                .insert(factor.clone(), factor_vid);
+            data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
             let factor_numeric = evaluate_as_numeric(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
             let specifier = as_specifier(factor_vid, data, None);
@@ -381,17 +383,19 @@ pub fn is_known_factor(
     factor_vid: VertexId,
     composite_vid: VertexId,
 ) -> bool {
-    factor_vid != composite_vid && (matches!(
-        get_edge(
-            &data.divisibility_graph,
-            factor_vid,
-            composite_vid,
-            &mut data.deleted_synonyms
-        ),
-        Some(Direct) | Some(Transitive)
-    ) || Connected::on(&Subgraph::new(&data.divisibility_graph)
-            .filter_edge(|edge_id, graph, _|
-                graph.edge(edge_id).copied() != Some(NotFactor)))
+    factor_vid != composite_vid
+        && (matches!(
+            get_edge(
+                &data.divisibility_graph,
+                factor_vid,
+                composite_vid,
+                &mut data.deleted_synonyms
+            ),
+            Some(Direct) | Some(Transitive)
+        ) || Connected::on(
+            &Subgraph::new(&data.divisibility_graph)
+                .filter_edge(|edge_id, graph, _| graph.edge(edge_id).copied() != Some(NotFactor)),
+        )
         .between(&factor_vid, &composite_vid)
         .strong()
         .run()
@@ -635,13 +639,7 @@ pub async fn find_and_submit_factors(
     let mut data = FactorData::default();
     let root_factor = Factor::from(digits_or_expr.as_str());
     let (root_vid, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
-        add_factor_node(
-            &mut data,
-            root_factor,
-            None,
-            Some(id),
-            http,
-        )
+        add_factor_node(&mut data, root_factor, None, Some(id), http)
     } else {
         let ProcessedStatusApiResponse {
             factors: known_factors,
@@ -729,20 +727,24 @@ pub async fn find_and_submit_factors(
     // Simplest case: try submitting all factors as factors of the root
     // Sort backwards so that we try to submit largest factors first
     let mut any_failed_retryably = false;
-    let (root_denominator_terms, root_denominator) = if let Complex(c) =
-        get_vertex(
-            &data.divisibility_graph,
-            root_vid,
-            &mut data.deleted_synonyms,
-        ) && let ComplexFactor::Divide { ref right, right_hash, .. } = **c {
-        let multiply = Complex(Multiply {
-            terms_hash: right_hash,
-            terms: right.clone()
-        }.into());
-        (
-            Some(right.clone()),
-            Some(multiply),
-        )
+    let (root_denominator_terms, root_denominator) = if let Complex(c) = get_vertex(
+        &data.divisibility_graph,
+        root_vid,
+        &mut data.deleted_synonyms,
+    ) && let ComplexFactor::Divide {
+        ref right,
+        right_hash,
+        ..
+    } = **c
+    {
+        let multiply = Complex(
+            Multiply {
+                terms_hash: right_hash,
+                terms: right.clone(),
+            }
+            .into(),
+        );
+        (Some(right.clone()), Some(multiply))
     } else {
         (None, None)
     };
@@ -817,7 +819,10 @@ pub async fn find_and_submit_factors(
                     .checked_with_root_denominator = true;
                     if root_denominator.may_be_proper_divisor_of(&factor) {
                         let divided = div_exact(&factor, root_denominator).unwrap_or_else(|| {
-                            Factor::divide(factor.clone(), root_denominator_terms.clone().unwrap().into_iter())
+                            Factor::divide(
+                                factor.clone(),
+                                root_denominator_terms.clone().unwrap().into_iter(),
+                            )
                         });
                         let (divided_vid, added) =
                             add_factor_node(&mut data, divided, Some(root_vid), None, http);
@@ -837,7 +842,9 @@ pub async fn find_and_submit_factors(
                 dnd_since_last_accepted += 1;
                 dnd_since_last_shuffle += 1;
                 if dnd_since_last_accepted == DESPERATION_SHUFFLE_THRESHOLD {
-                    warn!("Switching to graph-based approach because we've received 30 'Does not divide' responses since the last accepted one.");
+                    warn!(
+                        "Switching to graph-based approach because we've received 30 'Does not divide' responses since the last accepted one."
+                    );
                 }
             }
             OtherError => {
@@ -862,12 +869,16 @@ pub async fn find_and_submit_factors(
     let mut iters_without_progress = 0;
     let mut node_count = 1; // print graph stats on first loop iteration
     // Sort backwards so that we try to submit largest factors first
-    let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid, if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
-        dnd_since_last_shuffle = 0;
-        false
-    } else {
-        true
-    });
+    let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(
+        &mut data,
+        root_vid,
+        if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
+            dnd_since_last_shuffle = 0;
+            false
+        } else {
+            true
+        },
+    );
     'graph_iter: while !facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms)
         .expect("Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
@@ -1149,7 +1160,9 @@ pub async fn find_and_submit_factors(
                     dnd_since_last_accepted += 1;
                     dnd_since_last_shuffle += 1;
                     if dnd_since_last_accepted == DESPERATION_ABORT_THRESHOLD {
-                        error!("{id}: Aborting find_and_submit_factors due to too many 'Does not divide' responses!");
+                        error!(
+                            "{id}: Aborting find_and_submit_factors due to too many 'Does not divide' responses!"
+                        );
                         return accepted_factors > 0;
                     }
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
@@ -1172,7 +1185,10 @@ pub async fn find_and_submit_factors(
                             );
                             let divided =
                                 div_exact(factor, root_denominator).unwrap_or_else(|| {
-                                    Factor::divide(factor.clone(), root_denominator_terms.clone().unwrap().into_iter())
+                                    Factor::divide(
+                                        factor.clone(),
+                                        root_denominator_terms.clone().unwrap().into_iter(),
+                                    )
                                 });
                             let (divided_vid, added) =
                                 add_factor_node(&mut data, divided, Some(root_vid), None, http);
@@ -1230,7 +1246,8 @@ pub async fn find_and_submit_factors(
                 }
             }
         }
-        if !factors_to_submit.is_empty() && dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
+        if !factors_to_submit.is_empty() && dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD
+        {
             warn!("Shuffling factors_to_submit due to too many 'Does not divide' responses");
             factors_to_submit.make_contiguous().shuffle(&mut rng());
             dnd_since_last_shuffle = 0;
@@ -1282,7 +1299,11 @@ pub async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn vertex_ids_except<T: FromIterator<VertexId>>(data: &mut FactorData, root_vid: VertexId, sorted: bool) -> T {
+fn vertex_ids_except<T: FromIterator<VertexId>>(
+    data: &mut FactorData,
+    root_vid: VertexId,
+    sorted: bool,
+) -> T {
     let ids = data.divisibility_graph.vertices();
     let ids = if sorted {
         ids.sorted_by(|v1, v2| {
@@ -1642,9 +1663,12 @@ pub fn facts_of_mut<'a>(
 
 #[cfg(test)]
 mod tests {
-    use crate::algebraic::Factor;
     use crate::FAILED_U_SUBMISSIONS_OUT;
-    use crate::graph::{add_factor_node, find_and_submit_factors, is_known_factor, propagate_divisibility, FactorData};
+    use crate::algebraic::Factor;
+    use crate::graph::{
+        FactorData, add_factor_node, find_and_submit_factors, is_known_factor,
+        propagate_divisibility,
+    };
 
     #[test]
     fn test_is_known_factor() {
@@ -1663,13 +1687,17 @@ mod tests {
         let mut data = FactorData::default();
         let (node1, added) = add_factor_node(&mut data, Factor::from("2^16-1"), None, None, &http);
         assert!(added);
-        let (node2, added) = add_factor_node(&mut data, Factor::from("2^8-1"), Some(node1), None, &http);
+        let (node2, added) =
+            add_factor_node(&mut data, Factor::from("2^8-1"), Some(node1), None, &http);
         assert!(added);
-        let (node3, added) = add_factor_node(&mut data, Factor::from("2^4-1"), Some(node1), None, &http);
+        let (node3, added) =
+            add_factor_node(&mut data, Factor::from("2^4-1"), Some(node1), None, &http);
         assert!(added);
-        let (node4, added) = add_factor_node(&mut data, Factor::from("2^4+1"), Some(node1), None, &http);
+        let (node4, added) =
+            add_factor_node(&mut data, Factor::from("2^4+1"), Some(node1), None, &http);
         assert!(added);
-        let (node5, added) = add_factor_node(&mut data, Factor::from("2^8+1"), Some(node1), None, &http);
+        let (node5, added) =
+            add_factor_node(&mut data, Factor::from("2^8+1"), Some(node1), None, &http);
         assert!(added);
         drop(http);
         propagate_divisibility(&mut data, node2, node1, false);
@@ -1709,7 +1737,9 @@ mod tests {
         runtime.block_on(async {
             FAILED_U_SUBMISSIONS_OUT
                 .get_or_init(async || {
-                    Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
+                    Mutex::new(
+                        File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap(),
+                    )
                 })
                 .await;
             let (_channel, shutdown) = Monitor::new();
@@ -1720,7 +1750,7 @@ mod tests {
                 format!("I({})", 2 * 3 * 5 * 7 * 11 * 13 * 17 * 19).into(),
                 true,
             )
-                .await
+            .await
         });
         runtime.shutdown_background();
     }
