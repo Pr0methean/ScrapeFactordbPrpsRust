@@ -20,11 +20,12 @@ use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::{once, repeat_n};
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
+use ahash::RandomState;
 use object_pool::{Pool, Reusable};
 use tokio::task;
 use yamaquasi::Algo::Siqs;
@@ -594,12 +595,20 @@ impl Default for FactorBeingParsed {
     }
 }
 
+fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
+    let (left, right) = terms;
+    let invariant_hasher_state = RandomState::with_seed(0x1337c0de);
+    let left_hash = invariant_hasher_state.hash_one(left);
+    let right_hash = invariant_hasher_state.hash_one(right);
+    state.write_u64(left_hash.wrapping_add(right_hash));
+}
+
 #[derive(Derivative, PartialOrd, Ord)]
-#[derivative(Clone, Debug, Hash, Eq, PartialEq)]
+#[derivative(Clone, Debug, Hash, Eq)]
 pub enum ComplexFactor {
     AddSub {
-        left: Factor,
-        right: Factor,
+        #[derivative(Hash(hash_with="crate::algebraic::hash_add_sub"))]
+        terms: (Factor, Factor),
         subtract: bool,
     },
     Multiply {
@@ -623,7 +632,7 @@ pub enum ComplexFactor {
     Primorial(Factor),
 }
 
-#[derive(Clone, Debug, Hash, Ord, PartialOrd, Eq)]
+#[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Factor {
     Numeric(NumericFactor),
     BigNumber(BigNumber),
@@ -632,26 +641,22 @@ pub enum Factor {
     Complex(Arc<ComplexFactor>),
 }
 
-impl PartialEq for Factor {
+impl PartialEq for ComplexFactor {
     fn eq(&self, other: &Self) -> bool {
         match self {
-            Numeric(n) => matches!(other, Numeric(other_n) if other_n == n),
-            Factor::BigNumber(n) => matches!(other, Factor::BigNumber(other_n) if other_n == n),
-            ElidedNumber(n) => matches!(other, ElidedNumber(other_n) if other_n == n),
-            UnknownExpression(n) => matches!(other, UnknownExpression(other_n) if other_n == n),
-            Complex(c) => if let Complex(other_c) = other {
-                if other_c == c {
-                    true
-                } else if let AddSub {left: ref x, right: ref y, subtract: false} = **c {
-                    matches!(**other_c, AddSub {left: ref other_x, right: ref other_y, subtract: false}
-                            if other_x == y && other_y == x)
-
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
+            AddSub {terms: (x, y), subtract} => matches!(other, AddSub {terms: (ox, oy), subtract: os} if
+                os == subtract
+            && (x == ox && y == oy) || (!subtract && x == oy && y == ox)),
+            ComplexFactor::Multiply { terms_hash, terms } => matches!(other, Multiply { terms_hash: other_terms_hash, terms: other_terms }
+                if terms_hash == other_terms_hash && terms == other_terms),
+            ComplexFactor::Divide { left, right_hash, right } => matches!(other, Divide {left: other_left, right_hash: other_right_hash, right: other_right }
+                if right_hash == other_right_hash && left == other_left && right == other_right),
+            ComplexFactor::Power { base, exponent } => matches!(other, Power {base: other_base, exponent: other_exponent}
+                if base == other_base && exponent == other_exponent),
+            Fibonacci(term) => matches!(other, Fibonacci(other_term) if term == other_term),
+            Lucas(term) => matches!(other, Lucas(other_term) if term == other_term),
+            Factorial(term) => matches!(other, Factorial(other_term) if term == other_term),
+            Primorial(term) => matches!(other, Primorial(other_term) if term == other_term),
         }
     }
 }
@@ -664,7 +669,7 @@ impl From<FactorBeingParsed> for Factor {
             FactorBeingParsed::BigNumber(n) => Factor::BigNumber(n),
             FactorBeingParsed::ElidedNumber(n) => ElidedNumber(n),
             FactorBeingParsed::AddSub { left, right, subtract } =>
-                Complex(AddSub { left: Factor::from(*left), right: Factor::from(*right), subtract }.into()),
+                Complex(AddSub { terms: (Factor::from(*left), Factor::from(*right)), subtract }.into()),
             FactorBeingParsed::Multiply { terms } =>
                 Factor::multiply(terms.into_iter().map(|(term, power)| (Factor::from(term), power))),
             FactorBeingParsed::Divide { left, right } => Factor::divide((*left).into(), right.into_iter().map(|(term, power)| (Factor::from(term), power))),
@@ -1034,8 +1039,7 @@ impl Display for Factor {
             ElidedNumber(e) => e.fmt(f),
             Complex(c) => match **c {
                 AddSub {
-                    ref left,
-                    ref right,
+                    terms: (ref left, ref right),
                     subtract,
                 } => f.write_fmt(format_args!(
                     "({left}{}{right})",
@@ -1373,8 +1377,7 @@ pub fn to_like_powers_recursive_dedup(
             match factor {
                 Complex(ref c) => match **c {
                         AddSub {
-                            left: ref factor_left,
-                            right: ref factor_right,
+                            terms: (ref factor_left, ref factor_right),
                             subtract,
                         } => {
                             let subfactors = to_like_powers(factor_left, factor_right, subtract);
@@ -1513,8 +1516,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                 None
             }
             AddSub {
-                ref left,
-                ref right,
+                terms: (ref left, ref right),
                 subtract,
             } => {
                 if let Some(new_left) = div_exact(left, divisor)
@@ -1752,8 +1754,7 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                         (product_lower, product_upper)
                     }
                     AddSub {
-                        ref left,
-                        ref right,
+                        terms: (ref left, ref right),
                         subtract,
                     } => {
                         // addition/subtraction
@@ -1880,8 +1881,7 @@ pub(crate) fn modulo_as_numeric(
             ElidedNumber(_) | UnknownExpression(_) => None,
             Complex(ref c) => match **c {
                 AddSub {
-                    ref left,
-                    ref right,
+                    terms: (ref left, ref right),
                     subtract,
                 } => {
                     let left = modulo_as_numeric(left, modulus)?;
@@ -2017,8 +2017,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
                 _ => expr,
             },
             AddSub {
-                ref left,
-                ref right,
+                terms: (ref left, ref right),
                 subtract,
             } => simplify_add_sub_internal(left, right, subtract).unwrap_or(expr),
             _ => expr
@@ -2034,7 +2033,7 @@ pub(crate) fn simplify(expr: Factor) -> Factor {
 }
 
 fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
-    simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| Complex(AddSub {left: left.clone(), right: right.clone(), subtract}.into()))
+    simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| Complex(AddSub {terms: (left.clone(), right.clone()), subtract}.into()))
 }
 
 fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> Option<Factor> {
@@ -2064,8 +2063,7 @@ fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> O
         Some(Numeric(result_numeric))
     } else if new_left != *left || new_right != *right {
         Some(Complex(AddSub {
-            left: new_left,
-            right: new_right,
+            terms: (new_left, new_right),
             subtract,
         }.into()))
     } else {
@@ -2330,8 +2328,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                         Some(result)
                     }
                     AddSub {
-                        ref left,
-                        ref right,
+                        terms: (ref left, ref right),
                         subtract,
                     } => {
                         let left = evaluate_as_numeric(left)?;
@@ -2519,8 +2516,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                 factors.into_boxed_slice()
                             }
                             AddSub {
-                                ref left,
-                                ref right,
+                                terms: (ref left, ref right),
                                 subtract,
                             } => {
                                 let left = simplify(left.clone());
