@@ -765,13 +765,13 @@ pub async fn find_and_submit_factors(
             &mut data.deleted_synonyms,
         );
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
-        if factor
-            .as_str_non_numeric()
-            .is_some_and(|expr| expr.contains("..."))
+        if factor.is_elided()
         {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
             info!("{id}: Temporarily skipping {factor} because digits are missing");
+            factors_to_submit_in_graph
+                .extend(add_factors_to_graph(http, &mut data, root_vid, factor_vid).await);
             factors_to_submit_in_graph.push_back(factor_vid);
             continue;
         }
@@ -934,9 +934,7 @@ pub async fn find_and_submit_factors(
             factor_vid,
             &mut data.deleted_synonyms,
         );
-        if factor
-            .as_str_non_numeric()
-            .is_some_and(|expr| expr.contains("..."))
+        if factor.is_elided()
         {
             info!("{id}: Temporarily skipping {factor} because digits are missing");
             // Can't submit factor right now because we don't have it in a representable form, but
@@ -1149,9 +1147,7 @@ pub async fn find_and_submit_factors(
                 cofactor_vid,
                 &mut data.deleted_synonyms,
             );
-            if cofactor
-                .as_str_non_numeric()
-                .is_some_and(|expr| expr.contains("..."))
+            if cofactor.is_elided()
                 && facts_of(
                     &data.number_facts_map,
                     cofactor_vid,
@@ -1430,14 +1426,11 @@ async fn add_factors_to_graph(
     .expect("add_factors_to_graph called on a number that's not entered in number_facts_map");
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
-    let elided = matches!(
-        get_vertex(
+    let elided = get_vertex(
             &data.divisibility_graph,
             factor_vid,
             &mut data.deleted_synonyms
-        ),
-        Factor::ElidedNumber(_)
-    );
+        ).is_elided();
     // First, check factordb.com/api for already-known factors
     let needs_update = facts.needs_update();
     if needs_update || elided {
@@ -1624,11 +1617,10 @@ fn merge_equivalent_expressions(
         .to_vec()
     } else {
         info!("Merging equivalent expressions {current} and {equivalent}");
-        let current_expr = current.to_owned_string();
-        let current_len = if current_expr.contains("...") {
+        let current_len = if current.is_elided() {
             usize::MAX // replace elided numbers with full ones ASAP
         } else {
-            current_expr.len()
+            current.to_owned_string().len()
         };
         let facts = facts_of_mut(
             &mut data.number_facts_map,
@@ -1650,8 +1642,7 @@ fn merge_equivalent_expressions(
         );
         facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
         facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
-        let equivalent_expr = equivalent.to_owned_string();
-        if !equivalent_expr.contains("...") && equivalent_expr.len() < current_len {
+        if !equivalent.is_elided() && equivalent.to_owned_string().len() < current_len {
             let _ = replace(
                 data.divisibility_graph.vertex_mut(factor_vid).unwrap(),
                 equivalent,

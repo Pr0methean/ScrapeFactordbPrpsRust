@@ -1052,6 +1052,10 @@ impl Factor {
         }
         .contains(&other_last_digit)
     }
+
+    pub fn is_elided(&self) -> bool {
+        matches!(self, ElidedNumber(_))
+    }
 }
 
 impl From<NumericFactor> for Factor {
