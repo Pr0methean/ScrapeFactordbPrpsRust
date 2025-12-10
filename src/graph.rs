@@ -31,6 +31,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
 use gryf::adapt::Subgraph;
+use rand::rng;
+use rand::seq::SliceRandom;
 use crate::algebraic::ComplexFactor::{Multiply};
 
 pub type EntryId = u128;
@@ -617,6 +619,11 @@ impl NumberFacts {
     }
 }
 
+// Shuffle the list of factors if we've received too many "Does not divide" responses since the last
+// "Factor submitted" response. If the problem persists after shuffling, abort.
+const DESPERATION_SHUFFLE_THRESHOLD: usize = 30;
+const DESPERATION_ABORT_THRESHOLD: usize = 200;
+
 #[framed]
 pub async fn find_and_submit_factors(
     http: &mut impl FactorDbClientReadIdsAndExprs,
@@ -739,7 +746,9 @@ pub async fn find_and_submit_factors(
     } else {
         (None, None)
     };
-    let known_factors = vertex_ids_except::<Box<[_]>>(&mut data, root_vid);
+    let mut dnd_since_last_accepted = 0;
+    let mut dnd_since_last_shuffle = 0;
+    let known_factors = vertex_ids_except::<Box<[_]>>(&mut data, root_vid, true);
     for factor_vid in known_factors.into_iter() {
         let factor = get_vertex(
             &data.divisibility_graph,
@@ -787,6 +796,8 @@ pub async fn find_and_submit_factors(
                     ),
                     NumberFacts::marked_stale,
                 );
+                dnd_since_last_accepted = 0;
+                dnd_since_last_shuffle = 0;
                 accepted_factors += 1;
                 propagate_divisibility(&mut data, factor_vid, root_vid, false);
             }
@@ -823,6 +834,11 @@ pub async fn find_and_submit_factors(
                         }
                     }
                 }
+                dnd_since_last_accepted += 1;
+                dnd_since_last_shuffle += 1;
+                if dnd_since_last_accepted == DESPERATION_SHUFFLE_THRESHOLD {
+                    warn!("Switching to graph-based approach because we've received 30 'Does not divide' responses since the last accepted one.");
+                }
             }
             OtherError => {
                 any_failed_retryably = true;
@@ -846,7 +862,7 @@ pub async fn find_and_submit_factors(
     let mut iters_without_progress = 0;
     let mut node_count = 1; // print graph stats on first loop iteration
     // Sort backwards so that we try to submit largest factors first
-    let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid);
+    let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid, dnd_since_last_shuffle < DESPERATION_SHUFFLE_THRESHOLD);
     'graph_iter: while !facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms)
         .expect("Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
@@ -917,7 +933,7 @@ pub async fn find_and_submit_factors(
             factors_to_submit.push_back(factor_vid);
             continue;
         }
-        let dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid)
+        let dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid, dnd_since_last_shuffle < DESPERATION_SHUFFLE_THRESHOLD)
             .into_iter()
             .filter(|dest_vid|
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
@@ -1116,6 +1132,7 @@ pub async fn find_and_submit_factors(
                         NumberFacts::marked_stale,
                     );
                     accepted_factors += 1;
+                    dnd_since_last_accepted = 0;
                     iters_without_progress = 0;
                     propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
                     // Move newly-accepted factor to the back of the list
@@ -1123,6 +1140,11 @@ pub async fn find_and_submit_factors(
                     continue 'graph_iter;
                 }
                 DoesNotDivide => {
+                    dnd_since_last_accepted += 1;
+                    if dnd_since_last_accepted == DESPERATION_ABORT_THRESHOLD {
+                        error!("{id}: Aborting find_and_submit_factors due to too many 'Does not divide' responses!");
+                        return accepted_factors > 0;
+                    }
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     let mut subfactors =
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
@@ -1201,6 +1223,11 @@ pub async fn find_and_submit_factors(
                 }
             }
         }
+        if !factors_to_submit.is_empty() && dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
+            warn!("Shuffling factors_to_submit due to too many 'Does not divide' responses");
+            factors_to_submit.make_contiguous().shuffle(&mut rng());
+            dnd_since_last_shuffle = 0;
+        }
         if submission_errors {
             factors_to_submit.push_back(factor_vid);
         }
@@ -1248,13 +1275,18 @@ pub async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn vertex_ids_except<T: FromIterator<VertexId>>(data: &mut FactorData, root_vid: VertexId) -> T {
-    data.divisibility_graph
-        .vertices()
-        .sorted_by(|v1, v2| {
+fn vertex_ids_except<T: FromIterator<VertexId>>(data: &mut FactorData, root_vid: VertexId, sorted: bool) -> T {
+    let ids = data.divisibility_graph.vertices();
+    let ids = if sorted {
+        ids.sorted_by(|v1, v2| {
             compare_by_ref(&data.number_facts_map, v2, v1, &mut data.deleted_synonyms)
         })
-        .map(|vertex| vertex.id)
+    } else {
+        let mut ids = ids.collect::<Vec<_>>();
+        ids.shuffle(&mut rng());
+        ids.into_iter()
+    };
+    ids.map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<T>()
 }
