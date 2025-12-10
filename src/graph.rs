@@ -1062,7 +1062,7 @@ pub async fn find_and_submit_factors(
                 let unknown_non_factors = by_status.remove(&false).unwrap_or(vec![]);
                 drop(by_status);
                 if possible_factors.is_empty() {
-                    info!("{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on FactorDB check)");
+                    info!("{id}: Skipping submission of {factor} to {cofactor} because it can't divide any of the remaining cofactors (based on FactorDB check)");
                     // No possible path from factor to cofactor
                     for unknown_non_factor in unknown_non_factors {
                         rule_out_divisibility(&mut data, factor_vid, unknown_non_factor);
