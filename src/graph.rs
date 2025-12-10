@@ -868,7 +868,6 @@ pub async fn find_and_submit_factors(
     //     exponent.
     let mut iters_without_progress = 0;
     let mut iters_to_next_report = 0;
-    let mut node_count = 1; // print graph stats on first loop iteration
     // Sort backwards so that we try to submit largest factors first
     let mut factors_to_submit = vertex_ids_except::<VecDeque<_>>(
         &mut data,
@@ -880,9 +879,11 @@ pub async fn find_and_submit_factors(
             true
         },
     );
+    info!("{id}: {} factors left to submit after first pass", factors_to_submit.len());
     'graph_iter: while !facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms)
         .expect("Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
+        && let node_count = data.divisibility_graph.vertex_count()
         && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
         && let Some(factor_vid) = factors_to_submit.pop_front()
         && let edge_count = data.divisibility_graph.edge_count()
@@ -891,7 +892,6 @@ pub async fn find_and_submit_factors(
     {
         if iters_to_next_report == 0 {
             iters_to_next_report = node_count;
-            node_count = data.divisibility_graph.vertex_count();
             let (direct_divisors, non_factors) = data
                 .divisibility_graph
                 .edges()
