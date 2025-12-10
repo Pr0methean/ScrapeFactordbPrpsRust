@@ -866,7 +866,7 @@ pub async fn find_and_submit_factors(
     let mut iters_without_progress = 0;
     let mut iters_to_next_report = 0;
     // Sort backwards so that we try to submit largest factors first
-    info!("{id}: {} factors left to submit after first pass");
+    info!("{id}: {} factors left to submit after first pass", factors_to_submit_in_graph.len());
     'graph_iter: while !facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms)
         .expect("Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
@@ -1363,7 +1363,7 @@ async fn add_factors_to_graph(
     .expect("add_factors_to_graph called on a number that's not entered in number_facts_map");
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
-    let elided = matches!(get_vertex(&mut data.divisibility_graph, factor_vid, &mut data.deleted_synonyms), Some(Factor::ElidedNumber(_)));
+    let elided = matches!(get_vertex(&mut data.divisibility_graph, factor_vid, &mut data.deleted_synonyms), Factor::ElidedNumber(_));
     // First, check factordb.com/api for already-known factors
     if facts.needs_update() || elided {
         let factor_specifier = as_specifier(factor_vid, data, None);
