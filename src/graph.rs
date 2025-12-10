@@ -670,8 +670,6 @@ pub async fn find_and_submit_factors(
                             if added {
                                 propagate_divisibility(&mut data, factor_vid, root_node, false);
                                 digits_or_expr_full.push(factor_vid);
-                            } else {
-                                warn!("{id}: Tried to add a duplicate node");
                             }
                             factor_vid
                         })

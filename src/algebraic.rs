@@ -1,3 +1,4 @@
+use std::backtrace::Backtrace;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
@@ -737,11 +738,17 @@ type UniqueFactorCache = BasicCache<Factor, Box<[Factor]>>;
 
 static FACTOR_CACHE_POOL: OnceLock<Pool<FactorCache>> = OnceLock::new();
 static UNIQUE_FACTOR_CACHE_POOL: OnceLock<Pool<UniqueFactorCache>> = OnceLock::new();
-const CACHE_POOL_SIZE: usize = 16;
+const CACHE_POOL_SIZE: usize = 4;
 
 thread_local! {
-    static FACTOR_CACHE: RefCell<Reusable<'static, FactorCache>> = RefCell::new(FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 20))).pull(|| create_cache(1 << 20)));
-    static UNIQUE_FACTOR_CACHE: RefCell<Reusable<'static, UniqueFactorCache>> = RefCell::new(UNIQUE_FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 14))).pull(|| create_cache(1 << 14)));
+    static FACTOR_CACHE: RefCell<Reusable<'static, FactorCache>> = RefCell::new(FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 20))).pull(|| {
+        error!("Too many instances pulled from FACTOR_CACHE!\n{}", Backtrace::capture());
+        create_cache(1 << 20)
+    }));
+    static UNIQUE_FACTOR_CACHE: RefCell<Reusable<'static, UniqueFactorCache>> = RefCell::new(UNIQUE_FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 14))).pull(|| {
+        error!("Too many instances pulled from UNIQUE_FACTOR_CACHE!\n{}", Backtrace::capture());
+        create_cache(1 << 14)
+    }));
 }
 
 impl Default for Factor {
