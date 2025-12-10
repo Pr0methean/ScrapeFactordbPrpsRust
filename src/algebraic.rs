@@ -1,4 +1,3 @@
-use std::backtrace::Backtrace;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
@@ -22,6 +21,7 @@ use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
 use object_pool::{Pool, Reusable};
+use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2202,7 +2202,7 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
 
 fn simplify_divide(left: &Factor, right: &BTreeMap<Factor, NumberLength>) -> Factor {
     simplify_divide_internal(left, right)
-        .unwrap_or_else(|| Factor::divide(left.clone(), right.clone().into_iter()))
+        .unwrap_or_else(|| Factor::divide(left.clone(), right.clone()))
 }
 
 fn simplify_divide_internal(
@@ -2262,12 +2262,12 @@ fn simplify_divide_internal(
     } else if new_left == *left && cloned_right == *right {
         None
     } else {
-        Some(Factor::divide(new_left, cloned_right.into_iter()))
+        Some(Factor::divide(new_left, cloned_right))
     }
 }
 
 fn simplify_multiply(terms: &BTreeMap<Factor, NumberLength>) -> Factor {
-    simplify_multiply_internal(terms).unwrap_or_else(|| Factor::multiply(terms.clone().into_iter()))
+    simplify_multiply_internal(terms).unwrap_or_else(|| Factor::multiply(terms.clone()))
 }
 
 fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<Factor> {
@@ -2314,7 +2314,7 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             if new_terms == *terms {
                 None
             } else {
-                Some(Factor::multiply(new_terms.into_iter()))
+                Some(Factor::multiply(new_terms))
             }
         }
     }
@@ -2540,7 +2540,9 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     .unwrap_or(MAX_REPEATS)
                                     .min(MAX_REPEATS);
                                 let base_factors = find_factors(&simplify(base.clone()));
-                                repeat_n(base_factors, power.min(MAX_REPEATS)).flatten().collect()
+                                repeat_n(base_factors, power.min(MAX_REPEATS))
+                                    .flatten()
+                                    .collect()
                             }
                             Divide {
                                 ref left,
@@ -2616,8 +2618,11 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     return match power {
                                         0 => [].into(),
                                         1 => find_factors(&simplify(factor.clone())),
-                                        _ => repeat_n(simplify(factor.clone()), (*power as usize).min(MAX_REPEATS))
-                                            .collect(),
+                                        _ => repeat_n(
+                                            simplify(factor.clone()),
+                                            (*power as usize).min(MAX_REPEATS),
+                                        )
+                                        .collect(),
                                     };
                                 }
                                 // multiplication
@@ -2755,7 +2760,7 @@ fn factor_big_num(expr: BigNumber) -> Box<[Factor]> {
                     .iter()
                     .flat_map(|(factor, exponent)| repeat_n(factor.clone(), *exponent as usize)),
             );
-            factors.push(Factor::divide(original, divisor_map.into_iter()));
+            factors.push(Factor::divide(original, divisor_map));
         }
     }
     factors.into_boxed_slice()
@@ -2828,10 +2833,14 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union, power_multiset, ComplexFactor};
+    use crate::algebraic::{
+        ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
+        factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection,
+        multiset_union, power_multiset,
+    };
+    use ahash::RandomState;
     use itertools::Itertools;
     use std::iter::repeat_n;
-    use ahash::RandomState;
 
     impl From<String> for Factor {
         fn from(value: String) -> Self {
@@ -3436,7 +3445,7 @@ mod tests {
         use super::*;
         use alloc::fmt::Debug;
         use std::collections::BTreeMap;
-        use std::hash::{Hash};
+        use std::hash::Hash;
         fn assert_eq_and_same_hash<T: Eq + Hash + Debug>(left: T, right: T, message: &str) {
             assert_eq!(left, right, "In Eq: {message}");
             let hasher = RandomState::new();
@@ -3519,7 +3528,11 @@ mod tests {
                 subtract: false,
             };
 
-            assert_eq_and_same_hash(add1, add2, "two identical addition instances should be equal");
+            assert_eq_and_same_hash(
+                add1,
+                add2,
+                "two identical addition instances should be equal",
+            );
         }
 
         #[test]
@@ -3540,7 +3553,11 @@ mod tests {
 
             let mul2 = Factor::multiply(map2);
 
-            assert_eq_and_same_hash(mul1, mul2, "Multiplication should be commutative via BTreeMap");
+            assert_eq_and_same_hash(
+                mul1,
+                mul2,
+                "Multiplication should be commutative via BTreeMap",
+            );
         }
 
         #[test]
@@ -3629,7 +3646,11 @@ mod tests {
             let fib2 = ComplexFactor::Fibonacci(n.clone());
             let fib3 = ComplexFactor::Fibonacci(Factor::from(20u128));
 
-            assert_eq_and_same_hash(&fib1, &fib2, "identical Fibonacci expressions should be equal");
+            assert_eq_and_same_hash(
+                &fib1,
+                &fib2,
+                "identical Fibonacci expressions should be equal",
+            );
             assert_ne!(fib1, fib3);
         }
 
@@ -3726,10 +3747,13 @@ mod tests {
             let y = Factor::from("y");
             let z = Factor::from("z");
 
-            let add = Factor::Complex(ComplexFactor::AddSub {
-                terms: (x.clone(), y.clone()),
-                subtract: false,
-            }.into());
+            let add = Factor::Complex(
+                ComplexFactor::AddSub {
+                    terms: (x.clone(), y.clone()),
+                    subtract: false,
+                }
+                .into(),
+            );
 
             let mut map1 = BTreeMap::new();
             map1.insert(add.clone(), 1);
