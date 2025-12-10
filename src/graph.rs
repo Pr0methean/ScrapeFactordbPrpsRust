@@ -1131,13 +1131,7 @@ pub async fn find_and_submit_factors(
                         warn!("{id}: Already fully factored");
                         return true;
                     }
-                    if !facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms)
-                        .expect("Tried to check whether to mark_fully_factored for a number not entered in number_facts_map").is_known_fully_factored() {
-                        mark_fully_factored(
-                            cofactor_vid,
-                            &mut data
-                        );
-                    }
+                    mark_fully_factored(cofactor_vid, &mut data);
                     continue;
                 }
                 Accepted => {
@@ -1348,12 +1342,7 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
         facts.last_known_status = Some(FullyFactored);
         false
     };
-    for other_vid in data
-        .divisibility_graph
-        .vertices_by_id()
-        .filter(|other_vid| *other_vid != vid)
-        .collect::<Box<[_]>>()
-        .into_iter()
+    for other_vid in vertex_ids_except::<Vec<_>>(data, vid, true)
     {
         let edge = get_edge(
             &data.divisibility_graph,
