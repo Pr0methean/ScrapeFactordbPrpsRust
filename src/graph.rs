@@ -990,14 +990,14 @@ pub async fn find_and_submit_factors(
                         );
                         propagate_divisibility(&mut data, cofactor_vid, factor_vid, false);
                         continue;
-                    } else if facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms).expect("{id}: cofactor not in number_facts_map").is_final() {
+                    } else if facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms).expect("{id}: cofactor not in number_facts_map").is_known_fully_factored() {
                         let [factor, cofactor] = get_vertices(
                             &data.divisibility_graph,
                             [factor_vid, cofactor_vid],
                             &mut data.deleted_synonyms,
                         );
                         info!(
-                            "{id}: Skipping submission of {factor} to {cofactor} because it's already fully factored (based on FactorDB check)"
+                            "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
                         );
                         rule_out_divisibility(&mut data, cofactor_vid, factor_vid);
                         continue;
@@ -1029,7 +1029,7 @@ pub async fn find_and_submit_factors(
             // NumericFactor entries are already fully factored
             if let Numeric(_) = cofactor {
                 info!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because the number is too small"
+                    "{id}: Skipping submission of {factor} to {cofactor} because the destination is too small"
                 );
                 propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
                 continue;
@@ -1040,19 +1040,6 @@ pub async fn find_and_submit_factors(
                 &mut data.deleted_synonyms,
             )
             .expect("{id}: Reached cofactor_facts check for a number not entered in number_facts_map");
-            if cofactor_facts.is_known_fully_factored() {
-                info!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because {cofactor} is \
-                already fully factored"
-                );
-                if cofactor_vid == root_vid {
-                    return accepted_factors > 0;
-                }
-                if !cofactor_facts.needs_update() {
-                    rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
-                }
-                continue;
-            }
             let cofactor_lower_bound_log10 = cofactor_facts.lower_bound_log10;
             let cofactor_upper_bound_log10 = cofactor_facts.upper_bound_log10;
             if let UpToDate(ref known_factor_vids) | NotUpToDate(ref known_factor_vids) =
