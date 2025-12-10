@@ -2533,7 +2533,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     .unwrap_or(MAX_REPEATS)
                                     .min(MAX_REPEATS);
                                 let base_factors = find_factors(&simplify(base.clone()));
-                                repeat_n(base_factors, power).flatten().collect()
+                                repeat_n(base_factors, power.min(MAX_REPEATS)).flatten().collect()
                             }
                             Divide {
                                 ref left,
@@ -2596,7 +2596,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                 left_recursive_factors
                                     .into_iter()
                                     .flat_map(|(factor, exponent)| {
-                                        repeat_n(factor, exponent as usize)
+                                        repeat_n(factor, exponent.min(MAX_REPEATS) as usize)
                                     })
                                     .collect()
                             }
@@ -2609,20 +2609,21 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     return match power {
                                         0 => [].into(),
                                         1 => find_factors(&simplify(factor.clone())),
-                                        _ => repeat_n(simplify(factor.clone()), *power as usize)
+                                        _ => repeat_n(simplify(factor.clone()), (*power as usize).min(MAX_REPEATS))
                                             .collect(),
                                     };
                                 }
                                 // multiplication
                                 let mut factors = Vec::new();
                                 for (term, exponent) in terms {
+                                    let capped_exponent = (*exponent).min(MAX_REPEATS) as usize;
                                     let term = simplify(term.clone());
                                     let term_factors = find_factors(&term);
                                     if term_factors.is_empty() {
-                                        factors.extend(repeat_n(term, *exponent as usize));
+                                        factors.extend(repeat_n(term, capped_exponent));
                                     } else {
                                         factors.extend(
-                                            repeat_n(term_factors, *exponent as usize).flatten(),
+                                            repeat_n(term_factors, capped_exponent).flatten(),
                                         );
                                     }
                                 }
