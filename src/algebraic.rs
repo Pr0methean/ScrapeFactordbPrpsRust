@@ -851,14 +851,14 @@ impl Factor {
         Numeric(5)
     }
 
-    pub fn multiply(terms: impl Iterator<Item = (Factor, NumberLength)>) -> Self {
-        let terms = terms.collect();
+    pub fn multiply(terms: impl IntoIterator<Item = (Factor, NumberLength)>) -> Self {
+        let terms = terms.into_iter().collect();
         let terms_hash = hash(&terms);
         Complex(Multiply { terms, terms_hash }.into())
     }
 
-    pub fn divide(left: Factor, right: impl Iterator<Item = (Factor, NumberLength)>) -> Self {
-        let right = right.collect();
+    pub fn divide(left: Factor, right: impl IntoIterator<Item = (Factor, NumberLength)>) -> Self {
+        let right = right.into_iter().collect();
         let right_hash = hash(&right);
         Complex(
             Divide {
@@ -2821,13 +2821,10 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{
-        Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power,
-        fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union,
-        power_multiset,
-    };
+    use crate::algebraic::{Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union, power_multiset, ComplexFactor};
     use itertools::Itertools;
     use std::iter::repeat_n;
+    use ahash::RandomState;
 
     impl From<String> for Factor {
         fn from(value: String) -> Self {
@@ -3426,5 +3423,321 @@ mod tests {
     #[test]
     fn test_parse_elided() {
         assert!(matches!(Factor::from("2002...96"), Factor::ElidedNumber(_)));
+    }
+
+    mod complexfactor_eq_and_hash {
+        use super::*;
+        use alloc::fmt::Debug;
+        use std::collections::BTreeMap;
+        use std::hash::{Hash};
+        fn assert_eq_and_same_hash<T: Eq + Hash + Debug>(left: T, right: T, message: &str) {
+            assert_eq!(left, right, "In Eq: {message}");
+            let hasher = RandomState::new();
+            let left_hash = hasher.hash_one(left);
+            let right_hash = hasher.hash_one(right);
+            assert_eq!(left_hash, right_hash, "In Hash: {message}");
+        }
+
+        #[test]
+        fn test_addsub_commutative_addition() {
+            // a + b should equal b + a
+            let a = Factor::from("x");
+            let b = Factor::from(42u128);
+
+            let add1 = ComplexFactor::AddSub {
+                terms: (a.clone(), b.clone()),
+                subtract: false,
+            };
+
+            let add2 = ComplexFactor::AddSub {
+                terms: (b.clone(), a.clone()),
+                subtract: false,
+            };
+
+            assert_eq_and_same_hash(add1, add2, "Addition should be commutative");
+        }
+
+        #[test]
+        fn test_addsub_subtraction_not_commutative() {
+            // a - b should NOT equal b - a (unless a == b)
+            let a = Factor::from("x");
+            let b = Factor::from("y");
+
+            let sub1 = ComplexFactor::AddSub {
+                terms: (a.clone(), b.clone()),
+                subtract: true,
+            };
+
+            let sub2 = ComplexFactor::AddSub {
+                terms: (b.clone(), a.clone()),
+                subtract: true,
+            };
+
+            assert_ne!(sub1, sub2, "Subtraction should not be commutative");
+            // Hashes can be different for non-equal values
+        }
+
+        #[test]
+        fn test_addsub_addition_vs_subtraction() {
+            // a + b should NOT equal a - b
+            let a = Factor::from(10u128);
+            let b = Factor::from(5u128);
+
+            let add = ComplexFactor::AddSub {
+                terms: (a.clone(), b.clone()),
+                subtract: false,
+            };
+
+            let sub = ComplexFactor::AddSub {
+                terms: (a.clone(), b.clone()),
+                subtract: true,
+            };
+
+            assert_ne!(add, sub, "Addition and subtraction should not be equal");
+        }
+
+        #[test]
+        fn test_addsub_same_order() {
+            // a + b should equal a + b (trivial but important)
+            let a = Factor::from("alpha");
+            let b = Factor::from("beta");
+
+            let add1 = ComplexFactor::AddSub {
+                terms: (a.clone(), b.clone()),
+                subtract: false,
+            };
+
+            let add2 = ComplexFactor::AddSub {
+                terms: (a.clone(), b.clone()),
+                subtract: false,
+            };
+
+            assert_eq_and_same_hash(add1, add2, "two identical addition instances should be equal");
+        }
+
+        #[test]
+        fn test_multiply_commutative() {
+            // a × b should equal b × a
+            let a = Factor::from("x");
+            let b = Factor::from(2u128);
+
+            let mut map1 = BTreeMap::new();
+            map1.insert(a.clone(), 1); // x^1
+            map1.insert(b.clone(), 1); // 2^1
+
+            let mut map2 = BTreeMap::new();
+            map2.insert(b.clone(), 1); // 2^1 first
+            map2.insert(a.clone(), 1); // x^1 second
+
+            let mul1 = Factor::multiply(map1);
+
+            let mul2 = Factor::multiply(map2);
+
+            assert_eq_and_same_hash(mul1, mul2, "Multiplication should be commutative via BTreeMap");
+        }
+
+        #[test]
+        fn test_multiply_different_exponents() {
+            // x² × y should NOT equal x × y²
+            let x = Factor::from("x");
+            let y = Factor::from("y");
+
+            let mut map1 = BTreeMap::new();
+            map1.insert(x.clone(), 2); // x^2
+            map1.insert(y.clone(), 1); // y^1
+
+            let mut map2 = BTreeMap::new();
+            map2.insert(x.clone(), 1); // x^1
+            map2.insert(y.clone(), 2); // y^2
+
+            let mul1 = Factor::multiply(map1);
+
+            let mul2 = Factor::multiply(map2);
+
+            assert_ne!(mul1, mul2, "Different exponents should not be equal");
+        }
+
+        #[test]
+        fn test_divide_not_commutative() {
+            // a ÷ b should NOT equal b ÷ a
+            let a = Factor::from(10u128);
+            let b = Factor::from(2u128);
+
+            let mut right1 = BTreeMap::new();
+            right1.insert(b.clone(), 1);
+
+            let mut right2 = BTreeMap::new();
+            right2.insert(a.clone(), 1);
+
+            let div1 = Factor::divide(a.clone(), right1);
+
+            let div2 = Factor::divide(b.clone(), right2);
+
+            assert_ne!(div1, div2, "Division should not be commutative");
+        }
+
+        #[test]
+        fn test_power_not_commutative() {
+            // x^y should NOT equal y^x
+            let x = Factor::from(2u128);
+            let y = Factor::from(3u128);
+
+            let pow1 = ComplexFactor::Power {
+                base: x.clone(),
+                exponent: y.clone(),
+            };
+
+            let pow2 = ComplexFactor::Power {
+                base: y.clone(),
+                exponent: x.clone(),
+            };
+
+            assert_ne!(pow1, pow2, "Power should not be commutative");
+        }
+
+        #[test]
+        fn test_power_same() {
+            // x^y should equal x^y
+            let x = Factor::from("base");
+            let y = Factor::from("exp");
+
+            let pow1 = ComplexFactor::Power {
+                base: x.clone(),
+                exponent: y.clone(),
+            };
+
+            let pow2 = ComplexFactor::Power {
+                base: x.clone(),
+                exponent: y.clone(),
+            };
+
+            assert_eq_and_same_hash(pow1, pow2, "identical power expressions should be equal");
+        }
+
+        #[test]
+        fn test_fibonacci_equality() {
+            let n = Factor::from(10u128);
+
+            let fib1 = ComplexFactor::Fibonacci(n.clone());
+            let fib2 = ComplexFactor::Fibonacci(n.clone());
+            let fib3 = ComplexFactor::Fibonacci(Factor::from(20u128));
+
+            assert_eq_and_same_hash(&fib1, &fib2, "identical Fibonacci expressions should be equal");
+            assert_ne!(fib1, fib3);
+        }
+
+        #[test]
+        fn test_cross_variant_inequality() {
+            // Different variants should never be equal
+            let num = Factor::from(5u128);
+
+            let fib = ComplexFactor::Fibonacci(num.clone());
+            let luc = ComplexFactor::Lucas(num.clone());
+            let fac = ComplexFactor::Factorial(num.clone());
+            let prim = ComplexFactor::Primorial(num.clone());
+
+            assert_ne!(fib, luc);
+            assert_ne!(fib, fac);
+            assert_ne!(fib, prim);
+            assert_ne!(luc, fac);
+            assert_ne!(luc, prim);
+            assert_ne!(fac, prim);
+        }
+
+        #[test]
+        fn test_hash_consistency_equal_values() {
+            // Critical test: equal values must have equal hashes
+            let a = Factor::from("variable");
+            let b = Factor::from(100u128);
+
+            // Test addition commutativity hash consistency
+            let add1 = ComplexFactor::AddSub {
+                terms: (a.clone(), b.clone()),
+                subtract: false,
+            };
+
+            let add2 = ComplexFactor::AddSub {
+                terms: (b.clone(), a.clone()),
+                subtract: false,
+            };
+
+            assert_eq_and_same_hash(add1, add2, "Addition should be commutative");
+
+            // Test multiplication hash consistency
+            let x = Factor::from("x");
+            let y = Factor::from("y");
+
+            let mut map1 = BTreeMap::new();
+            map1.insert(x.clone(), 1);
+            map1.insert(y.clone(), 2);
+
+            let mut map2 = BTreeMap::new();
+            map2.insert(y.clone(), 2); // Different insertion order
+            map2.insert(x.clone(), 1);
+
+            let mul1 = Factor::multiply(map1);
+
+            let mul2 = Factor::multiply(map2);
+
+            assert_eq_and_same_hash(mul1, mul2, "Multiplication should be commutative");
+        }
+
+        #[test]
+        fn test_edge_case_self_equality() {
+            // a + a should equal a + a (trivial but tests edge case)
+            let a = Factor::from("same");
+
+            let expr1 = ComplexFactor::AddSub {
+                terms: (a.clone(), a.clone()),
+                subtract: false,
+            };
+
+            let expr2 = ComplexFactor::AddSub {
+                terms: (a.clone(), a.clone()),
+                subtract: false,
+            };
+
+            assert_eq_and_same_hash(expr1, expr2, "identical a+a expressions should be equal");
+
+            // Also test a - a
+            let sub1 = ComplexFactor::AddSub {
+                terms: (a.clone(), a.clone()),
+                subtract: true,
+            };
+
+            let sub2 = ComplexFactor::AddSub {
+                terms: (a.clone(), a.clone()),
+                subtract: true,
+            };
+            assert_eq_and_same_hash(sub1, sub2, "identical a-a expressions should be equal");
+        }
+
+        #[test]
+        fn test_nested_expressions() {
+            // Test (x + y) × z equality
+            let x = Factor::from("x");
+            let y = Factor::from("y");
+            let z = Factor::from("z");
+
+            let add = Factor::Complex(ComplexFactor::AddSub {
+                terms: (x.clone(), y.clone()),
+                subtract: false,
+            }.into());
+
+            let mut map1 = BTreeMap::new();
+            map1.insert(add.clone(), 1);
+            map1.insert(z.clone(), 1);
+
+            let mul1 = Factor::multiply(map1);
+
+            // Same expression should be equal
+            let mut map2 = BTreeMap::new();
+            map2.insert(add.clone(), 1);
+            map2.insert(z.clone(), 1);
+
+            let mul2 = Factor::multiply(map2);
+
+            assert_eq_and_same_hash(mul1, mul2, "identical nested expressions should be equal");
+        }
     }
 }
