@@ -922,21 +922,6 @@ pub async fn find_and_submit_factors(
         }
         iters_without_progress += 1;
         iters_to_next_report -= 1;
-        let root_remaining_factors_upper_bound_log10 = facts_of(&data.number_facts_map, root_vid, &mut data.deleted_synonyms).expect("Tried to compare log10 bounds for entry_id while root not entered in number_facts_map").upper_bound_log10
-            .saturating_sub(neighbor_vids(&data.divisibility_graph, root_vid, Incoming)
-                .into_iter()
-                .filter(|(_, divisibility)| *divisibility != NotFactor)
-                .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &mut data.deleted_synonyms)
-                    .expect("known_factors_upper_bound called for a number with a factor not entered in number_facts_map")
-                    .lower_bound_log10)
-                .sum());
-        if is_known_factor(&mut data, factor_vid, root_vid)
-            && facts_of(&data.number_facts_map, factor_vid, &mut data.deleted_synonyms).expect("Tried to compare log10 bounds for a number not entered in number_facts_map").lower_bound_log10
-            > root_remaining_factors_upper_bound_log10
-        {
-            // Already a known factor of root, and can't be a factor through any remaining path due to size
-            continue;
-        }
         // root can't be a factor of any other number we'll encounter
         rule_out_divisibility(&mut data, root_vid, factor_vid);
         // elided numbers and numbers over 65500 digits without an expression form can only
@@ -1003,6 +988,9 @@ pub async fn find_and_submit_factors(
                     smaller or equal or fails last-digit test"
                 );
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
+                if cofactor_vid == root_vid {
+                    continue 'graph_iter;
+                }
                 continue;
             }
             // NumericFactor entries are already fully factored
@@ -1024,6 +1012,9 @@ pub async fn find_and_submit_factors(
                     "Skipping submission of {factor} to {cofactor} because {cofactor} is \
                 already fully factored"
                 );
+                if cofactor_vid == root_vid {
+                    return accepted_factors > 0;
+                }
                 if !cofactor_facts.needs_update() {
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 }
@@ -1062,6 +1053,9 @@ pub async fn find_and_submit_factors(
                         rule_out_divisibility(&mut data, factor_vid, unknown_non_factor);
                     }
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
+                    if cofactor_vid == root_vid {
+                        continue 'graph_iter;
+                    }
                     continue;
                 } else if possible_factors.into_iter().all(|possible_factor_vid| {
                     get_edge(
@@ -1079,6 +1073,7 @@ pub async fn find_and_submit_factors(
             let cofactor_remaining_factors_upper_bound_log10 = cofactor_upper_bound_log10
                 .saturating_sub(neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
                     .into_iter()
+                    .filter(|(_, divisibility)| *divisibility != NotFactor)
                     .map(|(existing_factor, _)| facts_of(&data.number_facts_map, existing_factor, &mut data.deleted_synonyms)
                         .expect("known_factors_upper_bound called for a number with a factor not entered in number_facts_map")
                         .lower_bound_log10)
@@ -1087,9 +1082,11 @@ pub async fn find_and_submit_factors(
                 .expect("Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             if factor_facts.lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
+                if cofactor_vid == root_vid {
+                    continue 'graph_iter;
+                }
                 continue;
             }
-            let cofactor = cofactor.clone();
             if is_known_factor(&mut data, cofactor_vid, factor_vid) {
                 // factor is transitively divisible by dest_factor
                 propagate_divisibility(&mut data, cofactor_vid, factor_vid, true);
