@@ -817,8 +817,8 @@ pub async fn find_and_submit_factors(
                         factor_vid,
                         &mut data.deleted_synonyms,
                     );
-                    if root_denominator.may_be_proper_divisor_of(&factor) {
-                        let divided = div_exact(&factor, root_denominator).unwrap_or_else(|| {
+                    if root_denominator.may_be_proper_divisor_of(factor) {
+                        let divided = div_exact(factor, root_denominator).unwrap_or_else(|| {
                             Factor::divide(
                                 factor.clone(),
                                 root_denominator_terms.clone().unwrap().into_iter(),
@@ -1365,7 +1365,7 @@ async fn add_factors_to_graph(
     .expect("add_factors_to_graph called on a number that's not entered in number_facts_map");
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
-    let elided = matches!(get_vertex(&mut data.divisibility_graph, factor_vid, &mut data.deleted_synonyms), Factor::ElidedNumber(_));
+    let elided = matches!(get_vertex(&data.divisibility_graph, factor_vid, &mut data.deleted_synonyms), Factor::ElidedNumber(_));
     // First, check factordb.com/api for already-known factors
     let needs_update = facts.needs_update();
     if needs_update || elided {
