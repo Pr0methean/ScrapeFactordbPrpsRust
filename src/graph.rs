@@ -756,9 +756,9 @@ pub async fn find_and_submit_factors(
     };
     let mut dnd_since_last_accepted = 0;
     let mut dnd_since_last_shuffle = 0;
-    let known_factors = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid, true);
+    let mut known_factors = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid, true);
     let mut factors_to_submit_in_graph = VecDeque::new();
-    for factor_vid in known_factors.into_iter() {
+    while let Some(factor_vid) = known_factors.pop_front() {
         let factor = get_vertex(
             &data.divisibility_graph,
             factor_vid,
@@ -845,9 +845,14 @@ pub async fn find_and_submit_factors(
                 }
                 dnd_since_last_accepted += 1;
                 dnd_since_last_shuffle += 1;
+                if dnd_since_last_accepted == DESPERATION_ABORT_THRESHOLD {
+                    error!("{id}: Aborting due to too many 'does not divide' responses with no acceptances");
+                    return accepted_factors > 0;
+                }
                 if dnd_since_last_shuffle == DESPERATION_SHUFFLE_THRESHOLD {
-                    warn!("{id}: Shuffling known_factors due to too many 'does not divide' responses");
+                    warn!("{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances");
                     known_factors.make_contiguous().shuffle(&mut rng());
+                    dnd_since_last_shuffle = 0;
                 }
             }
             OtherError => {
