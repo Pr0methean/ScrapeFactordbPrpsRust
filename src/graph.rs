@@ -224,7 +224,7 @@ pub fn add_factor_node(
             let cached = http
                 .cached_factors(&specifier)
                 .or(factor_numeric.map(|eval| {
-                    let factors = find_factors_of_numeric(eval);
+                    let factors: Box<[_]> = find_factors_of_numeric(eval).into_keys().collect();
                     ProcessedStatusApiResponse {
                         status: Some(if factors.len() == 1 {
                             Prime

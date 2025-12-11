@@ -30,7 +30,7 @@ use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
-use std::iter::{once, repeat_n};
+use std::iter::{once};
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
 use tokio::task;
@@ -655,11 +655,11 @@ impl PartialEq for ComplexFactor {
             } => matches!(other, AddSub {terms: (ox, oy), subtract: os} if
                 os == subtract
             && ((x == ox && y == oy) || (!subtract && x == oy && y == ox))),
-            ComplexFactor::Multiply { terms_hash, terms } => {
+            Multiply { terms_hash, terms } => {
                 matches!(other, Multiply { terms_hash: other_terms_hash, terms: other_terms }
                 if terms_hash == other_terms_hash && terms == other_terms)
             }
-            ComplexFactor::Divide {
+            Divide {
                 left,
                 right_hash,
                 right,
@@ -667,7 +667,7 @@ impl PartialEq for ComplexFactor {
                 matches!(other, Divide {left: other_left, right_hash: other_right_hash, right: other_right }
                 if right_hash == other_right_hash && left == other_left && right == other_right)
             }
-            ComplexFactor::Power { base, exponent } => {
+            Power { base, exponent } => {
                 matches!(other, Power {base: other_base, exponent: other_exponent}
                 if base == other_base && exponent == other_exponent)
             }
@@ -727,7 +727,7 @@ impl From<FactorBeingParsed> for Factor {
 pub struct LocalFactorData {
     log10_estimate: OnceLock<(NumberLength, NumberLength)>,
     eval_as_numeric: OnceLock<Option<NumericFactor>>,
-    factors: OnceLock<Box<[Factor]>>,
+    factors: OnceLock<BTreeMap<Factor, NumberLength>>,
 }
 
 type FactorCache = BasicCache<Factor, Arc<LocalFactorData>>;
@@ -1159,107 +1159,94 @@ fn count_frequencies<T: Eq + Ord>(vec: impl Iterator<Item=T>) -> BTreeMap<T, Num
 }
 
 #[inline(always)]
-fn multiset_intersection<T: Eq + Ord + Clone>(vec1: Box<[T]>, vec2: Box<[T]>) -> Vec<T> {
+fn multiset_intersection<T: Eq + Ord + Clone>(mut vec1: BTreeMap<T, NumberLength>,
+                                              mut vec2: BTreeMap<T, NumberLength>)
+    -> BTreeMap<T, NumberLength> {
     if vec1.is_empty() || vec2.is_empty() {
-        return vec![];
+        return BTreeMap::new();
     }
-    let mut intersection_vec = Vec::with_capacity(vec1.len().min(vec2.len()));
-    let mut counts1 = count_frequencies(vec1.into_iter());
-    let mut counts2 = count_frequencies(vec2.into_iter());
-    if counts2.len() < counts1.len() {
-        swap(&mut counts1, &mut counts2);
+    let mut intersection_vec = BTreeMap::new();
+    if vec2.len() < vec1.len() {
+        swap(&mut vec1, &mut vec2);
     }
-    for (item, count1) in counts1.into_iter() {
-        if let Some(&count2) = counts2.get(&item) {
+    for (item, count1) in vec1.into_iter() {
+        if let Some(&count2) = vec2.get(&item) {
             let min_count = count1.min(count2);
-            intersection_vec.extend(repeat_n(item, min_count as usize));
+            intersection_vec.insert(item, min_count);
         }
     }
     intersection_vec
 }
 
 #[inline(always)]
-fn multiset_union<T: Eq + Ord + Clone>(mut vecs: Vec<Vec<T>>) -> Vec<T> {
-    vecs.retain(|vec| !vec.is_empty());
-    match vecs.len() {
-        0 => return vec![],
-        1 => return vecs.pop().unwrap(),
+fn multiset_union<T: Eq + Ord + Clone>(mut sets: Vec<BTreeMap<T, NumberLength>>) -> BTreeMap<T, NumberLength> {
+    sets.retain(|set| !set.is_empty());
+    match sets.len() {
+        0 => return BTreeMap::new(),
+        1 => return sets.pop().unwrap(),
         _ => {}
     }
     let mut total_counts = BTreeMap::new();
-    for vec in vecs {
-        let counts = count_frequencies(vec.into_iter());
-        for (item, count) in counts {
+    for set in sets {
+        for (item, count) in set {
             let total = total_counts.entry(item).or_insert(count);
             *total = (*total).max(count);
         }
     }
     total_counts
-        .into_iter()
-        .flat_map(|(item, count)| repeat_n(item, count as usize))
-        .collect()
 }
 
 #[inline]
-fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Factor> {
+fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> BTreeMap<Factor, NumberLength> {
     debug!("fibonacci_factors: term {term}, subset_recursion {subset_recursion}");
-    if term < SMALL_FIBONACCI_FACTORS.len() as NumericFactor {
-        SMALL_FIBONACCI_FACTORS[term as usize]
+    let factors = if term < SMALL_FIBONACCI_FACTORS.len() as NumericFactor {
+        count_frequencies(SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
             .copied()
-            .map(Numeric)
-            .collect()
+            .map(Numeric))
     } else if term.is_multiple_of(2) {
         let mut factors = fibonacci_factors(term >> 1, subset_recursion);
-        factors.extend(lucas_factors(term >> 1, subset_recursion));
+        sum_factor_btreemaps(&mut factors, lucas_factors(term >> 1, subset_recursion));
         factors
     } else if !subset_recursion {
-        vec![Complex(Fibonacci(Numeric(term)).into())]
+        [(Complex(Fibonacci(Numeric(term)).into()), 1)].into()
     } else {
         let factors_of_term = find_raw_factors_of_numeric(term);
-        let mut factors_of_term = factors_of_term
-            .into_iter()
-            .flat_map(|(key, value)| repeat_n(key, value))
-            .collect::<Vec<NumericFactor>>();
-        let full_set_size = factors_of_term.len();
-        let subsets = power_multiset(&mut factors_of_term);
-        let mut subset_factors = Vec::with_capacity(subsets.len());
+        let full_set_size: NumberLength = factors_of_term.values().copied().sum();
+        let subsets = power_multiset(factors_of_term);
+        let mut subset_factors = Vec::with_capacity(subsets.len().saturating_sub(2));
         for subset in subsets {
-            if subset.len() < full_set_size && !subset.is_empty() {
-                let product: NumericFactor = subset.into_iter().product();
+            if subset.values().copied().sum::<NumberLength>() < full_set_size && !subset.is_empty() {
+                let product: NumericFactor = subset.into_iter().map(|(factor, exponent)| factor.pow(exponent)).product();
                 if product > 2 {
                     subset_factors.push(fibonacci_factors(product, false));
                 }
             }
         }
         multiset_union(subset_factors)
-    }
+    };
+    factors
 }
 
 #[inline]
-fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Factor> {
+fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> BTreeMap<Factor, NumberLength> {
     debug!("lucas_factors: term {term}, subset_recursion {subset_recursion}");
     if term < SMALL_LUCAS_FACTORS.len() as NumericFactor {
-        SMALL_LUCAS_FACTORS[term as usize]
+        count_frequencies(SMALL_LUCAS_FACTORS[term as usize]
             .iter()
             .copied()
-            .map(Numeric)
-            .collect()
+            .map(Numeric))
     } else if !subset_recursion {
-        vec![Complex(Lucas(Numeric(term)).into())]
+        [(Complex(Lucas(Numeric(term)).into()), 1)].into()
     } else {
         let mut factors_of_term = find_raw_factors_of_numeric(term);
         let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as NumericFactor;
-        let mut factors_of_term = factors_of_term
-            .into_iter()
-            .flat_map(|(key, value)| repeat_n(key, value))
-            .collect::<Vec<NumericFactor>>();
-        let full_set_size = factors_of_term.len();
-        let subsets = power_multiset(&mut factors_of_term);
-        let mut subset_factors = Vec::with_capacity(subsets.len());
+        let full_set_size: NumberLength = factors_of_term.values().copied().sum();
+        let subsets = power_multiset(factors_of_term);
+        let mut subset_factors = Vec::with_capacity(subsets.len().saturating_sub(2));
         for subset in subsets {
-            if subset.len() < full_set_size && !subset.is_empty() {
-                let product = subset.into_iter().product::<NumericFactor>() << power_of_2;
+            if subset.values().copied().sum::<NumberLength>() < full_set_size && !subset.is_empty() {
+                let product = subset.into_iter().map(|(factor, exponent)| factor.pow(exponent)).product::<NumericFactor>() << power_of_2;
                 if product > 2 {
                     subset_factors.push(lucas_factors(product, false));
                 }
@@ -1270,48 +1257,28 @@ fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> Vec<Factor> {
 }
 
 #[inline]
-fn power_multiset<T: PartialEq + Ord + Copy>(multiset: &mut Vec<T>) -> Vec<Vec<T>> {
-    let mut result = Vec::new();
-    multiset.sort_unstable(); // Sort to handle duplicates more easily
-
-    #[inline]
-    fn generate_subsets<T: PartialEq + Copy>(
-        current_subset: &mut Vec<T>,
-        remaining_elements: &mut Vec<T>,
-        all_subsets: &mut Vec<Vec<T>>,
-    ) {
-        // Add the current subset to the result
-        all_subsets.push(current_subset.clone());
-
-        if remaining_elements.is_empty() {
-            return;
-        }
-
-        let mut i = 0;
-        while i < remaining_elements.len() {
-            let element = remaining_elements.remove(i);
-            current_subset.push(element);
-
-            generate_subsets(current_subset, remaining_elements, all_subsets);
-
-            // Backtrack: add the element back and remove from current_subset
-            current_subset.pop();
-            remaining_elements.insert(i, element);
-
-            // Skip duplicate elements to avoid redundant subsets
-            while i < remaining_elements.len() && remaining_elements[i] == element {
-                i += 1;
+fn power_multiset<T: PartialEq + Ord + Copy>(multiset: BTreeMap<T, NumberLength>) -> Vec<BTreeMap<T, NumberLength>> {
+    let total_size = multiset
+        .values()
+        .map(|count| (count + 1) as usize)
+        .product();
+    let mut result = Vec::with_capacity(total_size);
+    for index in 0..total_size {
+        let mut index_remainder = index;
+        let mut subset = BTreeMap::new();
+        for (item, count) in multiset.iter() {
+            if index_remainder == 0 {
+                break;
+            }
+            let divisor = (count + 1) as usize;
+            let subset_count = index_remainder % divisor;
+            index_remainder /= divisor;
+            if subset_count != 0 {
+                subset.insert(item.clone(), subset_count as NumberLength);
             }
         }
+        result.push(subset);
     }
-
-    let mut current_subset = Vec::new();
-    generate_subsets(&mut current_subset, multiset, &mut result);
-    for subset in result.iter_mut() {
-        subset.sort_unstable();
-    }
-    result.sort_unstable();
-    result.dedup();
     result
 }
 
@@ -1343,9 +1310,6 @@ fn modinv(a: NumericFactor, m: NumericFactor) -> Option<NumericFactor> {
     t.try_into().ok()
 }
 
-// Maximum number of times a factor will be repeated when raised to a power, to limit memory usage.
-const MAX_REPEATS: usize = 16;
-
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
     if a == 1 {
         return (1, 1);
@@ -1365,8 +1329,8 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     (a, n)
 }
 
-pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Box<[Factor]> {
-    let mut possible_factors = BTreeMap::new();
+pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> BTreeMap<Factor, NumberLength> {
+    let mut exponent_factors = BTreeMap::new();
     let mut new_left = simplify(left.clone());
     let mut new_right = simplify(right.clone());
     for term in [&mut new_left, &mut new_right] {
@@ -1394,45 +1358,38 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> Box<[Fac
             _ => None,
         };
         if let Some(exponent_numeric) = exponent_numeric {
-            find_raw_factors_of_numeric(exponent_numeric.into())
-                .into_iter()
-                .for_each(|(factor, factor_exponent)| {
-                    possible_factors.insert(
-                        factor,
-                        factor_exponent.max(possible_factors.get(&factor).copied().unwrap_or(0)),
-                    );
-                })
+            exponent_factors = multiset_union(vec![exponent_factors, find_raw_factors_of_numeric(exponent_numeric.into())]);
         }
     }
-    let total_factors = possible_factors.values().sum::<usize>();
+    let total_factors: NumberLength = exponent_factors.values().copied().sum();
     if total_factors <= 1 {
-        return [].into();
+        return BTreeMap::new();
     }
-    let mut results = Vec::with_capacity(total_factors * 2);
-    for (factor, _factor_power) in possible_factors {
+    let mut results = BTreeMap::new();
+    for (factor, _factor_power) in exponent_factors {
         if let Ok(factor) = NumberLength::try_from(factor)
             && let Some(left_root) = nth_root_exact(&new_left, factor)
             && let Some(right_root) = nth_root_exact(&new_right, factor)
         {
             if subtract {
-                results.push(simplify_add_sub(&left_root, &right_root, true));
+                *results.entry(simplify_add_sub(&left_root, &right_root, true)).or_insert(0) += 1;
                 if factor == 2 {
-                    results.push(simplify_add_sub(&left_root, &right_root, false));
+                    *results.entry(simplify_add_sub(&left_root, &right_root, false)).or_insert(0) += 1;
                 }
             } else if factor != 2 {
-                results.push(simplify_add_sub(&left_root, &right_root, false));
+                *results.entry(simplify_add_sub(&left_root, &right_root, false)).or_insert(0) += 1;
             }
         }
     }
-    results.into()
+    results
 }
 pub fn to_like_powers_recursive_dedup(
     left: &Factor,
     right: &Factor,
     subtract: bool,
-) -> Vec<Factor> {
-    let mut results = Vec::new();
-    let mut to_expand = count_frequencies(to_like_powers(left, right, subtract).into_iter());
+) -> BTreeMap<Factor, NumberLength> {
+    let mut results = BTreeMap::new();
+    let mut to_expand = to_like_powers(left, right, subtract);
     let mut already_expanded = BTreeSet::new();
     while let Some((factor, exponent)) = to_expand.pop_first() {
         if !already_expanded.contains(&factor) {
@@ -1445,21 +1402,21 @@ pub fn to_like_powers_recursive_dedup(
                         subtract,
                     } => {
                         let subfactors = to_like_powers(factor_left, factor_right, subtract);
-                        for subfactor in subfactors
+                        for (subfactor, subfactor_exponent) in subfactors
                             .into_iter()
-                            .filter(|subfactor| subfactor != &factor)
+                            .filter(|(subfactor, _)| subfactor != &factor)
                         {
-                            *to_expand.entry(subfactor).or_insert(0) += exponent;
+                            *to_expand.entry(subfactor).or_insert(0) += exponent * subfactor_exponent;
                         }
-                        results.extend(repeat_n(factor, exponent as usize));
+                        *results.entry(factor).or_insert(0) += 1;
                     }
-                    _ => results.push(factor),
+                    _ => *results.entry(factor).or_insert(0) += 1,
                 },
                 Numeric(n) => {
-                    results.extend(find_factors_of_numeric(n));
+                    sum_factor_btreemaps(&mut results, find_factors_of_numeric(n));
                 }
                 _ => {
-                    results.push(factor);
+                    *results.entry(factor).or_insert(0) += 1;
                 }
             }
             already_expanded.insert(factor_clone);
@@ -1697,19 +1654,20 @@ fn nth_root_of_product(
 }
 
 #[inline(always)]
-pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> Box<[Factor]> {
-    debug_assert_ne!(input, 0);
+pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> BTreeMap<Factor, NumberLength> {
     find_raw_factors_of_numeric(input)
         .into_iter()
-        .flat_map(|(factor, power)| repeat_n(Numeric(factor), power))
+        .map(|(factor, power)| (Numeric(factor), power))
         .collect()
 }
 
 #[inline(always)]
-pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<NumericFactor, usize> {
+pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<NumericFactor, NumberLength> {
     task::block_in_place(|| {
         if input <= 1 << 85 {
-            factorize128(input)
+            factorize128(input).into_iter()
+                .map(|(factor, exponent)| (factor, exponent as NumberLength))
+                .collect()
         } else {
             let mut prefs = Preferences::default();
             prefs.verbosity = Silent;
@@ -1717,7 +1675,7 @@ pub(crate) fn find_raw_factors_of_numeric(input: NumericFactor) -> BTreeMap<Nume
             for factor in factor(input.into(), Siqs, &prefs).unwrap() {
                 *factors
                     .entry(NumericFactor::try_from(factor).unwrap())
-                    .or_insert(0) += 1;
+                    .or_insert(0 as NumberLength) += 1;
             }
             factors
         }
@@ -2465,7 +2423,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
 }
 
 #[inline(always)]
-fn find_factors(expr: &Factor) -> Box<[Factor]> {
+fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     if let Numeric(n) = expr
         && *n < 1 << 64
     {
@@ -2481,72 +2439,71 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                 frame_sync(location!().named(expr_string), || {
                     let factors = match *expr {
                         Numeric(n) => find_factors_of_numeric(n),
-                        Factor::BigNumber(ref expr) => factor_big_num(expr.clone()),
+                        Factor::BigNumber(ref n) => factor_big_num(n.as_ref()),
+                        ElidedNumber(ref n) => factor_big_num(n.as_str()),
+                        UnknownExpression(_) => [(expr.clone(), 1)].into(),
                         Complex(ref c) => match **c {
                             Lucas(ref term) => {
                                 // Lucas number
                                 if let Some(term_number) = evaluate_as_numeric(term) {
-                                    lucas_factors(term_number, true).into_boxed_slice()
+                                    lucas_factors(term_number, true)
                                 } else {
                                     warn!(
                                         "Could not parse term number of a Lucas number: {}",
                                         term
                                     );
-                                    [].into()
+                                    BTreeMap::new()
                                 }
                             }
                             Fibonacci(ref term) => {
                                 // Fibonacci number
                                 if let Some(term_number) = evaluate_as_numeric(term) {
-                                    fibonacci_factors(term_number, true).into_boxed_slice()
+                                    fibonacci_factors(term_number, true)
                                 } else {
                                     warn!(
                                         "Could not parse term number of a Fibonacci number: {}",
                                         term
                                     );
-                                    [].into()
+                                    BTreeMap::new()
                                 }
                             }
                             Factorial(ref term) => {
                                 // factorial
                                 if let Some(input) = evaluate_as_numeric(term) {
-                                    let mut factors = Vec::new();
+                                    let mut factors = BTreeMap::new();
                                     for i in 2..=input {
-                                        factors.extend(find_factors_of_numeric(i));
+                                        sum_factor_btreemaps(&mut factors, find_factors_of_numeric(i));
                                     }
-                                    factors.into_boxed_slice()
+                                    factors
                                 } else {
                                     warn!("Could not parse input to factorial function: {}", term);
-                                    [].into()
+                                    BTreeMap::new()
                                 }
                             }
                             Primorial(ref term) => {
                                 // primorial
                                 if let Some(input) = evaluate_as_numeric(term) {
-                                    let mut factors = Vec::new();
+                                    let mut factors = BTreeMap::new();
                                     for i in 2..=input {
                                         if is_prime(i) {
-                                            factors.push(Numeric(i));
+                                            factors.insert(Numeric(i), 1);
                                         }
                                     }
-                                    factors.into_boxed_slice()
+                                    factors
                                 } else {
                                     warn!("Could not parse input to primorial function: {}", term);
-                                    [].into()
+                                    BTreeMap::new()
                                 }
                             }
                             Power {
                                 ref base,
                                 ref exponent,
                             } => {
-                                let power = evaluate_as_numeric(exponent)
-                                    .and_then(|power| usize::try_from(power).ok())
-                                    .unwrap_or(MAX_REPEATS)
-                                    .min(MAX_REPEATS);
-                                let base_factors = find_factors(&simplify(base.clone()));
-                                repeat_n(base_factors, power.min(MAX_REPEATS))
-                                    .flatten()
-                                    .collect()
+                                let mut factors = find_factors(&simplify(base.clone()));
+                                if let Some(power) = evaluate_as_numeric(exponent).and_then(|power| NumberLength::try_from(power).ok()) && power > 1 {
+                                    factors.iter_mut().for_each(|(_, exponent)| *exponent *= power);
+                                }
+                                factors
                             }
                             Divide {
                                 ref left,
@@ -2555,8 +2512,7 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                             } => {
                                 // division
                                 let mut left_recursive_factors = BTreeMap::new();
-                                let mut left_remaining_factors = count_frequencies(find_factors(&simplify(left.clone()))
-                                    .into_iter());
+                                let mut left_remaining_factors = find_factors(&simplify(left.clone()));
                                 let mut right_remaining_factors = right.clone();
                                 while let Some((factor, exponent)) =
                                     left_remaining_factors.pop_first()
@@ -2578,14 +2534,14 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                         }
                                     } else {
                                         let subfactors = if factor == *expr {
-                                            [].into()
+                                            BTreeMap::new()
                                         } else {
                                             find_factors(&factor)
                                         };
                                         for (subfactor, subfactor_exponent) in
-                                            count_frequencies(subfactors
+                                            subfactors
                                                 .into_iter()
-                                                .filter(|subfactor| *subfactor != factor))
+                                                .filter(|(subfactor, _)| *subfactor != factor)
                                         {
                                             if subfactor_exponent != 0 {
                                                 *left_remaining_factors
@@ -2617,9 +2573,9 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     } else {
                                         let subfactors = find_factors(&factor);
                                         for (subfactor, subfactor_exponent) in
-                                            count_frequencies(subfactors
+                                            subfactors
                                                 .into_iter()
-                                                .filter(|subfactor| *subfactor != factor))
+                                                .filter(|(subfactor, _)| *subfactor != factor)
                                         {
                                             *right_remaining_factors
                                                 .entry(subfactor)
@@ -2628,43 +2584,31 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                     }
                                 }
                                 left_recursive_factors
-                                    .into_iter()
-                                    .flat_map(|(factor, exponent)| {
-                                        repeat_n(factor, (exponent as usize).min(MAX_REPEATS))
-                                    })
-                                    .collect()
                             }
                             Multiply { ref terms, .. } => {
                                 if terms.is_empty() {
-                                    return [].into();
+                                    return BTreeMap::new();
                                 }
                                 if terms.len() == 1 {
                                     let (factor, power) = terms.first_key_value().unwrap();
                                     return match power {
-                                        0 => [].into(),
+                                        0 => BTreeMap::new(),
                                         1 => find_factors(&simplify(factor.clone())),
-                                        _ => repeat_n(
-                                            simplify(factor.clone()),
-                                            (*power as usize).min(MAX_REPEATS),
-                                        )
-                                        .collect(),
+                                        _ => [(simplify(factor.clone()), *power)].into()
                                     };
                                 }
                                 // multiplication
-                                let mut factors = Vec::new();
+                                let mut factors = BTreeMap::new();
                                 for (term, exponent) in terms {
-                                    let capped_exponent = (*exponent as usize).min(MAX_REPEATS);
                                     let term = simplify(term.clone());
                                     let term_factors = find_factors(&term);
                                     if term_factors.is_empty() {
-                                        factors.extend(repeat_n(term, capped_exponent));
+                                        *factors.entry(term).or_insert(0) += exponent;
                                     } else {
-                                        factors.extend(
-                                            repeat_n(term_factors, capped_exponent).flatten(),
-                                        );
+                                        sum_factor_btreemaps(&mut factors, term_factors);
                                     }
                                 }
-                                factors.into_boxed_slice()
+                                factors
                             }
                             AddSub {
                                 terms: (ref left, ref right),
@@ -2675,20 +2619,23 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                 let algebraic =
                                     to_like_powers_recursive_dedup(&left, &right, subtract);
                                 if !algebraic.is_empty() {
-                                    algebraic.into_boxed_slice()
+                                    algebraic
                                 } else {
                                     let mut factors = find_common_factors(&left, &right);
                                     for prime in SMALL_PRIMES {
-                                        let mut power = prime as NumericFactor;
-                                        let prime_factor: Factor = Numeric(power);
-                                        while modulo_as_numeric(expr, power) == Some(0) {
-                                            factors.push(prime_factor.clone());
+                                        let mut prime_to_power = prime as NumericFactor;
+                                        let mut power = 0;
+                                        while modulo_as_numeric(expr, prime_to_power) == Some(0) {
+                                            power += 1;
                                             let Some(new_power) =
-                                                power.checked_mul(prime as NumericFactor)
+                                                prime_to_power.checked_mul(prime as NumericFactor)
                                             else {
                                                 break;
                                             };
-                                            power = new_power;
+                                            prime_to_power = new_power;
+                                        }
+                                        if power > 0 {
+                                            *factors.entry(Numeric(prime as NumericFactor)).or_insert(0) += power;
                                         }
                                     }
                                     factors = multiset_union(vec![
@@ -2696,35 +2643,29 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
                                         to_like_powers_recursive_dedup(&left, &right, subtract),
                                         find_common_factors(&left, &right),
                                     ]);
-                                    let cofactors: Vec<_> = factors
+                                    let cofactors = factors
                                         .iter()
-                                        .unique()
-                                        .flat_map(|factor: &Factor| div_exact(expr, factor))
-                                        .map(simplify)
+                                        .flat_map(|(factor, exponent)| {
+                                            let mut cofactor = div_exact(expr, factor)?;
+                                            let mut remaining_exponent = exponent - 1;
+                                            while remaining_exponent > 0 && let Some(new_cofactor) = div_exact(&cofactor, factor) {
+                                                cofactor = new_cofactor;
+                                                remaining_exponent -= 1;
+                                            }
+                                            Some((simplify(cofactor), 1))
+                                        })
                                         .collect();
                                     factors = multiset_union(vec![factors, cofactors]);
-                                    factors.sort_unstable();
-                                    factors.into_boxed_slice()
+                                    factors
                                 }
                             }
                         },
-                        ElidedNumber(ref n) => match n.chars().last() {
-                            Some('0') => [Factor::two(), Factor::five()].into(),
-                            Some('5') => [Factor::five()].into(),
-                            Some('2' | '4' | '6' | '8') => [Factor::two()].into(),
-                            Some('1' | '3' | '7' | '9') => [].into(),
-                            x => {
-                                error!("Invalid last digit: {x:?}");
-                                [].into()
-                            }
-                        },
-                        UnknownExpression(_) => return [expr.clone()].into(),
                     };
                     if factors.is_empty() {
                         if let Some(n) = evaluate_as_numeric(expr) {
                             find_factors_of_numeric(n)
                         } else {
-                            [expr.clone()].into()
+                            [(expr.clone(), 1)].into()
                         }
                     } else {
                         factors
@@ -2743,75 +2684,78 @@ fn find_factors(expr: &Factor) -> Box<[Factor]> {
     }
 }
 
-fn factor_big_num(expr: BigNumber) -> Box<[Factor]> {
-    let mut factors = Vec::new();
-    let mut expr_short = expr.as_ref();
-    while expr_short != "0"
-        && let Some(stripped) = expr_short.strip_suffix('0')
-    {
-        factors.push(Factor::two());
-        factors.push(Factor::five());
-        expr_short = stripped;
+fn factor_big_num(expr: &str) -> BTreeMap<Factor, NumberLength> {
+    let mut factors = BTreeMap::new();
+    let mut expr_short = expr;
+    let orig_length = expr_short.len();
+    expr_short = expr_short.trim_end_matches('0');
+    let trailing_zeros = (orig_length - expr_short.len()) as NumberLength;
+    if trailing_zeros > 0 {
+        *factors.entry(Factor::two()).or_insert(0) += trailing_zeros;
+        *factors.entry(Factor::five()).or_insert(0) += trailing_zeros;
     }
     if let Ok(num) = expr_short.parse::<NumericFactor>() {
-        factors.extend(find_factors_of_numeric(num));
+        sum_factor_btreemaps(&mut factors, find_factors_of_numeric(num));
     } else {
-        let mut divisor_map = BTreeMap::new();
         match expr_short.chars().last() {
-            Some('5') => *divisor_map.entry(Factor::five()).or_insert(0) += 1,
-            Some('2' | '4' | '6' | '8') => *divisor_map.entry(Factor::two()).or_insert(0) += 1,
+            Some('5') => *factors.entry(Factor::five()).or_insert(0) += 1,
+            Some('2' | '4' | '6' | '8') => *factors.entry(Factor::two()).or_insert(0) += 1,
             // '0' is handled by strip_suffix
             _ => {}
         }
-        let sum_of_digits: NumericFactor = expr_short
+        let digit_values: Option<Vec<NumericFactor>> = expr_short
             .chars()
-            .map(|digit| digit.to_digit(10).unwrap() as NumericFactor)
-            .sum();
-        match sum_of_digits % 9 {
-            0 => {
-                *divisor_map.entry(Factor::three()).or_insert(0) += 2;
+            .map(|digit| digit.to_digit(10).map(NumericFactor::from))
+            .collect();
+        if let Some(digit_values) = digit_values {
+            let sum_of_digits: NumericFactor = digit_values.into_iter().sum();
+            match sum_of_digits % 9 {
+                0 => {
+                    *factors.entry(Factor::three()).or_insert(0) += 2;
+                }
+                3 | 6 => {
+                    *factors.entry(Factor::three()).or_insert(0) += 1;
+                }
+                _ => {}
             }
-            3 | 6 => {
-                *divisor_map.entry(Factor::three()).or_insert(0) += 1;
-            }
-            _ => {}
         }
         let original = Factor::from(expr_short);
-        if divisor_map.is_empty() {
-            factors.push(original);
+        if factors.is_empty() {
+            factors.insert(original, 1);
         } else {
-            factors.extend(
-                divisor_map
-                    .iter()
-                    .flat_map(|(factor, exponent)| repeat_n(factor.clone(), *exponent as usize)),
-            );
-            factors.push(Factor::divide(original, divisor_map));
+            factors.insert(Factor::divide(original, factors.clone()), 1);
         }
     }
-    factors.into_boxed_slice()
+    factors
+}
+
+fn sum_factor_btreemaps(factors: &mut BTreeMap<Factor, NumberLength>, extra_factors: BTreeMap<Factor, NumberLength>) {
+    for (factor, exponent) in extra_factors {
+        *factors.entry(factor).or_insert(0) += exponent;
+    }
 }
 
 #[inline]
-fn find_common_factors(expr1: &Factor, expr2: &Factor) -> Vec<Factor> {
+fn find_common_factors(expr1: &Factor, expr2: &Factor) -> BTreeMap<Factor, NumberLength> {
     let num1 = evaluate_as_numeric(expr1);
     if num1 == Some(1) {
-        return vec![];
+        return BTreeMap::new();
     }
     let num2 = evaluate_as_numeric(expr2);
     if num2 == Some(1) {
-        return vec![];
+        return BTreeMap::new();
     }
     if let Some(num1) = num1
         && let Some(num2) = num2
     {
-        find_factors_of_numeric(num1.gcd(&num2)).into_vec()
+        find_factors_of_numeric(num1.gcd(&num2))
     } else {
         let expr1_factors = find_factors(expr1);
         if expr1_factors.is_empty() {
-            return vec![];
+            return BTreeMap::new();
         }
         let expr2_factors = find_factors(expr2);
-        multiset_intersection(expr1_factors, expr2_factors)
+        multiset_intersection::<Factor>(expr1_factors, expr2_factors)
     }
 }
 
@@ -2825,7 +2769,10 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
             let expr = simplify(expr.clone());
             let mut factors = find_factors(&expr)
                 .into_iter()
-                .flat_map(|f| {
+                .flat_map(|(f, exponent)| {
+                    if exponent == 0 {
+                        return None;
+                    }
                     if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr) {
                         let f = simplify(f);
                         if f.may_be_proper_divisor_of(&expr) {
@@ -2855,6 +2802,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
@@ -2874,7 +2822,7 @@ mod tests {
     }
 
     fn find_factors(input: &str) -> Box<[Factor]> {
-        crate::algebraic::find_factors(&Factor::from(input))
+        crate::algebraic::find_unique_factors(&Factor::from(input))
     }
 
     fn evaluate_as_numeric(input: &str) -> Option<NumericFactor> {
@@ -3072,8 +3020,8 @@ mod tests {
 
     #[test]
     fn test_power() {
-        let factors = find_factors("(2^7-1)^2".into());
-        assert_eq!(factors, [Numeric(127), Numeric(127)].into());
+        let factors = super::find_factors(&"(2^7-1)^2".into());
+        assert_eq!(factors, [(Numeric(127), 2)].into());
     }
 
     #[test]
@@ -3161,14 +3109,10 @@ mod tests {
     #[test]
     fn test_lucas() {
         let factors = lucas_factors(5040, true);
-        let mut unique_factors = factors.clone();
-        unique_factors.sort_unstable();
-        unique_factors.dedup();
-        assert_eq!(factors.len(), unique_factors.len());
-        println!("{}", factors.iter().join(", "));
+        assert!(factors.values().all(|e| *e == 1));
         for odd_divisor in [35, 45, 63, 105, 315] {
             for factor in SMALL_LUCAS_FACTORS[5040 / odd_divisor] {
-                assert!(factors.contains(&(Numeric(*factor).into())));
+                assert!(factors.contains_key(&(Numeric(*factor).into())));
             }
         }
     }
@@ -3176,68 +3120,63 @@ mod tests {
     #[test]
     fn test_fibonacci() {
         let factors = fibonacci_factors(5040, true);
-        let larger_factors = factors
-            .iter()
-            .cloned()
-            .filter(|f| if let Numeric(n) = *f { n > 7 } else { true })
-            .collect::<Vec<_>>();
-        let mut unique_larger_factors = larger_factors.clone();
-        unique_larger_factors.sort_unstable();
-        unique_larger_factors.dedup();
-        assert_eq!(larger_factors.len(), unique_larger_factors.len());
-        println!("{}", factors.iter().join(", "));
+        let larger_factors: BTreeMap<Factor, NumberLength> = factors
+            .clone()
+            .into_iter()
+            .filter(|(f, _)| if let Numeric(n) = *f { n > 7 } else { true })
+            .collect();
+        assert!(larger_factors.values().all(|e| *e == 1));
+        println!("{}", factors.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
         for divisor in [
             1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20, 21, 24, 28, 30, 35, 36, 40, 42,
             45, 48, 56, 60, 63, 70, 72, 80, 84, 90, 105, 112, 120, 126, 140, 144, 168, 180,
         ] {
             for factor in SMALL_FIBONACCI_FACTORS[divisor] {
-                assert!(factors.contains(&Numeric(*factor).into()));
+                assert!(factors.contains_key(&Numeric(*factor).into()), "Missing {factor} for I({divisor}) in I(5040)");
             }
         }
     }
 
     #[test]
     fn test_power_multiset() {
-        let mut multiset = vec![2, 2, 3, 3, 5];
-        let power_multiset = power_multiset(&mut multiset);
+        let multiset = [(2, 2), (3, 2), (5, 1)].into();
+        let power_multiset = power_multiset(multiset);
         println!("{:?}", power_multiset);
         assert_eq!(power_multiset.len(), 18);
-        assert!(power_multiset.contains(&vec![]));
-        assert!(power_multiset.contains(&vec![2]));
-        assert!(power_multiset.contains(&vec![2, 2]));
-        assert!(power_multiset.contains(&vec![3]));
-        assert!(power_multiset.contains(&vec![2, 3]));
-        assert!(power_multiset.contains(&vec![2, 2, 3]));
-        assert!(power_multiset.contains(&vec![3, 3]));
-        assert!(power_multiset.contains(&vec![2, 3, 3]));
-        assert!(power_multiset.contains(&vec![2, 2, 3, 3]));
-        assert!(power_multiset.contains(&vec![5]));
-        assert!(power_multiset.contains(&vec![2, 5]));
-        assert!(power_multiset.contains(&vec![2, 2, 5]));
-        assert!(power_multiset.contains(&vec![3, 5]));
-        assert!(power_multiset.contains(&vec![2, 3, 5]));
-        assert!(power_multiset.contains(&vec![2, 2, 3, 5]));
-        assert!(power_multiset.contains(&vec![3, 3, 5]));
-        assert!(power_multiset.contains(&vec![2, 3, 3, 5]));
-        assert!(power_multiset.contains(&vec![2, 2, 3, 3, 5]));
+        assert!(power_multiset.contains(&BTreeMap::new()));
+        assert!(power_multiset.contains(&[(2, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 2)].into()));
+        assert!(power_multiset.contains(&[(3, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 1), (3, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 2), (3, 1)].into()));
+        assert!(power_multiset.contains(&[(3, 2)].into()));
+        assert!(power_multiset.contains(&[(2, 1), (3, 2)].into()));
+        assert!(power_multiset.contains(&[(2, 2), (3, 2)].into()));
+        assert!(power_multiset.contains(&[(5, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 1), (5, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 2), (5, 1)].into()));
+        assert!(power_multiset.contains(&[(3, 1), (5, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 1), (3, 1), (5, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 2), (3, 1), (5, 1)].into()));
+        assert!(power_multiset.contains(&[(3, 2), (5, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 1), (3, 2), (5, 1)].into()));
+        assert!(power_multiset.contains(&[(2, 2), (3, 2), (5, 1)].into()));
     }
 
     #[test]
     fn test_multiset_union() {
-        let multiset_1 = vec![2, 2, 3, 5, 7];
-        let multiset_2 = vec![2, 3, 3, 5, 11];
-        let mut union = multiset_union(vec![multiset_1, multiset_2]);
-        union.sort_unstable();
-        assert_eq!(union, vec![2, 2, 3, 3, 5, 7, 11]);
+        let multiset_1 = [(2, 2), (3, 1), (5, 1), (7, 1)].into();
+        let multiset_2 = [(2, 1), (3, 2), (5, 1), (11, 1)].into();
+        let union = multiset_union(vec![multiset_1, multiset_2]);
+        assert_eq!(union, [(2, 2), (3, 2), (5, 1), (7, 1), (11, 1)].into());
     }
 
     #[test]
     fn test_multiset_intersection() {
-        let multiset_1 = vec![2, 2, 3, 3, 5, 7];
-        let multiset_2 = vec![2, 3, 3, 5, 11];
-        let mut intersection = multiset_intersection(multiset_1.into(), multiset_2.into());
-        intersection.sort_unstable();
-        assert_eq!(intersection, vec![2, 3, 3, 5]);
+        let multiset_1: BTreeMap<NumericFactor, NumberLength> = [(2, 2), (3, 1), (5, 1), (7, 1)].into();
+        let multiset_2: BTreeMap<NumericFactor, NumberLength> = [(2, 1), (3, 2), (5, 1), (11, 1)].into();
+        let intersection = multiset_intersection(multiset_1.into(), multiset_2.into());
+        assert_eq!(intersection, [(2, 1), (3, 1), (5, 1)].into());
     }
 
     #[test]
@@ -3360,17 +3299,18 @@ mod tests {
         let repeated_12 = "12".repeat(50);
         let expr = super::expression_parser::arithmetic(&repeated_12).unwrap();
         let factors = super::find_factors(&Factor::from(expr).into());
-
+        println!("{}", factors.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
         // Should contain 2 and 3.
-        assert!(factors.contains(&Factor::two()));
-        assert!(factors.contains(&Factor::three()));
+        assert!(factors.contains_key(&Factor::two()));
+        assert!(factors.contains_key(&Factor::three()));
 
         // Should contain a generic factor which is the Divide term
-        let has_divide = factors.iter().any(|f| matches!(*f, Complex(ref c) if matches!(**c, Divide { ref right, .. } if right.contains_key(&Factor::two()))));
+        let has_divide = factors.iter().any(|(f, e)| *e == 1
+            && matches!(*f, Complex(ref c) if matches!(**c, Divide { ref right, .. } if right.contains_key(&Factor::two()))));
         assert!(has_divide, "Should return a symbolic Divide term");
 
         // Should prevent infinite recursion
-        factors.into_iter().for_each(|f| {
+        factors.into_keys().for_each(|f| {
             super::find_factors(&f);
         });
     }
@@ -3404,7 +3344,7 @@ mod tests {
             let f_n = fib(n);
             let factors = fibonacci_factors(n as NumericFactor, true);
             let mut product = U256::from(1);
-            for factor in factors {
+            for (factor, exponent) in factors {
                 if let Some(val) = crate::algebraic::evaluate_as_numeric(&factor) {
                     assert_eq!(
                         f_n % U256::from(val),
@@ -3414,7 +3354,7 @@ mod tests {
                         n,
                         f_n
                     );
-                    product *= U256::from(val);
+                    product *= U256::from(val).pow(exponent.into());
                 } else {
                     assert!(
                         n >= SMALL_FIBONACCI_FACTORS.len(),
@@ -3433,7 +3373,7 @@ mod tests {
             let l_n = luc(n);
             let factors = lucas_factors(n as NumericFactor, true);
             let mut product = U256::from(1);
-            for factor in factors {
+            for (factor, exponent) in factors {
                 if let Some(val) = crate::algebraic::evaluate_as_numeric(&factor) {
                     assert_eq!(
                         l_n % U256::from(val),
@@ -3443,7 +3383,7 @@ mod tests {
                         n,
                         l_n
                     );
-                    product *= U256::from(val);
+                    product *= U256::from(val).pow(exponent.into());
                 } else {
                     assert!(
                         n >= SMALL_LUCAS_FACTORS.len(),
@@ -3772,7 +3712,7 @@ mod tests {
             let y = Factor::from("y");
             let z = Factor::from("z");
 
-            let add = Factor::Complex(
+            let add = Complex(
                 ComplexFactor::AddSub {
                     terms: (x.clone(), y.clone()),
                     subtract: false,
