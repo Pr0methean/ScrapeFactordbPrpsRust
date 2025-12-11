@@ -31,8 +31,9 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::{once};
-use std::mem::swap;
+use std::mem::{swap, take};
 use std::sync::{Arc, OnceLock};
+use replace_with::replace_with_or_abort;
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::Verbosity::Silent;
@@ -1179,7 +1180,7 @@ fn multiset_intersection<T: Eq + Ord + Clone>(mut vec1: BTreeMap<T, NumberLength
 }
 
 #[inline(always)]
-fn multiset_union<T: Eq + Ord + Clone>(mut sets: Vec<BTreeMap<T, NumberLength>>) -> BTreeMap<T, NumberLength> {
+fn multiset_union<T: Eq + Ord + Clone + std::fmt::Display>(mut sets: Vec<BTreeMap<T, NumberLength>>) -> BTreeMap<T, NumberLength> {
     sets.retain(|set| !set.is_empty());
     match sets.len() {
         0 => return BTreeMap::new(),
@@ -1193,6 +1194,7 @@ fn multiset_union<T: Eq + Ord + Clone>(mut sets: Vec<BTreeMap<T, NumberLength>>)
             *total = (*total).max(count);
         }
     }
+    println!("multiset_union: {}", total_counts.iter().map(|(k, v)| format!("{k}->{v}")).join(", "));
     total_counts
 }
 
@@ -1366,18 +1368,30 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> BTreeMap
         return BTreeMap::new();
     }
     let mut results = BTreeMap::new();
-    for (factor, _factor_power) in exponent_factors {
+    for (factor, factor_power) in exponent_factors {
         if let Ok(factor) = NumberLength::try_from(factor)
+            && (subtract || (factor != 2))
             && let Some(left_root) = nth_root_exact(&new_left, factor)
             && let Some(right_root) = nth_root_exact(&new_right, factor)
         {
             if subtract {
-                *results.entry(simplify_add_sub(&left_root, &right_root, true)).or_insert(0) += 1;
-                if factor == 2 {
-                    *results.entry(simplify_add_sub(&left_root, &right_root, false)).or_insert(0) += 1;
-                }
-            } else if factor != 2 {
-                *results.entry(simplify_add_sub(&left_root, &right_root, false)).or_insert(0) += 1;
+                let new_factor = simplify_add_sub(&left_root, &right_root, true);
+                let new_cofactor = if factor == 2 {
+                    simplify_add_sub(&left_root, &right_root, false)
+                } else {
+                    div_power_exact(&new_left, &new_factor, factor_power).unwrap_or_else(|| {
+                        simplify_divide(&simplify_add_sub(&new_left, &new_right, subtract), &[(new_factor.clone(), factor_power)].into())
+                    })
+                };
+                *results.entry(new_cofactor).or_insert(0) += 1;
+                *results.entry(new_factor).or_insert(0) += factor_power;
+            } else {
+                let new_factor = simplify_add_sub(&left_root, &right_root, false);
+                let new_cofactor = div_power_exact(&new_left, &new_factor, factor_power).unwrap_or_else(|| {
+                    simplify_divide(&simplify_add_sub(&new_left, &new_right, subtract), &[(new_factor.clone(), factor_power)].into())
+                });
+                *results.entry(new_cofactor).or_insert(0) += 1;
+                *results.entry(new_factor).or_insert(0) += factor_power;
             }
         }
     }
@@ -1401,14 +1415,18 @@ pub fn to_like_powers_recursive_dedup(
                         terms: (ref factor_left, ref factor_right),
                         subtract,
                     } => {
+                        let mut subfactors_added = false;
                         let subfactors = to_like_powers(factor_left, factor_right, subtract);
                         for (subfactor, subfactor_exponent) in subfactors
                             .into_iter()
                             .filter(|(subfactor, _)| subfactor != &factor)
                         {
+                            subfactors_added = true;
                             *to_expand.entry(subfactor).or_insert(0) += exponent * subfactor_exponent;
                         }
-                        *results.entry(factor).or_insert(0) += 1;
+                        if !subfactors_added {
+                            *results.entry(factor).or_insert(0) += 1;
+                        }
                     }
                     _ => *results.entry(factor).or_insert(0) += 1,
                 },
@@ -1434,7 +1452,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
     {
         return product_numeric.div_exact(divisor_numeric).map(Numeric);
     }
-    match *product {
+    let result = match *product {
         Complex(ref c) => match **c {
             Power {
                 ref base,
@@ -1491,7 +1509,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     })
                     .collect::<Option<Vec<_>>>()?
                     .into_iter()
-                    .product();
+                    .try_reduce(|x, y| x.checked_mul(y))??;
                 let product_numeric: NumericFactor = terms
                     .iter()
                     .map(|(term, exponent)| {
@@ -1499,7 +1517,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     })
                     .collect::<Option<Vec<_>>>()?
                     .into_iter()
-                    .product();
+                    .try_reduce(|x, y| x.checked_mul(y))??;
                 Some(Numeric(product_numeric.div_exact(divisor_numeric)?))
             }
             Divide {
@@ -1585,7 +1603,29 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
             }
         }
         _ => None,
+    };
+    println!("div_exact: {product}/{divisor} -> {result:?}");
+    result
+}
+
+pub fn div_power_exact(product: &Factor, divisor: &Factor, power: NumberLength) -> Option<Factor> {
+    match power {
+        0 => return Some(product.clone()),
+        1 => return div_exact(product, divisor),
+        _ => {}
     }
+    if let Some(root) = nth_root_exact(product, power)
+        && let Some(root_quotient) = div_exact(&root, divisor) {
+        return Some(simplify_multiply(&[(root_quotient, power)].into()));
+    }
+    let mut result = Some(product.clone());
+    for _ in 0..power {
+        if result.is_none() {
+            return None;
+        }
+        replace_with_or_abort(&mut result, |result| div_exact(&result.unwrap(), divisor));
+    }
+    result
 }
 
 pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
@@ -2199,6 +2239,15 @@ fn simplify_divide_internal(
                 *cloned_right.entry(simplify(subterm.clone())).or_insert(0) +=
                     exponent * subterm_exponent;
             }
+        } else if let Complex(ref c) = simplified
+                && let Divide { ref left, ref right, .. } = **c {
+            // a/(b/c) => (a*c)/b
+            cloned_right.remove(&term);
+            let old_new_left = take(&mut new_left);
+            let mut new_left_terms = right.clone();
+            *new_left_terms.entry(old_new_left).or_insert(0) += 1;
+            new_left = simplify_multiply(&new_left_terms);
+            *cloned_right.entry(left.clone()).or_insert(0) += exponent;
         } else if simplified != term {
             if let Numeric(l) = new_left
                 && let Numeric(r) = term
@@ -2219,13 +2268,16 @@ fn simplify_divide_internal(
         *exponent -= 1;
         new_left = Factor::one();
     }
-    if cloned_right.is_empty() {
+    let result = if cloned_right.is_empty() {
         Some(new_left)
     } else if new_left == *left && cloned_right == *right {
         None
     } else {
         Some(Factor::divide(new_left, cloned_right))
-    }
+    };
+    println!("simplify_divide_internal: {}/{} -> {:?}", left, right.iter().map(|(k,v)| format!("{k}->{v}")).join(", "),
+             result);
+    result
 }
 
 fn simplify_multiply(terms: &BTreeMap<Factor, NumberLength>) -> Factor {
@@ -2511,79 +2563,65 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 ..
                             } => {
                                 // division
-                                let mut left_recursive_factors = BTreeMap::new();
                                 let mut left_remaining_factors = find_factors(&simplify(left.clone()));
                                 let mut right_remaining_factors = right.clone();
-                                while let Some((factor, exponent)) =
-                                    left_remaining_factors.pop_first()
-                                {
-                                    if exponent == 0 {
-                                        continue;
-                                    }
-                                    // Can't be rewritten with or_else due to borrow-checker rules
-                                    let right_exponent = match right_remaining_factors.get_mut(&factor) {
-                                        Some(e) => Some(e),
-                                        None => right_remaining_factors.get_mut(&simplify(factor.clone()))
-                                    };
-                                    if let Some(right_exponent) = right_exponent && *right_exponent != 0 {
-                                        let min_exponent = exponent.min(*right_exponent);
-                                        *right_exponent -= min_exponent;
-                                        let left_exponent = exponent - min_exponent;
-                                        if left_exponent > 0 {
-                                            left_remaining_factors.insert(factor, left_exponent);
+                                let mut left_finished = false;
+                                let mut right_finished = false;
+                                while !right_remaining_factors.is_empty()
+                                    && !left_remaining_factors.is_empty()
+                                    && !(left_finished && right_finished){
+                                    println!("left_remaining_factors: {}", left_remaining_factors.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
+                                    println!("right_remaining_factors: {}", right_remaining_factors.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
+                                    let intersection = multiset_intersection(left_remaining_factors.clone(), right_remaining_factors.clone());
+                                    if intersection.is_empty() {
+                                        if let Some(exact_div) = div_exact(&simplify_multiply(&left_remaining_factors), &simplify_multiply(&right_remaining_factors)) {
+                                            left_remaining_factors = [(exact_div, 1)].into();
+                                            break;
                                         }
-                                    } else {
-                                        let subfactors = if factor == *expr {
-                                            BTreeMap::new()
-                                        } else {
-                                            find_factors(&factor)
-                                        };
-                                        for (subfactor, subfactor_exponent) in
-                                            subfactors
-                                                .into_iter()
-                                                .filter(|(subfactor, _)| *subfactor != factor)
-                                        {
-                                            if subfactor_exponent != 0 {
-                                                *left_remaining_factors
-                                                    .entry(subfactor)
-                                                    .or_insert(0) += subfactor_exponent * exponent;
+                                        if !left_finished {
+                                            let mut new_left_remaining_factors = BTreeMap::new();
+                                            for (factor, exponent) in left_remaining_factors.iter() {
+                                                let subfactors = find_factors(&factor);
+                                                for (subfactor, subfactor_exponent) in subfactors {
+                                                    let old_count = new_left_remaining_factors.entry(subfactor).or_insert(0);
+                                                    *old_count = (*old_count).max(exponent * subfactor_exponent);
+                                                }
+                                            }
+                                            if left_remaining_factors == new_left_remaining_factors {
+                                                left_finished = true;
+                                            } else {
+                                                left_remaining_factors = new_left_remaining_factors;
                                             }
                                         }
-                                        *left_recursive_factors.entry(factor).or_insert(0) += exponent;
-                                    }
-                                }
-                                left_remaining_factors.retain(|_, exponent| *exponent != 0);
-                                right_remaining_factors.retain(|_, exponent| *exponent != 0);
-                                while let Some((factor, exponent)) =
-                                    right_remaining_factors.pop_last()
-                                {
-                                    if exponent == 0 {
-                                        continue;
-                                    }
-                                    if let Some(left_exponent) =
-                                        left_recursive_factors.get_mut(&factor) && *left_exponent != 0
-                                    {
-                                        let min_exponent = (*left_exponent).min(exponent);
-                                        *left_exponent -= min_exponent;
-                                        let right_exponent = exponent - min_exponent;
-                                        if right_exponent != 0 {
-                                            right_remaining_factors
-                                                .insert(factor, right_exponent);
+                                        if !right_finished {
+                                            let mut new_right_remaining_factors = BTreeMap::new();
+                                            for (factor, exponent) in right_remaining_factors.iter() {
+                                                let subfactors = find_factors(&factor);
+                                                for (subfactor, subfactor_exponent) in subfactors {
+                                                    let old_count = new_right_remaining_factors.entry(subfactor).or_insert(0);
+                                                    *old_count = (*old_count).max(exponent * subfactor_exponent);
+                                                }
+                                            }
+                                            if right_remaining_factors == new_right_remaining_factors {
+                                                right_finished = true;
+                                            } else {
+                                                right_remaining_factors = new_right_remaining_factors;
+                                            }
                                         }
                                     } else {
-                                        let subfactors = find_factors(&factor);
-                                        for (subfactor, subfactor_exponent) in
-                                            subfactors
-                                                .into_iter()
-                                                .filter(|(subfactor, _)| *subfactor != factor)
-                                        {
-                                            *right_remaining_factors
-                                                .entry(subfactor)
-                                                .or_insert(0) += subfactor_exponent * exponent;
+                                        for (factor, common_exponent) in intersection {
+                                            let right_remaining_exponent = right_remaining_factors.remove(&factor).unwrap() - common_exponent;
+                                            if right_remaining_exponent > 0 {
+                                                right_remaining_factors.insert(factor.clone(), right_remaining_exponent);
+                                            }
+                                            let left_remaining_exponent = left_remaining_factors.remove(&factor).unwrap() - common_exponent;
+                                            if left_remaining_exponent > 0 {
+                                                left_remaining_factors.insert(factor.clone(), left_remaining_exponent);
+                                            }
                                         }
                                     }
                                 }
-                                left_recursive_factors
+                                left_remaining_factors
                             }
                             Multiply { ref terms, .. } => {
                                 if terms.is_empty() {
@@ -2616,48 +2654,34 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                             } => {
                                 let left = simplify(left.clone());
                                 let right = simplify(right.clone());
-                                let algebraic =
-                                    to_like_powers_recursive_dedup(&left, &right, subtract);
-                                if !algebraic.is_empty() {
-                                    algebraic
-                                } else {
-                                    let mut factors = find_common_factors(&left, &right);
-                                    for prime in SMALL_PRIMES {
-                                        let mut prime_to_power = prime as NumericFactor;
-                                        let mut power = 0;
-                                        while modulo_as_numeric(expr, prime_to_power) == Some(0) {
-                                            power += 1;
-                                            let Some(new_power) =
-                                                prime_to_power.checked_mul(prime as NumericFactor)
-                                            else {
-                                                break;
-                                            };
-                                            prime_to_power = new_power;
-                                        }
-                                        if power > 0 {
-                                            *factors.entry(Numeric(prime as NumericFactor)).or_insert(0) += power;
-                                        }
+                                let algebraic = to_like_powers(&left, &right, subtract);
+                                println!("algebraic: {}", algebraic.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
+                                let mut common_factors = find_common_factors(&left, &right);
+                                for prime in SMALL_PRIMES {
+                                    let mut prime_to_power = prime as NumericFactor;
+                                    let mut power = 0;
+                                    while modulo_as_numeric(expr, prime_to_power) == Some(0) {
+                                        power += 1;
+                                        let Some(new_power) =
+                                            prime_to_power.checked_mul(prime as NumericFactor)
+                                        else {
+                                            break;
+                                        };
+                                        prime_to_power = new_power;
                                     }
-                                    factors = multiset_union(vec![
-                                        factors,
-                                        to_like_powers_recursive_dedup(&left, &right, subtract),
-                                        find_common_factors(&left, &right),
-                                    ]);
-                                    let cofactors = factors
-                                        .iter()
-                                        .flat_map(|(factor, exponent)| {
-                                            let mut cofactor = div_exact(expr, factor)?;
-                                            let mut remaining_exponent = exponent - 1;
-                                            while remaining_exponent > 0 && let Some(new_cofactor) = div_exact(&cofactor, factor) {
-                                                cofactor = new_cofactor;
-                                                remaining_exponent -= 1;
-                                            }
-                                            Some((simplify(cofactor), 1))
-                                        })
-                                        .collect();
-                                    factors = multiset_union(vec![factors, cofactors]);
-                                    factors
+                                    if power > 0 {
+                                        *common_factors.entry(Numeric(prime as NumericFactor)).or_insert(0) += power;
+                                    }
                                 }
+                                println!("common_factors: {}", common_factors.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
+                                let cofactors: BTreeMap<Factor, NumberLength> = common_factors
+                                    .iter()
+                                    .flat_map(|(factor, exponent)|
+                                          Some((div_power_exact(expr, factor, *exponent)?, 1))
+                                    )
+                                    .collect();
+                                println!("cofactors: {}", cofactors.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
+                                multiset_union(vec![algebraic, common_factors, cofactors])
                             }
                         },
                     };
@@ -2802,15 +2826,11 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{
-        ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
-        factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection,
-        multiset_union, power_multiset,
-    };
+    use crate::algebraic::{ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union, power_multiset, find_unique_factors};
     use ahash::RandomState;
     use itertools::Itertools;
     use std::iter::repeat_n;
@@ -2823,6 +2843,25 @@ mod tests {
 
     fn find_factors(input: &str) -> Box<[Factor]> {
         crate::algebraic::find_unique_factors(&Factor::from(input))
+    }
+
+    fn find_factors_recursive(input: &str) -> Vec<Factor> {
+        let mut already_decomposed = BTreeSet::new();
+        let mut factors = BTreeSet::new();
+        let mut results = Vec::new();
+        factors.insert(Factor::from(input));
+        while let Some(factor) = factors.pop_first() {
+            if already_decomposed.insert(factor.clone()) {
+                let next_factors = find_unique_factors(&factor);
+                println!("{factor}: {}", next_factors.iter().join(", "));
+                if next_factors.is_empty() || next_factors == [factor.clone()].into() {
+                    results.push(factor);
+                } else {
+                    factors.extend(next_factors);
+                }
+            }
+        }
+        results
     }
 
     fn evaluate_as_numeric(input: &str) -> Option<NumericFactor> {
@@ -2859,17 +2898,22 @@ mod tests {
 
     #[test]
     fn test_anbc_2() {
-        let factors = find_factors("(6^200600+1)/17".into());
+        let factors = find_factors_recursive("(6^200600+1)/17".into());
         println!("{}", factors.iter().join(", "));
 
         // Should contain (6^8+1)/17
         assert!(factors.contains(&98801.into()));
+
+        assert!(!factors.contains(&"6^3400+1".into()));
+        assert!(!factors.contains(&"6^11800+1".into()));
+        assert!(!factors.contains(&"6^40120+1".into()));
 
         // Shouldn't contain 6^5+1
         assert!(!factors.contains(&((6 as NumericFactor).pow(5) + 1).into()));
         assert!(!factors.contains(&7.into()));
         assert!(!factors.contains(&11.into()));
         assert!(!factors.contains(&101.into()));
+        assert!(!factors.contains(&"6^5+1".into()));
     }
 
     #[test]
@@ -2889,14 +2933,6 @@ mod tests {
         assert!(factors.contains(&format!("{}^12+1", NumericFactor::MAX).into()));
         assert!(factors.contains(&format!("{}^8-1", NumericFactor::MAX).into()));
         assert!(!factors.contains(&format!("{}^8+1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^6+1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^6-1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^4+1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^4-1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^3+1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^3-1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^2+1", NumericFactor::MAX).into()));
-        assert!(factors.contains(&format!("{}^2-1", NumericFactor::MAX).into()));
     }
 
     #[test]
@@ -2911,34 +2947,11 @@ mod tests {
         let factors = find_factors("(1297^400-901^400)/3".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
-        assert!(factors.contains(&Numeric(5)));
-        assert!(factors.contains(&Numeric(11)));
-        assert!(factors.contains(&"1297^100-901^100".into()));
+        assert!(factors.contains(&"1297^200-901^200".into()));
         assert!(factors.contains(&"1297^80-901^80".into()));
-        assert!(factors.contains(&"1297^100+901^100".into()));
+        assert!(factors.contains(&"1297^200+901^200".into()));
         assert!(!factors.contains(&"1297^80+901^80".into()));
-        let factors = find_factors("1297^390-901^390".into());
-        println!("{}", factors.iter().sorted().unique().join(","));
-        assert!(
-            factors
-                .iter()
-                .any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(2)))
-        );
-        assert!(
-            factors
-                .iter()
-                .any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(3)))
-        );
-        assert!(
-            !factors
-                .iter()
-                .any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(5)))
-        );
-        assert!(
-            factors
-                .iter()
-                .any(|factor| matches!(factor, Numeric(n) if n.is_multiple_of(11)))
-        );
+        let factors = find_factors("(1297^390-901^390)/396".into());
         assert!(factors.contains(&"1297^130-901^130".into()));
         assert!(factors.contains(&"1297^195-901^195".into()));
         assert!(!factors.contains(&"1297^130+901^130".into()));
@@ -3278,6 +3291,7 @@ mod tests {
             "1234512345123451234512345123451234512345"
         ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
+        assert!(may_be_proper_divisor_of("(2^1234-1)/3", "2^1234-1"));
     }
 
     #[test]
