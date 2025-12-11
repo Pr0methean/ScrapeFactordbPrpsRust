@@ -756,7 +756,7 @@ pub async fn find_and_submit_factors(
     };
     let mut dnd_since_last_accepted = 0;
     let mut dnd_since_last_shuffle = 0;
-    let known_factors = vertex_ids_except::<Box<[_]>>(&mut data, root_vid, true);
+    let known_factors = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid, true);
     let mut factors_to_submit_in_graph = VecDeque::new();
     for factor_vid in known_factors.into_iter() {
         let factor = get_vertex(
@@ -788,10 +788,6 @@ pub async fn find_and_submit_factors(
                 continue;
             }
             _ => {}
-        }
-        if dnd_since_last_shuffle >= DESPERATION_SHUFFLE_THRESHOLD {
-            factors_to_submit_in_graph.push_back(factor_vid);
-            continue;
         }
         match http.try_report_factor(Id(id), factor).await {
             AlreadyFullyFactored => return true,
@@ -849,6 +845,10 @@ pub async fn find_and_submit_factors(
                 }
                 dnd_since_last_accepted += 1;
                 dnd_since_last_shuffle += 1;
+                if dnd_since_last_shuffle == DESPERATION_SHUFFLE_THRESHOLD {
+                    warn!("{id}: Shuffling known_factors due to too many 'does not divide' responses");
+                    known_factors.make_contiguous().shuffle(&mut rng());
+                }
             }
             OtherError => {
                 factors_to_submit_in_graph.push_back(factor_vid);
