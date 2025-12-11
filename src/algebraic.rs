@@ -938,11 +938,14 @@ impl Factor {
         if self == other {
             return false;
         }
-        if let Some(n) = evaluate_as_numeric(self)
-            && let Some(o) = evaluate_as_numeric(other)
+        if let Some(n) = evaluate_as_numeric(self) {
+            if let Some(o) = evaluate_as_numeric(other)
         {
             return o > n && o.is_multiple_of(n);
-        };
+            } else if let Some(m) = modulo_as_numeric(other, n) {
+                return m == 0;
+            }
+        }
         match *self {
             Factor::BigNumber(_) => match *other {
                 Numeric(_) => return false,
@@ -1368,6 +1371,7 @@ pub fn to_like_powers(left: &Factor, right: &Factor, subtract: bool) -> BTreeMap
     let mut results = BTreeMap::new();
     for (factor, _factor_power) in exponent_factors {
         if let Ok(factor) = NumberLength::try_from(factor)
+            && (subtract || (factor != 2))
             && let Some(left_root) = nth_root_exact(&new_left, factor)
             && let Some(right_root) = nth_root_exact(&new_right, factor)
         {
@@ -1491,7 +1495,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     })
                     .collect::<Option<Vec<_>>>()?
                     .into_iter()
-                    .product();
+                    .try_reduce(|x, y| x.checked_mul(y))??;
                 let product_numeric: NumericFactor = terms
                     .iter()
                     .map(|(term, exponent)| {
@@ -1499,7 +1503,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     })
                     .collect::<Option<Vec<_>>>()?
                     .into_iter()
-                    .product();
+                    .try_reduce(|x, y| x.checked_mul(y))??;
                 Some(Numeric(product_numeric.div_exact(divisor_numeric)?))
             }
             Divide {
@@ -2014,7 +2018,7 @@ fn pisano(
         if sequence.len() as NumericFactor == term + 1 {
             return *sequence.last().unwrap();
         }
-        let next_term = (sequence[sequence.len() - 2] + sequence[sequence.len() - 2]) % modulus;
+        let next_term = (sequence[sequence.len() - 2] + sequence[sequence.len() - 1]) % modulus;
         if next_term == 0 {
             zeros += 1;
         }
@@ -2806,11 +2810,7 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{
-        ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
-        factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection,
-        multiset_union, power_multiset,
-    };
+    use crate::algebraic::{ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, multiset_intersection, multiset_union, power_multiset, modulo_as_numeric};
     use ahash::RandomState;
     use itertools::Itertools;
     use std::iter::repeat_n;
@@ -3313,6 +3313,15 @@ mod tests {
         factors.into_keys().for_each(|f| {
             super::find_factors(&f);
         });
+    }
+
+    #[test]
+    fn test_pisano() {
+        assert_eq!(modulo_as_numeric(&"I(2000)".into(), 5), Some(0));
+        assert_eq!(modulo_as_numeric(&"I(2001)".into(), 5), Some(1));
+        assert_eq!(modulo_as_numeric(&"I(2002)".into(), 5), Some(1));
+        assert_eq!(modulo_as_numeric(&"I(2003)".into(), 5), Some(2));
+        assert_eq!(modulo_as_numeric(&"I(2004)".into(), 5), Some(3));
     }
 
     #[test]
