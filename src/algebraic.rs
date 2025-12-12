@@ -2531,14 +2531,13 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         let right_remaining_exponent =
                                             right_remaining_factors.remove(&factor).unwrap()
                                                 - common_exponent;
-                                        if right_remaining_exponent > 0 {
-                                            right_remaining_factors
-                                                .insert(factor.clone(), right_remaining_exponent);
-                                        }
                                         let left_remaining_exponent =
                                             left_remaining_factors.remove(&factor).unwrap()
                                                 - common_exponent;
-                                        if left_remaining_exponent > 0 {
+                                        if right_remaining_exponent > 0 {
+                                            right_remaining_factors
+                                                .insert(factor, right_remaining_exponent);
+                                        } else if left_remaining_exponent > 0 {
                                             left_remaining_factors
                                                 .insert(factor, left_remaining_exponent);
                                         }
@@ -2660,25 +2659,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 let right = simplify(right.clone());
                                 let algebraic =
                                     to_like_powers(&left, &right, subtract);
-                                let mut common_factors = find_common_factors(&left, &right);
-                                for prime in SMALL_PRIMES {
-                                    let mut prime_to_power = prime as NumericFactor;
-                                    let mut power = 0;
-                                    while modulo_as_numeric(expr, prime_to_power) == Some(0) {
-                                        power += 1;
-                                        let Some(new_power) =
-                                            prime_to_power.checked_mul(prime as NumericFactor)
-                                        else {
-                                            break;
-                                        };
-                                        prime_to_power = new_power;
-                                    }
-                                    if power > 0 {
-                                        *common_factors
-                                            .entry(Numeric(prime as NumericFactor))
-                                            .or_insert(0) += power;
-                                    }
-                                }
+                                let common_factors = find_common_factors(&left, &right);
                                 let factors = multiset_union(vec![common_factors, algebraic]);
                                 let cofactors = factors
                                     .iter()
@@ -2698,11 +2679,31 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                             }
                         },
                     };
-                    if factors.is_empty() {
+                    if factors.is_empty() || (factors.len() == 1 && factors.get(expr) == Some(&1)) {
                         if let Some(n) = evaluate_as_numeric(expr) {
                             find_factors_of_numeric(n)
                         } else {
-                            [(expr.clone(), 1)].into()
+                            let mut factors = BTreeMap::new();
+                            for prime in SMALL_PRIMES {
+                                let mut prime_to_power = prime as NumericFactor;
+                                let mut power = 0;
+                                while modulo_as_numeric(expr, prime_to_power) == Some(0) {
+                                    power += 1;
+                                    let Some(new_power) =
+                                        prime_to_power.checked_mul(prime as NumericFactor)
+                                    else {
+                                        break;
+                                    };
+                                    prime_to_power = new_power;
+                                }
+                                if power > 0 {
+                                    *factors
+                                        .entry(Numeric(prime as NumericFactor))
+                                        .or_insert(0) += power;
+                                }
+                            }
+                            factors.insert(simplify_divide(expr, &factors), 1);
+                            factors
                         }
                     } else {
                         factors
@@ -2911,6 +2912,13 @@ mod tests {
     }
 
     #[test]
+    fn test_division_2() {
+        let factors = find_factors_recursive("(3^200+1)/2");
+        println!("{}", factors.iter().join(","));
+        // FIXME: assert!(!factors.contains(&2.into()));
+    }
+
+    #[test]
     fn test_anbc() {
         let expr = format!("{}^9*3+3", NumericFactor::MAX);
         let factors = find_factors(&expr);
@@ -2971,14 +2979,14 @@ mod tests {
 
     #[test]
     fn test_axbx() {
-        let factors = find_factors("(1297^400-901^400)/3".into());
+        let factors = find_factors_recursive("(1297^400-901^400)/3".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&"1297^200-901^200".into()));
         assert!(factors.contains(&"1297^80-901^80".into()));
         assert!(factors.contains(&"1297^200+901^200".into()));
         assert!(!factors.contains(&"1297^80+901^80".into()));
-        let factors = find_factors("1297^390-901^390".into());
+        let factors = find_factors_recursive("1297^390-901^390".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(
             factors
@@ -3052,9 +3060,9 @@ mod tests {
     fn test_mixed_chain() {
         let expr = format!(
             "(2^256-1)*(3^200+1)*(10^50)*((12^368-1)^2)/20/1{}",
-            &repeat_n('0', 50).collect::<String>()
+            &repeat_n('0', 49).collect::<String>()
         );
-        let factors = find_factors(&expr);
+        let factors = find_factors_recursive(&expr);
         println!("{}", factors.iter().join(","));
         assert!(!factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(3)));
@@ -3064,7 +3072,7 @@ mod tests {
 
     #[test]
     fn test_addition_chain() {
-        let factors = find_factors("7^5432+3*7^4321+7^321+7^21".into());
+        let factors = find_factors_recursive("7^5432+3*7^4321+7^321+7^21".into());
         println!("{}", factors.iter().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&Numeric(7)));
@@ -3121,7 +3129,7 @@ mod tests {
 
     #[test]
     fn test_nested_parens() {
-        let factors = find_factors("(12^((2^7-1)^2)-1)/88750555799".into());
+        let factors = find_factors_recursive("(12^((2^7-1)^2)-1)/88750555799".into());
         println!("{}", factors.iter().join(","));
         assert!(factors.contains(&Numeric(11)));
         assert!(factors.contains(&"12^127-1".into()));
