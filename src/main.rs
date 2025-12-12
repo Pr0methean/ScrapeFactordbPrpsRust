@@ -389,7 +389,7 @@ async fn queue_composites(
     http: &impl FactorDbClientReadIdsAndExprs,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZero<NumberLength>>,
-    shutdown_receiver: &mut Monitor
+    shutdown_receiver: &mut Monitor,
 ) -> JoinHandle<()> {
     let mut c_buffered = Vec::with_capacity(C_RESULTS_PER_PAGE);
     while c_buffered.is_empty() {
@@ -598,10 +598,15 @@ async fn main() -> anyhow::Result<()> {
     let mut c_shutdown_receiver = shutdown_receiver.clone();
     let mut c_buffer_task: JoinHandle<()> =
         task::spawn(async_backtrace::location!().frame(async move {
-            queue_composites(&http_clone, &c_sender_clone, c_digits, &mut c_shutdown_receiver)
-                .await
-                .await
-                .unwrap();
+            queue_composites(
+                &http_clone,
+                &c_sender_clone,
+                c_digits,
+                &mut c_shutdown_receiver,
+            )
+            .await
+            .await
+            .unwrap();
         }));
 
     FAILED_U_SUBMISSIONS_OUT
@@ -1060,7 +1065,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         if new_c_buffer_task {
-            c_buffer_task = queue_composites(&http, &c_sender, c_digits, &mut shutdown_receiver).await;
+            c_buffer_task =
+                queue_composites(&http, &c_sender, c_digits, &mut shutdown_receiver).await;
         }
     }
 }

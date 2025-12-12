@@ -2593,15 +2593,24 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     let mut left_remaining_factors =
                                         find_factors(&simplify(left.clone()));
                                     let mut right_remaining_factors = right.clone();
-                                    let intersection = multiset_intersection(left_remaining_factors.clone(), right_remaining_factors.clone());
+                                    let intersection = multiset_intersection(
+                                        left_remaining_factors.clone(),
+                                        right_remaining_factors.clone(),
+                                    );
                                     for (factor, common_exponent) in intersection {
-                                        let right_remaining_exponent = right_remaining_factors.remove(&factor).unwrap() - common_exponent;
+                                        let right_remaining_exponent =
+                                            right_remaining_factors.remove(&factor).unwrap()
+                                                - common_exponent;
                                         if right_remaining_exponent > 0 {
-                                            right_remaining_factors.insert(factor.clone(), right_remaining_exponent);
+                                            right_remaining_factors
+                                                .insert(factor.clone(), right_remaining_exponent);
                                         }
-                                        let left_remaining_exponent = left_remaining_factors.remove(&factor).unwrap() - common_exponent;
+                                        let left_remaining_exponent =
+                                            left_remaining_factors.remove(&factor).unwrap()
+                                                - common_exponent;
                                         if left_remaining_exponent > 0 {
-                                            left_remaining_factors.insert(factor, left_remaining_exponent);
+                                            left_remaining_factors
+                                                .insert(factor, left_remaining_exponent);
                                         }
                                     }
                                     while let Some((factor, exponent)) =
@@ -2641,15 +2650,16 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         }
                                         let simplified = simplify(factor.clone());
                                         if right_remaining_factors.is_empty() {
-                                            *left_recursive_factors.entry(simplified).or_insert(0) += exponent;
+                                            *left_recursive_factors
+                                                .entry(simplified)
+                                                .or_insert(0) += exponent;
                                             continue;
                                         }
                                         // Can't be rewritten with or_else due to borrow-checker rules
                                         let right_exponent =
                                             match right_remaining_factors.remove(&factor) {
                                                 Some(e) => Some(e),
-                                                None => right_remaining_factors
-                                                    .remove(&simplified),
+                                                None => right_remaining_factors.remove(&simplified),
                                             };
                                         if let Some(mut right_exponent) = right_exponent
                                             && right_exponent != 0
