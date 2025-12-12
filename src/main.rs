@@ -44,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
+use std::future::ready;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZero, NonZeroU32};
@@ -388,6 +389,7 @@ async fn queue_composites(
     http: &impl FactorDbClientReadIdsAndExprs,
     c_sender: &Sender<CompositeCheckTask>,
     digits: Option<NonZero<NumberLength>>,
+    shutdown_receiver: &mut Monitor
 ) -> JoinHandle<()> {
     let mut c_buffered = Vec::with_capacity(C_RESULTS_PER_PAGE);
     while c_buffered.is_empty() {
@@ -399,6 +401,9 @@ async fn queue_composites(
         let mut results_per_page = C_RESULTS_PER_PAGE;
         let mut composites_page = None;
         while composites_page.is_none() && results_per_page > 0 {
+            if shutdown_receiver.check_for_shutdown() {
+                return task::spawn(ready(()));
+            }
             let digits = digits.unwrap_or_else(|| {
                 rng()
                     .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
@@ -416,7 +421,7 @@ async fn queue_composites(
         }
         info!("{results_per_page} C search results retrieved");
         let Some(composites_page) = composites_page else {
-            return task::spawn(async {});
+            return task::spawn(ready(()));
         };
         let mut c_tasks: Box<[_]> = http
             .read_ids_and_exprs(&composites_page)
@@ -590,9 +595,10 @@ async fn main() -> anyhow::Result<()> {
     );
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
+    let mut c_shutdown_receiver = shutdown_receiver.clone();
     let mut c_buffer_task: JoinHandle<()> =
         task::spawn(async_backtrace::location!().frame(async move {
-            queue_composites(&http_clone, &c_sender_clone, c_digits)
+            queue_composites(&http_clone, &c_sender_clone, c_digits, &mut c_shutdown_receiver)
                 .await
                 .await
                 .unwrap();
@@ -1054,7 +1060,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         if new_c_buffer_task {
-            c_buffer_task = queue_composites(&http, &c_sender, c_digits).await;
+            c_buffer_task = queue_composites(&http, &c_sender, c_digits, &mut shutdown_receiver).await;
         }
     }
 }

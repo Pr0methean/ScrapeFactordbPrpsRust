@@ -37,10 +37,10 @@ impl Monitor {
 
     /// Returns `true` if the shutdown signal has been received.
     pub(crate) fn check_for_shutdown(&mut self) -> bool {
-        if self.is_shutdown.load(Acquire) {
-            true
-        } else if self.shutdown_notify.try_recv().is_ok() {
+        if self.shutdown_notify.try_recv().is_ok() {
             self.is_shutdown.store(true, Release);
+            true
+        } else if self.is_shutdown.load(Acquire) {
             true
         } else {
             false
