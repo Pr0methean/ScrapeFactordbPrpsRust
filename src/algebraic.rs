@@ -21,7 +21,6 @@ use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
 use object_pool::{Pool, Reusable};
-use replace_with::replace_with_or_abort;
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
