@@ -2601,7 +2601,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         }
                                         let left_remaining_exponent = left_remaining_factors.remove(&factor).unwrap() - common_exponent;
                                         if left_remaining_exponent > 0 {
-                                            left_remaining_factors.insert(factor.clone(), left_remaining_exponent);
+                                            left_remaining_factors.insert(factor, left_remaining_exponent);
                                         }
                                     }
                                     while let Some((factor, exponent)) =
