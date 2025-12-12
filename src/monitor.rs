@@ -40,11 +40,7 @@ impl Monitor {
         if self.shutdown_notify.try_recv().is_ok() {
             self.is_shutdown.store(true, Release);
             true
-        } else if self.is_shutdown.load(Acquire) {
-            true
-        } else {
-            false
-        }
+        } else { self.is_shutdown.load(Acquire) }
     }
 
     /// Receive the shutdown notice, waiting if necessary.
