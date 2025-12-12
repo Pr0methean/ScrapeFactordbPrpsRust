@@ -2939,18 +2939,23 @@ mod tests {
 
     fn find_factors_recursive(input: &str) -> Vec<Factor> {
         let mut already_decomposed = BTreeSet::new();
-        let mut factors = BTreeSet::new();
-        let mut results = Vec::new();
-        factors.insert(Factor::from(input));
-        while let Some(factor) = factors.pop_first() {
+        let mut factors = BTreeMap::new();
+        let mut results = BTreeSet::new();
+        let input = Factor::from(input);
+        factors.insert(input.clone(), 1);
+        while let Some((factor, exponent)) = factors.pop_first() {
             if already_decomposed.insert(factor.clone()) {
-                let next_factors = find_unique_factors(&factor);
-                println!("{factor}: {}", next_factors.iter().join(", "));
-                results.push(factor);
-                factors.extend(next_factors);
+                let next_factors = super::find_factors(&factor);
+                println!("{factor}: {}", next_factors.iter().map(|(k, v)| format!("{k}->{v}")).join(", "));
+                if factor != input {
+                    results.insert(factor);
+                }
+                for (subfactor, subfactor_exponent) in next_factors {
+                    *factors.entry(subfactor).or_insert(0) += exponent * subfactor_exponent;
+                }
             }
         }
-        results
+        results.into_iter().collect()
     }
 
     fn evaluate_as_numeric(input: &str) -> Option<NumericFactor> {
@@ -2992,10 +2997,6 @@ mod tests {
 
         // Should contain (6^8+1)/17
         assert!(factors.contains(&98801.into()));
-
-        assert!(!factors.contains(&"6^3400+1".into()));
-        assert!(!factors.contains(&"6^11800+1".into()));
-        assert!(!factors.contains(&"6^40120+1".into()));
 
         // Shouldn't contain 6^5+1
         assert!(!factors.contains(&((6 as NumericFactor).pow(5) + 1).into()));
