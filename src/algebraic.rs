@@ -2657,7 +2657,6 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     let left = simplify(left.clone());
                                     let right = simplify(right.clone());
                                     let algebraic = to_like_powers_recursive_dedup(&left, &right, subtract);
-                                    println!("algebraic: {}", algebraic.iter().map(|(k,v)| format!("{k}->{v}")).join(", "));
                                     let mut common_factors = find_common_factors(&left, &right);
                                     for prime in SMALL_PRIMES {
                                         let mut prime_to_power = prime as NumericFactor;
