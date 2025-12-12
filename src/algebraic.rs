@@ -2542,22 +2542,34 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                 .insert(factor, left_remaining_exponent);
                                         }
                                     }
-                                    while let Some((factor, exponent)) =
+                                    while let Some((mut factor, exponent)) =
                                         right_remaining_factors.pop_last()
                                     {
                                         if exponent == 0 {
                                             continue;
                                         }
-                                        if let Some(left_exponent) =
-                                            left_remaining_factors.get_mut(&factor)
-                                            && *left_exponent != 0
-                                        {
-                                            let min_exponent = (*left_exponent).min(exponent);
-                                            *left_exponent -= min_exponent;
+                                        let mut left_exponent = left_recursive_factors.remove(&factor).filter(|exponent| *exponent != 0)
+                                                .or_else(|| left_remaining_factors.remove(&factor)).filter(|exponent| *exponent != 0);
+                                        while left_exponent.is_none() {
+                                            let simplified = simplify(factor.clone());
+                                            if simplified != factor {
+                                                left_exponent = left_recursive_factors.remove(&simplified).filter(|exponent| *exponent != 0)
+                                                    .or_else(|| left_remaining_factors.remove(&simplified)).filter(|exponent| *exponent != 0);
+                                                factor = simplified;
+                                            } else {
+                                                break;
+                                            }
+                                        }
+                                        if let Some(mut left_exponent) = left_exponent {
+                                            let min_exponent = left_exponent.min(exponent);
+                                            left_exponent -= min_exponent;
                                             let right_exponent = exponent - min_exponent;
                                             if right_exponent != 0 {
                                                 right_remaining_factors
                                                     .insert(factor, right_exponent);
+                                            } else if left_exponent != 0 {
+                                                left_remaining_factors
+                                                    .insert(factor, left_exponent);
                                             }
                                         } else {
                                             let subfactors = find_factors(&factor);
@@ -2582,7 +2594,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             *left_recursive_factors
                                                 .entry(simplified)
                                                 .or_insert(0) += exponent;
-                                            continue;
+                                            break;
                                         }
                                         // Can't be rewritten with or_else due to borrow-checker rules
                                         let right_exponent =
@@ -2606,23 +2618,46 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             }
                                         } else if factor == *expr {
                                             continue;
+                                        } else if let Some(possible_multiple) = left_remaining_factors.keys().find(|multiple| factor.may_be_proper_divisor_of(multiple)).cloned() {
+                                            let multiple_exponent = left_remaining_factors.remove(&possible_multiple).unwrap();
+                                            let subfactors = find_factors(&possible_multiple);
+                                            let mut subfactor_found = false;
+                                            for (subfactor, subfactor_exponent) in subfactors
+                                                .into_iter()
+                                                .filter(|(subfactor, _)| *subfactor != possible_multiple)
+                                            {
+                                                if subfactor_exponent != 0 {
+                                                    subfactor_found = true;
+                                                    *left_remaining_factors
+                                                        .entry(subfactor)
+                                                        .or_insert(0) +=
+                                                        subfactor_exponent * multiple_exponent;
+                                                }
+                                            }
+                                            if !subfactor_found {
+                                                left_recursive_factors.insert(possible_multiple, multiple_exponent);
+                                            }
                                         } else {
                                             let subfactors = find_factors(&factor);
+                                            let mut subfactor_found = false;
                                             for (subfactor, subfactor_exponent) in subfactors
                                                 .into_iter()
                                                 .filter(|(subfactor, _)| *subfactor != factor)
                                             {
                                                 if subfactor_exponent != 0 {
-                                                    *left_remaining_factors
+                                                    subfactor_found = true;
+                                                    *right_remaining_factors
                                                         .entry(subfactor)
                                                         .or_insert(0) +=
                                                         subfactor_exponent * exponent;
                                                 }
                                             }
-                                            *left_recursive_factors.entry(factor).or_insert(0) +=
-                                                exponent;
+                                            if subfactor_found {
+                                                *right_remaining_factors.entry(factor).or_insert(0) += exponent;
+                                            }
                                         }
                                     }
+                                    sum_factor_btreemaps(&mut left_recursive_factors, left_remaining_factors);
                                     left_recursive_factors
                                 }
                             }
@@ -2915,7 +2950,7 @@ mod tests {
     fn test_division_2() {
         let factors = find_factors_recursive("(3^200+1)/2");
         println!("{}", factors.iter().join(","));
-        // FIXME: assert!(!factors.contains(&2.into()));
+        assert!(!factors.contains(&2.into()));
     }
 
     #[test]
