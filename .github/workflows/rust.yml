@@ -49,7 +49,7 @@ jobs:
           rustup install nightly
           rustup default nightly
       - name: Cache sccache local cache, cargo registry/git, and target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/sccache
@@ -60,7 +60,7 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml') }}-${{ runner.toolcache }}
           restore-keys: ${{ runner.os }}-cargo-
       - name: Cache apt/dpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             /usr/bin/ecm
