@@ -617,7 +617,7 @@ async fn main() -> anyhow::Result<()> {
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
     let mut do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
-    task::spawn(async_backtrace::location!().named_const("Execute checks from channels").frame(async move {
+    let do_checks = task::spawn(async_backtrace::location!().named_const("Execute checks from channels").frame(async move {
         info!("do_checks task starting");
         let mut c_filter = CuckooFilter::with_capacity(4096);
         let mut next_unknown_attempt = Instant::now();
@@ -948,7 +948,7 @@ async fn main() -> anyhow::Result<()> {
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
     let mut u_http = http.clone();
-    task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
+    let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
@@ -1009,6 +1009,8 @@ async fn main() -> anyhow::Result<()> {
             _ = shutdown_receiver.recv() => {
                 warn!("Main thread received shutdown signal; exiting");
                 c_buffer_task.abort();
+                let _ = queue_u.await;
+                let _ = do_checks.await;
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
