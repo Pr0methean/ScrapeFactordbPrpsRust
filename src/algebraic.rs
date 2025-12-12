@@ -2877,7 +2877,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
         Some(cached) => cached,
         None => {
             let expr = simplify(expr.clone());
-            let mut factors = find_factors(&expr)
+            let factors = find_factors(&expr)
                 .into_iter()
                 .rev()
                 .flat_map(|(f, exponent)| {
