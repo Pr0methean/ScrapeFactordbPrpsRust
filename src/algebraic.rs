@@ -2946,11 +2946,8 @@ mod tests {
             if already_decomposed.insert(factor.clone()) {
                 let next_factors = find_unique_factors(&factor);
                 println!("{factor}: {}", next_factors.iter().join(", "));
-                if next_factors.is_empty() || next_factors == [factor.clone()].into() {
-                    results.push(factor);
-                } else {
-                    factors.extend(next_factors);
-                }
+                results.push(factor);
+                factors.extend(next_factors);
             }
         }
         results
@@ -3422,6 +3419,13 @@ mod tests {
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
         assert!(may_be_proper_divisor_of("(2^1234-1)/3", "2^1234-1"));
     }
+
+    #[test]
+    fn test_find_factors_performance_1() {
+        let factors = find_factors_recursive("I(969969)");
+        println!("Factors: {}", factors.into_iter().join(", "));
+    }
+
 
     #[test]
     fn test_find_factors_performance_2() {
