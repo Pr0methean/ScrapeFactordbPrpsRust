@@ -2879,6 +2879,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
             let expr = simplify(expr.clone());
             let mut factors = find_factors(&expr)
                 .into_iter()
+                .rev()
                 .flat_map(|(f, exponent)| {
                     if exponent == 0 {
                         return None;
@@ -2891,9 +2892,8 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     }
                     None
                 })
+                .unique()
                 .collect::<Vec<_>>();
-            factors.sort_unstable();
-            factors.dedup();
             if factors.is_empty() {
                 warn!("No factors found for expression {expr}");
             } else {
