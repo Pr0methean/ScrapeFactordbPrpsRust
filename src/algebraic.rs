@@ -2605,59 +2605,13 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         }
                                     }
                                     while let Some((factor, exponent)) =
-                                        left_remaining_factors.pop_last()
-                                    {
-                                        if exponent == 0 {
-                                            continue;
-                                        }
-                                        // Can't be rewritten with or_else due to borrow-checker rules
-                                        let right_exponent =
-                                            match right_remaining_factors.get_mut(&factor) {
-                                                Some(e) => Some(e),
-                                                None => right_remaining_factors
-                                                    .get_mut(&simplify(factor.clone())),
-                                            };
-                                        if let Some(right_exponent) = right_exponent
-                                            && *right_exponent != 0
-                                        {
-                                            let min_exponent = exponent.min(*right_exponent);
-                                            *right_exponent -= min_exponent;
-                                            let left_exponent = exponent - min_exponent;
-                                            if left_exponent > 0 {
-                                                left_remaining_factors
-                                                    .insert(factor, left_exponent);
-                                            }
-                                        } else {
-                                            let subfactors = if factor == *expr {
-                                                BTreeMap::new()
-                                            } else {
-                                                find_factors(&factor)
-                                            };
-                                            for (subfactor, subfactor_exponent) in subfactors
-                                                .into_iter()
-                                                .filter(|(subfactor, _)| *subfactor != factor)
-                                            {
-                                                if subfactor_exponent != 0 {
-                                                    *left_remaining_factors
-                                                        .entry(subfactor)
-                                                        .or_insert(0) +=
-                                                        subfactor_exponent * exponent;
-                                                }
-                                            }
-                                            *left_recursive_factors.entry(factor).or_insert(0) +=
-                                                exponent;
-                                        }
-                                    }
-                                    left_remaining_factors.retain(|_, exponent| *exponent != 0);
-                                    right_remaining_factors.retain(|_, exponent| *exponent != 0);
-                                    while let Some((factor, exponent)) =
                                         right_remaining_factors.pop_last()
                                     {
                                         if exponent == 0 {
                                             continue;
                                         }
                                         if let Some(left_exponent) =
-                                            left_recursive_factors.get_mut(&factor)
+                                            left_remaining_factors.get_mut(&factor)
                                             && *left_exponent != 0
                                         {
                                             let min_exponent = (*left_exponent).min(exponent);
@@ -2677,6 +2631,57 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                     .entry(subfactor)
                                                     .or_insert(0) += subfactor_exponent * exponent;
                                             }
+                                        }
+                                    }
+                                    while let Some((factor, exponent)) =
+                                        left_remaining_factors.pop_last()
+                                    {
+                                        if exponent == 0 {
+                                            continue;
+                                        }
+                                        let simplified = simplify(factor.clone());
+                                        if right_remaining_factors.is_empty() {
+                                            *left_recursive_factors.entry(simplified).or_insert(0) += exponent;
+                                            continue;
+                                        }
+                                        // Can't be rewritten with or_else due to borrow-checker rules
+                                        let right_exponent =
+                                            match right_remaining_factors.remove(&factor) {
+                                                Some(e) => Some(e),
+                                                None => right_remaining_factors
+                                                    .remove(&simplified),
+                                            };
+                                        if let Some(mut right_exponent) = right_exponent
+                                            && right_exponent != 0
+                                        {
+                                            let min_exponent = exponent.min(right_exponent);
+                                            right_exponent -= min_exponent;
+                                            let left_exponent = exponent - min_exponent;
+                                            if right_exponent > 0 {
+                                                right_remaining_factors
+                                                    .insert(simplified.clone(), right_exponent);
+                                            }
+                                            if left_exponent > 0 {
+                                                left_remaining_factors
+                                                    .insert(simplified, left_exponent);
+                                            }
+                                        } else if factor == *expr {
+                                            continue;
+                                        } else {
+                                            let subfactors = find_factors(&factor);
+                                            for (subfactor, subfactor_exponent) in subfactors
+                                                .into_iter()
+                                                .filter(|(subfactor, _)| *subfactor != factor)
+                                            {
+                                                if subfactor_exponent != 0 {
+                                                    *left_remaining_factors
+                                                        .entry(subfactor)
+                                                        .or_insert(0) +=
+                                                        subfactor_exponent * exponent;
+                                                }
+                                            }
+                                            *left_recursive_factors.entry(factor).or_insert(0) +=
+                                                exponent;
                                         }
                                     }
                                     left_recursive_factors
