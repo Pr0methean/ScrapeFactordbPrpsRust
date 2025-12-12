@@ -635,8 +635,8 @@ impl NumberFacts {
 // Reverse the list of factors if we've received too many "Does not divide" responses since the last
 // accepted factor, so that small factors are submitted first. If reversing doesn't help, shuffle
 // the list. If all else fails, abort.
-const DESPERATION_REVERSE_ORDER_THRESHOLD: usize = 30;
-const DESPERATION_SHUFFLE_THRESHOLD: usize = 60;
+const DESPERATION_REVERSE_ORDER_THRESHOLD: usize = 10;
+const DESPERATION_SHUFFLE_THRESHOLD: usize = 20;
 const DESPERATION_ABORT_THRESHOLD: usize = 100;
 
 #[framed]
