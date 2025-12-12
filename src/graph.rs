@@ -765,8 +765,7 @@ pub async fn find_and_submit_factors(
             &mut data.deleted_synonyms,
         );
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
-        if factor.is_elided()
-        {
+        if factor.is_elided() {
             // Can't submit a factor that we can't fit into a URL, but can save it in case we find
             // out the ID later
             info!("{id}: Temporarily skipping {factor} because digits are missing");
@@ -846,11 +845,15 @@ pub async fn find_and_submit_factors(
                 dnd_since_last_accepted += 1;
                 dnd_since_last_shuffle += 1;
                 if dnd_since_last_accepted == DESPERATION_ABORT_THRESHOLD {
-                    error!("{id}: Aborting due to too many 'does not divide' responses with no acceptances");
+                    error!(
+                        "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
+                    );
                     return accepted_factors > 0;
                 }
                 if dnd_since_last_shuffle == DESPERATION_SHUFFLE_THRESHOLD {
-                    warn!("{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances");
+                    warn!(
+                        "{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances"
+                    );
                     known_factors.make_contiguous().shuffle(&mut rng());
                     dnd_since_last_shuffle = 0;
                 }
@@ -939,8 +942,7 @@ pub async fn find_and_submit_factors(
             factor_vid,
             &mut data.deleted_synonyms,
         );
-        if factor.is_elided()
-        {
+        if factor.is_elided() {
             info!("{id}: Temporarily skipping {factor} because digits are missing");
             // Can't submit factor right now because we don't have it in a representable form, but
             // running add_factors_to_graph may provide an equivalent expression
@@ -1432,10 +1434,11 @@ async fn add_factors_to_graph(
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
     let elided = get_vertex(
-            &data.divisibility_graph,
-            factor_vid,
-            &mut data.deleted_synonyms
-        ).is_elided();
+        &data.divisibility_graph,
+        factor_vid,
+        &mut data.deleted_synonyms,
+    )
+    .is_elided();
     // First, check factordb.com/api for already-known factors
     let needs_update = facts.needs_update();
     if needs_update || elided {
