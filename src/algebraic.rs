@@ -24,7 +24,7 @@ use object_pool::{Pool, Reusable};
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::default::Default;
 use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
@@ -1417,48 +1417,6 @@ pub fn to_like_powers(
     }
     results
 }
-pub fn to_like_powers_recursive_dedup(
-    left: &Factor,
-    right: &Factor,
-    subtract: bool,
-) -> BTreeMap<Factor, NumberLength> {
-    let mut results = BTreeMap::new();
-    let mut to_expand = to_like_powers(left, right, subtract);
-    let mut already_expanded = BTreeSet::new();
-    while let Some((factor, exponent)) = to_expand.pop_first() {
-        if !already_expanded.contains(&factor) {
-            let factor = simplify(factor.clone());
-            let factor_clone = factor.clone();
-            match factor {
-                Complex(ref c) => match **c {
-                    AddSub {
-                        terms: (ref factor_left, ref factor_right),
-                        subtract,
-                    } => {
-                        let subfactors = to_like_powers(factor_left, factor_right, subtract);
-                        for (subfactor, subfactor_exponent) in subfactors
-                            .into_iter()
-                            .filter(|(subfactor, _)| subfactor != &factor)
-                        {
-                            *to_expand.entry(subfactor).or_insert(0) +=
-                                exponent * subfactor_exponent;
-                        }
-                        *results.entry(factor).or_insert(0) += 1;
-                    }
-                    _ => *results.entry(factor).or_insert(0) += 1,
-                },
-                Numeric(n) => {
-                    sum_factor_btreemaps(&mut results, find_factors_of_numeric(n));
-                }
-                _ => {
-                    *results.entry(factor).or_insert(0) += 1;
-                }
-            }
-            already_expanded.insert(factor_clone);
-        }
-    }
-    results
-}
 
 pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
     if product == divisor {
@@ -2701,7 +2659,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 let left = simplify(left.clone());
                                 let right = simplify(right.clone());
                                 let algebraic =
-                                    to_like_powers_recursive_dedup(&left, &right, subtract);
+                                    to_like_powers(&left, &right, subtract);
                                 let mut common_factors = find_common_factors(&left, &right);
                                 for prime in SMALL_PRIMES {
                                     let mut prime_to_power = prime as NumericFactor;
@@ -2887,7 +2845,6 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::find_unique_factors;
     use crate::algebraic::{
         ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
         factor_power, fibonacci_factors, lucas_factors, modinv, modulo_as_numeric,
@@ -2989,7 +2946,7 @@ mod tests {
     #[test]
     fn test_anb_minus_c() {
         let expr = format!("{}^24-1", NumericFactor::MAX);
-        let factors = find_factors(&expr);
+        let factors = find_factors_recursive(&expr);
         println!("{}", factors.iter().join(", "));
         assert!(factors.contains(&format!("{}^12-1", NumericFactor::MAX).into()));
         assert!(factors.contains(&format!("{}^12+1", NumericFactor::MAX).into()));
