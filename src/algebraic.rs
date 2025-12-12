@@ -1396,32 +1396,24 @@ pub fn to_like_powers(
     if total_factors <= 1 {
         return BTreeMap::new();
     }
+    let expr = simplify_add_sub(&new_left, &new_right, subtract);
     let mut results = BTreeMap::new();
-    for (factor, factor_power) in exponent_factors {
+    for (factor, _) in exponent_factors {
         if let Ok(factor) = NumberLength::try_from(factor)
             && (subtract || (factor != 2))
             && let Some(left_root) = nth_root_exact(&new_left, factor)
             && let Some(right_root) = nth_root_exact(&new_right, factor)
         {
-            if subtract {
-                let new_factor = simplify_add_sub(&left_root, &right_root, true);
-                let new_cofactor = if factor == 2 {
-                    Some(simplify_add_sub(&left_root, &right_root, false))
-                } else {
-                    div_power_exact(&new_left, &new_factor, factor_power)
-                };
-                if let Some(new_cofactor) = new_cofactor {
-                    *results.entry(new_cofactor).or_insert(0) += 1;
-                }
-                *results.entry(new_factor).or_insert(0) += factor_power;
+            let new_factor = simplify_add_sub(&left_root, &right_root, subtract);
+            let new_cofactor = if subtract && factor == 2 {
+                simplify_add_sub(&left_root, &right_root, false)
             } else {
-                let new_factor = simplify_add_sub(&left_root, &right_root, false);
-                let new_cofactor = div_power_exact(&new_left, &new_factor, factor_power);
-                if let Some(new_cofactor) = new_cofactor {
-                    *results.entry(new_cofactor).or_insert(0) += 1;
-                }
-                *results.entry(new_factor).or_insert(0) += factor_power;
-            }
+                div_exact(&expr, &new_factor).unwrap_or_else(|| simplify_divide(
+                    &expr, &[(new_factor.clone(), 1)].into()
+                ))
+            };
+            *results.entry(new_cofactor).or_insert(0) += 1;
+            *results.entry(new_factor).or_insert(0) += 1;
         }
     }
     results
@@ -1630,25 +1622,6 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
         }
         _ => None,
     }
-}
-
-pub fn div_power_exact(product: &Factor, divisor: &Factor, power: NumberLength) -> Option<Factor> {
-    match power {
-        0 => return Some(product.clone()),
-        1 => return div_exact(product, divisor),
-        _ => {}
-    }
-    if let Some(root) = nth_root_exact(product, power)
-        && let Some(root_quotient) = div_exact(&root, divisor)
-    {
-        return Some(simplify_multiply(&[(root_quotient, power)].into()));
-    }
-    let mut result = Some(product.clone());
-    for _ in 0..power {
-        result.as_ref()?;
-        replace_with_or_abort(&mut result, |result| div_exact(&result.unwrap(), divisor));
-    }
-    result
 }
 
 pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
