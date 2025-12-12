@@ -2593,8 +2593,19 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     let mut left_remaining_factors =
                                         find_factors(&simplify(left.clone()));
                                     let mut right_remaining_factors = right.clone();
+                                    let intersection = multiset_intersection(left_remaining_factors.clone(), right_remaining_factors.clone());
+                                    for (factor, common_exponent) in intersection {
+                                        let right_remaining_exponent = right_remaining_factors.remove(&factor).unwrap() - common_exponent;
+                                        if right_remaining_exponent > 0 {
+                                            right_remaining_factors.insert(factor.clone(), right_remaining_exponent);
+                                        }
+                                        let left_remaining_exponent = left_remaining_factors.remove(&factor).unwrap() - common_exponent;
+                                        if left_remaining_exponent > 0 {
+                                            left_remaining_factors.insert(factor.clone(), left_remaining_exponent);
+                                        }
+                                    }
                                     while let Some((factor, exponent)) =
-                                        left_remaining_factors.pop_first()
+                                        left_remaining_factors.pop_last()
                                     {
                                         if exponent == 0 {
                                             continue;
