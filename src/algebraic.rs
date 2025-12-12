@@ -1203,7 +1203,8 @@ fn multiset_union<T: Eq + Ord + Clone>(mut sets: Vec<BTreeMap<T, NumberLength>>)
 #[inline]
 fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> BTreeMap<Factor, NumberLength> {
     debug!("fibonacci_factors: term {term}, subset_recursion {subset_recursion}");
-    let factors = if term < SMALL_FIBONACCI_FACTORS.len() as NumericFactor {
+    
+    if term < SMALL_FIBONACCI_FACTORS.len() as NumericFactor {
         count_frequencies(SMALL_FIBONACCI_FACTORS[term as usize]
             .iter()
             .copied()
@@ -1228,8 +1229,7 @@ fn fibonacci_factors(term: NumericFactor, subset_recursion: bool) -> BTreeMap<Fa
             }
         }
         multiset_union(subset_factors)
-    };
-    factors
+    }
 }
 
 #[inline]
@@ -1278,7 +1278,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(multiset: BTreeMap<T, NumberLength>
             let subset_count = index_remainder % divisor;
             index_remainder /= divisor;
             if subset_count != 0 {
-                subset.insert(item.clone(), subset_count as NumberLength);
+                subset.insert(*item, subset_count as NumberLength);
             }
         }
         result.push(subset);
@@ -1616,9 +1616,7 @@ pub fn div_power_exact(product: &Factor, divisor: &Factor, power: NumberLength) 
     }
     let mut result = Some(product.clone());
     for _ in 0..power {
-        if result.is_none() {
-            return None;
-        }
+        result.as_ref()?;
         replace_with_or_abort(&mut result, |result| div_exact(&result.unwrap(), divisor));
     }
     result
@@ -2546,7 +2544,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 ref right,
                                 ..
                             } => {
-                                if let Some(exact_div) = div_exact(left, &simplify_multiply(&right)) {
+                                if let Some(exact_div) = div_exact(left, &simplify_multiply(right)) {
                                     find_factors(&exact_div)
                                 } else {
                                     // division
