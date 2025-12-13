@@ -2855,10 +2855,14 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     if f == *expr || f == simplified {
                         return None;
                     }
-                    if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(expr)
-                            && f.may_be_proper_divisor_of(&simplified) {
+                    if f.as_numeric() != Some(1)
+                        && f.may_be_proper_divisor_of(expr)
+                        && f.may_be_proper_divisor_of(&simplified)
+                    {
                         let f = simplify(f);
-                        if f.may_be_proper_divisor_of(expr) && f.may_be_proper_divisor_of(&simplified) {
+                        if f.may_be_proper_divisor_of(expr)
+                            && f.may_be_proper_divisor_of(&simplified)
+                        {
                             return Some(f);
                         }
                     }
@@ -2887,7 +2891,11 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, modulo_as_numeric, multiset_intersection, multiset_union, power_multiset, estimate_log10};
+    use crate::algebraic::{
+        ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
+        estimate_log10, factor_power, fibonacci_factors, lucas_factors, modinv, modulo_as_numeric,
+        multiset_intersection, multiset_union, power_multiset,
+    };
     use ahash::RandomState;
     use alloc::collections::BTreeSet;
     use itertools::Itertools;
@@ -3881,7 +3889,7 @@ mod tests {
         for expr in [
             "(10^65035*18+10^130071-1)/9",
             "10^65035*18+10^130071-1",
-            "((((10)^260)-224)/32)"
+            "((((10)^260)-224)/32)",
         ] {
             let (lower, _) = estimate_log10(&Factor::from(expr));
             for factor in find_factors(expr) {
