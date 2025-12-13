@@ -1726,10 +1726,8 @@ pub fn facts_of_mut<'a>(
 mod tests {
     use crate::FAILED_U_SUBMISSIONS_OUT;
     use crate::algebraic::Factor;
-    use crate::graph::{
-        FactorData, add_factor_node, find_and_submit_factors, is_known_factor,
-        propagate_divisibility,
-    };
+    use crate::graph::{FactorData, add_factor_node, find_and_submit_factors, is_known_factor, propagate_divisibility, merge_equivalent_expressions};
+    use crate::net::MockFactorDbClient;
 
     #[test]
     fn test_is_known_factor() {
@@ -1814,5 +1812,24 @@ mod tests {
             .await
         });
         runtime.shutdown_background();
+    }
+
+    #[test]
+    fn test_merge_equivalent_expressions_infinite_recursion_2025_12_12() {
+        let mut http = MockFactorDbClient::new();
+        http.expect_known_factors_as_digits().never();
+        http.expect_cached_factors().return_const(None);
+        http.expect_parse_resource_limits().never();
+        http.expect_report_numeric_factor().never();
+        http.expect_retrying_get_and_decode().never();
+        http.expect_try_get_and_decode().never();
+        http.expect_try_get_expression_form().never();
+        http.expect_try_get_resource_limits().never();
+        http.expect_try_report_factor().never();
+
+        let mut data = FactorData::default();
+        let (root_vid, added) = add_factor_node(&mut data, Factor::from("(10^65035*18+10^130071-1)/9"), None, None, &http);
+        assert!(added);
+        merge_equivalent_expressions(&mut data, Some(root_vid), root_vid, Factor::from("(10^65035*18+10^130071-1)/3^2"), &http);
     }
 }
