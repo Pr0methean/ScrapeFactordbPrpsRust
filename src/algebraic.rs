@@ -2023,7 +2023,9 @@ fn pisano(
 pub(crate) fn simplify(expr: &Factor) -> Factor {
     match expr {
         Complex(c) => match **c {
-            Multiply { ref terms, .. } => simplify_multiply_internal(terms).unwrap_or_else(|| expr.clone()),
+            Multiply { ref terms, .. } => {
+                simplify_multiply_internal(terms).unwrap_or_else(|| expr.clone())
+            }
             Divide {
                 ref left,
                 ref right,
@@ -2191,8 +2193,7 @@ fn simplify_divide_internal(
         {
             cloned_right.remove(&term);
             for (subterm, subterm_exponent) in terms {
-                *cloned_right.entry(simplify(subterm)).or_insert(0) +=
-                    exponent * subterm_exponent;
+                *cloned_right.entry(simplify(subterm)).or_insert(0) += exponent * subterm_exponent;
             }
         } else if simplified != term {
             if let Numeric(l) = new_left
@@ -2848,14 +2849,15 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
             let mut factors = BTreeSet::new();
             let mut raw_factors: Vec<_> = find_factors(expr).into_iter().collect();
             while let Some((factor, exponent)) = raw_factors.pop() {
-                if exponent != 0 && factor != *expr && factor != simplified
+                if exponent != 0
+                    && factor != *expr
+                    && factor != simplified
                     && factor.as_numeric() != Some(1)
                     && factor.may_be_proper_divisor_of(expr)
                     && factor.may_be_proper_divisor_of(&simplified)
                 {
                     let mut f = simplify(&factor);
-                    if let Complex(c) = f
-                    {
+                    if let Complex(c) = f {
                         let c = Arc::unwrap_or_clone(c);
                         if let Multiply { terms, .. } = c {
                             raw_factors.extend(terms.into_iter());
@@ -2863,9 +2865,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                         }
                         f = Complex(c.into());
                     }
-                    if f.may_be_proper_divisor_of(expr)
-                        && f.may_be_proper_divisor_of(&simplified)
-                    {
+                    if f.may_be_proper_divisor_of(expr) && f.may_be_proper_divisor_of(&simplified) {
                         factors.insert(f);
                     }
                 }
