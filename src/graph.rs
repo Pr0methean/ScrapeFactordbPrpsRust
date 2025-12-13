@@ -477,62 +477,6 @@ impl PartialEq<Self> for NumberFacts {
     }
 }
 
-/// No ordering could be transitive if it treated an overlapping pair of ranges differently than a
-/// nonoverlapping pair. For example:
-///
-/// let a = Factor::Expression("100#"); // lower bound 10, upper bound 44
-/// let b = Factor::BigNumber("123456789012345678901234567890123456789012345678901234567890"); // lower bound 59, upper bound 60
-/// let c = Factor::Numeric(12345678901234567890); // lower bound 19, upper bound 20
-///
-/// So a < b and b < c because of the nonoverlapping bounds, but then c < a because expressions sort
-/// last in Factor::Ord, and we hace a cycle. By comparing the upper bounds first, we break this
-/// cycle in favor of c < a < b, which is the actual numeric-value ordering. This is probably about
-/// as close as we can come to a total numeric-value ordering with no bignum math and no isk of
-/// cycles./
-fn compare(
-    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
-    left_id: VertexId,
-    left: &Factor,
-    right_id: VertexId,
-    right: &Factor,
-    deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
-) -> Ordering {
-    let left_facts = facts_of(number_facts_map, left_id, deleted_synonyms)
-        .expect("compare() called for a number not entered in number_facts_map");
-    let right_facts = facts_of(number_facts_map, right_id, deleted_synonyms)
-        .expect("compare() called for a number not entered in number_facts_map");
-    left_facts
-        .upper_bound_log10
-        .cmp(&right_facts.upper_bound_log10)
-        .then_with(|| {
-            left_facts
-                .lower_bound_log10
-                .cmp(&right_facts.lower_bound_log10)
-        })
-        .then_with(|| left.cmp(right))
-}
-
-fn compare_by_vertex_id(data: &mut FactorData, left_id: VertexId, right_id: VertexId) -> Ordering {
-    let left = get_vertex(
-        &data.divisibility_graph,
-        left_id,
-        &mut data.deleted_synonyms,
-    );
-    let right = get_vertex(
-        &data.divisibility_graph,
-        right_id,
-        &mut data.deleted_synonyms,
-    );
-    compare(
-        &data.number_facts_map,
-        left_id,
-        left,
-        right_id,
-        right,
-        &mut data.deleted_synonyms,
-    )
-}
-
 impl NumberFacts {
     #[inline(always)]
     pub(crate) fn is_known_fully_factored(&self) -> bool {
@@ -1224,7 +1168,7 @@ pub async fn find_and_submit_factors(
                         return accepted_factors > 0;
                     }
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
-                    let mut subfactors =
+                    let subfactors =
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
                     if !subfactors.is_empty() {
                         factors_to_submit_in_graph.extend(subfactors);
