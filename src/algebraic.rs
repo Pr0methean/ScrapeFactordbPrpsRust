@@ -1358,8 +1358,8 @@ pub fn to_like_powers(
     subtract: bool,
 ) -> BTreeMap<Factor, NumberLength> {
     let mut exponent_factors = BTreeMap::new();
-    let mut new_left = simplify(left.clone());
-    let mut new_right = simplify(right.clone());
+    let mut new_left = simplify(left);
+    let mut new_right = simplify(right);
     for term in [&mut new_left, &mut new_right] {
         let exponent_numeric = match term {
             Numeric(a) => {
@@ -1507,7 +1507,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     while let Some(divisor) = divisor.div_exact(new_term) {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(Complex(Factorial(Numeric(new_term)).into())));
+                            return Some(simplify(&Complex(Factorial(Numeric(new_term)).into())));
                         }
                     }
                 }
@@ -1526,7 +1526,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(Complex(Primorial(Numeric(new_term)).into())));
+                            return Some(simplify(&Complex(Primorial(Numeric(new_term)).into())));
                         }
                     }
                 }
@@ -2020,34 +2020,34 @@ fn pisano(
     }
 }
 
-pub(crate) fn simplify(expr: Factor) -> Factor {
+pub(crate) fn simplify(expr: &Factor) -> Factor {
     match expr {
-        Complex(ref c) => match **c {
-            Multiply { ref terms, .. } => simplify_multiply_internal(terms).unwrap_or(expr),
+        Complex(c) => match **c {
+            Multiply { ref terms, .. } => simplify_multiply_internal(terms).unwrap_or_else(|| expr.clone()),
             Divide {
                 ref left,
                 ref right,
                 ..
-            } => simplify_divide_internal(left, right).unwrap_or(expr),
+            } => simplify_divide_internal(left, right).unwrap_or_else(|| expr.clone()),
             Power {
                 ref base,
                 ref exponent,
-            } => simplify_power_internal(base, exponent).unwrap_or(expr),
+            } => simplify_power_internal(base, exponent).unwrap_or_else(|| expr.clone()),
             Factorial(ref term) | Primorial(ref term) => match *term {
                 Numeric(0) | Numeric(1) => Factor::one(),
-                _ => expr,
+                _ => expr.clone(),
             },
             AddSub {
                 terms: (ref left, ref right),
                 subtract,
-            } => simplify_add_sub_internal(left, right, subtract).unwrap_or(expr),
-            _ => expr,
+            } => simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| expr.clone()),
+            _ => expr.clone(),
         },
         _ => {
-            if let Some(expr_numeric) = evaluate_as_numeric(&expr) {
+            if let Some(expr_numeric) = evaluate_as_numeric(expr) {
                 Numeric(expr_numeric)
             } else {
-                expr
+                expr.clone()
             }
         }
     }
@@ -2066,8 +2066,8 @@ fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
 }
 
 fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> Option<Factor> {
-    let mut new_left = simplify(left.clone());
-    let mut new_right = simplify(right.clone());
+    let mut new_left = simplify(left);
+    let mut new_right = simplify(right);
     match new_left.cmp(&new_right) {
         Ordering::Less => {
             if !subtract {
@@ -2120,8 +2120,8 @@ fn simplify_power(base: &Factor, exponent: &Factor) -> Factor {
 }
 
 fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
-    let mut new_base = simplify(base.clone());
-    let mut new_exponent = simplify(exponent.clone());
+    let mut new_base = simplify(base);
+    let mut new_exponent = simplify(exponent);
     if let Numeric(new_base_numeric) = new_base {
         if new_base_numeric == 1 {
             return Some(Factor::one());
@@ -2182,16 +2182,16 @@ fn simplify_divide_internal(
         new_left = left_left.clone();
         // left_left / (mid * right)
     }
-    let mut new_left = simplify(new_left);
+    let mut new_left = simplify(&new_left);
     let mut cloned_right = new_right.clone();
     for (term, exponent) in new_right {
-        let mut simplified = simplify(term.clone());
+        let mut simplified = simplify(&term);
         if let Complex(ref c) = simplified
             && let Multiply { ref terms, .. } = **c
         {
             cloned_right.remove(&term);
             for (subterm, subterm_exponent) in terms {
-                *cloned_right.entry(simplify(subterm.clone())).or_insert(0) +=
+                *cloned_right.entry(simplify(subterm)).or_insert(0) +=
                     exponent * subterm_exponent;
             }
         } else if simplified != term {
@@ -2246,7 +2246,7 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             terms
                 .clone()
                 .into_iter()
-                .map(|(term, term_exponent)| (simplify(term), term_exponent * exponent))
+                .map(|(term, term_exponent)| (simplify(&term), term_exponent * exponent))
                 .for_each(|(term, term_exponent)| {
                     *new_terms.entry(term).or_insert(0) += term_exponent
                 });
@@ -2497,7 +2497,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 ref base,
                                 ref exponent,
                             } => {
-                                let mut factors = find_factors(&simplify(base.clone()));
+                                let mut factors = find_factors(&simplify(base));
                                 if let Some(power) = evaluate_as_numeric(exponent)
                                     .and_then(|power| NumberLength::try_from(power).ok())
                                     && power > 1
@@ -2519,7 +2519,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 } else {
                                     // division
                                     let mut left_remaining_factors: BTreeMap<Factor, NumberLength> =
-                                        find_factors(&simplify(left.clone()))
+                                        find_factors(&simplify(left))
                                             .into_iter()
                                             .filter(|(factor, _)| factor != expr && factor != left && !matches!(&factor, Complex(c) if matches!(**c, Divide {left: ref c_left, ..} if c_left == expr || c_left == left)))
                                             .collect();
@@ -2566,7 +2566,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                     .filter(|exponent| *exponent != 0)
                                             });
                                         while left_exponent.is_none() {
-                                            let simplified = simplify(factor.clone());
+                                            let simplified = simplify(&factor);
                                             if simplified != factor {
                                                 left_exponent = left_recursive_factors
                                                     .remove(&simplified)
@@ -2673,14 +2673,14 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     let (factor, power) = terms.first_key_value().unwrap();
                                     return match power {
                                         0 => BTreeMap::new(),
-                                        1 => find_factors(&simplify(factor.clone())),
-                                        _ => [(simplify(factor.clone()), *power)].into(),
+                                        1 => find_factors(&simplify(factor)),
+                                        _ => [(simplify(factor), *power)].into(),
                                     };
                                 }
                                 // multiplication
                                 let mut factors = BTreeMap::new();
                                 for (term, exponent) in terms {
-                                    let term = simplify(term.clone());
+                                    let term = simplify(term);
                                     let term_factors = find_factors(&term);
                                     if term_factors.is_empty() {
                                         *factors.entry(term).or_insert(0) += exponent;
@@ -2694,8 +2694,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 terms: (ref left, ref right),
                                 subtract,
                             } => {
-                                let left = simplify(left.clone());
-                                let right = simplify(right.clone());
+                                let left = simplify(left);
+                                let right = simplify(right);
                                 let algebraic = to_like_powers(&left, &right, subtract);
                                 let common_factors = find_common_factors(&left, &right);
                                 let factors = multiset_union(vec![common_factors, algebraic]);
@@ -2710,7 +2710,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             cofactor = new_cofactor;
                                             remaining_exponent -= 1;
                                         }
-                                        Some((simplify(cofactor), 1))
+                                        Some((simplify(&cofactor), 1))
                                     })
                                     .collect();
                                 multiset_union(vec![factors, cofactors])
@@ -2844,7 +2844,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
     match cached {
         Some(cached) => cached,
         None => {
-            let simplified = simplify(expr.clone());
+            let simplified = simplify(expr);
             let mut factors = BTreeSet::new();
             let mut raw_factors: Vec<_> = find_factors(expr).into_iter().collect();
             while let Some((factor, exponent)) = raw_factors.pop() {
@@ -2853,7 +2853,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     && factor.may_be_proper_divisor_of(expr)
                     && factor.may_be_proper_divisor_of(&simplified)
                 {
-                    let mut f = simplify(factor);
+                    let mut f = simplify(&factor);
                     if let Complex(c) = f
                     {
                         let c = Arc::unwrap_or_clone(c);
