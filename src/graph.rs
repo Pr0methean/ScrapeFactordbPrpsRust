@@ -21,7 +21,6 @@ use async_backtrace::framed;
 use gryf::Graph;
 use gryf::adapt::Subgraph;
 use gryf::algo::Connected;
-use gryf::core::base::VertexRef;
 use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
