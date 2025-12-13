@@ -2629,7 +2629,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             let subfactors = find_factors(&factor);
                                             for (subfactor, subfactor_exponent) in subfactors
                                                 .into_iter()
-                                                .filter(|(subfactor, _)| *subfactor != factor)
+                                                .filter(|(subfactor, _)| *subfactor != factor && !matches!(subfactor, Complex(c) if matches!(**c, Divide {ref left, ..} if *left == factor)))
                                             {
                                                 *right_remaining_factors
                                                     .entry(subfactor)
@@ -3847,5 +3847,11 @@ mod tests {
 
             assert_eq_and_same_hash(mul1, mul2, "identical nested expressions should be equal");
         }
+    }
+
+    #[test]
+    fn test_infinite_recursion_2025_12_12() {
+        find_factors("(10^65035*18+10^130071-1)/9");
+        find_factors("10^65035*18+10^130071-1");
     }
 }
