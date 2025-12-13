@@ -2521,7 +2521,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     let mut left_remaining_factors: BTreeMap<Factor, NumberLength> =
                                         find_factors(&simplify(left.clone()))
                                             .into_iter()
-                                            .filter(|(factor, _)| factor != expr && !matches!(&factor, Complex(c) if matches!(**c, Divide {ref left, ..} if left == expr)))
+                                            .filter(|(factor, _)| factor != expr && factor != left && !matches!(&factor, Complex(c) if matches!(**c, Divide {left: ref c_left, ..} if c_left == expr || c_left == left)))
                                             .collect();
                                     if left_remaining_factors.contains_key(expr) {
                                         // Abort to prevent infinite recursion
@@ -2739,7 +2739,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         power;
                                 }
                             }
-                            factors.insert(simplify_divide(expr, &factors), 1);
+                            // factors.insert(simplify_divide(expr, &factors), 1);
                             factors
                         }
                     } else {
@@ -2844,7 +2844,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
     match cached {
         Some(cached) => cached,
         None => {
-            let expr = simplify(expr.clone());
+            let simplified = simplify(expr.clone());
             let factors = find_factors(&expr)
                 .into_iter()
                 .rev()
@@ -2852,9 +2852,13 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     if exponent == 0 {
                         return None;
                     }
-                    if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr) {
+                    if f == *expr || f == simplified {
+                        return None;
+                    }
+                    if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr)
+                            && f.may_be_proper_divisor_of(&simplified) {
                         let f = simplify(f);
-                        if f.may_be_proper_divisor_of(&expr) {
+                        if f.may_be_proper_divisor_of(&expr) && f.may_be_proper_divisor_of(&simplified) {
                             return Some(f);
                         }
                     }
@@ -2883,11 +2887,7 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{
-        ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
-        factor_power, fibonacci_factors, lucas_factors, modinv, modulo_as_numeric,
-        multiset_intersection, multiset_union, power_multiset,
-    };
+    use crate::algebraic::{ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, factor_power, fibonacci_factors, lucas_factors, modinv, modulo_as_numeric, multiset_intersection, multiset_union, power_multiset, estimate_log10};
     use ahash::RandomState;
     use alloc::collections::BTreeSet;
     use itertools::Itertools;
@@ -3878,7 +3878,16 @@ mod tests {
 
     #[test]
     fn test_infinite_recursion_2025_12_12() {
-        find_factors("(10^65035*18+10^130071-1)/9");
-        find_factors("10^65035*18+10^130071-1");
+        for expr in [
+            "(10^65035*18+10^130071-1)/9",
+            "10^65035*18+10^130071-1",
+            "((((10)^260)-224)/32)"
+        ] {
+            let (lower, _) = estimate_log10(&Factor::from(expr));
+            for factor in find_factors(expr) {
+                let (_, upper) = estimate_log10(&factor);
+                assert!(upper <= lower, "{factor} upper bound is too large");
+            }
+        }
     }
 }
