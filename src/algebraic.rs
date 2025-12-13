@@ -31,7 +31,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::iter::once;
-use std::mem::swap;
+use std::mem::{swap, take};
 use std::sync::{Arc, OnceLock};
 use tokio::task;
 use yamaquasi::Algo::Siqs;
@@ -2195,6 +2195,15 @@ fn simplify_divide_internal(
                 *cloned_right.entry(simplify(subterm.clone())).or_insert(0) +=
                     exponent * subterm_exponent;
             }
+        } else if let Complex(ref c) = simplified
+                && let Divide { ref left, ref right, .. } = **c {
+            // a/(b/c) => (a*c)/b
+            cloned_right.remove(&term);
+            let old_new_left = take(&mut new_left);
+            let mut new_left_terms = right.clone();
+            *new_left_terms.entry(old_new_left).or_insert(0) += 1;
+            new_left = simplify_multiply(&new_left_terms);
+            *cloned_right.entry(left.clone()).or_insert(0) += exponent;
         } else if simplified != term {
             if let Numeric(l) = new_left
                 && let Numeric(r) = term
@@ -3839,6 +3848,13 @@ mod tests {
             let mul2 = Factor::multiply(map2);
 
             assert_eq_and_same_hash(mul1, mul2, "identical nested expressions should be equal");
+        }
+
+        #[test]
+        fn test_nested_divide() {
+            let result = find_factors("20/(15/3)");
+            assert!(result.contains(&2.into()));
+            assert!(!result.contains(&5.into()));
         }
     }
 }
