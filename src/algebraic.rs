@@ -2856,14 +2856,19 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     && factor.may_be_proper_divisor_of(expr)
                     && factor.may_be_proper_divisor_of(&simplified)
                 {
-                    let mut f = simplify(&factor);
-                    if let Complex(c) = f {
-                        let c = Arc::unwrap_or_clone(c);
-                        if let Multiply { terms, .. } = c {
-                            raw_factors.extend(terms.into_iter());
-                            continue;
+                    let f = simplify(&factor);
+                    if let Complex(ref c) = f {
+                        match **c {
+                            Multiply { ref terms, .. } => {
+                                raw_factors.extend(terms.clone().into_iter());
+                                continue;
+                            }
+                            Divide { ref left, .. } => if *left == Factor::one() {
+                                // Factors of 1/x are either non-integer when x!=1 or trivial when x==1
+                                continue;
+                            }
+                            _ => {}
                         }
-                        f = Complex(c.into());
                     }
                     if f.may_be_proper_divisor_of(expr) && f.may_be_proper_divisor_of(&simplified) {
                         factors.insert(f);
