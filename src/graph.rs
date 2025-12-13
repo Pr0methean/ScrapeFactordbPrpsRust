@@ -31,7 +31,6 @@ use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
 use replace_with::replace_with_or_abort;
-use std::cmp::Ordering;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
