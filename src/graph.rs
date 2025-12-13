@@ -1029,9 +1029,11 @@ pub async fn find_and_submit_factors(
                             [factor_vid, cofactor_vid],
                             &mut data.deleted_synonyms,
                         );
-                        info!(
-                            "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
-                        );
+                        if !matches!(cofactor, Numeric(_)) {
+                            info!(
+                                "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
+                            );
+                        }
                         rule_out_divisibility(&mut data, cofactor_vid, factor_vid);
                         continue;
                     }
