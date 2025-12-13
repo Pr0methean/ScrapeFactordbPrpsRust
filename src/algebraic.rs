@@ -2739,7 +2739,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         power;
                                 }
                             }
-                            // factors.insert(simplify_divide(expr, &factors), 1);
+                            // Enabling this would cause infinite recursion: factors.insert(simplify_divide(expr, &factors), 1);
                             factors
                         }
                     } else {
