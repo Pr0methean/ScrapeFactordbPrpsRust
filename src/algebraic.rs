@@ -2519,7 +2519,6 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     find_factors(&exact_div)
                                 } else {
                                     // division
-                                    let mut left_recursive_factors = BTreeMap::new();
                                     let mut left_remaining_factors =
                                         find_factors(&simplify(left.clone()));
                                     let mut right_remaining_factors = right.clone();
@@ -2542,6 +2541,10 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                 .insert(factor, left_remaining_exponent);
                                         }
                                     }
+                                    if right_remaining_factors.is_empty() {
+                                        return left_remaining_factors;
+                                    }
+                                    let mut left_recursive_factors = BTreeMap::new();
                                     while let Some((mut factor, exponent)) =
                                         right_remaining_factors.pop_last()
                                     {
@@ -2549,12 +2552,12 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             continue;
                                         }
                                         let mut left_exponent = left_recursive_factors.remove(&factor).filter(|exponent| *exponent != 0)
-                                                .or_else(|| left_remaining_factors.remove(&factor)).filter(|exponent| *exponent != 0);
+                                                .or_else(|| left_remaining_factors.remove(&factor).filter(|exponent| *exponent != 0));
                                         while left_exponent.is_none() {
                                             let simplified = simplify(factor.clone());
                                             if simplified != factor {
                                                 left_exponent = left_recursive_factors.remove(&simplified).filter(|exponent| *exponent != 0)
-                                                    .or_else(|| left_remaining_factors.remove(&simplified)).filter(|exponent| *exponent != 0);
+                                                    .or_else(|| left_remaining_factors.remove(&simplified).filter(|exponent| *exponent != 0));
                                                 factor = simplified;
                                             } else {
                                                 break;
@@ -2571,6 +2574,50 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                 left_remaining_factors
                                                     .insert(factor, left_exponent);
                                             }
+                                        } else if let Some((left_factor, left_factor_div_factor)) =
+                                            left_remaining_factors.keys()
+                                                .filter_map(|left_factor| if let Some(left_factor_div_factor) = div_exact(left_factor, &factor) {
+                                                    Some((left_factor, left_factor_div_factor))
+                                                } else {
+                                                        None
+                                                })
+                                                .next() {
+                                            let mut left_exponent = left_remaining_factors.remove(&left_factor.clone()).unwrap();
+                                            let min_exponent = left_exponent.min(exponent);
+                                            left_exponent -= min_exponent;
+                                            let right_exponent = exponent - min_exponent;
+                                            if right_exponent != 0 {
+                                                right_remaining_factors
+                                                    .insert(factor, right_exponent);
+                                            } else if left_exponent != 0 {
+                                                left_remaining_factors
+                                                    .insert(factor, left_exponent);
+                                            }
+                                            left_remaining_factors.insert(
+                                                left_factor_div_factor, min_exponent
+                                            );
+                                        } else if let Some((left_factor, factor_div_left_factor)) =
+                                            left_remaining_factors.keys()
+                                                .filter_map(|left_factor| if let Some(factor_div_left_factor) = div_exact(&factor, left_factor) {
+                                                    Some((left_factor, factor_div_left_factor))
+                                                } else {
+                                                    None
+                                                })
+                                                .next() {
+                                            let mut left_exponent = left_remaining_factors.remove(&left_factor.clone()).unwrap();
+                                            let min_exponent = left_exponent.min(exponent);
+                                            left_exponent -= min_exponent;
+                                            let right_exponent = exponent - min_exponent;
+                                            if right_exponent != 0 {
+                                                right_remaining_factors
+                                                    .insert(factor, right_exponent);
+                                            } else if left_exponent != 0 {
+                                                left_remaining_factors
+                                                    .insert(factor, left_exponent);
+                                            }
+                                            right_remaining_factors.insert(
+                                                factor_div_left_factor, min_exponent
+                                            );
                                         } else {
                                             let subfactors = find_factors(&factor);
                                             for (subfactor, subfactor_exponent) in subfactors
@@ -2580,80 +2627,6 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                 *right_remaining_factors
                                                     .entry(subfactor)
                                                     .or_insert(0) += subfactor_exponent * exponent;
-                                            }
-                                        }
-                                    }
-                                    while let Some((factor, exponent)) =
-                                        left_remaining_factors.pop_last()
-                                    {
-                                        if exponent == 0 {
-                                            continue;
-                                        }
-                                        let simplified = simplify(factor.clone());
-                                        if right_remaining_factors.is_empty() {
-                                            *left_recursive_factors
-                                                .entry(simplified)
-                                                .or_insert(0) += exponent;
-                                            break;
-                                        }
-                                        // Can't be rewritten with or_else due to borrow-checker rules
-                                        let right_exponent =
-                                            match right_remaining_factors.remove(&factor) {
-                                                Some(e) => Some(e),
-                                                None => right_remaining_factors.remove(&simplified),
-                                            };
-                                        if let Some(mut right_exponent) = right_exponent
-                                            && right_exponent != 0
-                                        {
-                                            let min_exponent = exponent.min(right_exponent);
-                                            right_exponent -= min_exponent;
-                                            let left_exponent = exponent - min_exponent;
-                                            if right_exponent > 0 {
-                                                right_remaining_factors
-                                                    .insert(simplified.clone(), right_exponent);
-                                            }
-                                            if left_exponent > 0 {
-                                                left_remaining_factors
-                                                    .insert(simplified, left_exponent);
-                                            }
-                                        } else if factor == *expr {
-                                            continue;
-                                        } else if let Some(possible_multiple) = left_remaining_factors.keys().find(|multiple| factor.may_be_proper_divisor_of(multiple)).cloned() {
-                                            let multiple_exponent = left_remaining_factors.remove(&possible_multiple).unwrap();
-                                            let subfactors = find_factors(&possible_multiple);
-                                            let mut subfactor_found = false;
-                                            for (subfactor, subfactor_exponent) in subfactors
-                                                .into_iter()
-                                                .filter(|(subfactor, _)| *subfactor != possible_multiple)
-                                            {
-                                                if subfactor_exponent != 0 {
-                                                    subfactor_found = true;
-                                                    *left_remaining_factors
-                                                        .entry(subfactor)
-                                                        .or_insert(0) +=
-                                                        subfactor_exponent * multiple_exponent;
-                                                }
-                                            }
-                                            if !subfactor_found {
-                                                left_recursive_factors.insert(possible_multiple, multiple_exponent);
-                                            }
-                                        } else {
-                                            let subfactors = find_factors(&factor);
-                                            let mut subfactor_found = false;
-                                            for (subfactor, subfactor_exponent) in subfactors
-                                                .into_iter()
-                                                .filter(|(subfactor, _)| *subfactor != factor)
-                                            {
-                                                if subfactor_exponent != 0 {
-                                                    subfactor_found = true;
-                                                    *right_remaining_factors
-                                                        .entry(subfactor)
-                                                        .or_insert(0) +=
-                                                        subfactor_exponent * exponent;
-                                                }
-                                            }
-                                            if subfactor_found {
-                                                *right_remaining_factors.entry(factor).or_insert(0) += exponent;
                                             }
                                         }
                                     }
