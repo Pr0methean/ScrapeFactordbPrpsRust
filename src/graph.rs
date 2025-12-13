@@ -846,20 +846,20 @@ pub async fn find_and_submit_factors(
                 match dnd_since_last_accepted {
                     DESPERATION_ABORT_THRESHOLD.. => {
                         error!(
-                        "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
+                            "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
                         );
                         return accepted_factors > 0;
                     }
                     DESPERATION_REVERSE_ORDER_THRESHOLD => {
                         warn!(
-                        "{id}: Reversing known_factors due to too many 'does not divide' responses with no acceptances"
-                    );
+                            "{id}: Reversing known_factors due to too many 'does not divide' responses with no acceptances"
+                        );
                         known_factors.make_contiguous().reverse();
                     }
                     DESPERATION_SHUFFLE_THRESHOLD => {
                         warn!(
-                        "{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances"
-                    );
+                            "{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances"
+                        );
                         known_factors.make_contiguous().shuffle(&mut rng());
                     }
                     _ => {}
@@ -1285,21 +1285,23 @@ pub async fn find_and_submit_factors(
                     match dnd_since_last_accepted {
                         DESPERATION_ABORT_THRESHOLD.. => {
                             error!(
-                        "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
-                        );
+                                "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
+                            );
                             return accepted_factors > 0;
                         }
                         DESPERATION_REVERSE_ORDER_THRESHOLD => {
                             warn!(
-                        "{id}: Reversing known_factors due to too many 'does not divide' responses with no acceptances"
-                    );
+                                "{id}: Reversing known_factors due to too many 'does not divide' responses with no acceptances"
+                            );
                             factors_to_submit_in_graph.make_contiguous().reverse();
                         }
                         DESPERATION_SHUFFLE_THRESHOLD => {
                             warn!(
-                        "{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances"
-                    );
-                            factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+                                "{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances"
+                            );
+                            factors_to_submit_in_graph
+                                .make_contiguous()
+                                .shuffle(&mut rng());
                         }
                         _ => {}
                     }
@@ -1369,14 +1371,11 @@ pub async fn find_and_submit_factors(
     accepted_factors > 0
 }
 
-fn vertex_ids_except<T: FromIterator<VertexId>>(
-    data: &mut FactorData,
-    root_vid: VertexId,
-) -> T {
+fn vertex_ids_except<T: FromIterator<VertexId>>(data: &mut FactorData, root_vid: VertexId) -> T {
     let ids = data.divisibility_graph.vertices();
     let ids = ids.sorted_by(|v1, v2| {
-            compare_by_ref(&data.number_facts_map, v2, v1, &mut data.deleted_synonyms)
-        });
+        compare_by_ref(&data.number_facts_map, v2, v1, &mut data.deleted_synonyms)
+    });
     ids.map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<T>()
@@ -1726,7 +1725,10 @@ pub fn facts_of_mut<'a>(
 mod tests {
     use crate::FAILED_U_SUBMISSIONS_OUT;
     use crate::algebraic::Factor;
-    use crate::graph::{FactorData, add_factor_node, find_and_submit_factors, is_known_factor, propagate_divisibility, merge_equivalent_expressions};
+    use crate::graph::{
+        FactorData, add_factor_node, find_and_submit_factors, is_known_factor,
+        merge_equivalent_expressions, propagate_divisibility,
+    };
     use crate::net::MockFactorDbClient;
 
     #[test]
@@ -1828,8 +1830,20 @@ mod tests {
         http.expect_try_report_factor().never();
 
         let mut data = FactorData::default();
-        let (root_vid, added) = add_factor_node(&mut data, Factor::from("(10^65035*18+10^130071-1)/9"), None, None, &http);
+        let (root_vid, added) = add_factor_node(
+            &mut data,
+            Factor::from("(10^65035*18+10^130071-1)/9"),
+            None,
+            None,
+            &http,
+        );
         assert!(added);
-        merge_equivalent_expressions(&mut data, Some(root_vid), root_vid, Factor::from("(10^65035*18+10^130071-1)/3^2"), &http);
+        merge_equivalent_expressions(
+            &mut data,
+            Some(root_vid),
+            root_vid,
+            Factor::from("(10^65035*18+10^130071-1)/3^2"),
+            &http,
+        );
     }
 }
