@@ -24,7 +24,7 @@ use object_pool::{Pool, Reusable};
 use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
@@ -2845,31 +2845,31 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
         Some(cached) => cached,
         None => {
             let simplified = simplify(expr.clone());
-            let factors = find_factors(expr)
-                .into_iter()
-                .rev()
-                .flat_map(|(f, exponent)| {
-                    if exponent == 0 {
-                        return None;
+            let mut factors = BTreeSet::new();
+            let mut raw_factors: Vec<_> = find_factors(expr).into_iter().collect();
+            while let Some((factor, exponent)) = raw_factors.pop() {
+                if exponent != 0 && factor != *expr && factor != simplified
+                    && factor.as_numeric() != Some(1)
+                    && factor.may_be_proper_divisor_of(expr)
+                    && factor.may_be_proper_divisor_of(&simplified)
+                {
+                    let mut f = simplify(factor);
+                    if let Complex(c) = f
+                    {
+                        let c = Arc::unwrap_or_clone(c);
+                        if let Multiply { terms, .. } = c {
+                            raw_factors.extend(terms.into_iter());
+                            continue;
+                        }
+                        f = Complex(c.into());
                     }
-                    if f == *expr || f == simplified {
-                        return None;
-                    }
-                    if f.as_numeric() != Some(1)
-                        && f.may_be_proper_divisor_of(expr)
+                    if f.may_be_proper_divisor_of(expr)
                         && f.may_be_proper_divisor_of(&simplified)
                     {
-                        let f = simplify(f);
-                        if f.may_be_proper_divisor_of(expr)
-                            && f.may_be_proper_divisor_of(&simplified)
-                        {
-                            return Some(f);
-                        }
+                        factors.insert(f);
                     }
-                    None
-                })
-                .unique()
-                .collect::<Vec<_>>();
+                }
+            }
             if factors.is_empty() {
                 warn!("No factors found for expression {expr}");
             } else {
@@ -2878,7 +2878,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     factors.iter().join(", ")
                 );
             }
-            let factors = factors.into_boxed_slice();
+            let factors: Box<[Factor]> = factors.into_iter().collect();
             UNIQUE_FACTOR_CACHE
                 .with_borrow_mut(|cache| cache.insert(expr.clone(), factors.clone()));
             factors
