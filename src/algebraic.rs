@@ -2883,7 +2883,8 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     factors.iter().join(", ")
                 );
             }
-            let factors: Box<[Factor]> = factors.into_iter().collect();
+            let mut factors: Box<[Factor]> = factors.into_iter().collect();
+            factors.reverse();
             UNIQUE_FACTOR_CACHE
                 .with_borrow_mut(|cache| cache.insert(expr.clone(), factors.clone()));
             factors
