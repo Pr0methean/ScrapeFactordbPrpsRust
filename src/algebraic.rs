@@ -2845,7 +2845,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
         Some(cached) => cached,
         None => {
             let simplified = simplify(expr.clone());
-            let factors = find_factors(&expr)
+            let factors = find_factors(expr)
                 .into_iter()
                 .rev()
                 .flat_map(|(f, exponent)| {
@@ -2855,10 +2855,10 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     if f == *expr || f == simplified {
                         return None;
                     }
-                    if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(&expr)
+                    if f.as_numeric() != Some(1) && f.may_be_proper_divisor_of(expr)
                             && f.may_be_proper_divisor_of(&simplified) {
                         let f = simplify(f);
-                        if f.may_be_proper_divisor_of(&expr) && f.may_be_proper_divisor_of(&simplified) {
+                        if f.may_be_proper_divisor_of(expr) && f.may_be_proper_divisor_of(&simplified) {
                             return Some(f);
                         }
                     }
