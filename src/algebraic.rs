@@ -2437,7 +2437,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                         Numeric(n) => find_factors_of_numeric(n),
                         Factor::BigNumber(ref n) => factor_big_num(n.as_ref()),
                         ElidedNumber(ref n) => factor_big_num(n.as_str()),
-                        UnknownExpression(_) => [(expr.clone(), 1)].into(),
+                        UnknownExpression(_) => [].into(),
                         Complex(ref c) => match **c {
                             Lucas(ref term) => {
                                 // Lucas number
@@ -2523,7 +2523,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         find_factors(&simplify(left.clone()));
                                     if left_remaining_factors.contains_key(expr) {
                                         // Abort to prevent infinite recursion
-                                        return [(expr, 1)].into();
+                                        return [].into();
                                     }
                                     let mut right_remaining_factors = right.clone();
                                     let intersection = multiset_intersection(
