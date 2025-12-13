@@ -534,22 +534,6 @@ fn compare_by_vertex_id(data: &mut FactorData, left_id: VertexId, right_id: Vert
     )
 }
 
-fn compare_by_ref(
-    number_facts_map: &BTreeMap<VertexId, NumberFacts>,
-    left: &VertexRef<VertexId, Factor>,
-    right: &VertexRef<VertexId, Factor>,
-    deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
-) -> Ordering {
-    compare(
-        number_facts_map,
-        left.id,
-        left.attr,
-        right.id,
-        right.attr,
-        deleted_synonyms,
-    )
-}
-
 impl NumberFacts {
     #[inline(always)]
     pub(crate) fn is_known_fully_factored(&self) -> bool {
@@ -632,11 +616,7 @@ impl NumberFacts {
     }
 }
 
-// Reverse the list of factors if we've received too many "Does not divide" responses since the last
-// accepted factor, so that small factors are submitted first. If reversing doesn't help, shuffle
-// the list. If all else fails, abort.
-const DESPERATION_REVERSE_ORDER_THRESHOLD: usize = 10;
-const DESPERATION_SHUFFLE_THRESHOLD: usize = 20;
+// If we've received too many "Does not divide" responses since the last accepted factor, abort.
 const DESPERATION_ABORT_THRESHOLD: usize = 100;
 
 #[framed]
@@ -757,8 +737,8 @@ pub async fn find_and_submit_factors(
         (None, None)
     };
     let mut dnd_since_last_accepted = 0;
-    let mut shuffled_since_last_addition = false;
     let mut known_factors = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid);
+    known_factors.make_contiguous().shuffle(&mut rng());
     let mut factors_to_submit_in_graph = VecDeque::new();
     while let Some(factor_vid) = known_factors.pop_front() {
         let factor = get_vertex(
@@ -775,8 +755,8 @@ pub async fn find_and_submit_factors(
             let factors_of_factor =
                 add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
             if !factors_of_factor.is_empty() {
-                shuffled_since_last_addition = false;
                 factors_to_submit_in_graph.extend(factors_of_factor);
+                factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
             }
             factors_to_submit_in_graph.push_back(factor_vid);
             continue;
@@ -811,11 +791,18 @@ pub async fn find_and_submit_factors(
                 propagate_divisibility(&mut data, factor_vid, root_vid, false);
             }
             DoesNotDivide => {
+                dnd_since_last_accepted += 1;
+                if dnd_since_last_accepted >= DESPERATION_ABORT_THRESHOLD {
+                    error!(
+                        "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
+                    );
+                    return accepted_factors > 0;
+                }
                 let subfactors = add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
                 let subfactors_found = !subfactors.is_empty();
                 if subfactors_found {
                     factors_to_submit_in_graph.extend(subfactors);
-                    shuffled_since_last_addition = false;
+                    factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
                 }
                 if !subfactors_found && let Some(ref root_denominator) = root_denominator {
                     facts_of_mut(
@@ -850,32 +837,6 @@ pub async fn find_and_submit_factors(
                             .checked_with_root_denominator = true;
                         }
                     }
-                }
-                dnd_since_last_accepted += 1;
-                match dnd_since_last_accepted {
-                    DESPERATION_ABORT_THRESHOLD.. => {
-                        error!(
-                            "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
-                        );
-                        return accepted_factors > 0;
-                    }
-                    DESPERATION_REVERSE_ORDER_THRESHOLD => {
-                        if !shuffled_since_last_addition {
-                            warn!(
-                                "{id}: Reversing known_factors due to too many 'does not divide' responses with no acceptances"
-                            );
-                            known_factors.make_contiguous().reverse();
-                        }
-                    }
-                    DESPERATION_SHUFFLE_THRESHOLD => {
-                        if !replace(&mut shuffled_since_last_addition, true) {
-                            warn!(
-                                "{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances"
-                            );
-                            known_factors.make_contiguous().shuffle(&mut rng());
-                        }
-                    }
-                    _ => {}
                 }
             }
             OtherError => {
@@ -964,17 +925,18 @@ pub async fn find_and_submit_factors(
                 add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
             if !new_factors_of_factor.is_empty() {
                 factors_to_submit_in_graph.extend(new_factors_of_factor);
-                shuffled_since_last_addition = false;
+                factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
             }
             factors_to_submit_in_graph.push_back(factor_vid);
             continue;
         }
-        let dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid)
+        let mut dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid)
             .into_iter()
             .filter(|dest_vid|
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
                     get_edge(&data.divisibility_graph, factor_vid, *dest_vid, &mut data.deleted_synonyms).is_none())
             .collect::<Box<[_]>>();
+        dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
             let factor = get_vertex(
                 &data.divisibility_graph,
@@ -1116,8 +1078,8 @@ pub async fn find_and_submit_factors(
                     let factors_to_submit_instead =
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
                     if !factors_to_submit_instead.is_empty() {
-                        shuffled_since_last_addition = false;
                         factors_to_submit_in_graph.extend(factors_to_submit_instead);
+                        factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
                     }
                     continue;
                 } else if possible_factors.into_iter().all(|possible_factor_vid| {
@@ -1203,7 +1165,7 @@ pub async fn find_and_submit_factors(
                 if !new_factors_of_cofactor.is_empty() {
                     factors_to_submit_in_graph
                         .extend(new_factors_of_cofactor);
-                    shuffled_since_last_addition = false;
+                    factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
                 }
                 factors_to_submit_in_graph.push_back(factor_vid);
                 put_factor_back_into_queue = true;
@@ -1261,10 +1223,9 @@ pub async fn find_and_submit_factors(
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
                     subfactors.sort_unstable_by(|v1, v2| compare_by_vertex_id(&mut data, *v2, *v1));
                     if !subfactors.is_empty() {
-                        shuffled_since_last_addition = false;
-                    }
-                    if subfactors.is_empty()
-                        && let Some(ref root_denominator) = root_denominator
+                        factors_to_submit_in_graph.extend(subfactors);
+                        factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+                    } else if let Some(ref root_denominator) = root_denominator
                     {
                         let facts = facts_of_mut(
                             &mut data.number_facts_map,
@@ -1296,54 +1257,8 @@ pub async fn find_and_submit_factors(
                                 )
                                 .checked_with_root_denominator = true;
                                 factors_to_submit_in_graph.push_back(divided_vid);
-                                shuffled_since_last_addition = false;
                             }
                         }
-                    }
-                    factors_to_submit_in_graph.extend(subfactors.into_iter().sorted_by(
-                        |v1, v2| {
-                            compare_by_ref(
-                                &data.number_facts_map,
-                                &VertexRef {
-                                    id: *v2,
-                                    attr: get_vertex(
-                                        &data.divisibility_graph,
-                                        *v2,
-                                        &mut data.deleted_synonyms,
-                                    ),
-                                },
-                                &VertexRef {
-                                    id: *v1,
-                                    attr: get_vertex(
-                                        &data.divisibility_graph,
-                                        *v1,
-                                        &mut data.deleted_synonyms,
-                                    ),
-                                },
-                                &mut data.deleted_synonyms,
-                            )
-                        },
-                    ));
-                    match dnd_since_last_accepted {
-                        DESPERATION_REVERSE_ORDER_THRESHOLD => {
-                            if !shuffled_since_last_addition {
-                                warn!(
-                                    "{id}: Reversing known_factors due to too many 'does not divide' responses with no acceptances"
-                                );
-                                factors_to_submit_in_graph.make_contiguous().reverse();
-                            }
-                        }
-                        DESPERATION_SHUFFLE_THRESHOLD => {
-                            if !replace(&mut shuffled_since_last_addition, true) {
-                                warn!(
-                                    "{id}: Shuffling known_factors due to too many 'does not divide' responses with no acceptances"
-                                );
-                                factors_to_submit_in_graph
-                                    .make_contiguous()
-                                    .shuffle(&mut rng());
-                            }
-                        }
-                        _ => {}
                     }
                     let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms)
                         .expect("{id}: Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
@@ -1359,7 +1274,6 @@ pub async fn find_and_submit_factors(
                         .await
                         .is_empty()
                     {
-                        shuffled_since_last_addition = false;
                         iters_without_progress = 0;
                     }
                 }
@@ -1414,9 +1328,6 @@ pub async fn find_and_submit_factors(
 
 fn vertex_ids_except<T: FromIterator<VertexId>>(data: &mut FactorData, root_vid: VertexId) -> T {
     let ids = data.divisibility_graph.vertices();
-    let ids = ids.sorted_by(|v1, v2| {
-        compare_by_ref(&data.number_facts_map, v2, v1, &mut data.deleted_synonyms)
-    });
     ids.map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
         .collect::<T>()
