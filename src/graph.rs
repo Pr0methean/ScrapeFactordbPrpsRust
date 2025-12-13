@@ -1495,7 +1495,7 @@ async fn add_factors_to_graph(
             );
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != *factor
-                && !div_exact(factor, &known_factor).is_some_and(|divisor| divisor != Factor::one()) {
+                && div_exact(factor, &known_factor).is_none_or(|divisor| divisor == Factor::one()) {
                 merge_equivalent_expressions(data, Some(root_vid), factor_vid, known_factor, http);
             }
         } else {
