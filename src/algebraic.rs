@@ -2519,8 +2519,11 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     find_factors(&exact_div)
                                 } else {
                                     // division
-                                    let mut left_remaining_factors =
-                                        find_factors(&simplify(left.clone()));
+                                    let mut left_remaining_factors: BTreeMap<Factor, NumberLength> =
+                                        find_factors(&simplify(left.clone()))
+                                            .into_iter()
+                                            .filter(|(factor, _)| factor != expr && !matches!(&factor, Complex(c) if matches!(**c, Divide {ref left, ..} if left == expr)))
+                                            .collect();
                                     if left_remaining_factors.contains_key(expr) {
                                         // Abort to prevent infinite recursion
                                         return [].into();
