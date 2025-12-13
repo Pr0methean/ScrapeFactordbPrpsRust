@@ -2521,6 +2521,10 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     // division
                                     let mut left_remaining_factors =
                                         find_factors(&simplify(left.clone()));
+                                    if left_remaining_factors.contains_key(expr) {
+                                        // Abort to prevent infinite recursion
+                                        return [(expr, 1)].into();
+                                    }
                                     let mut right_remaining_factors = right.clone();
                                     let intersection = multiset_intersection(
                                         left_remaining_factors.clone(),
