@@ -2583,11 +2583,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             }
                                         } else if let Some((left_factor, left_factor_div_factor)) =
                                             left_remaining_factors.keys()
-                                                .filter_map(|left_factor| if let Some(left_factor_div_factor) = div_exact(left_factor, &factor) {
-                                                    Some((left_factor, left_factor_div_factor))
-                                                } else {
-                                                        None
-                                                })
+                                                .filter_map(|left_factor| div_exact(left_factor, &factor).map(|left_factor_div_factor| (left_factor, left_factor_div_factor)))
                                                 .next() {
                                             let mut left_exponent = left_remaining_factors.remove(&left_factor.clone()).unwrap();
                                             let min_exponent = left_exponent.min(exponent);
@@ -2605,11 +2601,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             );
                                         } else if let Some((left_factor, factor_div_left_factor)) =
                                             left_remaining_factors.keys()
-                                                .filter_map(|left_factor| if let Some(factor_div_left_factor) = div_exact(&factor, left_factor) {
-                                                    Some((left_factor, factor_div_left_factor))
-                                                } else {
-                                                    None
-                                                })
+                                                .filter_map(|left_factor| div_exact(&factor, left_factor).map(|factor_div_left_factor| (left_factor, factor_div_left_factor)))
                                                 .next() {
                                             let mut left_exponent = left_remaining_factors.remove(&left_factor.clone()).unwrap();
                                             let min_exponent = left_exponent.min(exponent);
