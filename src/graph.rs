@@ -755,7 +755,9 @@ pub async fn find_and_submit_factors(
                 add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
             if !factors_of_factor.is_empty() {
                 factors_to_submit_in_graph.extend(factors_of_factor);
-                factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+                factors_to_submit_in_graph
+                    .make_contiguous()
+                    .shuffle(&mut rng());
             }
             factors_to_submit_in_graph.push_back(factor_vid);
             continue;
@@ -801,7 +803,9 @@ pub async fn find_and_submit_factors(
                 let subfactors_found = !subfactors.is_empty();
                 if subfactors_found {
                     factors_to_submit_in_graph.extend(subfactors);
-                    factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+                    factors_to_submit_in_graph
+                        .make_contiguous()
+                        .shuffle(&mut rng());
                 }
                 if !subfactors_found && let Some(ref root_denominator) = root_denominator {
                     facts_of_mut(
@@ -924,7 +928,9 @@ pub async fn find_and_submit_factors(
                 add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
             if !new_factors_of_factor.is_empty() {
                 factors_to_submit_in_graph.extend(new_factors_of_factor);
-                factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+                factors_to_submit_in_graph
+                    .make_contiguous()
+                    .shuffle(&mut rng());
             }
             factors_to_submit_in_graph.push_back(factor_vid);
             continue;
@@ -1078,7 +1084,9 @@ pub async fn find_and_submit_factors(
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
                     if !factors_to_submit_instead.is_empty() {
                         factors_to_submit_in_graph.extend(factors_to_submit_instead);
-                        factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+                        factors_to_submit_in_graph
+                            .make_contiguous()
+                            .shuffle(&mut rng());
                     }
                     continue;
                 } else if possible_factors.into_iter().all(|possible_factor_vid| {
@@ -1223,9 +1231,10 @@ pub async fn find_and_submit_factors(
                     subfactors.sort_unstable_by(|v1, v2| compare_by_vertex_id(&mut data, *v2, *v1));
                     if !subfactors.is_empty() {
                         factors_to_submit_in_graph.extend(subfactors);
-                        factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
-                    } else if let Some(ref root_denominator) = root_denominator
-                    {
+                        factors_to_submit_in_graph
+                            .make_contiguous()
+                            .shuffle(&mut rng());
+                    } else if let Some(ref root_denominator) = root_denominator {
                         let facts = facts_of_mut(
                             &mut data.number_facts_map,
                             factor_vid,

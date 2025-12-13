@@ -2863,9 +2863,11 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                                 raw_factors.extend(terms.clone().into_iter());
                                 continue;
                             }
-                            Divide { ref left, .. } => if *left == Factor::one() {
-                                // Factors of 1/x are either non-integer when x!=1 or trivial when x==1
-                                continue;
+                            Divide { ref left, .. } => {
+                                if *left == Factor::one() {
+                                    // Factors of 1/x are either non-integer when x!=1 or trivial when x==1
+                                    continue;
+                                }
                             }
                             _ => {}
                         }
