@@ -713,7 +713,6 @@ pub async fn find_and_submit_factors(
         return false;
     }
     // Simplest case: try submitting all factors as factors of the root
-    // Sort backwards so that we try to submit largest factors first
     let (root_denominator_terms, root_denominator) = if let Complex(c) = get_vertex(
         &data.divisibility_graph,
         root_vid,
@@ -863,7 +862,6 @@ pub async fn find_and_submit_factors(
     //     exponent.
     let mut iters_without_progress = 0;
     let mut iters_to_next_report = 0;
-    // Sort backwards so that we try to submit largest factors first
     info!(
         "{id}: {} factors left to submit after first pass",
         factors_to_submit_in_graph.len()
@@ -1228,7 +1226,6 @@ pub async fn find_and_submit_factors(
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     let mut subfactors =
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
-                    subfactors.sort_unstable_by(|v1, v2| compare_by_vertex_id(&mut data, *v2, *v1));
                     if !subfactors.is_empty() {
                         factors_to_submit_in_graph.extend(subfactors);
                         factors_to_submit_in_graph
