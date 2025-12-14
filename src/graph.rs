@@ -1551,26 +1551,18 @@ fn add_factor_finder_factor_vertices_to_graph(
     factor_vid: VertexId,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
-    find_unique_factors(get_vertex(
+    let factor = get_vertex(
         &data.divisibility_graph,
         factor_vid,
         &mut data.deleted_synonyms,
-    ))
+    );
+    find_unique_factors(factor)
     .into_iter()
     .filter_map(|new_factor| {
-        if new_factor
-            != *get_vertex(
-                &data.divisibility_graph,
-                factor_vid,
-                &mut data.deleted_synonyms,
-            ) {
-            let entry_id = new_factor.known_id();
-            let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
-            if added {
-                Some(vid)
-            } else {
-                None
-            }
+        let entry_id = new_factor.known_id();
+        let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
+        if added {
+            Some(vid)
         } else {
             None
         }
