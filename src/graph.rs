@@ -1555,12 +1555,6 @@ fn merge_equivalent_expressions(
                 equivalent,
             );
         }
-
-        // New expression may allow factor_finder to find factors it couldn't before
-        let entry_id = facts.entry_id;
-        new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
-            data, root_vid, factor_vid, entry_id, http,
-        ));
         new_factor_vids
     }
 }
@@ -1591,7 +1585,7 @@ fn add_factor_finder_factor_vertices_to_graph(
         };
         add_factor_node(data, new_factor, root_vid, entry_id, http)
     })
-    .flat_map(|(vid, added)| if added { Some(vid) } else { None })
+    .filter_map(|(vid, added)| if added { Some(vid) } else { None })
     .collect()
 }
 
