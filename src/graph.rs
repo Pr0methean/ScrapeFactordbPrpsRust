@@ -238,7 +238,7 @@ pub fn add_factor_node(
             let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
                 entry_id = entry_id.or(cached.id);
                 if let Some(entry_id) = entry_id {
-                    data.vertex_id_by_entry_id.insert(entry_id, merge_dest);
+                    data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
                 }
                 has_cached = true;
                 let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
@@ -254,7 +254,7 @@ pub fn add_factor_node(
                 (cached.status, UpToDate(cached_subfactors))
             } else {
                 if let Some(entry_id) = entry_id {
-                    data.vertex_id_by_entry_id.insert(entry_id, merge_dest);
+                    data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
                 }
                 (None, NotQueried)
             };
@@ -1398,6 +1398,9 @@ async fn add_factors_to_graph(
         );
         facts.entry_id = facts.entry_id.or(new_id);
         id = facts.entry_id;
+        if let Some(id) = id {
+            data.vertex_id_by_entry_id.insert(id, factor_vid);
+        }
         if let Some(status) = status {
             facts.last_known_status = Some(status);
             if status == Prime || status == FullyFactored {
