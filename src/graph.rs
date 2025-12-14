@@ -1475,11 +1475,6 @@ async fn add_factors_to_graph(
                 http,
             );
             added.extend(added_via_equiv);
-            let factors = find_unique_factors(&expression_form);
-            added.extend(factors.into_iter().filter_map(|factor| {
-                let (vertex_id, added) = add_factor_node(data, factor, Some(root_vid), None, http);
-                if added { Some(vertex_id) } else { None }
-            }));
         }
     }
 
@@ -1499,16 +1494,7 @@ fn merge_equivalent_expressions(
         &mut data.deleted_synonyms,
     );
     if equivalent == *current {
-        facts_of(
-            &data.number_facts_map,
-            factor_vid,
-            &mut data.deleted_synonyms,
-        )
-        .expect(
-            "merge_equivalent_expressions called for a destination not entered in number_facts_map",
-        )
-        .factors_known_to_factordb
-        .to_vec()
+        vec![]
     } else {
         info!("Merging equivalent expressions {current} and {equivalent}");
         let current_len = if current.is_elided() {
@@ -1521,12 +1507,24 @@ fn merge_equivalent_expressions(
             factor_vid,
             &mut data.deleted_synonyms,
         );
-        let mut new_factor_vids = facts.factors_known_to_factordb.to_vec();
-        if !replace(&mut facts.checked_in_factor_finder, true) {
-            new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
+        let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
+            add_factor_finder_factor_vertices_to_graph(
                 data, root_vid, factor_vid, http,
-            ));
-        }
+            )
+        } else {
+            Vec::new()
+        };
+        new_factor_vids.extend(find_unique_factors(&equivalent)
+            .into_iter()
+            .filter_map(|new_factor| {
+                let entry_id = new_factor.known_id();
+                let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
+                if added {
+                    Some(vid)
+                } else {
+                    None
+                }
+            }));
         let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
         let facts = facts_of_mut(
             &mut data.number_facts_map,
