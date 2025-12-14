@@ -2855,6 +2855,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
     match cached {
         Some(cached) => cached,
         None => {
+            info!("find_unique_factors: {expr}\n{}", Backtrace::capture());
             let simplified = simplify(expr);
             let mut factors = BTreeSet::new();
             let mut raw_factors: Vec<_> = find_factors(expr).into_iter().collect();
