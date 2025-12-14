@@ -425,14 +425,6 @@ impl FactorsKnownToFactorDb {
             NotUpToDate(factors) | UpToDate(factors) => factors.clone(),
         }
     }
-
-    pub(crate) fn iter(&self) -> impl Iterator<Item = &VertexId> {
-        static EMPTY: Vec<VertexId> = vec![];
-        match self {
-            NotQueried => EMPTY.iter(),
-            NotUpToDate(factors) | UpToDate(factors) => factors.iter(),
-        }
-    }
 }
 
 impl FactorsKnownToFactorDb {
@@ -563,6 +555,13 @@ impl NumberFacts {
 // If we've received too many "Does not divide" responses since the last accepted factor, abort.
 const DESPERATION_ABORT_THRESHOLD: usize = 100;
 
+#[inline(always)]
+fn dedup_and_shuffle<T: Ord>(deque: &mut VecDeque<T>) {
+    let deque_as_set = BTreeSet::from_iter(deque.drain(..));
+    deque.extend(deque_as_set);
+    deque.make_contiguous().shuffle(&mut rng());
+}
+
 #[framed]
 pub async fn find_and_submit_factors(
     http: &mut impl FactorDbClientReadIdsAndExprs,
@@ -589,7 +588,6 @@ pub async fn find_and_submit_factors(
             0 => add_factor_node(&mut data, root_factor, None, Some(id), http),
             _ => {
                 let (root_node, _) = add_factor_node(&mut data, root_factor, None, Some(id), http);
-                digits_or_expr_full.push(root_node);
                 let root_factors = UpToDate(if known_factors.len() > 1 {
                     known_factors
                         .into_iter()
@@ -690,22 +688,6 @@ pub async fn find_and_submit_factors(
             &mut data.deleted_synonyms,
         );
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
-        if factor.is_elided() {
-            // Can't submit a factor that we can't express, but
-            // running add_factors_to_graph may provide an equivalent expression, else we can save
-            // it in case we find out the ID later
-            info!("{id}: Temporarily skipping {factor} because digits are missing");
-            let factors_of_factor =
-                add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
-            if !factors_of_factor.is_empty() {
-                factors_to_submit_in_graph.extend(factors_of_factor);
-                factors_to_submit_in_graph
-                    .make_contiguous()
-                    .shuffle(&mut rng());
-            }
-            factors_to_submit_in_graph.push_back(factor_vid);
-            continue;
-        }
         match get_edge(
             &data.divisibility_graph,
             factor_vid,
@@ -720,9 +702,26 @@ pub async fn find_and_submit_factors(
             }
             _ => {}
         }
+        if factor.is_elided() {
+            // Can't submit a factor that we can't express, but
+            // running add_factors_to_graph may provide an equivalent expression, else we can save
+            // it in case we find out the ID later
+            info!("{id}: Temporarily skipping {factor} because digits are missing");
+            let factors_of_factor =
+                add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
+            if !factors_of_factor.is_empty() {
+                factors_to_submit_in_graph.extend(factors_of_factor);
+                dedup_and_shuffle(&mut factors_to_submit_in_graph);
+            }
+            if !factors_to_submit_in_graph.contains(&factor_vid) {
+                factors_to_submit_in_graph.push_back(factor_vid);
+            }
+            continue;
+        }
         match http.try_report_factor(Id(id), factor).await {
             AlreadyFullyFactored => return true,
             Accepted => {
+                propagate_divisibility(&mut data, factor_vid, root_vid, false);
                 replace_with_or_abort(
                     facts_of_mut(
                         &mut data.number_facts_map,
@@ -733,7 +732,6 @@ pub async fn find_and_submit_factors(
                 );
                 dnd_since_last_accepted = 0;
                 accepted_factors += 1;
-                propagate_divisibility(&mut data, factor_vid, root_vid, false);
             }
             DoesNotDivide => {
                 dnd_since_last_accepted += 1;
@@ -747,9 +745,7 @@ pub async fn find_and_submit_factors(
                 let subfactors_found = !subfactors.is_empty();
                 if subfactors_found {
                     factors_to_submit_in_graph.extend(subfactors);
-                    factors_to_submit_in_graph
-                        .make_contiguous()
-                        .shuffle(&mut rng());
+                    dedup_and_shuffle(&mut factors_to_submit_in_graph);
                 }
                 if !subfactors_found && let Some(ref root_denominator) = root_denominator {
                     facts_of_mut(
@@ -871,11 +867,11 @@ pub async fn find_and_submit_factors(
                 add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
             if !new_factors_of_factor.is_empty() {
                 factors_to_submit_in_graph.extend(new_factors_of_factor);
-                factors_to_submit_in_graph
-                    .make_contiguous()
-                    .shuffle(&mut rng());
+                dedup_and_shuffle(&mut factors_to_submit_in_graph);
             }
-            factors_to_submit_in_graph.push_back(factor_vid);
+            if !factors_to_submit_in_graph.contains(&factor_vid) {
+                factors_to_submit_in_graph.push_back(factor_vid);
+            }
             continue;
         }
         let mut dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid)
@@ -895,7 +891,7 @@ pub async fn find_and_submit_factors(
             continue;
         };
         let mut put_factor_back_into_queue = false;
-        for cofactor_vid in dest_factors.into_iter() {
+        'per_cofactor: for cofactor_vid in dest_factors.into_iter() {
             if is_known_factor(&mut data, factor_vid, cofactor_vid) {
                 let [factor, cofactor] = get_vertices(
                     &data.divisibility_graph,
@@ -1027,9 +1023,7 @@ pub async fn find_and_submit_factors(
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
                     if !factors_to_submit_instead.is_empty() {
                         factors_to_submit_in_graph.extend(factors_to_submit_instead);
-                        factors_to_submit_in_graph
-                            .make_contiguous()
-                            .shuffle(&mut rng());
+                        dedup_and_shuffle(&mut factors_to_submit_in_graph);
                     }
                     continue;
                 } else if possible_factors.into_iter().all(|possible_factor_vid| {
@@ -1117,9 +1111,8 @@ pub async fn find_and_submit_factors(
                         .extend(new_factors_of_cofactor);
                     factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
                 }
-                factors_to_submit_in_graph.push_back(factor_vid);
                 put_factor_back_into_queue = true;
-                continue;
+                break 'per_cofactor;
             }
             let dest_specifier = as_specifier(cofactor_vid, &mut data);
             match http
@@ -1142,6 +1135,7 @@ pub async fn find_and_submit_factors(
                     continue;
                 }
                 Accepted => {
+                    propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
                     replace_with_or_abort(
                         facts_of_mut(
                             &mut data.number_facts_map,
@@ -1153,12 +1147,11 @@ pub async fn find_and_submit_factors(
                     accepted_factors += 1;
                     dnd_since_last_accepted = 0;
                     iters_without_progress = 0;
-                    propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
                     // Move newly-accepted factor to the back of the list
                     if cofactor_vid != root_vid {
-                        factors_to_submit_in_graph.push_back(factor_vid);
+                        put_factor_back_into_queue = true;
                     }
-                    continue 'graph_iter;
+                    break 'per_cofactor;
                 }
                 DoesNotDivide => {
                     dnd_since_last_accepted += 1;
@@ -1206,7 +1199,7 @@ pub async fn find_and_submit_factors(
                                     &mut data.deleted_synonyms,
                                 )
                                 .checked_with_root_denominator = true;
-                                factors_to_submit_in_graph.push_back(divided_vid);
+                                put_factor_back_into_queue = true;
                             }
                         }
                     }
@@ -1229,7 +1222,7 @@ pub async fn find_and_submit_factors(
                 }
             }
         }
-        if put_factor_back_into_queue {
+        if put_factor_back_into_queue && !factors_to_submit_in_graph.contains(&factor_vid) {
             factors_to_submit_in_graph.push_back(factor_vid);
         }
     }
