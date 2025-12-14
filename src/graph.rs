@@ -1501,6 +1501,7 @@ fn merge_equivalent_expressions(
         vec![]
     } else {
         info!("Merging equivalent expressions {current} and {equivalent}");
+        data.vertex_id_by_expr.insert(equivalent.clone(), factor_vid);
         let current_len = if current.is_elided() {
             usize::MAX // replace elided numbers with full ones ASAP
         } else {
@@ -1540,10 +1541,9 @@ fn merge_equivalent_expressions(
         if !equivalent.is_elided() && equivalent.to_owned_string().len() < current_len {
             let _ = replace(
                 data.divisibility_graph.vertex_mut(factor_vid).unwrap(),
-                equivalent.clone(),
+                equivalent,
             );
         }
-        data.vertex_id_by_expr.insert(equivalent, factor_vid);
         new_factor_vids
     }
 }
