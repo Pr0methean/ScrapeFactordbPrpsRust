@@ -553,7 +553,9 @@ impl NumberFacts {
 }
 
 // If we've received too many "Does not divide" responses since the last accepted factor, abort.
-const DESPERATION_ABORT_THRESHOLD: usize = 100;
+// This is meant to ensure we don't waste too much time on a job much better suited to a more
+// sophisticated algebra system.
+const DND_ABORT_THRESHOLD: usize = 30;
 
 #[inline(always)]
 fn dedup_and_shuffle<T: Ord>(deque: &mut VecDeque<T>) {
@@ -735,7 +737,7 @@ pub async fn find_and_submit_factors(
             }
             DoesNotDivide => {
                 dnd_since_last_accepted += 1;
-                if dnd_since_last_accepted >= DESPERATION_ABORT_THRESHOLD {
+                if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
                     error!(
                         "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
                     );
@@ -1155,7 +1157,7 @@ pub async fn find_and_submit_factors(
                 }
                 DoesNotDivide => {
                     dnd_since_last_accepted += 1;
-                    if dnd_since_last_accepted >= DESPERATION_ABORT_THRESHOLD {
+                    if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
                         error!(
                             "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
                         );
