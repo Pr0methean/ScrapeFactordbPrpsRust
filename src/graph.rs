@@ -1363,9 +1363,7 @@ async fn add_factors_to_graph(
                 &mut data.deleted_synonyms,
             );
             let known_factor = known_factors.into_iter().next().unwrap();
-            if known_factor != *factor
-                && div_exact(factor, &known_factor).is_none_or(|divisor| divisor == Factor::one())
-            {
+            if known_factor != *factor {
                 merge_equivalent_expressions(data, Some(root_vid), factor_vid, known_factor, http);
             }
         } else {
@@ -1386,12 +1384,6 @@ async fn add_factors_to_graph(
                 &mut data.number_facts_map,
                 factor_vid,
                 &mut data.deleted_synonyms,
-            );
-            let old_factors: BTreeSet<_> = facts.factors_known_to_factordb.iter().collect();
-            added.extend(
-                new_known_factors
-                    .iter()
-                    .filter(|factor_vid| !old_factors.contains(factor_vid)),
             );
             if known_factor_count > 0 {
                 facts.factors_known_to_factordb = UpToDate(new_known_factors);
