@@ -1453,7 +1453,6 @@ async fn add_factors_to_graph(
             data,
             Some(root_vid),
             factor_vid,
-            facts.entry_id,
             http,
         ));
     }
@@ -1534,11 +1533,10 @@ fn merge_equivalent_expressions(
             factor_vid,
             &mut data.deleted_synonyms,
         );
-        let entry_id = facts.entry_id;
         let mut new_factor_vids = facts.factors_known_to_factordb.to_vec();
         if !replace(&mut facts.checked_in_factor_finder, true) {
             new_factor_vids.extend(add_factor_finder_factor_vertices_to_graph(
-                data, root_vid, factor_vid, entry_id, http,
+                data, root_vid, factor_vid, http,
             ));
         }
         let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
@@ -1563,7 +1561,6 @@ fn add_factor_finder_factor_vertices_to_graph(
     data: &mut FactorData,
     root_vid: Option<VertexId>,
     factor_vid: VertexId,
-    entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
     find_unique_factors(get_vertex(
@@ -1572,20 +1569,24 @@ fn add_factor_finder_factor_vertices_to_graph(
         &mut data.deleted_synonyms,
     ))
     .into_iter()
-    .map(|new_factor| {
-        let entry_id = if new_factor
-            == *get_vertex(
+    .filter_map(|new_factor| {
+        if new_factor
+            != *get_vertex(
                 &data.divisibility_graph,
                 factor_vid,
                 &mut data.deleted_synonyms,
             ) {
-            entry_id
+            let entry_id = new_factor.known_id();
+            let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
+            if added {
+                Some(vid)
+            } else {
+                None
+            }
         } else {
-            new_factor.known_id()
-        };
-        add_factor_node(data, new_factor, root_vid, entry_id, http)
+            None
+        }
     })
-    .filter_map(|(vid, added)| if added { Some(vid) } else { None })
     .collect()
 }
 
