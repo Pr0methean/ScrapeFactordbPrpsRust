@@ -993,7 +993,7 @@ pub async fn find_and_submit_factors(
                 let mut by_status = known_factor_vids
                     .iter()
                     .copied()
-                    .flat_map(|known_factor_vid| {
+                    .filter_map(|known_factor_vid| {
                         if get_edge(&data.divisibility_graph, factor_vid, known_factor_vid, &mut data.deleted_synonyms) != Some(NotFactor) {
                             None
                         } else if factor.may_be_proper_divisor_of(
@@ -1476,7 +1476,7 @@ async fn add_factors_to_graph(
             );
             added.extend(added_via_equiv);
             let factors = find_unique_factors(&expression_form);
-            added.extend(factors.into_iter().flat_map(|factor| {
+            added.extend(factors.into_iter().filter_map(|factor| {
                 let (vertex_id, added) = add_factor_node(data, factor, Some(root_vid), None, http);
                 if added { Some(vertex_id) } else { None }
             }));

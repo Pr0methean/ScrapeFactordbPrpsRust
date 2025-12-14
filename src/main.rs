@@ -435,7 +435,7 @@ async fn queue_composites(
         c_buffered.extend(
             c_tasks
                 .into_iter()
-                .flat_map(|c_task| match c_sender.try_send(c_task) {
+                .filter_map(|c_task| match c_sender.try_send(c_task) {
                     Ok(()) => None,
                     Err(Closed(_)) => None,
                     Err(Full(c_task)) => Some(c_task),

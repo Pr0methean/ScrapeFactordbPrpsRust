@@ -652,7 +652,7 @@ impl FactorDbClientReadIdsAndExprs for RealFactorDbClient {
     ) -> impl Iterator<Item = (EntryId, &'a str)> {
         self.id_and_expr_regex
             .captures_iter(haystack)
-            .flat_map(move |capture| {
+            .filter_map(move |capture| {
                 let Some(id) = capture.get(1) else {
                     error!("Failed to get ID for expression in\n{haystack}");
                     return None;

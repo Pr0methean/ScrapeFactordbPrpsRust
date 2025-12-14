@@ -2712,7 +2712,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 let factors = multiset_union(vec![common_factors, algebraic]);
                                 let cofactors = factors
                                     .iter()
-                                    .flat_map(|(factor, exponent)| {
+                                    .filter_map(|(factor, exponent)| {
                                         let mut cofactor = div_exact(expr, factor)?;
                                         let mut remaining_exponent = exponent - 1;
                                         while remaining_exponent > 0
