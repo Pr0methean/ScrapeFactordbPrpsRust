@@ -237,6 +237,9 @@ pub fn add_factor_node(
             let mut has_cached = false;
             let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
                 entry_id = entry_id.or(cached.id);
+                if let Some(entry_id) = entry_id {
+                    data.vertex_id_by_entry_id.insert(entry_id, merge_dest);
+                }
                 has_cached = true;
                 let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
                 for subfactor in cached.factors {
@@ -250,9 +253,11 @@ pub fn add_factor_node(
                 }
                 (cached.status, UpToDate(cached_subfactors))
             } else {
+                if let Some(entry_id) = entry_id {
+                    data.vertex_id_by_entry_id.insert(entry_id, merge_dest);
+                }
                 (None, NotQueried)
             };
-
             data.number_facts_map.insert(
                 factor_vid,
                 NumberFacts {
@@ -270,9 +275,6 @@ pub fn add_factor_node(
             );
             (factor_vid, true)
         });
-    if let Some(entry_id) = entry_id {
-        data.vertex_id_by_entry_id.insert(entry_id, merge_dest);
-    }
     if *get_vertex(
         &data.divisibility_graph,
         merge_dest,
