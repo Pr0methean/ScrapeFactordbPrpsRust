@@ -723,31 +723,40 @@ impl From<FactorBeingParsed> for Factor {
     }
 }
 
-#[derive(Default)]
-pub struct LocalFactorData {
-    log10_estimate: OnceLock<(NumberLength, NumberLength)>,
-    eval_as_numeric: OnceLock<Option<NumericFactor>>,
-    factors: OnceLock<BTreeMap<Factor, NumberLength>>,
-}
-
-type FactorCache = BasicCache<Factor, Arc<LocalFactorData>>;
-type UniqueFactorCache = BasicCache<Factor, Box<[Factor]>>;
+type FactorCache<T> = BasicCache<Factor, T>;
+type FactorCachePool<T> = OnceLock<Pool<FactorCache<T>>>;
+type FactorCacheCell<T> = RefCell<Reusable<'static, FactorCache<T>>>;
 
 // Object pools are used to avoid discarding a thread-local cache's contents when the thread exits,
 // in case another thread started later can use them.
 
-static FACTOR_CACHE_POOL: OnceLock<Pool<FactorCache>> = OnceLock::new();
-static UNIQUE_FACTOR_CACHE_POOL: OnceLock<Pool<UniqueFactorCache>> = OnceLock::new();
+static NUMERIC_VALUE_CACHE_POOL: FactorCachePool<Option<NumericFactor>> = FactorCachePool::new();
+static LOG10_ESTIMATE_CACHE_POOL: FactorCachePool<(NumberLength, NumberLength)> = FactorCachePool::new();
+static FACTOR_CACHE_POOL: FactorCachePool<BTreeMap<Factor, NumberLength>> = FactorCachePool::new();
+static UNIQUE_FACTOR_CACHE_POOL: FactorCachePool<Box<[Factor]>> = FactorCachePool::new();
 const CACHE_POOL_SIZE: usize = 4;
 
+const NUMERIC_VALUE_CACHE_SIZE: usize = 1 << 20;
+const LOG10_ESTIMATE_CACHE_SIZE: usize = 1 << 20;
+const FACTOR_CACHE_SIZE: usize = 1 << 12;
+const UNIQUE_FACTOR_CACHE_SIZE: usize = 1 << 16;
+
 thread_local! {
-    static FACTOR_CACHE: RefCell<Reusable<'static, FactorCache>> = RefCell::new(FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 20))).pull(|| {
-        error!("Too many instances pulled from FACTOR_CACHE!\n{}", Backtrace::capture());
-        create_cache(1 << 20)
+    static NUMERIC_VALUE_CACHE: FactorCacheCell<Option<NumericFactor>> = FactorCacheCell::new(NUMERIC_VALUE_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(NUMERIC_VALUE_CACHE_SIZE))).pull(|| {
+        error!("Too many instances pulled from NUMERIC_VALUE_CACHE!\n{}", Backtrace::capture());
+        create_cache(NUMERIC_VALUE_CACHE_SIZE)
     }));
-    static UNIQUE_FACTOR_CACHE: RefCell<Reusable<'static, UniqueFactorCache>> = RefCell::new(UNIQUE_FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(1 << 14))).pull(|| {
+    static LOG10_ESTIMATE_CACHE: FactorCacheCell<(NumberLength, NumberLength)> = FactorCacheCell::new(LOG10_ESTIMATE_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(LOG10_ESTIMATE_CACHE_SIZE))).pull(|| {
+        error!("Too many instances pulled from LOG10_ESTIMATE_CACHE!\n{}", Backtrace::capture());
+        create_cache(LOG10_ESTIMATE_CACHE_SIZE)
+    }));
+    static FACTOR_CACHE: FactorCacheCell<BTreeMap<Factor, NumberLength>> = FactorCacheCell::new(FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(FACTOR_CACHE_SIZE))).pull(|| {
+        error!("Too many instances pulled from FACTOR_CACHE!\n{}", Backtrace::capture());
+        create_cache(FACTOR_CACHE_SIZE)
+    }));
+    static UNIQUE_FACTOR_CACHE: FactorCacheCell<Box<[Factor]>> = RefCell::new(UNIQUE_FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(UNIQUE_FACTOR_CACHE_SIZE))).pull(|| {
         error!("Too many instances pulled from UNIQUE_FACTOR_CACHE!\n{}", Backtrace::capture());
-        create_cache(1 << 14)
+        create_cache(UNIQUE_FACTOR_CACHE_SIZE)
     }));
 }
 
@@ -1680,136 +1689,126 @@ pub(crate) fn find_raw_factors_of_numeric(
 #[inline(always)]
 fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
-    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr)?.log10_estimate.get().copied());
+    let cached = LOG10_ESTIMATE_CACHE.with_borrow(|cache| cache.get(expr).cloned());
     match cached {
         Some(cached) => cached,
         None => {
-            if let Some(log10_bounds) = FACTOR_CACHE.with_borrow_mut(|cache| {
-                let data = cache.get_mut(expr)?;
-                let log10_bounds = log10_bounds(data.eval_as_numeric.get().copied()??);
-                data.log10_estimate.get_or_init(|| log10_bounds);
-                Some(log10_bounds)
-            }) {
-                return log10_bounds;
-            }
-            let bounds = match *expr {
-                Numeric(n) => log10_bounds(n),
-                Factor::BigNumber(ref expr) => {
-                    let len = expr.as_ref().len();
-                    ((len - 1) as NumberLength, len as NumberLength)
-                }
-                Complex(ref c) => match **c {
-                    Fibonacci(ref x) | Lucas(ref x) => {
-                        // Fibonacci or Lucas number
-                        let Some(term_number) = evaluate_as_numeric(x) else {
-                            warn!("Could not parse term number of a Lucas number: {}", x);
-                            return (0, NumberLength::MAX);
-                        };
-                        let est_log = term_number as f64 * 0.20898;
-                        (
-                            est_log.floor() as NumberLength,
-                            est_log.ceil() as NumberLength + 1,
-                        )
+            let bounds = if let Some(Some(numeric_value)) = NUMERIC_VALUE_CACHE.with_borrow(|cache| cache.get(expr).copied()) {
+                log10_bounds(numeric_value)
+            } else {
+                match *expr {
+                    Numeric(n) => log10_bounds(n),
+                    Factor::BigNumber(ref expr) => {
+                        let len = expr.as_ref().len();
+                        ((len - 1) as NumberLength, len as NumberLength)
                     }
-                    Factorial(ref input) => {
-                        // factorial
-                        let Some(input) = evaluate_as_numeric(input) else {
-                            warn!("Could not parse input to a factorial: {}", input);
-                            return (0, NumberLength::MAX);
-                        };
-                        let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
+                    Complex(ref c) => match **c {
+                        Fibonacci(ref x) | Lucas(ref x) => {
+                            // Fibonacci or Lucas number
+                            let Some(term_number) = evaluate_as_numeric(x) else {
+                                warn!("Could not parse term number of a Lucas number: {}", x);
+                                return (0, NumberLength::MAX);
+                            };
+                            let est_log = term_number as f64 * 0.20898;
+                            (
+                                est_log.floor() as NumberLength,
+                                est_log.ceil() as NumberLength + 1,
+                            )
+                        }
+                        Factorial(ref input) => {
+                            // factorial
+                            let Some(input) = evaluate_as_numeric(input) else {
+                                warn!("Could not parse input to a factorial: {}", input);
+                                return (0, NumberLength::MAX);
+                            };
+                            let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
 
-                        // LN_10 is already rounded up
-                        let log_factorial_lower_bound = ln_factorial.next_down() / LN_10;
-                        let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
+                            // LN_10 is already rounded up
+                            let log_factorial_lower_bound = ln_factorial.next_down() / LN_10;
+                            let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
 
-                        (
-                            log_factorial_lower_bound.floor() as NumberLength,
-                            log_factorial_upper_bound.ceil() as NumberLength,
-                        )
-                    }
-                    Primorial(ref input) => {
-                        // primorial
-                        let Some(input) = evaluate_as_numeric(input) else {
-                            warn!("Could not parse input to a factorial: {}", input);
-                            return (0, NumberLength::MAX);
-                        };
+                            (
+                                log_factorial_lower_bound.floor() as NumberLength,
+                                log_factorial_upper_bound.ceil() as NumberLength,
+                            )
+                        }
+                        Primorial(ref input) => {
+                            // primorial
+                            let Some(input) = evaluate_as_numeric(input) else {
+                                warn!("Could not parse input to a factorial: {}", input);
+                                return (0, NumberLength::MAX);
+                            };
 
-                        // Lower bound is from
-                        // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
-                        // "Approximate formulas for some functions of prime numbers".
-                        // Illinois Journal of Mathematics 6 (1), p. 70
-                        // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
-                        // (p. 7 of PDF)
-                        let lower_bound = if input >= 563 {
-                            (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil()
-                                as NumberLength
-                        } else if input >= 41 {
-                            (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil()
-                                as NumberLength
-                        } else {
-                            0
-                        };
-                        let upper_bound = (1.01624 / LN_10 * input as f64).floor() as NumberLength;
-                        (lower_bound, upper_bound)
-                    }
-                    Power {
-                        ref base,
-                        ref exponent,
-                    } => estimate_log10_power(base, exponent),
-                    Divide {
-                        ref left,
-                        ref right,
-                        ..
-                    } => {
-                        let (num_lower, num_upper) = estimate_log10_internal(left);
-                        let (denom_lower, denom_upper) = estimate_log10_of_product(right);
-                        let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
-                        let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
-                        (lower, upper)
-                    }
-                    Multiply { ref terms, .. } => {
-                        // multiplication
-                        let (product_lower, product_upper) = estimate_log10_of_product(terms);
-                        (product_lower, product_upper)
-                    }
-                    AddSub {
-                        terms: (ref left, ref right),
-                        subtract,
-                    } => {
-                        // addition/subtraction
-                        let (left_lower, left_upper) = estimate_log10_internal(left);
-                        let (right_lower, right_upper) = estimate_log10_internal(right);
-                        let combined_lower = if subtract {
-                            if right_upper >= left_lower - 1 {
-                                0
+                            // Lower bound is from
+                            // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
+                            // "Approximate formulas for some functions of prime numbers".
+                            // Illinois Journal of Mathematics 6 (1), p. 70
+                            // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
+                            // (p. 7 of PDF)
+                            let lower_bound = if input >= 563 {
+                                (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil()
+                                    as NumberLength
+                            } else if input >= 41 {
+                                (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil()
+                                    as NumberLength
                             } else {
-                                left_lower.saturating_sub(1)
-                            }
-                        } else {
-                            left_lower.max(right_lower)
-                        };
-                        let combined_upper = if subtract {
-                            left_upper
-                        } else {
-                            left_upper.max(right_upper).saturating_add(1)
-                        };
-                        (combined_lower, combined_upper)
+                                0
+                            };
+                            let upper_bound = (1.01624 / LN_10 * input as f64).floor() as NumberLength;
+                            (lower_bound, upper_bound)
+                        }
+                        Power {
+                            ref base,
+                            ref exponent,
+                        } => estimate_log10_power(base, exponent),
+                        Divide {
+                            ref left,
+                            ref right,
+                            ..
+                        } => {
+                            let (num_lower, num_upper) = estimate_log10_internal(left);
+                            let (denom_lower, denom_upper) = estimate_log10_of_product(right);
+                            let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
+                            let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
+                            (lower, upper)
+                        }
+                        Multiply { ref terms, .. } => {
+                            // multiplication
+                            let (product_lower, product_upper) = estimate_log10_of_product(terms);
+                            (product_lower, product_upper)
+                        }
+                        AddSub {
+                            terms: (ref left, ref right),
+                            subtract,
+                        } => {
+                            // addition/subtraction
+                            let (left_lower, left_upper) = estimate_log10_internal(left);
+                            let (right_lower, right_upper) = estimate_log10_internal(right);
+                            let combined_lower = if subtract {
+                                if right_upper >= left_lower - 1 {
+                                    0
+                                } else {
+                                    left_lower.saturating_sub(1)
+                                }
+                            } else {
+                                left_lower.max(right_lower)
+                            };
+                            let combined_upper = if subtract {
+                                left_upper
+                            } else {
+                                left_upper.max(right_upper).saturating_add(1)
+                            };
+                            (combined_lower, combined_upper)
+                        }
+                    },
+                    ElidedNumber(_) => {
+                        // Elided numbers from factordb are always at least 51 digits
+                        (50, NumberLength::MAX)
                     }
-                },
-                ElidedNumber(_) => {
-                    // Elided numbers from factordb are always at least 51 digits
-                    (50, NumberLength::MAX)
+                    UnknownExpression(_) => (0, NumberLength::MAX),
                 }
-                UnknownExpression(_) => (0, NumberLength::MAX),
             };
-            FACTOR_CACHE.with_borrow_mut(|cache| {
-                if let Ok(Some(facts)) =
-                    cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-                {
-                    facts.log10_estimate.get_or_init(|| bounds);
-                }
-            });
+            LOG10_ESTIMATE_CACHE.with_borrow_mut(|cache| cache.insert(expr.clone(), bounds));
             bounds
         }
     }
@@ -2292,7 +2291,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
     if let Numeric(n) = expr {
         return Some(*n);
     }
-    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr)?.eval_as_numeric.get().copied());
+    let cached = NUMERIC_VALUE_CACHE.with_borrow(|cache| cache.get(expr).copied());
     match cached {
         Some(numeric) => numeric,
         None => {
@@ -2416,13 +2415,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                 ElidedNumber(_) => None,
                 UnknownExpression(_) => None,
             };
-            FACTOR_CACHE.with_borrow_mut(|cache| {
-                if let Ok(Some(facts)) =
-                    cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-                {
-                    facts.eval_as_numeric.get_or_init(|| numeric);
-                }
-            });
+            NUMERIC_VALUE_CACHE.with_borrow_mut(|cache| cache.insert(expr.clone(), numeric));
             numeric
         }
     }
@@ -2435,7 +2428,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     {
         return find_factors_of_numeric(*n);
     }
-    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr)?.factors.get().cloned());
+    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr).cloned());
     match cached {
         Some(cached) => cached,
         None => {
@@ -2758,13 +2751,9 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                     }
                 })
             });
-            FACTOR_CACHE.with_borrow_mut(|cache| {
-                if let Ok(Some(facts)) =
-                    cache.get_or_insert_with(expr, || Ok::<_, !>(Default::default()))
-                {
-                    facts.factors.get_or_init(|| factors.clone());
-                }
-            });
+            FACTOR_CACHE.with_borrow_mut(|cache|
+                cache.insert(expr.clone(), factors.clone())
+            );
             factors
         }
     }
