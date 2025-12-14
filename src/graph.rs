@@ -1495,6 +1495,10 @@ fn merge_equivalent_expressions(
     );
     if equivalent == *current {
         vec![]
+    } else if let Some(existing_vid) = data.vertex_id_by_expr.get(&equivalent).copied()
+            && to_real_vertex_id(existing_vid, &mut data.deleted_synonyms)
+            == to_real_vertex_id(factor_vid, &mut data.deleted_synonyms) {
+        vec![]
     } else {
         info!("Merging equivalent expressions {current} and {equivalent}");
         let current_len = if current.is_elided() {
@@ -1536,9 +1540,10 @@ fn merge_equivalent_expressions(
         if !equivalent.is_elided() && equivalent.to_owned_string().len() < current_len {
             let _ = replace(
                 data.divisibility_graph.vertex_mut(factor_vid).unwrap(),
-                equivalent,
+                equivalent.clone(),
             );
         }
+        data.vertex_id_by_expr.insert(equivalent, factor_vid);
         new_factor_vids
     }
 }
