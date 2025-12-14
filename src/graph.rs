@@ -1446,9 +1446,8 @@ async fn add_factors_to_graph(
     }
 
     // Next, check if factor_finder can find factors
-    let facts = facts_of(&data.number_facts_map, factor_vid, &mut data.deleted_synonyms)
-        .expect("Tried to check checked_in_factor_finder in add_factors_to_graph when not entered in number_facts_map");
-    if !facts.checked_in_factor_finder {
+    let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms);
+    if !replace(&mut facts.checked_in_factor_finder, true) {
         added.extend(add_factor_finder_factor_vertices_to_graph(
             data,
             Some(root_vid),
@@ -1456,17 +1455,12 @@ async fn add_factors_to_graph(
             http,
         ));
     }
-    let facts = facts_of_mut(
-        &mut data.number_facts_map,
-        factor_vid,
-        &mut data.deleted_synonyms,
-    );
-    facts.checked_in_factor_finder = true;
-
+    let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms);
     if let Some(entry_id) = facts.entry_id
         && !facts.expression_form_checked_in_factor_finder
         && let Some(expression_form) = http.try_get_expression_form(entry_id).await
     {
+        facts.expression_form_checked_in_factor_finder = true;
         let factor = get_vertex(
             &data.divisibility_graph,
             factor_vid,
@@ -1487,12 +1481,6 @@ async fn add_factors_to_graph(
                 if added { Some(vertex_id) } else { None }
             }));
         }
-        let facts = facts_of_mut(
-            &mut data.number_facts_map,
-            factor_vid,
-            &mut data.deleted_synonyms,
-        );
-        facts.expression_form_checked_in_factor_finder = true;
     }
 
     added.into_iter().collect()
