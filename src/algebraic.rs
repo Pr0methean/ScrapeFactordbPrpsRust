@@ -1965,6 +1965,16 @@ pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option
                     if term >= modulus {
                         return Some(0);
                     }
+                    if term == modulus - 1 {
+                        // Wilson's theorem
+                        return Some(if is_prime(modulus) {
+                            term
+                        } else if modulus == 4 {
+                            2
+                        } else {
+                            0
+                        });
+                    }
                     let mut result = 1;
                     for i in 2..=term {
                         result = (result * i) % modulus;
@@ -1976,7 +1986,7 @@ pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option
                 }
                 Primorial(ref term) => {
                     let term = evaluate_as_numeric(term)?;
-                    if term >= modulus {
+                    if term >= modulus && (is_prime(term) || is_prime(modulus)) {
                         return Some(0);
                     }
                     let mut result = 1;
