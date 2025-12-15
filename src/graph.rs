@@ -1204,7 +1204,7 @@ pub async fn find_and_submit_factors(
                                     divided_vid,
                                     &mut data.deleted_synonyms,
                                 )
-                                    .checked_with_root_denominator = true;
+                                .checked_with_root_denominator = true;
                                 factors_to_submit_in_graph.push_back(divided_vid);
                             }
                         }
@@ -1214,7 +1214,8 @@ pub async fn find_and_submit_factors(
                     } else {
                         let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms)
                             .expect("{id}: Tried to fetch cofactor_facts for a cofactor not entered in number_facts_map");
-                        if cofactor_facts.needs_update() || !cofactor_facts.checked_for_listed_algebraic
+                        if cofactor_facts.needs_update()
+                            || !cofactor_facts.checked_for_listed_algebraic
                         {
                             // An error must have occurred while fetching cofactor's factors
                             put_factor_back_into_queue = true;
