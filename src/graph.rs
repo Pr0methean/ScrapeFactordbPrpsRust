@@ -1158,6 +1158,15 @@ pub async fn find_and_submit_factors(
                     break 'per_cofactor;
                 }
                 DoesNotDivide => {
+                    if cofactor_vid == root_vid {
+                        dnd_since_last_accepted += 1;
+                        if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
+                            error!(
+                                "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
+                            );
+                            return accepted_factors > 0;
+                        }
+                    }
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     let subfactors =
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
@@ -1195,19 +1204,12 @@ pub async fn find_and_submit_factors(
                                     divided_vid,
                                     &mut data.deleted_synonyms,
                                 )
-                                .checked_with_root_denominator = true;
-                                put_factor_back_into_queue = true;
+                                    .checked_with_root_denominator = true;
+                                factors_to_submit_in_graph.push_back(divided_vid);
                             }
                         }
                     }
                     if cofactor_vid == root_vid {
-                        dnd_since_last_accepted += 1;
-                        if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
-                            error!(
-                                "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
-                            );
-                            return accepted_factors > 0;
-                        }
                         continue 'graph_iter; // Skip put_factor_back_into_queue check for factors that don't divide the root
                     } else {
                         let cofactor_facts = facts_of(&data.number_facts_map, cofactor_vid, &mut data.deleted_synonyms)
