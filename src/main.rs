@@ -499,11 +499,7 @@ async fn main() -> anyhow::Result<()> {
         let mut next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
         loop {
             select! {
-                _ = sleep_until(next_backtrace) => {
-                    info!("Task backtraces:\n{}", taskdump_tree(false));
-                    info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
-                    next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
-                }
+                biased;
                 _ = sigterm.recv() => {
                     warn!("Received SIGTERM; signaling tasks to exit");
                     break;
@@ -511,6 +507,11 @@ async fn main() -> anyhow::Result<()> {
                 _ = &mut sigint => {
                     warn!("Received SIGINT; signaling tasks to exit");
                     break;
+                }
+                _ = sleep_until(next_backtrace) => {
+                    info!("Task backtraces:\n{}", taskdump_tree(false));
+                    info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+                    next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
                 }
             }
         }
@@ -651,6 +652,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             info!("do_checks: Polling for next task");
             select! {
+                biased;
                 _ = do_checks_shutdown_receiver.recv() => {
                     warn!("do_checks received shutdown signal; exiting");
                     return;
