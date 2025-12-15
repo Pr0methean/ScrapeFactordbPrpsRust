@@ -1150,9 +1150,11 @@ pub async fn find_and_submit_factors(
                     dnd_since_last_accepted = 0;
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
-                    if cofactor_vid != root_vid {
-                        put_factor_back_into_queue = true;
+                    if cofactor_vid == root_vid {
+                        // skip put_factor_back_into_queue check
+                        continue 'graph_iter;
                     }
+                    put_factor_back_into_queue = true;
                     break 'per_cofactor;
                 }
                 DoesNotDivide => {
