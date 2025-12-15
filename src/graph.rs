@@ -1448,7 +1448,11 @@ async fn add_factors_to_graph(
     }
 
     // Next, check if factor_finder can find factors
-    let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms);
+    let facts = facts_of_mut(
+        &mut data.number_facts_map,
+        factor_vid,
+        &mut data.deleted_synonyms,
+    );
     if !replace(&mut facts.checked_in_factor_finder, true) {
         added.extend(add_factor_finder_factor_vertices_to_graph(
             data,
@@ -1457,7 +1461,11 @@ async fn add_factors_to_graph(
             http,
         ));
     }
-    let facts = facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms);
+    let facts = facts_of_mut(
+        &mut data.number_facts_map,
+        factor_vid,
+        &mut data.deleted_synonyms,
+    );
     if let Some(entry_id) = facts.entry_id
         && !facts.expression_form_checked_in_factor_finder
         && let Some(expression_form) = http.try_get_expression_form(entry_id).await
@@ -1498,12 +1506,14 @@ fn merge_equivalent_expressions(
     if equivalent == *current {
         vec![]
     } else if let Some(existing_vid) = data.vertex_id_by_expr.get(&equivalent).copied()
-            && to_real_vertex_id(existing_vid, &mut data.deleted_synonyms)
-            == to_real_vertex_id(factor_vid, &mut data.deleted_synonyms) {
+        && to_real_vertex_id(existing_vid, &mut data.deleted_synonyms)
+            == to_real_vertex_id(factor_vid, &mut data.deleted_synonyms)
+    {
         vec![]
     } else {
         info!("Merging equivalent expressions {current} and {equivalent}");
-        data.vertex_id_by_expr.insert(equivalent.clone(), factor_vid);
+        data.vertex_id_by_expr
+            .insert(equivalent.clone(), factor_vid);
         let current_len = if current.is_elided() {
             usize::MAX // replace elided numbers with full ones ASAP
         } else {
@@ -1515,23 +1525,17 @@ fn merge_equivalent_expressions(
             &mut data.deleted_synonyms,
         );
         let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
-            add_factor_finder_factor_vertices_to_graph(
-                data, root_vid, factor_vid, http,
-            )
+            add_factor_finder_factor_vertices_to_graph(data, root_vid, factor_vid, http)
         } else {
             Vec::new()
         };
-        new_factor_vids.extend(find_unique_factors(&equivalent)
-            .into_iter()
-            .filter_map(|new_factor| {
+        new_factor_vids.extend(find_unique_factors(&equivalent).into_iter().filter_map(
+            |new_factor| {
                 let entry_id = new_factor.known_id();
                 let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
-                if added {
-                    Some(vid)
-                } else {
-                    None
-                }
-            }));
+                if added { Some(vid) } else { None }
+            },
+        ));
         let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
         let facts = facts_of_mut(
             &mut data.number_facts_map,
@@ -1562,17 +1566,13 @@ fn add_factor_finder_factor_vertices_to_graph(
         &mut data.deleted_synonyms,
     );
     find_unique_factors(factor)
-    .into_iter()
-    .filter_map(|new_factor| {
-        let entry_id = new_factor.known_id();
-        let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
-        if added {
-            Some(vid)
-        } else {
-            None
-        }
-    })
-    .collect()
+        .into_iter()
+        .filter_map(|new_factor| {
+            let entry_id = new_factor.known_id();
+            let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
+            if added { Some(vid) } else { None }
+        })
+        .collect()
 }
 
 #[inline(always)]

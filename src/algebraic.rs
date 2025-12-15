@@ -4,9 +4,7 @@ use crate::algebraic::ComplexFactor::{
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
 use crate::graph::EntryId;
 use crate::net::BigNumber;
-use crate::{
-    MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, hash, write_bignum,
-};
+use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, hash, write_bignum};
 use ahash::RandomState;
 use async_backtrace::location;
 use derivative::Derivative;
@@ -20,6 +18,8 @@ use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
+use quick_cache::UnitWeighter;
+use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,8 +31,6 @@ use std::hint::unreachable_unchecked;
 use std::iter::once;
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
-use quick_cache::sync::{Cache, DefaultLifecycle};
-use quick_cache::UnitWeighter;
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::Verbosity::Silent;
@@ -730,7 +728,8 @@ type FactorCacheLock<T> = OnceLock<SyncFactorCache<T>>;
 // in case another thread started later can use them.
 
 static NUMERIC_VALUE_CACHE_LOCK: FactorCacheLock<Option<NumericFactor>> = FactorCacheLock::new();
-static LOG10_ESTIMATE_CACHE_LOCK: FactorCacheLock<(NumberLength, NumberLength)> = FactorCacheLock::new();
+static LOG10_ESTIMATE_CACHE_LOCK: FactorCacheLock<(NumberLength, NumberLength)> =
+    FactorCacheLock::new();
 static FACTOR_CACHE_LOCK: FactorCacheLock<BTreeMap<Factor, NumberLength>> = FactorCacheLock::new();
 static UNIQUE_FACTOR_CACHE_LOCK: FactorCacheLock<Box<[Factor]>> = FactorCacheLock::new();
 

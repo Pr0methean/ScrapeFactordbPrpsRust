@@ -432,15 +432,13 @@ async fn queue_composites(
             .collect();
         c_tasks.shuffle(&mut rng());
         let c_initial = c_tasks.len();
-        c_buffered.extend(
-            c_tasks
-                .into_iter()
-                .filter_map(|c_task| match c_sender.try_send(c_task) {
-                    Ok(()) => None,
-                    Err(Closed(_)) => None,
-                    Err(Full(c_task)) => Some(c_task),
-                }),
-        );
+        c_buffered.extend(c_tasks.into_iter().filter_map(
+            |c_task| match c_sender.try_send(c_task) {
+                Ok(()) => None,
+                Err(Closed(_)) => None,
+                Err(Full(c_task)) => Some(c_task),
+            },
+        ));
         let c_sent = c_initial - c_buffered.len();
         info!("Sent {c_sent} C's to channel");
     }
