@@ -5,7 +5,7 @@ use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression
 use crate::graph::EntryId;
 use crate::net::BigNumber;
 use crate::{
-    BasicCache, MAX_ID_EQUAL_TO_VALUE, NumberLength, create_cache, frame_sync, hash, write_bignum,
+    MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, hash, write_bignum,
 };
 use ahash::RandomState;
 use async_backtrace::location;
@@ -20,8 +20,6 @@ use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
-use object_pool::{Pool, Reusable};
-use std::backtrace::Backtrace;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,6 +31,8 @@ use std::hint::unreachable_unchecked;
 use std::iter::once;
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
+use quick_cache::sync::{Cache, DefaultLifecycle};
+use quick_cache::UnitWeighter;
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::Verbosity::Silent;
@@ -723,41 +723,36 @@ impl From<FactorBeingParsed> for Factor {
     }
 }
 
-type FactorCache<T> = BasicCache<Factor, T>;
-type FactorCachePool<T> = OnceLock<Pool<FactorCache<T>>>;
-type FactorCacheCell<T> = RefCell<Reusable<'static, FactorCache<T>>>;
+type SyncFactorCache<V> = Cache<Factor, V, UnitWeighter, RandomState, DefaultLifecycle<Factor, V>>;
+type FactorCacheLock<T> = OnceLock<SyncFactorCache<T>>;
 
 // Object pools are used to avoid discarding a thread-local cache's contents when the thread exits,
 // in case another thread started later can use them.
 
-static NUMERIC_VALUE_CACHE_POOL: FactorCachePool<Option<NumericFactor>> = FactorCachePool::new();
-static LOG10_ESTIMATE_CACHE_POOL: FactorCachePool<(NumberLength, NumberLength)> = FactorCachePool::new();
-static FACTOR_CACHE_POOL: FactorCachePool<BTreeMap<Factor, NumberLength>> = FactorCachePool::new();
-static UNIQUE_FACTOR_CACHE_POOL: FactorCachePool<Box<[Factor]>> = FactorCachePool::new();
-const CACHE_POOL_SIZE: usize = 4;
+static NUMERIC_VALUE_CACHE_LOCK: FactorCacheLock<Option<NumericFactor>> = FactorCacheLock::new();
+static LOG10_ESTIMATE_CACHE_LOCK: FactorCacheLock<(NumberLength, NumberLength)> = FactorCacheLock::new();
+static FACTOR_CACHE_LOCK: FactorCacheLock<BTreeMap<Factor, NumberLength>> = FactorCacheLock::new();
+static UNIQUE_FACTOR_CACHE_LOCK: FactorCacheLock<Box<[Factor]>> = FactorCacheLock::new();
 
 const NUMERIC_VALUE_CACHE_SIZE: usize = 1 << 20;
 const LOG10_ESTIMATE_CACHE_SIZE: usize = 1 << 20;
 const FACTOR_CACHE_SIZE: usize = 1 << 12;
 const UNIQUE_FACTOR_CACHE_SIZE: usize = 1 << 16;
 
-thread_local! {
-    static NUMERIC_VALUE_CACHE: FactorCacheCell<Option<NumericFactor>> = FactorCacheCell::new(NUMERIC_VALUE_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(NUMERIC_VALUE_CACHE_SIZE))).pull(|| {
-        error!("Too many instances pulled from NUMERIC_VALUE_CACHE!\n{}", Backtrace::capture());
-        create_cache(NUMERIC_VALUE_CACHE_SIZE)
-    }));
-    static LOG10_ESTIMATE_CACHE: FactorCacheCell<(NumberLength, NumberLength)> = FactorCacheCell::new(LOG10_ESTIMATE_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(LOG10_ESTIMATE_CACHE_SIZE))).pull(|| {
-        error!("Too many instances pulled from LOG10_ESTIMATE_CACHE!\n{}", Backtrace::capture());
-        create_cache(LOG10_ESTIMATE_CACHE_SIZE)
-    }));
-    static FACTOR_CACHE: FactorCacheCell<BTreeMap<Factor, NumberLength>> = FactorCacheCell::new(FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(FACTOR_CACHE_SIZE))).pull(|| {
-        error!("Too many instances pulled from FACTOR_CACHE!\n{}", Backtrace::capture());
-        create_cache(FACTOR_CACHE_SIZE)
-    }));
-    static UNIQUE_FACTOR_CACHE: FactorCacheCell<Box<[Factor]>> = RefCell::new(UNIQUE_FACTOR_CACHE_POOL.get_or_init(|| Pool::new(CACHE_POOL_SIZE, || create_cache(UNIQUE_FACTOR_CACHE_SIZE))).pull(|| {
-        error!("Too many instances pulled from UNIQUE_FACTOR_CACHE!\n{}", Backtrace::capture());
-        create_cache(UNIQUE_FACTOR_CACHE_SIZE)
-    }));
+fn get_numeric_value_cache() -> &'static SyncFactorCache<Option<NumericFactor>> {
+    NUMERIC_VALUE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(NUMERIC_VALUE_CACHE_SIZE))
+}
+
+fn get_log10_estimate_cache() -> &'static SyncFactorCache<(NumberLength, NumberLength)> {
+    LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE))
+}
+
+fn get_factor_cache() -> &'static SyncFactorCache<BTreeMap<Factor, NumberLength>> {
+    FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE))
+}
+
+fn get_unique_factor_cache() -> &'static SyncFactorCache<Box<[Factor]>> {
+    UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(UNIQUE_FACTOR_CACHE_SIZE))
 }
 
 impl Default for Factor {
@@ -1691,12 +1686,12 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
     if let Numeric(numeric_value) = *expr {
         return log10_bounds(numeric_value);
-    } else if let Some(Some(numeric_value)) = NUMERIC_VALUE_CACHE.with_borrow(|cache| cache.get(expr).copied()) {
+    } else if let Some(Some(numeric_value)) = get_numeric_value_cache().get(expr) {
         // Any old estimate is no longer worth saving
-        LOG10_ESTIMATE_CACHE.with_borrow_mut(|cache| cache.remove(expr));
+        get_log10_estimate_cache().remove(expr);
         return log10_bounds(numeric_value);
     }
-    let cached = LOG10_ESTIMATE_CACHE.with_borrow(|cache| cache.get(expr).cloned());
+    let cached = get_log10_estimate_cache().get(expr);
     match cached {
         Some(cached) => cached,
         None => {
@@ -1811,7 +1806,7 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                 }
                 UnknownExpression(_) => (0, NumberLength::MAX),
             };
-            LOG10_ESTIMATE_CACHE.with_borrow_mut(|cache| cache.insert(expr.clone(), bounds));
+            get_log10_estimate_cache().insert(expr.clone(), bounds);
             bounds
         }
     }
@@ -2294,7 +2289,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
     if let Numeric(n) = expr {
         return Some(*n);
     }
-    let cached = NUMERIC_VALUE_CACHE.with_borrow(|cache| cache.get(expr).copied());
+    let cached = get_numeric_value_cache().get(expr);
     match cached {
         Some(numeric) => numeric,
         None => {
@@ -2418,7 +2413,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                 ElidedNumber(_) => None,
                 UnknownExpression(_) => None,
             };
-            NUMERIC_VALUE_CACHE.with_borrow_mut(|cache| cache.insert(expr.clone(), numeric));
+            get_numeric_value_cache().insert(expr.clone(), numeric);
             numeric
         }
     }
@@ -2431,7 +2426,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     {
         return find_factors_of_numeric(*n);
     }
-    let cached = FACTOR_CACHE.with_borrow(|cache| cache.get(expr).cloned());
+    let cached = get_factor_cache().get(expr);
     match cached {
         Some(cached) => cached,
         None => {
@@ -2754,9 +2749,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                     }
                 })
             });
-            FACTOR_CACHE.with_borrow_mut(|cache|
-                cache.insert(expr.clone(), factors.clone())
-            );
+            get_factor_cache().insert(expr.clone(), factors.clone());
             factors
         }
     }
@@ -2843,7 +2836,7 @@ fn find_common_factors(expr1: &Factor, expr2: &Factor) -> BTreeMap<Factor, Numbe
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
-    let cached = UNIQUE_FACTOR_CACHE.with_borrow(|cache| cache.get(expr).cloned());
+    let cached = get_unique_factor_cache().get(expr);
     match cached {
         Some(cached) => cached,
         None => {
@@ -2888,8 +2881,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 );
             }
             let factors: Box<[Factor]> = factors.into_iter().collect();
-            UNIQUE_FACTOR_CACHE
-                .with_borrow_mut(|cache| cache.insert(expr.clone(), factors.clone()));
+            get_unique_factor_cache().insert(expr.clone(), factors.clone());
             factors
         }
     }
