@@ -3416,15 +3416,17 @@ mod tests {
     }
 
     #[test]
-    fn test_find_factors_performance_2() {
+    fn test_find_numeric_factors_performance() {
         let start = std::time::Instant::now();
-        const LARGEST_64BIT_PRIME: NumericFactor = 18446744073709551557;
-        const OTHER_LARGE_64BIT_PRIME: NumericFactor = 18446744069414584289; // largest prime below 1<<64 - 1<<32
-        let expr = Numeric(LARGEST_64BIT_PRIME * OTHER_LARGE_64BIT_PRIME);
+        const FIRST_LARGE_PRIME: NumericFactor = 23058430092136939559; // next prime after 5<<62
+        const SECOND_LARGE_PRIME: NumericFactor = 13835058055282163729; // next prime after 3<<62
+        let expr = Numeric(FIRST_LARGE_PRIME * SECOND_LARGE_PRIME);
         let factors = super::find_factors(&expr.into());
         println!("Time: {:?}", start.elapsed());
-        // Verify we found something useful
-        println!("Factors count: {}", factors.len());
+        // Verify correct answer
+        assert_eq!(factors.len(), 2);
+        assert_eq!(factors.get(&Factor::from(FIRST_LARGE_PRIME)), Some(&1));
+        assert_eq!(factors.get(&Factor::from(SECOND_LARGE_PRIME)), Some(&1));
     }
 
     #[test]
