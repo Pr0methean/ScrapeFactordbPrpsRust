@@ -1,4 +1,3 @@
-use std::f64::consts::LN_10;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
@@ -25,6 +24,7 @@ use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
+use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
@@ -921,39 +921,41 @@ impl Factor {
             terms: &BTreeMap<Factor, NumberLength>,
             other: &Factor,
         ) -> bool {
-            terms.iter()
-                .all(|(term, exponent)| {
-                    if *exponent == 0 {
-                        return true;
-                    }
-                    if !term.may_be_proper_divisor_of(other) {
+            terms.iter().all(|(term, exponent)| {
+                if *exponent == 0 {
+                    return true;
+                }
+                if !term.may_be_proper_divisor_of(other) {
+                    return false;
+                }
+                if *exponent == 1 {
+                    return true;
+                }
+                let mut tested_exponent = 1;
+                let mut quotient = div_exact(other, term);
+                while let Some(next_quotient) = quotient {
+                    if !term.may_be_proper_divisor_of(&next_quotient) {
                         return false;
                     }
-                    if *exponent == 1 {
+                    tested_exponent += 1;
+                    if *exponent == tested_exponent {
                         return true;
                     }
-                    let mut tested_exponent = 1;
-                    let mut quotient = div_exact(other, term);
-                    while let Some(next_quotient) = quotient {
-                        if !term.may_be_proper_divisor_of(&next_quotient) {
-                            return false;
-                        }
-                        tested_exponent += 1;
-                        if *exponent == tested_exponent {
-                            return true;
-                        }
-                        quotient = div_exact(&next_quotient, term);
-                    }
-                    true
-                })
+                    quotient = div_exact(&next_quotient, term);
+                }
+                true
+            })
         }
-        if let Some(quotient) = div_exact(self, other) && let Some(quotient_numeric) = evaluate_as_numeric(&quotient) {
+        if let Some(quotient) = div_exact(self, other)
+            && let Some(quotient_numeric) = evaluate_as_numeric(&quotient)
+        {
             return quotient_numeric > 1;
         }
         if let Some(n) = evaluate_as_numeric(self)
-            && let Some(m) = modulo_as_numeric(other, n) {
-                return m == 0;
-            }
+            && let Some(m) = modulo_as_numeric(other, n)
+        {
+            return m == 0;
+        }
         match *self {
             Factor::BigNumber(_) => match *other {
                 Numeric(_) => return false,
@@ -1049,7 +1051,9 @@ impl Factor {
                 return false;
             }
             if let Some(right_exponent) = right.get(self) {
-                if !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))]).may_be_proper_divisor_of(left) {
+                if !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))])
+                    .may_be_proper_divisor_of(left)
+                {
                     return false;
                 }
             } else if !self.may_be_proper_divisor_of(left) {
@@ -1700,7 +1704,8 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     if let Numeric(numeric_value) = *expr {
         return log10_bounds(numeric_value);
     }
-    let log10_estimate_cache = LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE));
+    let log10_estimate_cache =
+        LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE));
     if let Some(Some(numeric_value)) = get_numeric_value_cache().get(expr) {
         // Any old estimate is no longer worth saving
         log10_estimate_cache.remove(expr);
@@ -2853,7 +2858,8 @@ fn find_common_factors(expr1: &Factor, expr2: &Factor) -> BTreeMap<Factor, Numbe
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
-    let unique_factor_cache = UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(UNIQUE_FACTOR_CACHE_SIZE));
+    let unique_factor_cache =
+        UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(UNIQUE_FACTOR_CACHE_SIZE));
     let cached = unique_factor_cache.get(expr);
     match cached {
         Some(cached) => cached,
