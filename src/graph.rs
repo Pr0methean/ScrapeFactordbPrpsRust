@@ -882,6 +882,7 @@ pub async fn find_and_submit_factors(
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
                     get_edge(&data.divisibility_graph, factor_vid, *dest_vid, &mut data.deleted_synonyms).is_none())
             .collect::<Box<[_]>>();
+        let mut did_not_divide = false;
         dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
             let factor = get_vertex(
@@ -1147,6 +1148,7 @@ pub async fn find_and_submit_factors(
                         NumberFacts::marked_stale,
                     );
                     accepted_factors += 1;
+                    did_not_divide = false;
                     dnd_since_last_accepted = 0;
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
@@ -1167,6 +1169,7 @@ pub async fn find_and_submit_factors(
                             return accepted_factors > 0;
                         }
                     }
+                    did_not_divide = true;
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                     let subfactors =
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
@@ -1231,6 +1234,15 @@ pub async fn find_and_submit_factors(
                         iters_without_progress = 0;
                     }
                 }
+            }
+        }
+        if did_not_divide {
+            dnd_since_last_accepted += 1;
+            if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
+                error!(
+                                "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
+                            );
+                return accepted_factors > 0;
             }
         }
         if put_factor_back_into_queue && !factors_to_submit_in_graph.contains(&factor_vid) {
