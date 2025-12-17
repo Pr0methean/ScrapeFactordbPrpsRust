@@ -947,8 +947,8 @@ impl Factor {
                     true
                 })
         }
-        if let Some(quotient) = div_exact(self, other) {
-            return evaluate_as_numeric(&quotient) != Some(1);
+        if let Some(quotient) = div_exact(self, other) && let Some(quotient_numeric) = evaluate_as_numeric(&quotient) {
+            return quotient_numeric > 1;
         }
         if let Some(n) = evaluate_as_numeric(self)
             && let Some(m) = modulo_as_numeric(other, n) {
