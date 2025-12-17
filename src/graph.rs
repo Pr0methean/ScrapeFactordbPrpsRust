@@ -938,11 +938,9 @@ pub async fn find_and_submit_factors(
                             [factor_vid, cofactor_vid],
                             &mut data.deleted_synonyms,
                         );
-                        if !matches!(cofactor, Numeric(_)) {
-                            info!(
-                                "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
-                            );
-                        }
+                        debug!(
+                            "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
+                        );
                         rule_out_divisibility(&mut data, cofactor_vid, factor_vid);
                         continue;
                     }
@@ -960,22 +958,17 @@ pub async fn find_and_submit_factors(
                 &mut data.deleted_synonyms,
             );
             if !factor.may_be_proper_divisor_of(cofactor) {
-                info!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because it fails a divisibility \
-                    test"
-                );
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 if cofactor_vid == root_vid {
-                    continue 'graph_iter;
+                    continue 'graph_iter; // Skip put_factor_back_in_queue check
                 }
                 continue;
             }
             // NumericFactor entries are already fully factored
             if let Numeric(_) = cofactor {
-                info!(
+                debug!(
                     "{id}: Skipping submission of {factor} to {cofactor} because the destination is too small"
                 );
-                propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
                 continue;
             }
             let cofactor_facts = facts_of(
