@@ -820,7 +820,7 @@ pub async fn find_and_submit_factors(
         && edge_count < complete_graph_edge_count
     {
         if iters_to_next_report == 0 {
-            iters_to_next_report = node_count;
+            iters_to_next_report = node_count.min(100);
             let (direct_divisors, non_factors) = data
                 .divisibility_graph
                 .edges()
