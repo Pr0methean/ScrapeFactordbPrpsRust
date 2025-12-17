@@ -1,3 +1,4 @@
+use std::f64::consts::LN_10;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
@@ -24,7 +25,6 @@ use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
-use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
@@ -740,18 +740,6 @@ const UNIQUE_FACTOR_CACHE_SIZE: usize = 1 << 16;
 
 fn get_numeric_value_cache() -> &'static SyncFactorCache<Option<NumericFactor>> {
     NUMERIC_VALUE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(NUMERIC_VALUE_CACHE_SIZE))
-}
-
-fn get_log10_estimate_cache() -> &'static SyncFactorCache<(NumberLength, NumberLength)> {
-    LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE))
-}
-
-fn get_factor_cache() -> &'static SyncFactorCache<BTreeMap<Factor, NumberLength>> {
-    FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE))
-}
-
-fn get_unique_factor_cache() -> &'static SyncFactorCache<Box<[Factor]>> {
-    UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(UNIQUE_FACTOR_CACHE_SIZE))
 }
 
 impl Default for Factor {
@@ -1685,12 +1673,14 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
     if let Numeric(numeric_value) = *expr {
         return log10_bounds(numeric_value);
-    } else if let Some(Some(numeric_value)) = get_numeric_value_cache().get(expr) {
+    }
+    let log10_estimate_cache = LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE));
+    if let Some(Some(numeric_value)) = get_numeric_value_cache().get(expr) {
         // Any old estimate is no longer worth saving
-        get_log10_estimate_cache().remove(expr);
+        log10_estimate_cache.remove(expr);
         return log10_bounds(numeric_value);
     }
-    let cached = get_log10_estimate_cache().get(expr);
+    let cached = log10_estimate_cache.get(expr);
     match cached {
         Some(cached) => cached,
         None => {
@@ -1805,7 +1795,7 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                 }
                 UnknownExpression(_) => (0, NumberLength::MAX),
             };
-            get_log10_estimate_cache().insert(expr.clone(), bounds);
+            log10_estimate_cache.insert(expr.clone(), bounds);
             bounds
         }
     }
@@ -2288,7 +2278,8 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
     if let Numeric(n) = expr {
         return Some(*n);
     }
-    let cached = get_numeric_value_cache().get(expr);
+    let numeric_value_cache = get_numeric_value_cache();
+    let cached = numeric_value_cache.get(expr);
     match cached {
         Some(numeric) => numeric,
         None => {
@@ -2412,7 +2403,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                 ElidedNumber(_) => None,
                 UnknownExpression(_) => None,
             };
-            get_numeric_value_cache().insert(expr.clone(), numeric);
+            numeric_value_cache.insert(expr.clone(), numeric);
             numeric
         }
     }
@@ -2425,7 +2416,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     {
         return find_factors_of_numeric(*n);
     }
-    let cached = get_factor_cache().get(expr);
+    let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE));
+    let cached = factor_cache.get(expr);
     match cached {
         Some(cached) => cached,
         None => {
@@ -2748,7 +2740,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                     }
                 })
             });
-            get_factor_cache().insert(expr.clone(), factors.clone());
+            factor_cache.insert(expr.clone(), factors.clone());
             factors
         }
     }
@@ -2835,7 +2827,8 @@ fn find_common_factors(expr1: &Factor, expr2: &Factor) -> BTreeMap<Factor, Numbe
 /// Returns all unique, nontrivial factors we can find.
 #[inline(always)]
 pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
-    let cached = get_unique_factor_cache().get(expr);
+    let unique_factor_cache = UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(UNIQUE_FACTOR_CACHE_SIZE));
+    let cached = unique_factor_cache.get(expr);
     match cached {
         Some(cached) => cached,
         None => {
@@ -2880,7 +2873,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 );
             }
             let factors: Box<[Factor]> = factors.into_iter().collect();
-            get_unique_factor_cache().insert(expr.clone(), factors.clone());
+            unique_factor_cache.insert(expr.clone(), factors.clone());
             factors
         }
     }
