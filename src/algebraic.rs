@@ -944,17 +944,16 @@ impl Factor {
                         }
                         quotient = div_exact(&next_quotient, term);
                     }
-                    return true;
+                    true
                 })
         }
-        if div_exact(self, other).is_some_and(|quotient| evaluate_as_numeric(&quotient) != Some(1)) {
-            return true;
+        if let Some(quotient) = div_exact(self, other) {
+            return evaluate_as_numeric(&quotient) != Some(1);
         }
-        if let Some(n) = evaluate_as_numeric(self) {
-            if let Some(m) = modulo_as_numeric(other, n) {
+        if let Some(n) = evaluate_as_numeric(self)
+            && let Some(m) = modulo_as_numeric(other, n) {
                 return m == 0;
             }
-        }
         match *self {
             Factor::BigNumber(_) => match *other {
                 Numeric(_) => return false,
