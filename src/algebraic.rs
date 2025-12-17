@@ -921,18 +921,37 @@ impl Factor {
             terms: &BTreeMap<Factor, NumberLength>,
             other: &Factor,
         ) -> bool {
-            // FIXME: Check whether exponent is large enough
-            terms
-                .keys()
-                .all(|term| term.may_be_proper_divisor_of(other))
+            terms.iter()
+                .all(|(term, exponent)| {
+                    if *exponent == 0 {
+                        return true;
+                    }
+                    if !term.may_be_proper_divisor_of(other) {
+                        return false;
+                    }
+                    if *exponent == 1 {
+                        return true;
+                    }
+                    let mut tested_exponent = 1;
+                    let mut quotient = div_exact(other, term);
+                    while let Some(next_quotient) = quotient {
+                        if !term.may_be_proper_divisor_of(&next_quotient) {
+                            return false;
+                        }
+                        tested_exponent += 1;
+                        if *exponent == tested_exponent {
+                            return true;
+                        }
+                        quotient = div_exact(&next_quotient, term);
+                    }
+                    return true;
+                })
         }
-        if self == other {
-            return false;
+        if div_exact(self, other).is_some_and(|quotient| evaluate_as_numeric(&quotient) != Some(1)) {
+            return true;
         }
         if let Some(n) = evaluate_as_numeric(self) {
-            if let Some(o) = evaluate_as_numeric(other) {
-                return o > n && o.is_multiple_of(n);
-            } else if let Some(m) = modulo_as_numeric(other, n) {
+            if let Some(m) = modulo_as_numeric(other, n) {
                 return m == 0;
             }
         }
@@ -1026,9 +1045,17 @@ impl Factor {
                 ref right,
                 ..
             } = **c
-            && (!self.may_be_proper_divisor_of(left) || !product_may_be_divisor_of(right, left))
         {
-            return false;
+            if !product_may_be_divisor_of(right, left) {
+                return false;
+            }
+            if let Some(right_exponent) = right.get(self) {
+                if !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))]).may_be_proper_divisor_of(left) {
+                    return false;
+                }
+            } else if !self.may_be_proper_divisor_of(left) {
+                return false;
+            }
         }
         let Some(last_digit) = self.last_digit() else {
             return true;
