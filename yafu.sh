@@ -20,7 +20,7 @@ while read -r num; do
       start_time="$(date +%s%N)"
       while read -r factor; do (
         echo "Found factor ${factor} of ${num}"
-        output=$(sem --id 'factordb-curl' --fg -j 1 xargs curl --retry 10 --retry-all-errors --retry-delay 10 -d "number=${num}&factor=${factor}" <<< "https://factordb.com/reportfactor.php")
+        output=$(sem --id 'factordb-curl' --fg -j 1 xargs curl --retry 10 --retry-all-errors --retry-delay 10 --connect-timeout 60 --max-time 60 -d "number=${num}&factor=${factor}" <<< "https://factordb.com/reportfactor.php")
         error=$?
         if ! grep -q "submitted" <<< "$output"; then
           error=1
