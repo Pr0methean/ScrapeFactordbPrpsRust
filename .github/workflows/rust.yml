@@ -69,7 +69,7 @@ jobs:
             /var/cache/apt/archives/*.deb
             /var/lib/dpkg/status
             /usr/bin/sccache
-          key: dpkg-ecm-2025-12-18
+          key: dpkg-ecm-2025-11-17
       - name: Start sccache server
         run: |
           sudo apt-get install sccache
@@ -81,7 +81,7 @@ jobs:
         run: |
           (
           mkfifo composites
-          sudo apt-get install libecm-dev libecm1 gmp-ecm
+          sudo apt-get install libecm-dev gmp-ecm
           ) &
           apt_pid=$!
           # Dump sccache stats before build
