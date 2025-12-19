@@ -956,6 +956,11 @@ impl Factor {
         {
             return m == 0;
         }
+        if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
+            && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
+            && log10_self_lower > log10_other_upper {
+            return false;
+        }
         match *self {
             Factor::BigNumber(_) => match *other {
                 Numeric(_) => return false,
@@ -1701,135 +1706,139 @@ pub(crate) fn find_raw_factors_of_numeric(
 #[inline(always)]
 fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     debug!("estimate_log10_internal: {expr}");
-    if let Numeric(numeric_value) = *expr {
-        return log10_bounds(numeric_value);
+    if let Some(cached_log10_bounds) = get_cached_log10_bounds(expr) {
+        return cached_log10_bounds;
     }
-    let log10_estimate_cache =
-        LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE));
+    let bounds = match *expr {
+        Numeric(n) => log10_bounds(n),
+        Factor::BigNumber(ref expr) => {
+            let len = expr.as_ref().len();
+            ((len - 1) as NumberLength, len as NumberLength)
+        }
+        Complex(ref c) => match **c {
+            Fibonacci(ref x) | Lucas(ref x) => {
+                // Fibonacci or Lucas number
+                let Some(term_number) = evaluate_as_numeric(x) else {
+                    warn!("Could not parse term number of a Lucas number: {}", x);
+                    return (0, NumberLength::MAX);
+                };
+                let est_log = term_number as f64 * 0.20898;
+                (
+                    est_log.floor() as NumberLength,
+                    est_log.ceil() as NumberLength + 1,
+                )
+            }
+            Factorial(ref input) => {
+                // factorial
+                let Some(input) = evaluate_as_numeric(input) else {
+                    warn!("Could not parse input to a factorial: {}", input);
+                    return (0, NumberLength::MAX);
+                };
+                let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
+
+                // LN_10 is already rounded up
+                let log_factorial_lower_bound = ln_factorial.next_down() / LN_10;
+                let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
+
+                (
+                    log_factorial_lower_bound.floor() as NumberLength,
+                    log_factorial_upper_bound.ceil() as NumberLength,
+                )
+            }
+            Primorial(ref input) => {
+                // primorial
+                let Some(input) = evaluate_as_numeric(input) else {
+                    warn!("Could not parse input to a factorial: {}", input);
+                    return (0, NumberLength::MAX);
+                };
+
+                // Lower bound is from
+                // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
+                // "Approximate formulas for some functions of prime numbers".
+                // Illinois Journal of Mathematics 6 (1), p. 70
+                // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
+                // (p. 7 of PDF)
+                let lower_bound = if input >= 563 {
+                    (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil()
+                        as NumberLength
+                } else if input >= 41 {
+                    (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil()
+                        as NumberLength
+                } else {
+                    0
+                };
+                let upper_bound = (1.01624 / LN_10 * input as f64).floor() as NumberLength;
+                (lower_bound, upper_bound)
+            }
+            Power {
+                ref base,
+                ref exponent,
+            } => estimate_log10_power(base, exponent),
+            Divide {
+                ref left,
+                ref right,
+                ..
+            } => {
+                let (num_lower, num_upper) = estimate_log10_internal(left);
+                let (denom_lower, denom_upper) = estimate_log10_of_product(right);
+                let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
+                let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
+                (lower, upper)
+            }
+            Multiply { ref terms, .. } => {
+                // multiplication
+                let (product_lower, product_upper) = estimate_log10_of_product(terms);
+                (product_lower, product_upper)
+            }
+            AddSub {
+                terms: (ref left, ref right),
+                subtract,
+            } => {
+                // addition/subtraction
+                let (left_lower, left_upper) = estimate_log10_internal(left);
+                let (right_lower, right_upper) = estimate_log10_internal(right);
+                let combined_lower = if subtract {
+                    if right_upper >= left_lower - 1 {
+                        0
+                    } else {
+                        left_lower.saturating_sub(1)
+                    }
+                } else {
+                    left_lower.max(right_lower)
+                };
+                let combined_upper = if subtract {
+                    left_upper
+                } else {
+                    left_upper.max(right_upper).saturating_add(1)
+                };
+                (combined_lower, combined_upper)
+            }
+        },
+        ElidedNumber(_) => {
+            // Elided numbers from factordb are always at least 51 digits
+            (50, NumberLength::MAX)
+        }
+        UnknownExpression(_) => (0, NumberLength::MAX),
+    };
+    get_log10_cache().insert(expr.clone(), bounds);
+    bounds
+}
+
+fn get_cached_log10_bounds(expr: &Factor) -> Option<(NumberLength, NumberLength)> {
+    if let Numeric(numeric_value) = *expr {
+        return Some(log10_bounds(numeric_value));
+    }
+    let log10_estimate_cache = get_log10_cache();
     if let Some(Some(numeric_value)) = get_numeric_value_cache().get(expr) {
         // Any old estimate is no longer worth saving
         log10_estimate_cache.remove(expr);
-        return log10_bounds(numeric_value);
+        return Some(log10_bounds(numeric_value));
     }
-    let cached = log10_estimate_cache.get(expr);
-    match cached {
-        Some(cached) => cached,
-        None => {
-            let bounds = match *expr {
-                Numeric(n) => log10_bounds(n),
-                Factor::BigNumber(ref expr) => {
-                    let len = expr.as_ref().len();
-                    ((len - 1) as NumberLength, len as NumberLength)
-                }
-                Complex(ref c) => match **c {
-                    Fibonacci(ref x) | Lucas(ref x) => {
-                        // Fibonacci or Lucas number
-                        let Some(term_number) = evaluate_as_numeric(x) else {
-                            warn!("Could not parse term number of a Lucas number: {}", x);
-                            return (0, NumberLength::MAX);
-                        };
-                        let est_log = term_number as f64 * 0.20898;
-                        (
-                            est_log.floor() as NumberLength,
-                            est_log.ceil() as NumberLength + 1,
-                        )
-                    }
-                    Factorial(ref input) => {
-                        // factorial
-                        let Some(input) = evaluate_as_numeric(input) else {
-                            warn!("Could not parse input to a factorial: {}", input);
-                            return (0, NumberLength::MAX);
-                        };
-                        let (ln_factorial, _) = ((input + 1) as f64).ln_gamma();
+    log10_estimate_cache.get(expr)
+}
 
-                        // LN_10 is already rounded up
-                        let log_factorial_lower_bound = ln_factorial.next_down() / LN_10;
-                        let log_factorial_upper_bound = ln_factorial.next_up() / LN_10.next_down();
-
-                        (
-                            log_factorial_lower_bound.floor() as NumberLength,
-                            log_factorial_upper_bound.ceil() as NumberLength,
-                        )
-                    }
-                    Primorial(ref input) => {
-                        // primorial
-                        let Some(input) = evaluate_as_numeric(input) else {
-                            warn!("Could not parse input to a factorial: {}", input);
-                            return (0, NumberLength::MAX);
-                        };
-
-                        // Lower bound is from
-                        // Rosser, J. Barkley; Schoenfeld, Lowell (1962-03-01).
-                        // "Approximate formulas for some functions of prime numbers".
-                        // Illinois Journal of Mathematics 6 (1), p. 70
-                        // https://projecteuclid.org/journalArticle/Download?urlId=10.1215%2Fijm%2F1255631807
-                        // (p. 7 of PDF)
-                        let lower_bound = if input >= 563 {
-                            (input as f64 * (1.0 / (2.0 * (input as f64).ln())) / LN_10).ceil()
-                                as NumberLength
-                        } else if input >= 41 {
-                            (input as f64 * (1.0 / (input as f64).ln()) / LN_10.next_down()).ceil()
-                                as NumberLength
-                        } else {
-                            0
-                        };
-                        let upper_bound = (1.01624 / LN_10 * input as f64).floor() as NumberLength;
-                        (lower_bound, upper_bound)
-                    }
-                    Power {
-                        ref base,
-                        ref exponent,
-                    } => estimate_log10_power(base, exponent),
-                    Divide {
-                        ref left,
-                        ref right,
-                        ..
-                    } => {
-                        let (num_lower, num_upper) = estimate_log10_internal(left);
-                        let (denom_lower, denom_upper) = estimate_log10_of_product(right);
-                        let lower = num_lower.saturating_sub(denom_upper.saturating_add(1));
-                        let upper = num_upper.saturating_sub(denom_lower.saturating_sub(1));
-                        (lower, upper)
-                    }
-                    Multiply { ref terms, .. } => {
-                        // multiplication
-                        let (product_lower, product_upper) = estimate_log10_of_product(terms);
-                        (product_lower, product_upper)
-                    }
-                    AddSub {
-                        terms: (ref left, ref right),
-                        subtract,
-                    } => {
-                        // addition/subtraction
-                        let (left_lower, left_upper) = estimate_log10_internal(left);
-                        let (right_lower, right_upper) = estimate_log10_internal(right);
-                        let combined_lower = if subtract {
-                            if right_upper >= left_lower - 1 {
-                                0
-                            } else {
-                                left_lower.saturating_sub(1)
-                            }
-                        } else {
-                            left_lower.max(right_lower)
-                        };
-                        let combined_upper = if subtract {
-                            left_upper
-                        } else {
-                            left_upper.max(right_upper).saturating_add(1)
-                        };
-                        (combined_lower, combined_upper)
-                    }
-                },
-                ElidedNumber(_) => {
-                    // Elided numbers from factordb are always at least 51 digits
-                    (50, NumberLength::MAX)
-                }
-                UnknownExpression(_) => (0, NumberLength::MAX),
-            };
-            log10_estimate_cache.insert(expr.clone(), bounds);
-            bounds
-        }
-    }
+fn get_log10_cache() -> &'static SyncFactorCache<(NumberLength, NumberLength)> {
+    LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE))
 }
 
 #[inline]
