@@ -16,7 +16,10 @@ use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
 };
-use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS, ReportFactorResult};
+use crate::{
+    FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, ReportFactorResult,
+    SUBMIT_FACTOR_MAX_ATTEMPTS,
+};
 use async_backtrace::framed;
 use gryf::Graph;
 use gryf::adapt::Subgraph;
@@ -1116,9 +1119,7 @@ pub async fn find_and_submit_factors(
                 put_factor_back_into_queue = true;
                 break 'per_cofactor;
             }
-            match try_report_factor(http, &mut data, factor_vid, cofactor_vid)
-                .await
-            {
+            match try_report_factor(http, &mut data, factor_vid, cofactor_vid).await {
                 AlreadyFullyFactored => {
                     if cofactor_vid == root_vid {
                         warn!("{id}: Already fully factored");
@@ -1610,15 +1611,26 @@ pub fn facts_of_mut<'a>(
         .unwrap()
 }
 
-async fn try_report_factor(http: &impl FactorDbClient, data: &mut FactorData, factor_vid: VertexId, destination_vid: VertexId) -> ReportFactorResult {
-    let [factor, dest] = get_vertices(&data.divisibility_graph, [factor_vid, destination_vid], &mut data.deleted_synonyms);
+async fn try_report_factor(
+    http: &impl FactorDbClient,
+    data: &mut FactorData,
+    factor_vid: VertexId,
+    destination_vid: VertexId,
+) -> ReportFactorResult {
+    let [factor, dest] = get_vertices(
+        &data.divisibility_graph,
+        [factor_vid, destination_vid],
+        &mut data.deleted_synonyms,
+    );
     let dest_specifier = facts_of(
         &data.number_facts_map,
         factor_vid,
         &mut data.deleted_synonyms,
-    ).and_then(|facts| facts.entry_id).or_else(|| dest.known_id())
-        .map(Id)
-        .unwrap_or_else(|| Expression(factor));
+    )
+    .and_then(|facts| facts.entry_id)
+    .or_else(|| dest.known_id())
+    .map(Id)
+    .unwrap_or_else(|| Expression(factor));
     http.try_report_factor(dest_specifier, factor).await
 }
 

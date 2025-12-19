@@ -95,9 +95,13 @@ pub trait FactorDbClient {
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
-    fn cached_factors<'a>(&self, id: &'a NumberSpecifier<'a>) -> Option<ProcessedStatusApiResponse>;
-    async fn try_report_factor<'a>(&self, u_id: NumberSpecifier<'a>, factor: &Factor)
-    -> ReportFactorResult;
+    fn cached_factors<'a>(&self, id: &'a NumberSpecifier<'a>)
+    -> Option<ProcessedStatusApiResponse>;
+    async fn try_report_factor<'a>(
+        &self,
+        u_id: NumberSpecifier<'a>,
+        factor: &Factor,
+    ) -> ReportFactorResult;
     async fn report_numeric_factor(
         &self,
         u_id: EntryId,

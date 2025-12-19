@@ -257,7 +257,7 @@ enum NumberSpecifier<'a> {
     Expression(&'a Factor),
 }
 
-impl <'a> Display for NumberSpecifier<'a> {
+impl<'a> Display for NumberSpecifier<'a> {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
