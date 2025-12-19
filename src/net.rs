@@ -425,7 +425,7 @@ impl FactorDbClient for RealFactorDbClient {
                     self.try_get_and_decode(&url).await.ok_or(None)
                 }
             }
-            Expression(ref expr) => {
+            Expression(expr) => {
                 let url = format!(
                     "https://factordb.com/api?query={}",
                     encode(&expr.to_owned_string())
@@ -576,7 +576,7 @@ impl FactorDbClient for RealFactorDbClient {
         factor: &Factor,
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
-            Expression(ref x) => match *x {
+            Expression(x) => match x {
                 Numeric(_) => return AlreadyFullyFactored,
                 _ => (None, Some(x.to_owned_string())),
             },
