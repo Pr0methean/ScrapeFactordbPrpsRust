@@ -607,8 +607,10 @@ impl FactorDbClient for RealFactorDbClient {
                     Accepted
                 } else if text.contains("fully factored") || text.contains("Number too small") {
                     AlreadyFullyFactored
-                } else {
+                } else if text.contains("Does not divide") {
                     DoesNotDivide
+                } else {
+                    OtherError
                 }
             }
             Err(e) => {
