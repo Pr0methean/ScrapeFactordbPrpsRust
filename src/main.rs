@@ -252,12 +252,12 @@ async fn check_composite(
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
-enum NumberSpecifier {
+enum NumberSpecifier<'a> {
     Id(EntryId),
-    Expression(Factor),
+    Expression(&'a Factor),
 }
 
-impl Display for NumberSpecifier {
+impl <'a> Display for NumberSpecifier<'a> {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {

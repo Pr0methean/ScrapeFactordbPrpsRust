@@ -16,7 +16,7 @@ use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
 };
-use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS, ReportFactorResult};
 use async_backtrace::framed;
 use gryf::Graph;
 use gryf::adapt::Subgraph;
@@ -151,7 +151,7 @@ pub fn propagate_divisibility(
     }
 }
 
-fn as_specifier(factor_vid: VertexId, data: &mut FactorData) -> NumberSpecifier {
+fn as_specifier(factor_vid: VertexId, data: &mut FactorData) -> NumberSpecifier<'_> {
     if let Some(facts) = facts_of(
         &data.number_facts_map,
         factor_vid,
@@ -168,7 +168,7 @@ fn as_specifier(factor_vid: VertexId, data: &mut FactorData) -> NumberSpecifier 
         factor
             .known_id()
             .map(Id)
-            .unwrap_or_else(|| Expression(factor.clone()))
+            .unwrap_or_else(|| Expression(factor))
     }
 }
 
@@ -1116,16 +1116,7 @@ pub async fn find_and_submit_factors(
                 put_factor_back_into_queue = true;
                 break 'per_cofactor;
             }
-            let dest_specifier = as_specifier(cofactor_vid, &mut data);
-            match http
-                .try_report_factor(
-                    dest_specifier,
-                    get_vertex(
-                        &data.divisibility_graph,
-                        factor_vid,
-                        &mut data.deleted_synonyms,
-                    ),
-                )
+            match try_report_factor(http, &mut data, factor_vid, cofactor_vid)
                 .await
             {
                 AlreadyFullyFactored => {
@@ -1617,6 +1608,18 @@ pub fn facts_of_mut<'a>(
     number_facts_map
         .get_mut(&to_real_vertex_id(vertex_id, deleted_synonyms))
         .unwrap()
+}
+
+async fn try_report_factor(http: &impl FactorDbClient, data: &mut FactorData, factor_vid: VertexId, destination_vid: VertexId) -> ReportFactorResult {
+    let [factor, dest] = get_vertices(&data.divisibility_graph, [factor_vid, destination_vid], &mut data.deleted_synonyms);
+    let dest_specifier = facts_of(
+        &data.number_facts_map,
+        factor_vid,
+        &mut data.deleted_synonyms,
+    ).and_then(|facts| facts.entry_id).or_else(|| dest.known_id())
+        .map(Id)
+        .unwrap_or_else(|| Expression(factor));
+    http.try_report_factor(dest_specifier, factor).await
 }
 
 #[cfg(test)]

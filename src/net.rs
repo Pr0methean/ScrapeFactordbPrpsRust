@@ -89,14 +89,14 @@ pub trait FactorDbClient {
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
     async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor>;
-    async fn known_factors_as_digits(
+    async fn known_factors_as_digits<'a>(
         &mut self,
-        id: NumberSpecifier,
+        id: NumberSpecifier<'a>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
-    fn cached_factors(&self, id: &NumberSpecifier) -> Option<ProcessedStatusApiResponse>;
-    async fn try_report_factor(&self, u_id: NumberSpecifier, factor: &Factor)
+    fn cached_factors<'a>(&self, id: &'a NumberSpecifier<'a>) -> Option<ProcessedStatusApiResponse>;
+    async fn try_report_factor<'a>(&self, u_id: NumberSpecifier<'a>, factor: &Factor)
     -> ReportFactorResult;
     async fn report_numeric_factor(
         &self,
@@ -402,9 +402,9 @@ impl FactorDbClient for RealFactorDbClient {
 
     #[inline]
     #[framed]
-    async fn known_factors_as_digits(
+    async fn known_factors_as_digits<'a>(
         &mut self,
-        id: NumberSpecifier,
+        id: NumberSpecifier<'a>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse {
@@ -412,7 +412,6 @@ impl FactorDbClient for RealFactorDbClient {
         if let Some(cached) = self.cached_factors(&id) {
             return cached;
         }
-        let mut expr_key = None;
         let response = match id {
             Id(id) => {
                 let url = format!("https://factordb.com/api?id={id}");
@@ -427,7 +426,6 @@ impl FactorDbClient for RealFactorDbClient {
                 }
             }
             Expression(ref expr) => {
-                expr_key = Some(expr);
                 let url = format!(
                     "https://factordb.com/api?query={}",
                     encode(&expr.to_owned_string())
@@ -516,7 +514,7 @@ impl FactorDbClient for RealFactorDbClient {
             {
                 self.by_id_cache.insert(id, processed.clone());
             }
-            if let Some(expr) = expr_key {
+            if let Expression(expr) = id {
                 self.by_expr_cache.insert(expr.clone(), processed.clone());
             }
         }
@@ -532,7 +530,7 @@ impl FactorDbClient for RealFactorDbClient {
             Id(entry_id) => Some(*entry_id),
             Expression(x) => {
                 if let Numeric(n) = *x {
-                    Some(n)
+                    Some(*n)
                 } else {
                     None
                 }
@@ -563,7 +561,7 @@ impl FactorDbClient for RealFactorDbClient {
                         .and_then(|expr| self.by_expr_cache.get(expr))
                 })
                 .cloned(),
-            Expression(expr) => self.by_expr_cache.get(expr).cloned(),
+            Expression(expr) => self.by_expr_cache.get(*expr).cloned(),
         };
         if cached.is_some() {
             info!("Factor cache hit for {id}");
@@ -574,7 +572,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn try_report_factor(
         &self,
-        u_id: NumberSpecifier,
+        u_id: NumberSpecifier<'_>,
         factor: &Factor,
     ) -> ReportFactorResult {
         let (id, number) = match u_id {
