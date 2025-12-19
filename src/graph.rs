@@ -768,7 +768,11 @@ pub async fn find_and_submit_factors(
                                 root_denominator_terms.clone().unwrap().into_iter(),
                             )
                         });
-                        if divided.may_be_proper_divisor_of(get_vertex(&data.divisibility_graph, root_vid, &mut data.deleted_synonyms)) {
+                        if divided.may_be_proper_divisor_of(get_vertex(
+                            &data.divisibility_graph,
+                            root_vid,
+                            &mut data.deleted_synonyms,
+                        )) {
                             let (divided_vid, added) =
                                 add_factor_node(&mut data, divided, Some(root_vid), None, http);
                             if added {
@@ -780,7 +784,7 @@ pub async fn find_and_submit_factors(
                                     divided_vid,
                                     &mut data.deleted_synonyms,
                                 )
-                                    .checked_with_root_denominator = true;
+                                .checked_with_root_denominator = true;
                             }
                         }
                     }
@@ -1192,7 +1196,11 @@ pub async fn find_and_submit_factors(
                                         root_denominator_terms.clone().unwrap(),
                                     )
                                 });
-                            if divided.may_be_proper_divisor_of(get_vertex(&data.divisibility_graph, root_vid, &mut data.deleted_synonyms)) {
+                            if divided.may_be_proper_divisor_of(get_vertex(
+                                &data.divisibility_graph,
+                                root_vid,
+                                &mut data.deleted_synonyms,
+                            )) {
                                 let (divided_vid, added) =
                                     add_factor_node(&mut data, divided, Some(root_vid), None, http);
                                 if added {
@@ -1203,7 +1211,7 @@ pub async fn find_and_submit_factors(
                                         divided_vid,
                                         &mut data.deleted_synonyms,
                                     )
-                                        .checked_with_root_denominator = true;
+                                    .checked_with_root_denominator = true;
                                     factors_to_submit_in_graph.push_back(divided_vid);
                                 }
                             }
