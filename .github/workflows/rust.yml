@@ -64,6 +64,7 @@ jobs:
         with:
           path: |
             /usr/bin/ecm
+            /usr/lib/x86_64-linux-gnu/libecm.so.1
             /usr/lib/x86_64-linux-gnu/libecm.a
             /var/cache/apt/archives/*.deb
             /var/lib/dpkg/status
