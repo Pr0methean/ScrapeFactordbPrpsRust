@@ -1233,8 +1233,8 @@ pub async fn find_and_submit_factors(
             dnd_since_last_accepted += 1;
             if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
                 error!(
-                                "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
-                            );
+                    "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
+                );
                 return accepted_factors > 0;
             }
         }

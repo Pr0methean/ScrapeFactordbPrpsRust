@@ -958,7 +958,8 @@ impl Factor {
         }
         if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
             && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
-            && log10_self_lower > log10_other_upper {
+            && log10_self_lower > log10_other_upper
+        {
             return false;
         }
         match *self {
