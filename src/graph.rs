@@ -767,7 +767,7 @@ pub async fn find_and_submit_factors(
                     if root_denominator.may_be_proper_divisor_of(factor) {
                         let divided = div_exact(factor, root_denominator).unwrap_or_else(|| {
                             simplify_divide(
-                                &factor,
+                                factor,
                                 root_denominator_terms.as_ref().unwrap(),
                             )
                         });
@@ -1183,7 +1183,7 @@ pub async fn find_and_submit_factors(
                                 let divided =
                                     div_exact(factor, root_denominator).unwrap_or_else(|| {
                                         simplify_divide(
-                                            &factor,
+                                            factor,
                                             root_denominator_terms.as_ref().unwrap(),
                                         )
                                     });
