@@ -1114,7 +1114,7 @@ pub async fn find_and_submit_factors(
                 if !new_factors_of_cofactor.is_empty() {
                     factors_to_submit_in_graph
                         .extend(new_factors_of_cofactor);
-                    factors_to_submit_in_graph.make_contiguous().shuffle(&mut rng());
+                    dedup_and_shuffle(&mut factors_to_submit_in_graph);
                 }
                 put_factor_back_into_queue = true;
                 break 'per_cofactor;
@@ -1166,9 +1166,7 @@ pub async fn find_and_submit_factors(
                         add_factors_to_graph(http, &mut data, root_vid, factor_vid).await;
                     if !subfactors.is_empty() {
                         factors_to_submit_in_graph.extend(subfactors);
-                        factors_to_submit_in_graph
-                            .make_contiguous()
-                            .shuffle(&mut rng());
+                        dedup_and_shuffle(&mut factors_to_submit_in_graph);
                     } else if let Some(ref root_denominator) = root_denominator {
                         let facts = facts_of_mut(
                             &mut data.number_facts_map,
@@ -1181,30 +1179,32 @@ pub async fn find_and_submit_factors(
                                 factor_vid,
                                 &mut data.deleted_synonyms,
                             );
-                            let divided =
-                                div_exact(factor, root_denominator).unwrap_or_else(|| {
-                                    Factor::divide(
-                                        factor.clone(),
-                                        root_denominator_terms.clone().unwrap(),
-                                    )
-                                });
-                            if divided.may_be_proper_divisor_of(get_vertex(
-                                &data.divisibility_graph,
-                                root_vid,
-                                &mut data.deleted_synonyms,
-                            )) {
-                                let (divided_vid, added) =
-                                    add_factor_node(&mut data, divided, Some(root_vid), None, http);
-                                if added {
-                                    // Don't apply this recursively, except when divided was already in
-                                    // the graph for another reason
-                                    facts_of_mut(
-                                        &mut data.number_facts_map,
-                                        divided_vid,
-                                        &mut data.deleted_synonyms,
-                                    )
-                                    .checked_with_root_denominator = true;
-                                    factors_to_submit_in_graph.push_back(divided_vid);
+                            if factor.may_be_proper_divisor_of(root_denominator) {
+                                let divided =
+                                    div_exact(factor, root_denominator).unwrap_or_else(|| {
+                                        Factor::divide(
+                                            factor.clone(),
+                                            root_denominator_terms.clone().unwrap(),
+                                        )
+                                    });
+                                if divided.may_be_proper_divisor_of(get_vertex(
+                                    &data.divisibility_graph,
+                                    root_vid,
+                                    &mut data.deleted_synonyms,
+                                )) {
+                                    let (divided_vid, added) =
+                                        add_factor_node(&mut data, divided, Some(root_vid), None, http);
+                                    if added {
+                                        // Don't apply this recursively, except when divided was already in
+                                        // the graph for another reason
+                                        facts_of_mut(
+                                            &mut data.number_facts_map,
+                                            divided_vid,
+                                            &mut data.deleted_synonyms,
+                                        )
+                                            .checked_with_root_denominator = true;
+                                        factors_to_submit_in_graph.push_back(divided_vid);
+                                    }
                                 }
                             }
                         }
