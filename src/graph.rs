@@ -1,7 +1,7 @@
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
-use crate::algebraic::ComplexFactor;
+use crate::algebraic::{simplify_divide, ComplexFactor};
 use crate::algebraic::ComplexFactor::Multiply;
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::div_exact;
@@ -766,9 +766,9 @@ pub async fn find_and_submit_factors(
                     );
                     if root_denominator.may_be_proper_divisor_of(factor) {
                         let divided = div_exact(factor, root_denominator).unwrap_or_else(|| {
-                            Factor::divide(
-                                factor.clone(),
-                                root_denominator_terms.clone().unwrap().into_iter(),
+                            simplify_divide(
+                                &factor,
+                                root_denominator_terms.as_ref().unwrap(),
                             )
                         });
                         if divided.may_be_proper_divisor_of(get_vertex(
@@ -1182,9 +1182,9 @@ pub async fn find_and_submit_factors(
                             if factor.may_be_proper_divisor_of(root_denominator) {
                                 let divided =
                                     div_exact(factor, root_denominator).unwrap_or_else(|| {
-                                        Factor::divide(
-                                            factor.clone(),
-                                            root_denominator_terms.clone().unwrap(),
+                                        simplify_divide(
+                                            &factor,
+                                            root_denominator_terms.as_ref().unwrap(),
                                         )
                                     });
                                 if divided.may_be_proper_divisor_of(get_vertex(

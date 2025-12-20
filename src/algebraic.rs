@@ -2196,7 +2196,7 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
     }
 }
 
-fn simplify_divide(left: &Factor, right: &BTreeMap<Factor, NumberLength>) -> Factor {
+pub fn simplify_divide(left: &Factor, right: &BTreeMap<Factor, NumberLength>) -> Factor {
     simplify_divide_internal(left, right)
         .unwrap_or_else(|| Factor::divide(left.clone(), right.clone()))
 }
