@@ -1,10 +1,10 @@
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
-use crate::algebraic::{simplify_divide, ComplexFactor};
 use crate::algebraic::ComplexFactor::Multiply;
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::div_exact;
+use crate::algebraic::{ComplexFactor, simplify_divide};
 use crate::algebraic::{
     Factor, NumericFactor, estimate_log10, evaluate_as_numeric, find_factors_of_numeric,
     find_unique_factors,
@@ -766,10 +766,7 @@ pub async fn find_and_submit_factors(
                     );
                     if root_denominator.may_be_proper_divisor_of(factor) {
                         let divided = div_exact(factor, root_denominator).unwrap_or_else(|| {
-                            simplify_divide(
-                                factor,
-                                root_denominator_terms.as_ref().unwrap(),
-                            )
+                            simplify_divide(factor, root_denominator_terms.as_ref().unwrap())
                         });
                         if divided.may_be_proper_divisor_of(get_vertex(
                             &data.divisibility_graph,
@@ -1192,8 +1189,13 @@ pub async fn find_and_submit_factors(
                                     root_vid,
                                     &mut data.deleted_synonyms,
                                 )) {
-                                    let (divided_vid, added) =
-                                        add_factor_node(&mut data, divided, Some(root_vid), None, http);
+                                    let (divided_vid, added) = add_factor_node(
+                                        &mut data,
+                                        divided,
+                                        Some(root_vid),
+                                        None,
+                                        http,
+                                    );
                                     if added {
                                         // Don't apply this recursively, except when divided was already in
                                         // the graph for another reason
@@ -1202,7 +1204,7 @@ pub async fn find_and_submit_factors(
                                             divided_vid,
                                             &mut data.deleted_synonyms,
                                         )
-                                            .checked_with_root_denominator = true;
+                                        .checked_with_root_denominator = true;
                                         factors_to_submit_in_graph.push_back(divided_vid);
                                     }
                                 }
