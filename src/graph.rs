@@ -236,7 +236,7 @@ pub fn add_factor_node(
                         id: Numeric(eval).known_id(),
                     }
                 }));
-            entry_id = entry_id.or(cached.and_then(|cached| cached.id));
+            entry_id = entry_id.or(cached.as_ref().and_then(|cached| cached.id));
             if let Some(entry_id) = entry_id {
                 data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
             }
