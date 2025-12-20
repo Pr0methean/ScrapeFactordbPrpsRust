@@ -1381,7 +1381,13 @@ async fn add_factors_to_graph(
             );
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != *factor {
-                merge_equivalent_expressions(data, Some(parent_vid), factor_vid, known_factor, http);
+                merge_equivalent_expressions(
+                    data,
+                    Some(parent_vid),
+                    factor_vid,
+                    known_factor,
+                    http,
+                );
             }
         } else {
             let new_known_factors: Vec<_> = known_factors
@@ -1473,9 +1479,7 @@ async fn add_factors_to_graph(
     );
     if !replace(&mut facts.checked_in_factor_finder, true) {
         added.extend(add_factor_finder_factor_vertices_to_graph(
-            data,
-            factor_vid,
-            http,
+            data, factor_vid, http,
         ));
     }
     let facts = facts_of_mut(
