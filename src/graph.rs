@@ -219,6 +219,9 @@ pub fn add_factor_node(
         .unwrap_or_else(|| {
             let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
             data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
+            if let Some(root_vid) = root_vid {
+                propagate_divisibility(data, factor_vid, root_vid, false);
+            }
             let factor_numeric = evaluate_as_numeric(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
             let specifier = as_specifier(factor_vid, data);
