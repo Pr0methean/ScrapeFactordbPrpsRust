@@ -738,7 +738,7 @@ const LOG10_ESTIMATE_CACHE_SIZE: usize = 1 << 20;
 const FACTOR_CACHE_SIZE: usize = 1 << 12;
 const UNIQUE_FACTOR_CACHE_SIZE: usize = 1 << 16;
 
-fn get_numeric_value_cache() -> &'static SyncFactorCache<Option<NumericFactor>> {
+pub fn get_numeric_value_cache() -> &'static SyncFactorCache<Option<NumericFactor>> {
     NUMERIC_VALUE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(NUMERIC_VALUE_CACHE_SIZE))
 }
 

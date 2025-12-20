@@ -2,7 +2,7 @@ use crate::BasicCache;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
-use crate::algebraic::{NumericFactor, find_factors_of_numeric};
+use crate::algebraic::{NumericFactor, find_factors_of_numeric, get_numeric_value_cache};
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::NumberStatus::{
@@ -535,6 +535,8 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(x) => {
                 if let Numeric(n) = *x {
                     Some(*n)
+                } else if let Some(Some(n)) = get_numeric_value_cache().get(*x) {
+                    Some(n)
                 } else {
                     None
                 }

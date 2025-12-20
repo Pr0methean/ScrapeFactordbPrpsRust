@@ -236,29 +236,26 @@ pub fn add_factor_node(
                         id: Numeric(eval).known_id(),
                     }
                 }));
-            // Only full factorizations are cached or obtained via evaluate_as_numeric.
+            entry_id = entry_id.or(cached.and_then(|cached| cached.id));
+            if let Some(entry_id) = entry_id {
+                data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
+            }
+            // Only full factorizations are stored in the cache or obtained via evaluate_as_numeric.
             let mut has_cached = false;
             let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
-                entry_id = entry_id.or(cached.id);
-                if let Some(entry_id) = entry_id {
-                    data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
-                }
                 has_cached = true;
                 let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
                 for subfactor in cached.factors {
                     let (subfactor_vid, _) = if subfactor == factor {
                         (factor_vid, false)
                     } else {
-                        let entry_id = subfactor.known_id();
-                        add_factor_node(data, subfactor, root_vid, entry_id, http)
+                        let subfactor_entry_id = subfactor.known_id();
+                        add_factor_node(data, subfactor, root_vid, subfactor_entry_id, http)
                     };
                     cached_subfactors.push(subfactor_vid);
                 }
                 (cached.status, UpToDate(cached_subfactors))
             } else {
-                if let Some(entry_id) = entry_id {
-                    data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
-                }
                 (None, NotQueried)
             };
             data.number_facts_map.insert(
