@@ -902,6 +902,10 @@ pub async fn find_and_submit_factors(
         };
         let mut put_factor_back_into_queue = false;
         'per_cofactor: for cofactor_vid in dest_factors.into_iter() {
+            if factor_vid == cofactor_vid {
+                error!("dest_factors included factor_vid");
+                continue;
+            }
             if is_known_factor(&mut data, factor_vid, cofactor_vid) {
                 let [factor, cofactor] = get_vertices(
                     &data.divisibility_graph,
