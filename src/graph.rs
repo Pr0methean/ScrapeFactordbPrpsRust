@@ -202,7 +202,7 @@ pub fn get_edge_mut(
 pub fn add_factor_node(
     data: &mut FactorData,
     factor: Factor,
-    root_vid: Option<VertexId>,
+    parent_vid: Option<VertexId>,
     mut entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
@@ -219,7 +219,7 @@ pub fn add_factor_node(
         .unwrap_or_else(|| {
             let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
             data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
-            if let Some(root_vid) = root_vid {
+            if let Some(root_vid) = parent_vid {
                 propagate_divisibility(data, factor_vid, root_vid, false);
             }
             let factor_numeric = evaluate_as_numeric(&factor);
@@ -253,7 +253,7 @@ pub fn add_factor_node(
                         (factor_vid, false)
                     } else {
                         let subfactor_entry_id = subfactor.known_id();
-                        add_factor_node(data, subfactor, root_vid, subfactor_entry_id, http)
+                        add_factor_node(data, subfactor, Some(factor_vid), subfactor_entry_id, http)
                     };
                     cached_subfactors.push(subfactor_vid);
                 }
@@ -284,7 +284,7 @@ pub fn add_factor_node(
         &mut data.deleted_synonyms,
     ) != factor
     {
-        merge_equivalent_expressions(data, root_vid, merge_dest, factor, http);
+        merge_equivalent_expressions(data, parent_vid, merge_dest, factor, http);
     }
     if let Some(matching_vid) = matching_vid
         && merge_dest != matching_vid
@@ -302,7 +302,7 @@ pub fn add_factor_node(
         data.deleted_synonyms.insert(matching_vid, merge_dest);
         let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
         let old_facts = data.number_facts_map.remove(&matching_vid).unwrap();
-        merge_equivalent_expressions(data, root_vid, merge_dest, old_factor, http);
+        merge_equivalent_expressions(data, parent_vid, merge_dest, old_factor, http);
         replace_with_or_abort(
             facts_of_mut(
                 &mut data.number_facts_map,
@@ -1192,7 +1192,7 @@ pub async fn find_and_submit_factors(
                                     let (divided_vid, added) = add_factor_node(
                                         &mut data,
                                         divided,
-                                        Some(root_vid),
+                                        Some(cofactor_vid),
                                         None,
                                         http,
                                     );
@@ -1344,7 +1344,7 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
 async fn add_factors_to_graph(
     http: &mut impl FactorDbClientReadIdsAndExprs,
     data: &mut FactorData,
-    root_vid: VertexId,
+    parent_vid: VertexId,
     factor_vid: VertexId,
 ) -> Box<[VertexId]> {
     let facts = facts_of(
@@ -1381,7 +1381,7 @@ async fn add_factors_to_graph(
             );
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != *factor {
-                merge_equivalent_expressions(data, Some(root_vid), factor_vid, known_factor, http);
+                merge_equivalent_expressions(data, Some(parent_vid), factor_vid, known_factor, http);
             }
         } else {
             let new_known_factors: Vec<_> = known_factors
@@ -1389,7 +1389,7 @@ async fn add_factors_to_graph(
                 .map(|known_factor| {
                     let entry_id = known_factor.known_id();
                     let (known_factor_vid, is_new) =
-                        add_factor_node(data, known_factor, Some(root_vid), entry_id, http);
+                        add_factor_node(data, known_factor, Some(parent_vid), entry_id, http);
                     propagate_divisibility(data, known_factor_vid, factor_vid, false);
                     if is_new {
                         added.insert(known_factor_vid);
@@ -1474,7 +1474,6 @@ async fn add_factors_to_graph(
     if !replace(&mut facts.checked_in_factor_finder, true) {
         added.extend(add_factor_finder_factor_vertices_to_graph(
             data,
-            Some(root_vid),
             factor_vid,
             http,
         ));
@@ -1497,7 +1496,7 @@ async fn add_factors_to_graph(
         if expression_form != *factor {
             let added_via_equiv = merge_equivalent_expressions(
                 data,
-                Some(root_vid),
+                Some(parent_vid),
                 factor_vid,
                 expression_form.clone(),
                 http,
@@ -1511,7 +1510,7 @@ async fn add_factors_to_graph(
 
 fn merge_equivalent_expressions(
     data: &mut FactorData,
-    root_vid: Option<VertexId>,
+    parent_vid: Option<VertexId>,
     factor_vid: VertexId,
     equivalent: Factor,
     http: &impl FactorDbClient,
@@ -1543,14 +1542,14 @@ fn merge_equivalent_expressions(
             &mut data.deleted_synonyms,
         );
         let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
-            add_factor_finder_factor_vertices_to_graph(data, root_vid, factor_vid, http)
+            add_factor_finder_factor_vertices_to_graph(data, factor_vid, http)
         } else {
             Vec::new()
         };
         new_factor_vids.extend(find_unique_factors(&equivalent).into_iter().filter_map(
             |new_factor| {
                 let entry_id = new_factor.known_id();
-                let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
+                let (vid, added) = add_factor_node(data, new_factor, parent_vid, entry_id, http);
                 if added { Some(vid) } else { None }
             },
         ));
@@ -1574,7 +1573,6 @@ fn merge_equivalent_expressions(
 
 fn add_factor_finder_factor_vertices_to_graph(
     data: &mut FactorData,
-    root_vid: Option<VertexId>,
     factor_vid: VertexId,
     http: &impl FactorDbClient,
 ) -> Vec<VertexId> {
@@ -1587,7 +1585,7 @@ fn add_factor_finder_factor_vertices_to_graph(
         .into_iter()
         .filter_map(|new_factor| {
             let entry_id = new_factor.known_id();
-            let (vid, added) = add_factor_node(data, new_factor, root_vid, entry_id, http);
+            let (vid, added) = add_factor_node(data, new_factor, Some(factor_vid), entry_id, http);
             if added { Some(vid) } else { None }
         })
         .collect()
