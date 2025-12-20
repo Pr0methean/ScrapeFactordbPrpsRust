@@ -1173,7 +1173,7 @@ pub async fn find_and_submit_factors(
                                 factor_vid,
                                 &mut data.deleted_synonyms,
                             );
-                            if factor.may_be_proper_divisor_of(root_denominator) {
+                            if root_denominator.may_be_proper_divisor_of(factor) {
                                 let divided =
                                     div_exact(factor, root_denominator).unwrap_or_else(|| {
                                         simplify_divide(
