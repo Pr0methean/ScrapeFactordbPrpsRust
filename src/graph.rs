@@ -587,10 +587,16 @@ pub async fn find_and_submit_factors(
             return true;
         }
         match known_factors.len() {
-            0 => {},
+            0 => {}
             1 => {
-                merge_equivalent_expressions(&mut data, Some(root_vid), root_vid, known_factors.into_iter().next().unwrap(), http);
-            },
+                merge_equivalent_expressions(
+                    &mut data,
+                    Some(root_vid),
+                    root_vid,
+                    known_factors.into_iter().next().unwrap(),
+                    http,
+                );
+            }
             _ => {
                 let root_factors = known_factors
                     .into_iter()
