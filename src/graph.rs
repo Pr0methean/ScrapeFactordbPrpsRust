@@ -286,30 +286,34 @@ pub fn add_factor_node(
     if let Some(matching_vid) = matching_vid
         && merge_dest != matching_vid
     {
-        neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
-            .into_iter()
-            .for_each(|(neighbor_vid, divisibility)| {
-                propagate_transitive_divisibility(data, neighbor_vid, merge_dest, divisibility)
-            });
-        neighbor_vids(&data.divisibility_graph, matching_vid, Outgoing)
-            .into_iter()
-            .for_each(|(neighbor_vid, divisibility)| {
-                propagate_transitive_divisibility(data, merge_dest, neighbor_vid, divisibility)
-            });
-        data.deleted_synonyms.insert(matching_vid, merge_dest);
-        let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
-        let old_facts = data.number_facts_map.remove(&matching_vid).unwrap();
-        merge_equivalent_expressions(data, merge_dest, old_factor, http);
-        replace_with_or_abort(
-            facts_of_mut(
-                &mut data.number_facts_map,
-                merge_dest,
-                &mut data.deleted_synonyms,
-            ),
-            |facts| facts.merged_with(old_facts),
-        );
+        merge_vertices(data, http, merge_dest, matching_vid);
     }
     (merge_dest, added)
+}
+
+fn merge_vertices(data: &mut FactorData, http: &impl FactorDbClient, merge_dest: VertexId, matching_vid: VertexId) {
+    neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
+        .into_iter()
+        .for_each(|(neighbor_vid, divisibility)| {
+            propagate_transitive_divisibility(data, neighbor_vid, merge_dest, divisibility)
+        });
+    neighbor_vids(&data.divisibility_graph, matching_vid, Outgoing)
+        .into_iter()
+        .for_each(|(neighbor_vid, divisibility)| {
+            propagate_transitive_divisibility(data, merge_dest, neighbor_vid, divisibility)
+        });
+    data.deleted_synonyms.insert(matching_vid, merge_dest);
+    let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
+    let old_facts = data.number_facts_map.remove(&matching_vid).unwrap();
+    merge_equivalent_expressions(data, merge_dest, old_factor, http);
+    replace_with_or_abort(
+        facts_of_mut(
+            &mut data.number_facts_map,
+            merge_dest,
+            &mut data.deleted_synonyms,
+        ),
+        |facts| facts.merged_with(old_facts),
+    );
 }
 
 fn propagate_transitive_divisibility(
@@ -962,6 +966,11 @@ pub async fn find_and_submit_factors(
                 cofactor_vid,
                 &mut data.deleted_synonyms,
             );
+            if factor == cofactor {
+                error!("Duplicate nodes detected: {factor_vid:?} and {cofactor_vid:?} are both {factor}");
+                merge_vertices(&mut data, http, factor_vid, cofactor_vid);
+                continue;
+            }
             if !factor.may_be_proper_divisor_of(cofactor) {
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 if cofactor_vid == root_vid {

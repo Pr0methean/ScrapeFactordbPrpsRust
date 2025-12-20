@@ -18,7 +18,6 @@ use async_backtrace::{framed, location};
 use atomic_time::AtomicInstant;
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
-use std::backtrace::Backtrace;
 use curl::easy::{Easy2, Handler, WriteError};
 use futures_util::TryFutureExt;
 use governor::middleware::StateInformationMiddleware;
@@ -583,7 +582,7 @@ impl FactorDbClient for RealFactorDbClient {
         factor: &Factor,
     ) -> ReportFactorResult {
         if u_id == Expression(factor) {
-            error!("Attempted to submit factor {factor} to itself\n{}", Backtrace::capture());
+            error!("Attempted to submit factor {factor} to itself");
             return DoesNotDivide;
         }
         let (id, number) = match u_id {
@@ -739,7 +738,7 @@ impl NumberStatusExt for Option<NumberStatus> {
     fn is_known_fully_factored(&self) -> bool {
         matches!(
             self,
-            Some(NumberStatus::FullyFactored) | Some(NumberStatus::Prime)
+            Some(FullyFactored) | Some(Prime)
         )
     }
 }
