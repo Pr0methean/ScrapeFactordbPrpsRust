@@ -187,9 +187,9 @@ impl RealFactorDbClient {
             id_and_expr_regex: id_and_expr_regex.into(),
             digits_fallback_regex: digits_fallback_regex.into(),
             expression_form_regex: expression_form_regex.into(),
-            by_id_cache: create_cache(256),
-            by_expr_cache: create_cache(128),
-            expression_form_cache: create_cache(128),
+            by_id_cache: create_cache(1 << 16),
+            by_expr_cache: create_cache(1 << 12),
+            expression_form_cache: create_cache(1 << 16),
         }
     }
 
