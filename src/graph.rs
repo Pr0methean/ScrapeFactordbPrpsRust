@@ -1518,11 +1518,11 @@ fn merge_equivalent_expressions(
         factor_vid,
         &mut data.deleted_synonyms,
     );
+    let factor_vid = to_real_vertex_id(factor_vid, &mut data.deleted_synonyms);
     if equivalent == *current {
         vec![]
     } else if let Some(existing_vid) = data.vertex_id_by_expr.get(&equivalent).copied()
-        && to_real_vertex_id(existing_vid, &mut data.deleted_synonyms)
-            == to_real_vertex_id(factor_vid, &mut data.deleted_synonyms)
+        && to_real_vertex_id(existing_vid, &mut data.deleted_synonyms) == factor_vid
     {
         vec![]
     } else {
