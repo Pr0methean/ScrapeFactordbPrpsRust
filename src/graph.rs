@@ -353,7 +353,7 @@ pub fn to_real_vertex_id(
     }
     synonyms_to_forward.pop(); // last one found points to the real vertex ID
     for synonym in synonyms_to_forward {
-        deleted_synonyms.insert(vertex_id, synonym);
+        deleted_synonyms.insert(synonym, vertex_id);
     }
     vertex_id
 }
