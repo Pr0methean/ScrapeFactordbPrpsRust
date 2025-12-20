@@ -581,6 +581,10 @@ impl FactorDbClient for RealFactorDbClient {
         u_id: NumberSpecifier<'_>,
         factor: &Factor,
     ) -> ReportFactorResult {
+        if u_id == Expression(factor) {
+            error!("Attempted to submit factor {} to itself\n{}", Backtrace::capture());
+            return DoesNotDivide;
+        }
         let (id, number) = match u_id {
             Expression(x) => match x {
                 Numeric(_) => return AlreadyFullyFactored,

@@ -1,3 +1,4 @@
+use std::backtrace::Backtrace;
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -1621,6 +1622,10 @@ async fn try_report_factor(
     factor_vid: VertexId,
     destination_vid: VertexId,
 ) -> ReportFactorResult {
+    if factor_vid == destination_vid {
+        error!("Attempted to submit a factor to itself\n{}", Backtrace::capture());
+        return DoesNotDivide;
+    }
     let [factor, dest] = get_vertices(
         &data.divisibility_graph,
         [factor_vid, destination_vid],
