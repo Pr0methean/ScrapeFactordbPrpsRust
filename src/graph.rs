@@ -349,7 +349,7 @@ pub fn to_real_vertex_id(
     let mut synonyms_to_forward = Vec::new();
     while let Some(synonym) = deleted_synonyms.get(&vertex_id) {
         synonyms_to_forward.push(*synonym);
-        vertex_id = to_real_vertex_id(*synonym, deleted_synonyms);
+        vertex_id = *synonym;
     }
     synonyms_to_forward.pop(); // last one found points to the real vertex ID
     for synonym in synonyms_to_forward {
