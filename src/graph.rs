@@ -305,7 +305,6 @@ fn merge_vertices(data: &mut FactorData, http: &impl FactorDbClient, merge_dest:
     data.deleted_synonyms.insert(matching_vid, merge_dest);
     let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
     let old_facts = data.number_facts_map.remove(&matching_vid).unwrap();
-    merge_equivalent_expressions(data, merge_dest, old_factor, http);
     replace_with_or_abort(
         facts_of_mut(
             &mut data.number_facts_map,
@@ -314,6 +313,7 @@ fn merge_vertices(data: &mut FactorData, http: &impl FactorDbClient, merge_dest:
         ),
         |facts| facts.merged_with(old_facts),
     );
+    merge_equivalent_expressions(data, merge_dest, old_factor, http);
 }
 
 fn propagate_transitive_divisibility(
