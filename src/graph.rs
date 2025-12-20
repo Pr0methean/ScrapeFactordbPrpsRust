@@ -574,9 +574,9 @@ pub async fn find_and_submit_factors(
     let mut digits_or_expr_full = Vec::new();
     let mut data = FactorData::default();
     let root_factor = Factor::from(digits_or_expr.as_str());
-    let (root_vid, _) = if !skip_looking_up_known && !digits_or_expr.contains("...") {
-        add_factor_node(&mut data, root_factor, None, Some(id), http)
-    } else {
+    let elided = root_factor.is_elided();
+    let (root_vid, _) = add_factor_node(&mut data, root_factor, None, Some(id), http);
+    if (!skip_looking_up_known) || elided {
         let ProcessedStatusApiResponse {
             factors: known_factors,
             status,
@@ -587,41 +587,43 @@ pub async fn find_and_submit_factors(
             return true;
         }
         match known_factors.len() {
-            0 => add_factor_node(&mut data, root_factor, None, Some(id), http),
+            0 => {},
+            1 => {
+                merge_equivalent_expressions(&mut data, Some(root_vid), root_vid, known_factors.into_iter().next().unwrap(), http);
+            },
             _ => {
-                let (root_node, _) = add_factor_node(&mut data, root_factor, None, Some(id), http);
-                let root_factors = UpToDate(if known_factors.len() > 1 {
-                    known_factors
-                        .into_iter()
-                        .map(|known_factor| {
-                            let entry_id = known_factor.known_id();
-                            let (factor_vid, added) = add_factor_node(
-                                &mut data,
-                                known_factor,
-                                Some(root_node),
-                                entry_id,
-                                http,
-                            );
-                            if added {
-                                propagate_divisibility(&mut data, factor_vid, root_node, false);
-                                digits_or_expr_full.push(factor_vid);
-                            }
-                            factor_vid
-                        })
-                        .collect()
-                } else {
-                    vec![root_node]
-                });
+                let root_factors = known_factors
+                    .into_iter()
+                    .map(|known_factor| {
+                        let entry_id = known_factor.known_id();
+                        let (factor_vid, added) = add_factor_node(
+                            &mut data,
+                            known_factor,
+                            Some(root_vid),
+                            entry_id,
+                            http,
+                        );
+                        if added {
+                            propagate_divisibility(&mut data, factor_vid, root_vid, false);
+                            digits_or_expr_full.push(factor_vid);
+                        }
+                        factor_vid
+                    })
+                    .collect();
                 let root_facts = facts_of_mut(
                     &mut data.number_facts_map,
-                    root_node,
+                    root_vid,
                     &mut data.deleted_synonyms,
                 );
-                root_facts.factors_known_to_factordb = root_factors;
-                root_facts.last_known_status = status;
-                (root_node, true)
+                root_facts.factors_known_to_factordb = UpToDate(root_factors);
             }
         }
+        let root_facts = facts_of_mut(
+            &mut data.number_facts_map,
+            root_vid,
+            &mut data.deleted_synonyms,
+        );
+        root_facts.last_known_status = status;
     };
     debug!(
         "{id}: Root node for {digits_or_expr} is {} with vertex ID {root_vid:?}",
@@ -631,14 +633,6 @@ pub async fn find_and_submit_factors(
             &mut data.deleted_synonyms
         )
     );
-    if skip_looking_up_known {
-        let root_facts = facts_of_mut(
-            &mut data.number_facts_map,
-            root_vid,
-            &mut data.deleted_synonyms,
-        );
-        root_facts.factors_known_to_factordb = UpToDate(vec![root_vid]);
-    }
     digits_or_expr_full.push(root_vid);
     let mut factor_found = false;
     let mut accepted_factors = 0;
