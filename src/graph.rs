@@ -262,7 +262,7 @@ impl FactorData {
         factor: &Factor,
         http: &impl FactorDbClient,
     ) -> Vec<VertexId> {
-        find_unique_factors(&factor)
+        find_unique_factors(factor)
             .into_iter()
             .filter_map(|new_factor| {
                 let entry_id = new_factor.known_id();
@@ -1060,8 +1060,8 @@ pub async fn find_and_submit_factors(
                         dedup_and_shuffle(&mut factors_to_submit_in_graph);
                     } else if let Some(ref root_denominator) = root_denominator {
                         let facts = data.facts_mut(factor_vid);
-                        if !replace(&mut facts.checked_with_root_denominator, true) {
-                            if root_denominator.may_be_proper_divisor_of(&factor) {
+                        if !replace(&mut facts.checked_with_root_denominator, true)
+                            && root_denominator.may_be_proper_divisor_of(&factor) {
                                 let divided =
                                     div_exact(&factor, root_denominator).unwrap_or_else(|| {
                                         simplify_divide(
@@ -1081,7 +1081,6 @@ pub async fn find_and_submit_factors(
                                     }
                                 }
                             }
-                        }
                     }
                     if cofactor_vid == root_vid {
                         continue 'graph_iter; // Skip put_factor_back_into_queue check for factors that don't divide the root
