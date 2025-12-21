@@ -1213,7 +1213,7 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
             facts.last_known_status = Some(Prime);
         } else {
             facts.last_known_status = Some(FullyFactored);
-            for neighbor in factors.to_vec() {
+            for neighbor in factors.clone() {
                 let neighbor_facts = data.facts_mut(neighbor);
                 neighbor_facts.factors_known_to_factordb = UpToDate(vec![neighbor]);
                 neighbor_facts.last_known_status = Some(Prime);
