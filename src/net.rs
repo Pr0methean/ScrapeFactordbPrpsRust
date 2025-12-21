@@ -587,10 +587,19 @@ impl FactorDbClient for RealFactorDbClient {
         }
         let (id, number) = match u_id {
             Expression(x) => match x {
-                Numeric(_) => return AlreadyFullyFactored,
+                Numeric(n) => {
+                    error!("Attempted to submit factor {factor} of too-small number {n}");
+                    return AlreadyFullyFactored
+                },
                 _ => (None, Some(x.to_owned_string())),
             },
-            Id(id) => (Some(id), None),
+            Id(id) => {
+                if id <= MAX_ID_EQUAL_TO_VALUE {
+                    error!("Attempted to submit factor {factor} of too-small number {id}");
+                    return AlreadyFullyFactored;
+                }
+                (Some(id), None)
+            },
         };
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
