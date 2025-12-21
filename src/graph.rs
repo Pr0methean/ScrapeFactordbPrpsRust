@@ -631,9 +631,9 @@ pub async fn find_and_submit_factors(
         let root_facts = data.facts_mut(root_vid);
         root_facts.last_known_status = status;
     };
+    let root_factor = data.get_factor(root_vid);
     debug!(
-        "{id}: Root node for {digits_or_expr} is {} with vertex ID {root_vid:?}",
-        data.get_factor(root_vid)
+        "{id}: Root node for {digits_or_expr} is {root_factor} with vertex ID {root_vid:?}",
     );
     digits_or_expr_full.push(root_vid);
     let mut factor_found = false;
@@ -654,10 +654,10 @@ pub async fn find_and_submit_factors(
         return false;
     }
     // Simplest case: try submitting all factors as factors of the root
-    let (root_denominator_terms, root_denominator) = if let Complex(c) = data.get_factor(root_vid)
+    let (root_denominator_terms, root_denominator) = if let Complex(ref c) = root_factor
         && let ComplexFactor::Divide {
             right, right_hash, ..
-        } = &*c
+        } = &**c
     {
         let multiply = Complex(
             Multiply {
@@ -726,12 +726,11 @@ pub async fn find_and_submit_factors(
                 }
                 if !subfactors_found && let Some(ref root_denominator) = root_denominator {
                     data.facts_mut(factor_vid).checked_with_root_denominator = true;
-                    let factor = data.get_factor(factor_vid);
                     if root_denominator.may_be_proper_divisor_of(&factor) {
                         let divided = div_exact(&factor, root_denominator).unwrap_or_else(|| {
                             simplify_divide(&factor, root_denominator_terms.as_ref().unwrap())
                         });
-                        if divided.may_be_proper_divisor_of(&data.get_factor(root_vid)) {
+                        if divided.may_be_proper_divisor_of(&root_factor) {
                             let (divided_vid, added) =
                                 add_factor_node(&mut data, divided, None, http);
                             if added {
@@ -851,9 +850,8 @@ pub async fn find_and_submit_factors(
                 error!("dest_factors included factor_vid");
                 continue;
             }
+            let cofactor = data.get_factor(cofactor_vid);
             if data.is_known_factor(factor_vid, cofactor_vid) {
-                let factor = data.get_factor(factor_vid);
-                let cofactor = data.get_factor(cofactor_vid);
                 info!(
                     "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on graph check)"
                 );
@@ -868,8 +866,6 @@ pub async fn find_and_submit_factors(
             match factor_facts.factors_known_to_factordb {
                 UpToDate(ref already_known_factors) | NotUpToDate(ref already_known_factors) => {
                     if already_known_factors.contains(&cofactor_vid) {
-                        let factor = data.get_factor(factor_vid);
-                        let cofactor = data.get_factor(cofactor_vid);
                         info!(
                             "{id}: Skipping submission of {factor} to {cofactor} because it's already known (based on FactorDB check)"
                         );
@@ -880,8 +876,6 @@ pub async fn find_and_submit_factors(
                         .expect("{id}: cofactor not in number_facts_map")
                         .is_known_fully_factored()
                     {
-                        let factor = data.get_factor(factor_vid);
-                        let cofactor = data.get_factor(cofactor_vid);
                         debug!(
                             "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
                         );
@@ -892,8 +886,6 @@ pub async fn find_and_submit_factors(
                 }
                 NotQueried => {}
             }
-            let factor = data.get_factor(factor_vid);
-            let cofactor = data.get_factor(cofactor_vid);
             if factor == cofactor {
                 error!(
                     "Duplicate nodes detected: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
@@ -994,9 +986,7 @@ pub async fn find_and_submit_factors(
                 continue;
             }
             if data.is_known_factor(cofactor_vid, factor_vid) {
-                // factor is transitively divisible by dest_factor
-                let factor = data.get_factor(factor_vid);
-                let cofactor = data.get_factor(cofactor_vid);
+                // factor is transitively divisible by cofactor
                 info!(
                     "{id}: Skipping submission of {factor} to {cofactor} because it's a multiple"
                 );
@@ -1014,8 +1004,6 @@ pub async fn find_and_submit_factors(
                 .entry_id
                 .is_none()
             {
-                let factor = data.get_factor(factor_vid);
-                let cofactor = data.get_factor(cofactor_vid);
                 info!(
                     "{id}: Temporarily skipping submission of {factor} to {cofactor} because we can't unambiguously identify the destination"
                 );
@@ -1073,7 +1061,6 @@ pub async fn find_and_submit_factors(
                     } else if let Some(ref root_denominator) = root_denominator {
                         let facts = data.facts_mut(factor_vid);
                         if !replace(&mut facts.checked_with_root_denominator, true) {
-                            let factor = data.get_factor(factor_vid);
                             if root_denominator.may_be_proper_divisor_of(&factor) {
                                 let divided =
                                     div_exact(&factor, root_denominator).unwrap_or_else(|| {
@@ -1082,7 +1069,7 @@ pub async fn find_and_submit_factors(
                                             root_denominator_terms.as_ref().unwrap(),
                                         )
                                     });
-                                if divided.may_be_proper_divisor_of(&data.get_factor(root_vid)) {
+                                if divided.may_be_proper_divisor_of(&root_factor) {
                                     let (divided_vid, added) =
                                         add_factor_node(&mut data, divided, None, http);
                                     if added {
@@ -1242,7 +1229,6 @@ async fn add_factors_to_graph(
             .await;
         let known_factor_count = known_factors.len();
         if known_factor_count == 1 {
-            let factor = data.get_factor(factor_vid);
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != factor {
                 data.merge_equivalent_expressions(factor_vid, known_factor, http);
@@ -1286,7 +1272,6 @@ async fn add_factors_to_graph(
         .expect("Tried to check checked_for_listed_algebraic in add_factors_to_graph when not entered in number_facts_map")
         .checked_for_listed_algebraic
     {
-        let factor = data.get_factor(factor_vid);
         if let Some(known_id) = factor.known_id()
             && id != known_id
         {
@@ -1331,7 +1316,6 @@ async fn add_factors_to_graph(
         && let Some(expression_form) = http.try_get_expression_form(entry_id).await
     {
         facts.expression_form_checked_in_factor_finder = true;
-        let factor = data.get_factor(factor_vid);
         if expression_form != factor {
             let added_via_equiv =
                 data.merge_equivalent_expressions(factor_vid, expression_form.clone(), http);
