@@ -242,17 +242,11 @@ impl FactorData {
             facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
             facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
             let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
-                self.add_factor_finder_factor_vertices_to_graph(factor_vid, http)
+                self.add_from_factor_finder(&current, http)
             } else {
                 Vec::new()
             };
-            new_factor_vids.extend(find_unique_factors(&equivalent).into_iter().filter_map(
-                |new_factor| {
-                    let entry_id = new_factor.known_id();
-                    let (vid, added) = add_factor_node(self, new_factor, entry_id, http);
-                    if added { Some(vid) } else { None }
-                },
-            ));
+            new_factor_vids.extend(self.add_from_factor_finder(&equivalent, http));
             if !equivalent.is_elided() && equivalent.to_owned_string().len() < current_len {
                 let _ = replace(
                     self.divisibility_graph.vertex_mut(factor_vid).unwrap(),
@@ -263,12 +257,11 @@ impl FactorData {
         }
     }
 
-    fn add_factor_finder_factor_vertices_to_graph(
+    fn add_from_factor_finder(
         &mut self,
-        factor_vid: VertexId,
+        factor: &Factor,
         http: &impl FactorDbClient,
     ) -> Vec<VertexId> {
-        let factor = self.get_factor(factor_vid);
         find_unique_factors(&factor)
             .into_iter()
             .filter_map(|new_factor| {
@@ -278,6 +271,7 @@ impl FactorData {
             })
             .collect()
     }
+
     pub fn as_specifier(&mut self, factor_vid: VertexId) -> NumberSpecifier<'_> {
         if let Some(facts) = self.facts(factor_vid)
             && let Some(factor_entry_id) = facts.entry_id
@@ -1329,7 +1323,7 @@ async fn add_factors_to_graph(
     // Next, check if factor_finder can find factors
     let facts = data.facts_mut(factor_vid);
     if !replace(&mut facts.checked_in_factor_finder, true) {
-        added.extend(data.add_factor_finder_factor_vertices_to_graph(factor_vid, http));
+        added.extend(data.add_from_factor_finder(&factor, http));
     }
     let facts = data.facts_mut(factor_vid);
     if let Some(entry_id) = facts.entry_id
