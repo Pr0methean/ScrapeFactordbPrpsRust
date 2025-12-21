@@ -881,7 +881,6 @@ pub async fn find_and_submit_factors(
                 merge_vertices(&mut data, http, factor_vid, cofactor_vid);
                 continue;
             }
-            let cofactor_elided = cofactor.is_elided();
             if !factor.may_be_proper_divisor_of(&cofactor) {
                 data.rule_out_divisibility(factor_vid, cofactor_vid);
                 if cofactor_vid == root_vid {
@@ -984,7 +983,7 @@ pub async fn find_and_submit_factors(
             // elided numbers can only be used as dests if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
             // later
-            if cofactor_elided
+            if cofactor.is_elided()
                 && data.facts(cofactor_vid)
                 .expect(
                     "{id}: Tried to check for entry_id for a cofactor not entered in number_facts_map",
