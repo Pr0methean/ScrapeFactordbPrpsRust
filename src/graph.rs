@@ -1267,10 +1267,9 @@ async fn add_factors_to_graph(
     }
 
     // Next, check factordb.com/frame_moreinfo.php for listed algebraic factors
+    let facts = data.facts_mut(factor_vid);
     if let Some(id) = id
-        && !data.facts(factor_vid)
-        .expect("Tried to check checked_for_listed_algebraic in add_factors_to_graph when not entered in number_facts_map")
-        .checked_for_listed_algebraic
+        && !facts.checked_for_listed_algebraic
     {
         if let Some(known_id) = factor.known_id()
             && id != known_id
@@ -1285,7 +1284,7 @@ async fn add_factors_to_graph(
                 && let Some((_before, listed_algebraic_and_rest)) = result.split_once("Algebraic factors")
                 && let Some((listed_algebraic, _rest)) = listed_algebraic_and_rest.split_once("Is factor of")
             {
-                data.facts_mut(factor_vid).checked_for_listed_algebraic = true;
+                facts.checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(&listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
                     let subfactor = Factor::from(factor_digits_or_expr);
