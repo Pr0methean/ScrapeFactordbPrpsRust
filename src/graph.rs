@@ -1,4 +1,3 @@
-use std::backtrace::Backtrace;
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -35,6 +34,7 @@ use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
 use replace_with::replace_with_or_abort;
+use std::backtrace::Backtrace;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
@@ -291,7 +291,12 @@ pub fn add_factor_node(
     (merge_dest, added)
 }
 
-fn merge_vertices(data: &mut FactorData, http: &impl FactorDbClient, merge_dest: VertexId, matching_vid: VertexId) {
+fn merge_vertices(
+    data: &mut FactorData,
+    http: &impl FactorDbClient,
+    merge_dest: VertexId,
+    matching_vid: VertexId,
+) {
     neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
         .into_iter()
         .for_each(|(neighbor_vid, divisibility)| {
@@ -605,12 +610,8 @@ pub async fn find_and_submit_factors(
                     .into_iter()
                     .map(|known_factor| {
                         let entry_id = known_factor.known_id();
-                        let (factor_vid, added) = add_factor_node(
-                            &mut data,
-                            known_factor,
-                            entry_id,
-                            http,
-                        );
+                        let (factor_vid, added) =
+                            add_factor_node(&mut data, known_factor, entry_id, http);
                         if added {
                             propagate_divisibility(&mut data, factor_vid, root_vid, false);
                             digits_or_expr_full.push(factor_vid);
@@ -711,8 +712,7 @@ pub async fn find_and_submit_factors(
             // running add_factors_to_graph may provide an equivalent expression, else we can save
             // it in case we find out the ID later
             info!("{id}: Temporarily skipping {factor} because digits are missing");
-            let factors_of_factor =
-                add_factors_to_graph(http, &mut data, factor_vid).await;
+            let factors_of_factor = add_factors_to_graph(http, &mut data, factor_vid).await;
             if !factors_of_factor.is_empty() {
                 factors_to_submit_in_graph.extend(factors_of_factor);
                 dedup_and_shuffle(&mut factors_to_submit_in_graph);
@@ -870,8 +870,7 @@ pub async fn find_and_submit_factors(
             // Can't submit a factor that we can't express, but
             // running add_factors_to_graph may provide an equivalent expression, else we can save
             // it in case we find out the ID later
-            let new_factors_of_factor =
-                add_factors_to_graph(http, &mut data, factor_vid).await;
+            let new_factors_of_factor = add_factors_to_graph(http, &mut data, factor_vid).await;
             if !new_factors_of_factor.is_empty() {
                 factors_to_submit_in_graph.extend(new_factors_of_factor);
                 dedup_and_shuffle(&mut factors_to_submit_in_graph);
@@ -967,7 +966,9 @@ pub async fn find_and_submit_factors(
                 &mut data.deleted_synonyms,
             );
             if factor == cofactor {
-                error!("Duplicate nodes detected: {factor_vid:?} and {cofactor_vid:?} are both {factor}");
+                error!(
+                    "Duplicate nodes detected: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
+                );
                 merge_vertices(&mut data, http, factor_vid, cofactor_vid);
                 continue;
             }
@@ -1167,8 +1168,7 @@ pub async fn find_and_submit_factors(
                     }
                     did_not_divide = true;
                     rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
-                    let subfactors =
-                        add_factors_to_graph(http, &mut data, factor_vid).await;
+                    let subfactors = add_factors_to_graph(http, &mut data, factor_vid).await;
                     if !subfactors.is_empty() {
                         factors_to_submit_in_graph.extend(subfactors);
                         dedup_and_shuffle(&mut factors_to_submit_in_graph);
@@ -1197,12 +1197,8 @@ pub async fn find_and_submit_factors(
                                     root_vid,
                                     &mut data.deleted_synonyms,
                                 )) {
-                                    let (divided_vid, added) = add_factor_node(
-                                        &mut data,
-                                        divided,
-                                        None,
-                                        http,
-                                    );
+                                    let (divided_vid, added) =
+                                        add_factor_node(&mut data, divided, None, http);
                                     if added {
                                         // Don't apply this recursively, except when divided was already in
                                         // the graph for another reason
@@ -1387,12 +1383,7 @@ async fn add_factors_to_graph(
             );
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != *factor {
-                merge_equivalent_expressions(
-                    data,
-                    factor_vid,
-                    known_factor,
-                    http,
-                );
+                merge_equivalent_expressions(data, factor_vid, known_factor, http);
             }
         } else {
             let new_known_factors: Vec<_> = known_factors
@@ -1502,12 +1493,8 @@ async fn add_factors_to_graph(
             &mut data.deleted_synonyms,
         );
         if expression_form != *factor {
-            let added_via_equiv = merge_equivalent_expressions(
-                data,
-                factor_vid,
-                expression_form.clone(),
-                http,
-            );
+            let added_via_equiv =
+                merge_equivalent_expressions(data, factor_vid, expression_form.clone(), http);
             added.extend(added_via_equiv);
         }
     }
@@ -1624,7 +1611,10 @@ async fn try_report_factor(
     destination_vid: VertexId,
 ) -> ReportFactorResult {
     if factor_vid == destination_vid {
-        error!("Attempted to submit a factor to itself\n{}", Backtrace::capture());
+        error!(
+            "Attempted to submit a factor to itself\n{}",
+            Backtrace::capture()
+        );
         return DoesNotDivide;
     }
     let [factor, dest] = get_vertices(
@@ -1671,17 +1661,13 @@ mod tests {
         let mut data = FactorData::default();
         let (node1, added) = add_factor_node(&mut data, Factor::from("2^16-1"), None, &http);
         assert!(added);
-        let (node2, added) =
-            add_factor_node(&mut data, Factor::from("2^8-1"), None, &http);
+        let (node2, added) = add_factor_node(&mut data, Factor::from("2^8-1"), None, &http);
         assert!(added);
-        let (node3, added) =
-            add_factor_node(&mut data, Factor::from("2^4-1"), None, &http);
+        let (node3, added) = add_factor_node(&mut data, Factor::from("2^4-1"), None, &http);
         assert!(added);
-        let (node4, added) =
-            add_factor_node(&mut data, Factor::from("2^4+1"), None, &http);
+        let (node4, added) = add_factor_node(&mut data, Factor::from("2^4+1"), None, &http);
         assert!(added);
-        let (node5, added) =
-            add_factor_node(&mut data, Factor::from("2^8+1"), None, &http);
+        let (node5, added) = add_factor_node(&mut data, Factor::from("2^8+1"), None, &http);
         assert!(added);
         drop(http);
         propagate_divisibility(&mut data, node2, node1, false);

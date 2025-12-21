@@ -589,8 +589,8 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(x) => match x {
                 Numeric(n) => {
                     error!("Attempted to submit factor {factor} of too-small number {n}");
-                    return AlreadyFullyFactored
-                },
+                    return AlreadyFullyFactored;
+                }
                 _ => (None, Some(x.to_owned_string())),
             },
             Id(id) => {
@@ -599,7 +599,7 @@ impl FactorDbClient for RealFactorDbClient {
                     return AlreadyFullyFactored;
                 }
                 (Some(id), None)
-            },
+            }
         };
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
@@ -745,10 +745,7 @@ pub trait NumberStatusExt {
 impl NumberStatusExt for Option<NumberStatus> {
     #[inline]
     fn is_known_fully_factored(&self) -> bool {
-        matches!(
-            self,
-            Some(FullyFactored) | Some(Prime)
-        )
+        matches!(self, Some(FullyFactored) | Some(Prime))
     }
 }
 

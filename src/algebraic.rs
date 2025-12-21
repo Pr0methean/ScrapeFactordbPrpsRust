@@ -1089,15 +1089,25 @@ impl Factor {
             ElidedNumber(_) => true,
             UnknownExpression(str) => str.contains("..."),
             Complex(c) => match **c {
-                AddSub { terms: (ref left, ref right), .. } => left.is_elided() || right.is_elided(),
+                AddSub {
+                    terms: (ref left, ref right),
+                    ..
+                } => left.is_elided() || right.is_elided(),
                 Multiply { ref terms, .. } => terms.keys().any(Factor::is_elided),
-                Divide { ref left, ref right, .. } => left.is_elided() || right.keys().any(Factor::is_elided),
-                Power { ref base, ref exponent } => base.is_elided() || exponent.is_elided(),
+                Divide {
+                    ref left,
+                    ref right,
+                    ..
+                } => left.is_elided() || right.keys().any(Factor::is_elided),
+                Power {
+                    ref base,
+                    ref exponent,
+                } => base.is_elided() || exponent.is_elided(),
                 Fibonacci(ref term) => term.is_elided(),
                 Lucas(ref term) => term.is_elided(),
                 Factorial(ref term) => term.is_elided(),
                 Primorial(ref term) => term.is_elided(),
-            }
+            },
         }
     }
 }
