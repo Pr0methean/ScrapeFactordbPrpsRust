@@ -1391,12 +1391,12 @@ async fn add_factors_to_graph(
                     known_factor_vid
                 })
                 .collect();
-            let facts = facts_of_mut(
-                &mut data.number_facts_map,
-                factor_vid,
-                &mut data.deleted_synonyms,
-            );
             if known_factor_count > 0 {
+                let facts = facts_of_mut(
+                    &mut data.number_facts_map,
+                    factor_vid,
+                    &mut data.deleted_synonyms,
+                );
                 facts.factors_known_to_factordb = UpToDate(new_known_factors);
             }
         }
