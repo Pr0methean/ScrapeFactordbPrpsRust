@@ -534,8 +534,8 @@ impl FactorDbClient for RealFactorDbClient {
         let numeric_or_id = match id {
             Id(entry_id) => Some(*entry_id),
             Expression(x) => {
-                if let Numeric(n) = *x {
-                    Some(*n)
+                if let Numeric(n) = **x {
+                    Some(n)
                 } else if let Some(Some(n)) = get_numeric_value_cache().get(x.as_ref()) {
                     Some(n)
                 } else {

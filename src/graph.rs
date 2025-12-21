@@ -95,7 +95,7 @@ impl FactorData {
     }
     
     pub fn get_factor(&mut self, vertex_id: VertexId) -> Factor {
-        let real_id = self.resolvevid(vertex_id);
+        let real_id = self.resolve_vid(vertex_id);
         self.divisibility_graph.vertex(real_id).unwrap().clone()
     }
     
@@ -1292,7 +1292,7 @@ async fn add_factors_to_graph(
             data.vertex_id_by_entry_id.insert(id, factor_vid);
         }
         if let Some(status) = status {
-            facts.last_known_status = Some(status);
+            data.facts_mut(factor_vid).last_known_status = Some(status);
             if status == Prime || status == FullyFactored {
                 mark_fully_factored(factor_vid, data);
             }
@@ -1389,7 +1389,8 @@ async fn try_report_factor(
 
 #[cfg(test)]
 mod tests {
-    use crate::FAILED_U_SUBMISSIONS_OUT;
+    use crate::graph::NumericFactor;
+use crate::FAILED_U_SUBMISSIONS_OUT;
     use crate::algebraic::Factor;
     use crate::graph::{
         FactorData, add_factor_node, find_and_submit_factors,
@@ -1459,15 +1460,15 @@ mod tests {
         const LARGE_PRIME: NumericFactor = 340282366920938463463374607431768211297; // last prime below 2^128
 
         let mut data = FactorData::default();
-        let (node1, added) = add_factor_node(&mut data, Factor::from(&format!("{LARGE_PRIME}^16-1")), None, &http);
+        let (node1, added) = add_factor_node(&mut data, Factor::from(format!("{LARGE_PRIME}^16-1").as_str()), None, &http);
         assert!(added);
-        let (node2, added) = add_factor_node(&mut data, Factor::from(&format!("{LARGE_PRIME}^8-1")), None, &http);
+        let (node2, added) = add_factor_node(&mut data, Factor::from(format!("{LARGE_PRIME}^8-1").as_str()), None, &http);
         assert!(added);
-        let (node3, added) = add_factor_node(&mut data, Factor::from(&format!("{LARGE_PRIME}^4-1")), None, &http);
+        let (node3, added) = add_factor_node(&mut data, Factor::from(format!("{LARGE_PRIME}^4-1").as_str()), None, &http);
         assert!(added);
-        let (node4, added) = add_factor_node(&mut data, Factor::from(&format!("{LARGE_PRIME}^4+1")), None, &http);
+        let (node4, added) = add_factor_node(&mut data, Factor::from(format!("{LARGE_PRIME}^4+1").as_str()), None, &http);
         assert!(added);
-        let (node5, added) = add_factor_node(&mut data, Factor::from(&format!("{LARGE_PRIME}^8+1")), None, &http);
+        let (node5, added) = add_factor_node(&mut data, Factor::from(format!("{LARGE_PRIME}^8+1").as_str()), None, &http);
         assert!(added);
         drop(http);
         data.propagate_divisibility(node2, node1, false);
