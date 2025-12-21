@@ -931,14 +931,9 @@ pub async fn find_and_submit_factors(
                 }
                 NotQueried => {}
             }
-            let factor = get_vertex(
+            let [factor, cofactor] = get_vertices(
                 &data.divisibility_graph,
-                factor_vid,
-                &mut data.deleted_synonyms,
-            );
-            let cofactor = get_vertex(
-                &data.divisibility_graph,
-                cofactor_vid,
+                [factor_vid, cofactor_vid],
                 &mut data.deleted_synonyms,
             );
             if factor == cofactor {
@@ -948,6 +943,7 @@ pub async fn find_and_submit_factors(
                 merge_vertices(&mut data, http, factor_vid, cofactor_vid);
                 continue;
             }
+            let cofactor_elided = cofactor.is_elided();
             if !factor.may_be_proper_divisor_of(cofactor) {
                 rule_out_divisibility(&mut data, factor_vid, cofactor_vid);
                 if cofactor_vid == root_vid {
@@ -1066,12 +1062,7 @@ pub async fn find_and_submit_factors(
             // be used as dests if their IDs are known
             // however, this doesn't affect the divisibility graph because the ID may be found
             // later
-            let cofactor = get_vertex(
-                &data.divisibility_graph,
-                cofactor_vid,
-                &mut data.deleted_synonyms,
-            );
-            if cofactor.is_elided()
+            if cofactor_elided
                 && facts_of(
                     &data.number_facts_map,
                     cofactor_vid,
@@ -1083,9 +1074,9 @@ pub async fn find_and_submit_factors(
                 .entry_id
                 .is_none()
             {
-                let factor = get_vertex(
+                let [factor, cofactor] = get_vertices(
                     &data.divisibility_graph,
-                    factor_vid,
+                    [factor_vid, cofactor_vid],
                     &mut data.deleted_synonyms,
                 );
                 info!(
