@@ -116,13 +116,6 @@ impl FactorData {
         self.divisibility_graph.edge(edge_id).copied()
     }
 
-    pub fn get_edge_mut(&mut self, source: VertexId, dest: VertexId) -> Option<&mut Divisibility> {
-        let source = self.resolve_vid(source);
-        let dest = self.resolve_vid(dest);
-        let edge_id = self.divisibility_graph.edge_id_any(source, dest)?;
-        self.divisibility_graph.edge_mut(edge_id)
-    }
-
     pub fn rule_out_divisibility(&mut self, nonfactor: VertexId, dest: VertexId) {
         let nonfactor = self.resolve_vid(nonfactor);
         let dest = self.resolve_vid(dest);
@@ -153,7 +146,8 @@ impl FactorData {
             // happens because of recursion
             return;
         }
-        let edge = self.get_edge_mut(factor, dest);
+        let edge_id = self.divisibility_graph.edge_id_any(factor, dest);
+        let edge = edge_id.and_then(|edge_id| self.divisibility_graph.edge_mut(edge_id));
         match edge {
             Some(Direct) | Some(NotFactor) => return,
             Some(Transitive) => {
