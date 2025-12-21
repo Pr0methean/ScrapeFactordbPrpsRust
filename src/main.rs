@@ -42,6 +42,7 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::future::ready;
@@ -254,7 +255,7 @@ async fn check_composite(
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
 enum NumberSpecifier<'a> {
     Id(EntryId),
-    Expression(&'a Factor),
+    Expression(Cow<'a, Factor>),
 }
 
 impl<'a> Display for NumberSpecifier<'a> {

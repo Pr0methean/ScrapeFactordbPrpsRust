@@ -429,7 +429,7 @@ impl FactorDbClient for RealFactorDbClient {
                     self.try_get_and_decode(&url).await.ok_or(None)
                 }
             }
-            Expression(expr) => {
+            Expression(ref expr) => {
                 let url = format!(
                     "https://factordb.com/api?query={}",
                     encode(&expr.to_owned_string())
@@ -518,8 +518,9 @@ impl FactorDbClient for RealFactorDbClient {
             {
                 self.by_id_cache.insert(id, processed.clone());
             }
-            if let Expression(expr) = id {
-                self.by_expr_cache.insert(expr.clone(), processed.clone());
+            if let Expression(expr) = &id {
+                self.by_expr_cache
+                    .insert(expr.clone().into_owned(), processed.clone());
             }
         }
         if !include_ff && processed.status.is_known_fully_factored() {
@@ -535,7 +536,7 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(x) => {
                 if let Numeric(n) = *x {
                     Some(*n)
-                } else if let Some(Some(n)) = get_numeric_value_cache().get(*x) {
+                } else if let Some(Some(n)) = get_numeric_value_cache().get(x.as_ref()) {
                     Some(n)
                 } else {
                     None
@@ -567,7 +568,7 @@ impl FactorDbClient for RealFactorDbClient {
                         .and_then(|expr| self.by_expr_cache.get(expr))
                 })
                 .cloned(),
-            Expression(expr) => self.by_expr_cache.get(*expr).cloned(),
+            Expression(expr) => self.by_expr_cache.get(expr.as_ref()).cloned(),
         };
         if cached.is_some() {
             info!("Factor cache hit for {id}");
@@ -581,12 +582,12 @@ impl FactorDbClient for RealFactorDbClient {
         u_id: NumberSpecifier<'_>,
         factor: &Factor,
     ) -> ReportFactorResult {
-        if u_id == Expression(factor) {
+        if u_id == Expression(std::borrow::Cow::Borrowed(factor)) {
             error!("Attempted to submit factor {factor} to itself");
             return DoesNotDivide;
         }
         let (id, number) = match u_id {
-            Expression(x) => match x {
+            Expression(ref x) => match x.as_ref() {
                 Numeric(n) => {
                     error!("Attempted to submit factor {factor} of too-small number {n}");
                     return AlreadyFullyFactored;
