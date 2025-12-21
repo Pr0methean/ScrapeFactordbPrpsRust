@@ -1255,14 +1255,14 @@ async fn add_factors_to_graph(
         let facts = data.facts_mut(factor_vid);
         facts.entry_id = facts.entry_id.or(new_id);
         id = facts.entry_id;
-        if let Some(id) = id {
-            data.vertex_id_by_entry_id.insert(id, factor_vid);
-        }
         if let Some(status) = status {
-            data.facts_mut(factor_vid).last_known_status = Some(status);
+            facts.last_known_status = Some(status);
             if status == Prime || status == FullyFactored {
                 mark_fully_factored(factor_vid, data);
             }
+        }
+        if let Some(id) = id {
+            data.vertex_id_by_entry_id.insert(id, factor_vid);
         }
     }
 
