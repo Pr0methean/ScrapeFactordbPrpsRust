@@ -502,19 +502,6 @@ impl NumberFacts {
             && self.expression_form_checked_in_factor_finder
             && self.checked_in_factor_finder
     }
-    fn marked_stale(self) -> Self {
-        if self.is_final() {
-            return self;
-        }
-        if let UpToDate(factors) = self.factors_known_to_factordb {
-            NumberFacts {
-                factors_known_to_factordb: NotUpToDate(factors),
-                ..self
-            }
-        } else {
-            self
-        }
-    }
     pub fn merged_with(self, other: Self) -> Self {
         NumberFacts {
             lower_bound_log10: self.lower_bound_log10.max(other.lower_bound_log10),
@@ -726,14 +713,7 @@ pub async fn find_and_submit_factors(
             AlreadyFullyFactored => return true,
             Accepted => {
                 propagate_divisibility(&mut data, factor_vid, root_vid, false);
-                replace_with_or_abort(
-                    facts_of_mut(
-                        &mut data.number_facts_map,
-                        root_vid,
-                        &mut data.deleted_synonyms,
-                    ),
-                    NumberFacts::marked_stale,
-                );
+                mark_stale(&mut data, root_vid);
                 dnd_since_last_accepted = 0;
                 accepted_factors += 1;
             }
@@ -1136,14 +1116,7 @@ pub async fn find_and_submit_factors(
                 }
                 Accepted => {
                     propagate_divisibility(&mut data, factor_vid, cofactor_vid, false);
-                    replace_with_or_abort(
-                        facts_of_mut(
-                            &mut data.number_facts_map,
-                            cofactor_vid,
-                            &mut data.deleted_synonyms,
-                        ),
-                        NumberFacts::marked_stale,
-                    );
+                    mark_stale(&mut data, factor_vid);
                     accepted_factors += 1;
                     did_not_divide = false;
                     dnd_since_last_accepted = 0;
@@ -1292,6 +1265,25 @@ pub async fn find_and_submit_factors(
         }
     }
     accepted_factors > 0
+}
+
+#[inline(always)]
+fn mark_stale(data: &mut FactorData, stale_vid: VertexId) {
+    replace_with_or_abort(
+        facts_of_mut(
+            &mut data.number_facts_map,
+            stale_vid,
+            &mut data.deleted_synonyms,
+        ),
+        |facts| if !facts.is_final() && let UpToDate(factors) = facts.factors_known_to_factordb {
+            NumberFacts {
+                factors_known_to_factordb: NotUpToDate(factors),
+                ..facts
+            }
+        } else {
+            facts
+        }
+    );
 }
 
 fn vertex_ids_except<T: FromIterator<VertexId>>(data: &mut FactorData, root_vid: VertexId) -> T {
