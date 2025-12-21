@@ -870,11 +870,6 @@ pub async fn find_and_submit_factors(
         let mut did_not_divide = false;
         dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
-            let factor = get_vertex(
-                &data.divisibility_graph,
-                factor_vid,
-                &mut data.deleted_synonyms,
-            );
             info!("{id}: Skipping {factor} because there are no more cofactors it can divide");
             continue;
         };
