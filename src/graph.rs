@@ -1275,14 +1275,18 @@ fn mark_stale(data: &mut FactorData, stale_vid: VertexId) {
             stale_vid,
             &mut data.deleted_synonyms,
         ),
-        |facts| if !facts.is_final() && let UpToDate(factors) = facts.factors_known_to_factordb {
-            NumberFacts {
-                factors_known_to_factordb: NotUpToDate(factors),
-                ..facts
+        |facts| {
+            if !facts.is_final()
+                && let UpToDate(factors) = facts.factors_known_to_factordb
+            {
+                NumberFacts {
+                    factors_known_to_factordb: NotUpToDate(factors),
+                    ..facts
+                }
+            } else {
+                facts
             }
-        } else {
-            facts
-        }
+        },
     );
 }
 
