@@ -186,8 +186,7 @@ impl FactorData {
 
     pub fn vertex_ids_except(&self, root_vid: VertexId) -> Vec<VertexId> {
         self.divisibility_graph
-            .vertices()
-            .map(|vertex| vertex.id)
+            .vertices_by_id()
             .filter(|factor_vid| *factor_vid != root_vid)
             .collect()
     }
