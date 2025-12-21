@@ -670,8 +670,9 @@ pub async fn find_and_submit_factors(
         (None, None)
     };
     let mut dnd_since_last_accepted = 0;
-    let mut known_factors = vertex_ids_except::<VecDeque<_>>(&mut data, root_vid);
-    known_factors.make_contiguous().shuffle(&mut rng());
+    let mut known_factors = vertex_ids_except(&data, root_vid);
+    known_factors.shuffle(&mut rng());
+    let mut known_factors = VecDeque::from(known_factors);
     let mut factors_to_submit_in_graph = VecDeque::new();
     while let Some(factor_vid) = known_factors.pop_front() {
         let factor = get_vertex(
@@ -860,12 +861,12 @@ pub async fn find_and_submit_factors(
             }
             continue;
         }
-        let mut dest_factors = vertex_ids_except::<Vec<_>>(&mut data, factor_vid)
+        let mut dest_factors = vertex_ids_except(&data, factor_vid)
             .into_iter()
             .filter(|dest_vid|
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
                     get_edge(&data.divisibility_graph, factor_vid, *dest_vid, &mut data.deleted_synonyms).is_none())
-            .collect::<Box<[_]>>();
+            .collect::<Vec<_>>();
         let mut did_not_divide = false;
         dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
@@ -1225,13 +1226,7 @@ pub async fn find_and_submit_factors(
         }
     }
 
-    for factor_vid in data
-        .divisibility_graph
-        .vertices_by_id()
-        .filter(|factor_vid| *factor_vid != root_vid)
-        .collect::<Box<[_]>>()
-        .into_iter()
-    {
+    for factor_vid in vertex_ids_except(&data, root_vid) {
         let factor = get_vertex(
             &data.divisibility_graph,
             factor_vid,
@@ -1290,11 +1285,12 @@ fn mark_stale(data: &mut FactorData, stale_vid: VertexId) {
     );
 }
 
-fn vertex_ids_except<T: FromIterator<VertexId>>(data: &mut FactorData, root_vid: VertexId) -> T {
+#[inline(always)]
+fn vertex_ids_except(data: &FactorData, root_vid: VertexId) -> Vec<VertexId> {
     let ids = data.divisibility_graph.vertices();
     ids.map(|vertex| vertex.id)
         .filter(|factor_vid| *factor_vid != root_vid)
-        .collect::<T>()
+        .collect()
 }
 
 fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
@@ -1324,7 +1320,7 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
         facts.last_known_status = Some(FullyFactored);
         false
     };
-    for other_vid in vertex_ids_except::<Vec<_>>(data, vid) {
+    for other_vid in vertex_ids_except(data, vid) {
         let edge = get_edge(
             &data.divisibility_graph,
             other_vid,
