@@ -442,7 +442,8 @@ fn merge_vertices(
             },
             checked_in_factor_finder: facts.checked_in_factor_finder
                 && old_facts.checked_in_factor_finder,
-            expression_form_checked_in_factor_finder: facts.expression_form_checked_in_factor_finder
+            expression_form_checked_in_factor_finder: facts
+                .expression_form_checked_in_factor_finder
                 && old_facts.expression_form_checked_in_factor_finder,
 
             // root_denominator only has to be done with one or the other, because it doesn't depend
@@ -632,9 +633,7 @@ pub async fn find_and_submit_factors(
         root_facts.last_known_status = status;
     };
     let root_factor = data.get_factor(root_vid);
-    debug!(
-        "{id}: Root node for {digits_or_expr} is {root_factor} with vertex ID {root_vid:?}",
-    );
+    debug!("{id}: Root node for {digits_or_expr} is {root_factor} with vertex ID {root_vid:?}",);
     digits_or_expr_full.push(root_vid);
     let mut factor_found = false;
     let mut accepted_factors = 0;
@@ -1061,26 +1060,27 @@ pub async fn find_and_submit_factors(
                     } else if let Some(ref root_denominator) = root_denominator {
                         let facts = data.facts_mut(factor_vid);
                         if !replace(&mut facts.checked_with_root_denominator, true)
-                            && root_denominator.may_be_proper_divisor_of(&factor) {
-                                let divided =
-                                    div_exact(&factor, root_denominator).unwrap_or_else(|| {
-                                        simplify_divide(
-                                            &factor,
-                                            root_denominator_terms.as_ref().unwrap(),
-                                        )
-                                    });
-                                if divided.may_be_proper_divisor_of(&root_factor) {
-                                    let (divided_vid, added) =
-                                        add_factor_node(&mut data, divided, None, http);
-                                    if added {
-                                        factors_to_submit_in_graph.push_back(divided_vid);
-                                        // Don't apply this recursively, except when divided was already in
-                                        // the graph for another reason
-                                        data.facts_mut(divided_vid).checked_with_root_denominator =
-                                            true;
-                                    }
+                            && root_denominator.may_be_proper_divisor_of(&factor)
+                        {
+                            let divided =
+                                div_exact(&factor, root_denominator).unwrap_or_else(|| {
+                                    simplify_divide(
+                                        &factor,
+                                        root_denominator_terms.as_ref().unwrap(),
+                                    )
+                                });
+                            if divided.may_be_proper_divisor_of(&root_factor) {
+                                let (divided_vid, added) =
+                                    add_factor_node(&mut data, divided, None, http);
+                                if added {
+                                    factors_to_submit_in_graph.push_back(divided_vid);
+                                    // Don't apply this recursively, except when divided was already in
+                                    // the graph for another reason
+                                    data.facts_mut(divided_vid).checked_with_root_denominator =
+                                        true;
                                 }
                             }
+                        }
                     }
                     if cofactor_vid == root_vid {
                         continue 'graph_iter; // Skip put_factor_back_into_queue check for factors that don't divide the root
@@ -1280,19 +1280,17 @@ async fn add_factors_to_graph(
             let url = format!("https://factordb.com/frame_moreinfo.php?id={id}");
             let result = http.try_get_and_decode(&url).await;
             if let Some(result) = result
-                && let Some((_before, listed_algebraic_and_rest)) = result.split_once("Algebraic factors")
-                && let Some((listed_algebraic, _rest)) = listed_algebraic_and_rest.split_once("Is factor of")
+                && let Some((_before, listed_algebraic_and_rest)) =
+                    result.split_once("Algebraic factors")
+                && let Some((listed_algebraic, _rest)) =
+                    listed_algebraic_and_rest.split_once("Is factor of")
             {
                 facts.checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(&listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
                     let subfactor = Factor::from(factor_digits_or_expr);
-                    let (subfactor_vid, is_new) = add_factor_node(
-                        data,
-                        subfactor,
-                        Some(subfactor_entry_id),
-                        http,
-                    );
+                    let (subfactor_vid, is_new) =
+                        add_factor_node(data, subfactor, Some(subfactor_entry_id), http);
                     if is_new {
                         added.insert(subfactor_vid);
                     }
