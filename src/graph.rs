@@ -1349,12 +1349,12 @@ async fn add_factors_to_graph(
     .expect("add_factors_to_graph called on a number that's not entered in number_facts_map");
     let mut added = BTreeSet::new();
     let mut id = facts.entry_id;
-    let elided = get_vertex(
+    let factor = get_vertex(
         &data.divisibility_graph,
         factor_vid,
         &mut data.deleted_synonyms,
-    )
-    .is_elided();
+    );
+    let elided = factor.is_elided();
     // First, check factordb.com/api for already-known factors
     let needs_update = facts.needs_update();
     if needs_update || elided {
@@ -1441,10 +1441,10 @@ async fn add_factors_to_graph(
                 facts_of_mut(&mut data.number_facts_map, factor_vid, &mut data.deleted_synonyms).checked_for_listed_algebraic = true;
                 let algebraic_factors = http.read_ids_and_exprs(&listed_algebraic);
                 for (subfactor_entry_id, factor_digits_or_expr) in algebraic_factors {
-                    let factor = Factor::from(factor_digits_or_expr);
+                    let subfactor = Factor::from(factor_digits_or_expr);
                     let (subfactor_vid, is_new) = add_factor_node(
                         data,
-                        factor,
+                        subfactor,
                         Some(subfactor_entry_id),
                         http,
                     );
@@ -1526,6 +1526,9 @@ fn merge_equivalent_expressions(
             factor_vid,
             &mut data.deleted_synonyms,
         );
+        let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
+        facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
+        facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
         let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
             add_factor_finder_factor_vertices_to_graph(data, factor_vid, http)
         } else {
@@ -1538,14 +1541,6 @@ fn merge_equivalent_expressions(
                 if added { Some(vid) } else { None }
             },
         ));
-        let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
-        let facts = facts_of_mut(
-            &mut data.number_facts_map,
-            factor_vid,
-            &mut data.deleted_synonyms,
-        );
-        facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
-        facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
         if !equivalent.is_elided() && equivalent.to_owned_string().len() < current_len {
             let _ = replace(
                 data.divisibility_graph.vertex_mut(factor_vid).unwrap(),
