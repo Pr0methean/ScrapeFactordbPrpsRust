@@ -17,7 +17,7 @@ use crate::net::{
     ProcessedStatusApiResponse,
 };
 use crate::{
-    FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, ReportFactorResult,
+    FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier,
     SUBMIT_FACTOR_MAX_ATTEMPTS,
 };
 use async_backtrace::framed;
@@ -34,7 +34,6 @@ use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
 use replace_with::replace_with_or_abort;
-use std::backtrace::Backtrace;
 use std::borrow::Cow;
 use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -1010,7 +1009,8 @@ pub async fn find_and_submit_factors(
                 put_factor_back_into_queue = true;
                 break 'per_cofactor;
             }
-            match try_report_factor(http, &mut data, factor_vid, cofactor_vid).await {
+            let cofactor_specifier = data.as_specifier(cofactor_vid);
+            match http.try_report_factor(cofactor_specifier, &factor).await {
                 AlreadyFullyFactored => {
                     if cofactor_vid == root_vid {
                         warn!("{id}: Already fully factored");
@@ -1313,24 +1313,6 @@ async fn add_factors_to_graph(
     }
 
     added.into_iter().collect()
-}
-
-async fn try_report_factor(
-    http: &impl FactorDbClient,
-    data: &mut FactorData,
-    factor_vid: VertexId,
-    destination_vid: VertexId,
-) -> ReportFactorResult {
-    if factor_vid == destination_vid {
-        error!(
-            "Attempted to submit a factor to itself\n{}",
-            Backtrace::capture()
-        );
-        return DoesNotDivide;
-    }
-    let factor = data.get_factor(factor_vid);
-    let dest_specifier = data.as_specifier(destination_vid);
-    http.try_report_factor(dest_specifier, &factor).await
 }
 
 #[cfg(test)]
