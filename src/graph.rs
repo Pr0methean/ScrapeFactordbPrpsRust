@@ -16,10 +16,7 @@ use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
 };
-use crate::{
-    FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier,
-    SUBMIT_FACTOR_MAX_ATTEMPTS,
-};
+use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
 use async_backtrace::framed;
 use gryf::Graph;
 use gryf::adapt::Subgraph;
