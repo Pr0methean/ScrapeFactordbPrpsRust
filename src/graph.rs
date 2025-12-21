@@ -1377,13 +1377,7 @@ async fn try_report_factor(
         return DoesNotDivide;
     }
     let factor = data.get_factor(factor_vid);
-    let dest = data.get_factor(destination_vid);
-
-    let dest_specifier = data.facts(factor_vid)
-    .and_then(|facts| facts.entry_id)
-    .or_else(|| dest.known_id())
-    .map(Id)
-    .unwrap_or_else(|| Expression(Cow::Owned(factor.clone())));
+    let dest_specifier = data.as_specifier(destination_vid);
     http.try_report_factor(dest_specifier, &factor).await
 }
 
