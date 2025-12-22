@@ -178,6 +178,15 @@ impl FactorData {
                 }
             }
         }
+        // Backward propagation: if A divides factor, and factor divides dest, then A divides dest
+        for (upstream, _) in neighbor_vids(&self.divisibility_graph, factor, Incoming) {
+            if upstream == dest {
+                continue;
+            }
+            // This is safe because we check `if factor == dest` at start, preventing 1-cycle recursion.
+            // And if A->factor exists, we add A->dest.
+            self.propagate_divisibility(upstream, dest, true);
+        }
     }
 
     pub fn vertex_ids_except(&self, root_vid: VertexId) -> Vec<VertexId> {
@@ -219,6 +228,9 @@ impl FactorData {
             vec![]
         } else {
             info!("Merging equivalent expressions {current} and {equivalent}");
+            if let Some(existing_vid) = self.vertex_id_by_expr.get(&equivalent).copied() {
+                merge_vertices(self, http, factor_vid, existing_vid);
+            }
             self.vertex_id_by_expr
                 .insert(equivalent.clone(), factor_vid);
             let current_len = if current.is_elided() {
@@ -1500,5 +1512,119 @@ mod tests {
             Factor::from("(10^65035*18+10^130071-1)/3^2"),
             &http,
         );
+    }
+
+    #[test]
+    fn test_add_factor_node_deduplication() {
+        let mut http = MockFactorDbClient::new();
+        http.expect_cached_factors().return_const(None);
+        // Add minimal expectations for unused methods to satisfy mocker if needed, though 'never()' is default
+        let mut data = FactorData::default();
+
+        let factor = Factor::from("2^32+1");
+        let (vid1, added1) = add_factor_node(&mut data, factor.clone(), None, &http);
+        assert!(added1);
+
+        let (vid2, added2) = add_factor_node(&mut data, factor, None, &http);
+        assert!(!added2);
+        assert_eq!(vid1, vid2);
+    }
+
+    #[test]
+    fn test_merge_equivalent_expressions_logic() {
+        let mut http = MockFactorDbClient::new();
+        http.expect_cached_factors().return_const(None);
+        http.expect_known_factors_as_digits().never();
+
+        let mut data = FactorData::default();
+
+        // Create two nodes that are effectively the same but added differently
+        let f1 = Factor::from("2^32+1");
+        let f2 = Factor::from("4294967297"); // 2^32+1 evaluated
+
+        let (_vid1, _) = add_factor_node(&mut data, f1.clone(), None, &http);
+        let (_vid2, _) = add_factor_node(&mut data, f2.clone(), None, &http);
+
+        // Initially they might be separate if not using canonical forms or if forced separately
+        // But add_factor_node checks numeric value cache, so they MIGHT be merged automatically if they evaluate to same numeric
+        // To force them separate for this test, let's use symbolic expressions that don't immediately simplify/evaluate to same
+        // But `merge_equivalent_expressions` is explicitly for this.
+
+        // Retrying with symbolic that won't auto-merge
+        let f3 = Factor::from("x+y");
+        let f4 = Factor::from("y+x"); // commuted
+
+        let (_vid3, _) = add_factor_node(&mut data, f3, None, &http);
+        let (_vid4, _) = add_factor_node(&mut data, f4.clone(), None, &http);
+        
+        // Assert they are different initially if our hash/eq logic relies on structure (which it does mostly, though We have some commutativity tests)
+        // Actually, our Factor::eq handles commutativity for AddSub, so they might be deduplicated already!
+        // Let's use something that isn't automatically deduplicated but IS equivalent.
+        // e.g. x+x and 2*x
+        
+        let f5 = Factor::from("a+a");
+        let f6 = Factor::from("2*a");
+        
+        let (vid5, _) = add_factor_node(&mut data, f5, None, &http);
+        let (vid6, _) = add_factor_node(&mut data, f6.clone(), None, &http);
+        
+        assert_ne!(vid5, vid6);
+
+        // Now merge them
+        let _merged_vids = data.merge_equivalent_expressions(vid5, f6, &http);
+        
+        // vid6 should now resolve to vid5 (or vice versa)
+        let resolved_vid6 = data.resolve_vid(vid6);
+        let resolved_vid5 = data.resolve_vid(vid5);
+        assert_eq!(resolved_vid5, resolved_vid6);
+    }
+
+    #[test]
+    fn test_propagate_divisibility_transitive() {
+        let mut data = FactorData::default();
+        let mut http = MockFactorDbClient::new();
+         http.expect_cached_factors().return_const(None);
+
+        let (a, _) = add_factor_node(&mut data, Factor::from("a"), None, &http);
+        let (b, _) = add_factor_node(&mut data, Factor::from("b"), None, &http);
+        let (c, _) = add_factor_node(&mut data, Factor::from("c"), None, &http);
+
+        // a divides b
+        data.propagate_divisibility(a, b, false);
+        // b divides c
+        data.propagate_divisibility(b, c, false);
+
+        // Should know a divides c transitively
+        assert!(data.is_known_factor(a, c));
+        
+        // And direct ones
+        assert!(data.is_known_factor(a, b));
+        assert!(data.is_known_factor(b, c));
+    }
+
+    #[test]
+    fn test_rule_out_divisibility_propagation() {
+        let mut data = FactorData::default();
+        let mut http = MockFactorDbClient::new();
+        http.expect_cached_factors().return_const(None);
+        
+        let (a, _) = add_factor_node(&mut data, Factor::from("a"), None, &http);
+        let (b, _) = add_factor_node(&mut data, Factor::from("b"), None, &http);
+        let (c, _) = add_factor_node(&mut data, Factor::from("c"), None, &http);
+
+        // c divides b (c is a factor of b)
+        data.propagate_divisibility(c, b, false);
+        
+        // Rule out a divides b (a is NOT a factor of b)
+        data.rule_out_divisibility(a, b);
+        
+        // If A !| B. And C | B. Does A !| C? Not necessarily. 2 !| 9, 3 | 9. 2 !| 3.
+        // But if A | C and C | B, then A | B.
+        // So if A !| B, and C | B, then A cannot divide C?
+        // If A | C, then since C | B -> A | B. But A !| B. Contradiction.
+        // So yes, A !| C.
+        
+        use crate::graph::Divisibility::NotFactor;
+        assert_eq!(data.get_edge(a, c), Some(NotFactor));
     }
 }
