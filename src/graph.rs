@@ -1556,23 +1556,23 @@ mod tests {
 
         let (_vid3, _) = add_factor_node(&mut data, f3, None, &http);
         let (_vid4, _) = add_factor_node(&mut data, f4.clone(), None, &http);
-        
+
         // Assert they are different initially if our hash/eq logic relies on structure (which it does mostly, though We have some commutativity tests)
         // Actually, our Factor::eq handles commutativity for AddSub, so they might be deduplicated already!
         // Let's use something that isn't automatically deduplicated but IS equivalent.
         // e.g. x+x and 2*x
-        
+
         let f5 = Factor::from("a+a");
         let f6 = Factor::from("2*a");
-        
+
         let (vid5, _) = add_factor_node(&mut data, f5, None, &http);
         let (vid6, _) = add_factor_node(&mut data, f6.clone(), None, &http);
-        
+
         assert_ne!(vid5, vid6);
 
         // Now merge them
         let _merged_vids = data.merge_equivalent_expressions(vid5, f6, &http);
-        
+
         // vid6 should now resolve to vid5 (or vice versa)
         let resolved_vid6 = data.resolve_vid(vid6);
         let resolved_vid5 = data.resolve_vid(vid5);
@@ -1583,7 +1583,7 @@ mod tests {
     fn test_propagate_divisibility_transitive() {
         let mut data = FactorData::default();
         let mut http = MockFactorDbClient::new();
-         http.expect_cached_factors().return_const(None);
+        http.expect_cached_factors().return_const(None);
 
         let (a, _) = add_factor_node(&mut data, Factor::from("a"), None, &http);
         let (b, _) = add_factor_node(&mut data, Factor::from("b"), None, &http);
@@ -1596,7 +1596,7 @@ mod tests {
 
         // Should know a divides c transitively
         assert!(data.is_known_factor(a, c));
-        
+
         // And direct ones
         assert!(data.is_known_factor(a, b));
         assert!(data.is_known_factor(b, c));
@@ -1607,23 +1607,23 @@ mod tests {
         let mut data = FactorData::default();
         let mut http = MockFactorDbClient::new();
         http.expect_cached_factors().return_const(None);
-        
+
         let (a, _) = add_factor_node(&mut data, Factor::from("a"), None, &http);
         let (b, _) = add_factor_node(&mut data, Factor::from("b"), None, &http);
         let (c, _) = add_factor_node(&mut data, Factor::from("c"), None, &http);
 
         // c divides b (c is a factor of b)
         data.propagate_divisibility(c, b, false);
-        
+
         // Rule out a divides b (a is NOT a factor of b)
         data.rule_out_divisibility(a, b);
-        
+
         // If A !| B. And C | B. Does A !| C? Not necessarily. 2 !| 9, 3 | 9. 2 !| 3.
         // But if A | C and C | B, then A | B.
         // So if A !| B, and C | B, then A cannot divide C?
         // If A | C, then since C | B -> A | B. But A !| B. Contradiction.
         // So yes, A !| C.
-        
+
         use crate::graph::Divisibility::NotFactor;
         assert_eq!(data.get_edge(a, c), Some(NotFactor));
     }

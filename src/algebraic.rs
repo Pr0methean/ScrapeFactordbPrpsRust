@@ -2136,13 +2136,16 @@ fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> O
     let mut new_left = simplify(left);
     let mut new_right = simplify(right);
     if let Numeric(n) = new_right
-        && n == 0 {
-            return Some(new_left);
-        }
-    if !subtract && let Numeric(n) = new_left
-        && n == 0 {
-            return Some(new_right);
-        }
+        && n == 0
+    {
+        return Some(new_left);
+    }
+    if !subtract
+        && let Numeric(n) = new_left
+        && n == 0
+    {
+        return Some(new_right);
+    }
     match new_left.cmp(&new_right) {
         Ordering::Less => {
             if !subtract {
@@ -2222,7 +2225,9 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
     match evaluate_as_numeric(&new_exponent) {
         Some(0) => Some(Factor::one()),
         Some(1) => Some(new_base),
-        Some(n) => Some(simplify_multiply(&once((new_base, n as NumberLength)).collect())),
+        Some(n) => Some(simplify_multiply(
+            &once((new_base, n as NumberLength)).collect(),
+        )),
         None => {
             if *base == new_base && *exponent == new_exponent {
                 None
@@ -2786,7 +2791,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 for (term, exponent) in to_like_powers(&left, &right, subtract) {
                                     if let Numeric(n) = term {
                                         for (sub_f, sub_e) in find_factors_of_numeric(n) {
-                                            *algebraic.entry(sub_f).or_insert(0) += sub_e * exponent;
+                                            *algebraic.entry(sub_f).or_insert(0) +=
+                                                sub_e * exponent;
                                         }
                                     } else {
                                         *algebraic.entry(term).or_insert(0) += exponent;
@@ -3211,8 +3217,8 @@ mod tests {
         );
         let factors = find_factors_recursive(&expr);
         println!("{}", factors.iter().join(","));
-        // Since find_factors_recursive finds factors of intermediate terms, 
-        // and some intermediate algebraic terms have numeric factors 
+        // Since find_factors_recursive finds factors of intermediate terms,
+        // and some intermediate algebraic terms have numeric factors
         // (even if cancelled globally), they appear in the recursive results.
         assert!(factors.contains(&Numeric(3)));
         assert!(factors.contains(&Numeric(11)));
@@ -4013,80 +4019,122 @@ mod tests {
     #[test]
     fn test_simplify_basic() {
         use crate::algebraic::simplify;
-         // x + 0 = x
+        // x + 0 = x
         let x = Factor::from("x");
         let zero = Factor::from(0u128);
-        assert_eq!(simplify(&Complex(ComplexFactor::AddSub {
-            terms: (x.clone(), zero.clone()),
-            subtract: false,
-        }.into())), x);
-        assert_eq!(simplify(&Complex(ComplexFactor::AddSub {
-            terms: (x.clone(), zero.clone()),
-            subtract: true,
-        }.into())), x);
-        
+        assert_eq!(
+            simplify(&Complex(
+                ComplexFactor::AddSub {
+                    terms: (x.clone(), zero.clone()),
+                    subtract: false,
+                }
+                .into()
+            )),
+            x
+        );
+        assert_eq!(
+            simplify(&Complex(
+                ComplexFactor::AddSub {
+                    terms: (x.clone(), zero.clone()),
+                    subtract: true,
+                }
+                .into()
+            )),
+            x
+        );
+
         // x * 1 = x
         let one = Factor::from(1u128);
         let mut terms = BTreeMap::new();
         terms.insert(x.clone(), 1);
         terms.insert(one.clone(), 1);
-        assert_eq!(simplify(&Complex(ComplexFactor::Multiply {
-            terms: terms.clone(),
-            terms_hash: 0
-        }.into())), x);
-        
+        assert_eq!(
+            simplify(&Complex(
+                ComplexFactor::Multiply {
+                    terms: terms.clone(),
+                    terms_hash: 0
+                }
+                .into()
+            )),
+            x
+        );
+
         // x ^ 1 = x
-        assert_eq!(simplify(&Complex(ComplexFactor::Power {
-            base: x.clone(),
-            exponent: one.clone()
-        }.into())), x);
-        
+        assert_eq!(
+            simplify(&Complex(
+                ComplexFactor::Power {
+                    base: x.clone(),
+                    exponent: one.clone()
+                }
+                .into()
+            )),
+            x
+        );
+
         // x / 1 = x
         let mut right = BTreeMap::new();
         right.insert(one.clone(), 1);
-        assert_eq!(simplify(&Complex(Divide {
-            left: x.clone(),
-            right,
-            right_hash: 0
-        }.into())), x);
+        assert_eq!(
+            simplify(&Complex(
+                Divide {
+                    left: x.clone(),
+                    right,
+                    right_hash: 0
+                }
+                .into()
+            )),
+            x
+        );
     }
-    
+
     #[test]
     fn test_simplify_power_zero() {
         use crate::algebraic::simplify;
         // x ^ 0 = 1
         let x = Factor::from("x");
         let zero = Factor::from(0u128);
-         assert_eq!(simplify(&Complex(ComplexFactor::Power {
-            base: x.clone(),
-            exponent: zero.clone()
-        }.into())), Factor::one());
+        assert_eq!(
+            simplify(&Complex(
+                ComplexFactor::Power {
+                    base: x.clone(),
+                    exponent: zero.clone()
+                }
+                .into()
+            )),
+            Factor::one()
+        );
     }
-    
+
     #[test]
     fn test_simplify_nested_powers() {
-         use crate::algebraic::simplify;
-         // (x^2)^3 = x^6
-         let x = Factor::from("x");
-         let two = Factor::from(2u128);
-         let three = Factor::from(3u128);
-         
-         let inner = Complex(ComplexFactor::Power {
-             base: x.clone(),
-             exponent: two.clone()
-         }.into());
-         let nested = Complex(ComplexFactor::Power {
-             base: inner,
-             exponent: three.clone()
-         }.into());
-         let simplified = simplify(&nested);
-         
-         // Should be Multiply, not Power, because exponent's numeric value is known
-         let expected = Factor::multiply([(x, 6)]);
-         
-         assert_eq!(simplified, expected);
+        use crate::algebraic::simplify;
+        // (x^2)^3 = x^6
+        let x = Factor::from("x");
+        let two = Factor::from(2u128);
+        let three = Factor::from(3u128);
+
+        let inner = Complex(
+            ComplexFactor::Power {
+                base: x.clone(),
+                exponent: two.clone(),
+            }
+            .into(),
+        );
+        let nested = Complex(
+            ComplexFactor::Power {
+                base: inner,
+                exponent: three.clone(),
+            }
+            .into(),
+        );
+        let simplified = simplify(&nested);
+
+        // Should be Multiply, not Power, because exponent's numeric value is known
+        let expected = Factor::multiply([(x, 6)]);
+
+        assert_eq!(simplified, expected);
     }
-    
+
     #[test]
     fn test_fmt_round_trip() {
         // Verify that Factor::from(f.to_string()) == f
@@ -4103,9 +4151,9 @@ mod tests {
             "lucas(100)",
             "5!",
             "7#",
-            "((a+b)*c)^d"
+            "((a+b)*c)^d",
         ];
-        
+
         for case in cases {
             let f = Factor::from(case);
             let s = f.to_string();
@@ -4113,25 +4161,25 @@ mod tests {
             assert_eq!(f, f2, "Round trip failed for {}", case);
         }
     }
-    
+
     #[test]
     fn test_to_like_powers() {
         use crate::algebraic::to_like_powers;
         // 2^10 - 3^10
         // like power is 10.
-        // Or 2, 5. 
+        // Or 2, 5.
         // Logic will find factors of exponents.
-        
+
         let left = Factor::from("2^10");
         let right = Factor::from("3^10");
-        
+
         let result = to_like_powers(&left, &right, true);
         // Exponent factors of 10 are 1, 2, 5, 10
         // It should return btreemap with factors.
         // Logic: for factor in exponent_factors:
         //    if factor != 2 (unless not subtract):
         //       ...
-        // x^10 - y^10. 
+        // x^10 - y^10.
         // 10: x-y, x+y doesn't work directly if factor==2 check applies?
         // Wait, "subtract || (factor != 2)"
         // If subtract is true, factor=2 IS allowed.
@@ -4139,7 +4187,7 @@ mod tests {
         // Common exponent 10.
         // factor 2: (2^5)^2 - (3^5)^2 = (2^5-3^5)(2^5+3^5)
         // factor 5: (2^2)^5 - (3^2)^5 -> (2^2-3^2)(...)
-        
+
         // Let's just verify it finds SOMETHING
         assert!(!result.is_empty());
     }
@@ -4149,13 +4197,13 @@ mod tests {
         // a^2 - b^2 -> (a-b)(a+b)
         // 5^2 - 4^2 = 25 - 16 = 9 = 3^2
         // factors: 5-4=1, 5+4=9.
-        
+
         // 10^2 - 6^2 = 100 - 36 = 64 = 2^6
         // factors: 10-6=4, 10+6=16.
-        
+
         let factors = find_factors("5^2-4^2");
         assert!(factors.iter().any(|f| f.as_numeric() == Some(3)));
-        
+
         let factors = find_factors("10^2-6^2");
         assert!(factors.iter().any(|f| f.as_numeric() == Some(2)));
     }
