@@ -37,7 +37,7 @@ use yamaquasi::Verbosity::Silent;
 use yamaquasi::{Preferences, factor};
 
 thread_local! {
-    static FIND_FACTORS_STACK: std::cell::RefCell<std::collections::BTreeSet<Factor>> = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    static FIND_FACTORS_STACK: std::cell::RefCell<std::collections::BTreeSet<Factor>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
@@ -2135,16 +2135,14 @@ fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
 fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> Option<Factor> {
     let mut new_left = simplify(left);
     let mut new_right = simplify(right);
-    if let Numeric(n) = new_right {
-        if n == 0 {
+    if let Numeric(n) = new_right
+        && n == 0 {
             return Some(new_left);
         }
-    }
-    if !subtract && let Numeric(n) = new_left {
-        if n == 0 {
+    if !subtract && let Numeric(n) = new_left
+        && n == 0 {
             return Some(new_right);
         }
-    }
     match new_left.cmp(&new_right) {
         Ordering::Less => {
             if !subtract {
@@ -4046,7 +4044,7 @@ mod tests {
         // x / 1 = x
         let mut right = BTreeMap::new();
         right.insert(one.clone(), 1);
-        assert_eq!(simplify(&Complex(ComplexFactor::Divide {
+        assert_eq!(simplify(&Complex(Divide {
             left: x.clone(),
             right: right,
             right_hash: 0
