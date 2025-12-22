@@ -37,7 +37,7 @@ use yamaquasi::Verbosity::Silent;
 use yamaquasi::{Preferences, factor};
 
 thread_local! {
-    static FIND_FACTORS_STACK: std::cell::RefCell<std::collections::BTreeSet<Factor>> = const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+    static FIND_FACTORS_STACK: RefCell<BTreeSet<Factor>> = const { RefCell::new(BTreeSet::new()) };
 }
 
 static SMALL_FIBONACCI_FACTORS: [&[NumericFactor]; 199] = [
@@ -4046,7 +4046,7 @@ mod tests {
         right.insert(one.clone(), 1);
         assert_eq!(simplify(&Complex(Divide {
             left: x.clone(),
-            right: right,
+            right,
             right_hash: 0
         }.into())), x);
     }
