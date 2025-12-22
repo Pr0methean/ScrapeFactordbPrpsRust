@@ -4084,7 +4084,7 @@ mod tests {
          let simplified = simplify(&nested);
          
          // Should be Multiply, not Power, because exponent's numeric value is known
-         let expected = Factor::multiply([x, 6]);
+         let expected = Factor::multiply([(x, 6)]);
          
          assert_eq!(simplified, expected);
     }
