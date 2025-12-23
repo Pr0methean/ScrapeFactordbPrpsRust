@@ -952,9 +952,12 @@ impl Factor {
             })
         }
         if let Some(n) = evaluate_as_numeric(self)
-            && let Some(m) = modulo_as_numeric(other, n)
         {
-            return m == 0;
+            if let Some(other_n) = evaluate_as_numeric(other) {
+                return other_n > n && other_n.is_multiple_of(n);
+            } else if let Some(m) = modulo_as_numeric(other, n) && m != 0 {
+                return false;
+            }
         }
         if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
             && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
