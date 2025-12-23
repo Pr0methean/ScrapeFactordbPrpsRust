@@ -674,7 +674,10 @@ pub async fn find_and_submit_factors(
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         match data.get_edge(factor_vid, root_vid) {
             Some(Direct) | Some(Transitive) | Some(NotFactor) => {
-                info!("{id}: Skipping {factor} because it's already known to be a factor of {digits_or_expr} (status: {:?})", data.get_edge(factor_vid, root_vid));
+                info!(
+                    "{id}: Skipping {factor} because it's already known to be a factor of {digits_or_expr} (status: {:?})",
+                    data.get_edge(factor_vid, root_vid)
+                );
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
                 continue;

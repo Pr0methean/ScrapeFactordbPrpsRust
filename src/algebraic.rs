@@ -2362,14 +2362,15 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
         };
 
         if let Complex(ref c) = term
-            && let Multiply { ref terms, .. } = **c {
-                changed = true;
-                for (inner_term, inner_exponent) in terms.iter() {
-                    let k: Factor = inner_term.clone();
-                    *new_terms.entry(k).or_insert(0) += inner_exponent * exponent;
-                }
-                continue;
+            && let Multiply { ref terms, .. } = **c
+        {
+            changed = true;
+            for (inner_term, inner_exponent) in terms.iter() {
+                let k: Factor = inner_term.clone();
+                *new_terms.entry(k).or_insert(0) += inner_exponent * exponent;
             }
+            continue;
+        }
         *new_terms.entry(term).or_insert(0) += exponent;
     }
 
