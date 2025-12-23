@@ -20,6 +20,7 @@ use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1508,38 +1509,49 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                 let mut divisor_terms = if let Complex(ref c) = *divisor
                     && let Multiply { ref terms, .. } = **c
                 {
-                    terms.clone()
+                    Cow::Borrowed(terms)
                 } else {
-                    [(divisor.clone(), 1)].into()
+                    Cow::Owned([(divisor.clone(), 1)].into())
                 };
+
                 let mut new_terms = terms.clone();
+                let mut cancelled_any = false;
                 for (term, exponent) in new_terms.iter_mut() {
-                    if let Some(divisor_exponent) = divisor_terms.get_mut(term) {
+                    if let Some(divisor_exponent) = divisor_terms.to_mut().get_mut(term) {
                         let min_exponent = (*divisor_exponent).min(*exponent);
                         *divisor_exponent -= min_exponent;
-                        if *divisor_exponent == 0 {
-                            divisor_terms.remove(term);
-                        }
                         *exponent -= min_exponent;
+                        cancelled_any = true;
                     }
                 }
-                new_terms.retain(|_, exponent| *exponent != 0);
-                divisor_terms.retain(|_, exponent| *exponent != 0);
+
+                if cancelled_any {
+                    new_terms.retain(|_, exponent| *exponent != 0);
+                    divisor_terms.to_mut().retain(|_, exponent| *exponent != 0);
+                }
+
                 if divisor_terms.is_empty() {
                     return Some(simplify_multiply(&new_terms));
                 }
                 if new_terms.is_empty() {
+                    // Try to see if divisor_terms (all numeric) divides 1
+                    let divisor_numeric: NumericFactor = divisor_terms
+                        .iter()
+                        .map(|(term, exponent)| {
+                            evaluate_as_numeric(term)
+                                .and_then(|numeric| numeric.checked_pow(*exponent))
+                        })
+                        .collect::<Option<Vec<_>>>()?
+                        .into_iter()
+                        .try_reduce(|x, y| x.checked_mul(y))??;
+                    if divisor_numeric == 1 {
+                        return Some(Factor::one());
+                    }
                     return None;
                 }
+
+                // Numeric fallback using REMAINING terms
                 let divisor_numeric: NumericFactor = divisor_terms
-                    .into_iter()
-                    .map(|(term, exponent)| {
-                        evaluate_as_numeric(&term).and_then(|numeric| numeric.checked_pow(exponent))
-                    })
-                    .collect::<Option<Vec<_>>>()?
-                    .into_iter()
-                    .try_reduce(|x, y| x.checked_mul(y))??;
-                let product_numeric: NumericFactor = terms
                     .iter()
                     .map(|(term, exponent)| {
                         evaluate_as_numeric(term).and_then(|numeric| numeric.checked_pow(*exponent))
@@ -1547,6 +1559,16 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     .collect::<Option<Vec<_>>>()?
                     .into_iter()
                     .try_reduce(|x, y| x.checked_mul(y))??;
+
+                let product_numeric: NumericFactor = new_terms
+                    .iter()
+                    .map(|(term, exponent)| {
+                        evaluate_as_numeric(term).and_then(|numeric| numeric.checked_pow(*exponent))
+                    })
+                    .collect::<Option<Vec<_>>>()?
+                    .into_iter()
+                    .try_reduce(|x, y| x.checked_mul(y))??;
+
                 Some(Numeric(product_numeric.div_exact(divisor_numeric)?))
             }
             Divide {
@@ -2315,55 +2337,67 @@ fn simplify_multiply(terms: &BTreeMap<Factor, NumberLength>) -> Factor {
 
 fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<Factor> {
     let mut new_terms = BTreeMap::new();
+    let mut changed = false;
+
     for (term, exponent) in terms.iter() {
-        let term = simplify(term);
-        let (term, exponent) = if let Numeric(n) = term {
+        let simplified = simplify(term);
+        if simplified != *term {
+            changed = true;
+        }
+
+        let (term, exponent) = if let Numeric(n) = simplified {
             if n == 1 {
+                changed = true;
                 continue;
             }
             let (factored_term, factored_exponent) = factor_power(n, *exponent);
             if factored_term != n {
+                changed = true;
                 (Numeric(factored_term), factored_exponent)
             } else {
-                (term.clone(), *exponent)
+                (Numeric(n), *exponent)
             }
         } else {
-            (term.clone(), *exponent)
+            (simplified, *exponent)
         };
-        if let Complex(ref c) = term
-            && let Multiply { ref terms, .. } = **c
-        {
-            terms
-                .clone()
-                .into_iter()
-                .map(|(term, term_exponent)| (simplify(&term), term_exponent * exponent))
-                .for_each(|(term, term_exponent)| {
-                    *new_terms.entry(term).or_insert(0) += term_exponent
-                });
-        } else {
-            *new_terms.entry(term).or_insert(0) += exponent;
+
+        if let Complex(ref c) = term {
+            if let Multiply { ref terms, .. } = **c {
+                changed = true;
+                for (inner_term, inner_exponent) in terms.iter() {
+                    let k: Factor = inner_term.clone();
+                    *new_terms.entry(k).or_insert(0) += inner_exponent * exponent;
+                }
+                continue;
+            }
         }
+        *new_terms.entry(term).or_insert(0) += exponent;
     }
-    new_terms.retain(|factor, exponent| *factor != Factor::one() && *exponent != 0);
+
+    new_terms.retain(|factor, exponent| {
+        if *factor == Factor::one() || *exponent == 0 {
+            changed = true;
+            false
+        } else {
+            true
+        }
+    });
+
+    if !changed {
+        return None;
+    }
+
     match new_terms.len() {
         0 => Some(Factor::one()),
         1 => {
             let (factor, power) = new_terms.into_iter().next().unwrap();
             if power == 1 {
                 Some(factor)
-            } else if terms.len() == 1 && terms.first_key_value() == Some((&factor, &power)) {
-                None
             } else {
-                Some(Factor::multiply(once((factor, power))))
+                Some(Factor::multiply([(factor, power)]))
             }
         }
-        _ => {
-            if new_terms == *terms {
-                None
-            } else {
-                Some(Factor::multiply(new_terms))
-            }
-        }
+        _ => Some(Factor::multiply(new_terms)),
     }
 }
 
@@ -2998,8 +3032,8 @@ mod tests {
     use crate::algebraic::Factor::{Complex, Numeric};
     use crate::algebraic::{
         ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
-        estimate_log10, factor_power, fibonacci_factors, lucas_factors, modinv, modulo_as_numeric,
-        multiset_intersection, multiset_union, power_multiset,
+        div_exact, estimate_log10, factor_power, fibonacci_factors, lucas_factors, modinv,
+        modulo_as_numeric, multiset_intersection, multiset_union, power_multiset,
     };
     use ahash::RandomState;
     use alloc::collections::BTreeSet;
@@ -4210,5 +4244,14 @@ mod tests {
 
         let factors = find_factors("10^2-6^2");
         assert!(factors.iter().any(|f| f.as_numeric() == Some(2)));
+    }
+    #[test]
+    fn test_div_exact_numeric_fallback_bug() {
+        // (x+1)*10 / ((x+1)*2) should be 5
+        let x_plus_1: Factor = "x+1".into();
+        let product = Factor::multiply([(x_plus_1.clone(), 1), (10.into(), 1)]);
+        let divisor = Factor::multiply([(x_plus_1.clone(), 1), (2.into(), 1)]);
+        let result = div_exact(&product, &divisor);
+        assert_eq!(result, Some(5.into()));
     }
 }
