@@ -1994,7 +1994,7 @@ pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option
                             .powm(*exponent as NumericFactor, &modulus);
                         match modinv(term_mod, modulus) {
                             Some(inv) => result = result.mulm(inv, &modulus),
-                            None => result = result.div_exact(modulus)?,
+                            None => return None,
                         }
                     }
                     Some(result)
@@ -2839,7 +2839,10 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         power;
                                 }
                             }
-                            // Enabling this would cause infinite recursion: factors.insert(simplify_divide(expr, &factors), 1);
+                            let cofactor = simplify_divide(expr, &factors);
+                            if &cofactor != expr {
+                                factors.insert(cofactor, 1);
+                            }
                             factors
                         }
                     } else {
