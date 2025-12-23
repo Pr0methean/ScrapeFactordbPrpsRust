@@ -569,11 +569,6 @@ impl NumberFacts {
     }
 }
 
-// If we've received too many "Does not divide" responses since the last accepted factor, abort.
-// This is meant to ensure we don't waste too much time on a job much better suited to a more
-// sophisticated algebra system.
-const DND_ABORT_THRESHOLD: usize = 30;
-
 #[inline(always)]
 fn dedup_and_shuffle<T: Ord>(deque: &mut VecDeque<T>) {
     let deque_as_set = BTreeSet::from_iter(deque.drain(..));
@@ -670,7 +665,6 @@ pub async fn find_and_submit_factors(
     } else {
         (None, None)
     };
-    let mut dnd_since_last_accepted = 0;
     let mut known_factors = data.vertex_ids_except(root_vid);
     known_factors.shuffle(&mut rng());
     let mut known_factors = VecDeque::from(known_factors);
@@ -707,17 +701,9 @@ pub async fn find_and_submit_factors(
             Accepted => {
                 data.propagate_divisibility(factor_vid, root_vid, false);
                 mark_stale(&mut data, root_vid);
-                dnd_since_last_accepted = 0;
                 accepted_factors += 1;
             }
             DoesNotDivide => {
-                dnd_since_last_accepted += 1;
-                if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
-                    error!(
-                        "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
-                    );
-                    return accepted_factors > 0;
-                }
                 let subfactors = add_factors_to_graph(http, &mut data, factor_vid).await;
                 let subfactors_found = !subfactors.is_empty();
                 if subfactors_found {
@@ -838,7 +824,6 @@ pub async fn find_and_submit_factors(
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
                     data.get_edge(factor_vid, *dest_vid).is_none())
             .collect::<Vec<_>>();
-        let mut did_not_divide = false;
         dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
             info!("{id}: Skipping {factor} because there are no more cofactors it can divide");
@@ -1031,8 +1016,6 @@ pub async fn find_and_submit_factors(
                     data.propagate_divisibility(factor_vid, cofactor_vid, false);
                     mark_stale(&mut data, cofactor_vid);
                     accepted_factors += 1;
-                    did_not_divide = false;
-                    dnd_since_last_accepted = 0;
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
                     if cofactor_vid == root_vid {
@@ -1043,16 +1026,6 @@ pub async fn find_and_submit_factors(
                     break 'per_cofactor;
                 }
                 DoesNotDivide => {
-                    if cofactor_vid == root_vid {
-                        dnd_since_last_accepted += 1;
-                        if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
-                            error!(
-                                "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
-                            );
-                            return accepted_factors > 0;
-                        }
-                    }
-                    did_not_divide = true;
                     data.rule_out_divisibility(factor_vid, cofactor_vid);
                     let subfactors = add_factors_to_graph(http, &mut data, factor_vid).await;
                     if !subfactors.is_empty() {
@@ -1105,15 +1078,6 @@ pub async fn find_and_submit_factors(
                         iters_without_progress = 0;
                     }
                 }
-            }
-        }
-        if did_not_divide {
-            dnd_since_last_accepted += 1;
-            if dnd_since_last_accepted >= DND_ABORT_THRESHOLD {
-                error!(
-                    "{id}: Aborting due to too many 'does not divide' responses with no acceptances"
-                );
-                return accepted_factors > 0;
             }
         }
         if put_factor_back_into_queue && !factors_to_submit_in_graph.contains(&factor_vid) {
