@@ -679,8 +679,8 @@ pub async fn find_and_submit_factors(
         let factor = data.get_factor(factor_vid);
         debug!("{id}: Factor {factor} has vertex ID {factor_vid:?}");
         match data.get_edge(factor_vid, root_vid) {
-            Some(Direct) | Some(NotFactor) => {
-                info!("{id}: Skipping {factor} because it's already linked to {digits_or_expr}");
+            Some(Direct) | Some(Transitive) | Some(NotFactor) => {
+                info!("{id}: Skipping {factor} because it's already known to be a factor of {digits_or_expr} (status: {:?})", data.get_edge(factor_vid, root_vid));
                 // This has been submitted directly to the root already, so it's probably already been
                 // factored out of all other divisors.
                 continue;
@@ -1029,7 +1029,7 @@ pub async fn find_and_submit_factors(
                 }
                 Accepted => {
                     data.propagate_divisibility(factor_vid, cofactor_vid, false);
-                    mark_stale(&mut data, factor_vid);
+                    mark_stale(&mut data, cofactor_vid);
                     accepted_factors += 1;
                     did_not_divide = false;
                     dnd_since_last_accepted = 0;
