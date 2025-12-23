@@ -73,6 +73,19 @@ impl Default for FactorData {
     }
 }
 
+
+enum WorkItem {
+    Propagate {
+        factor: VertexId,
+        dest: VertexId,
+        transitive: bool,
+    },
+    RuleOut {
+        nonfactor: VertexId,
+        dest: VertexId,
+    },
+}
+
 impl FactorData {
     pub fn resolve_vid(&mut self, mut vertex_id: VertexId) -> VertexId {
         let mut synonyms_to_forward = Vec::new();
@@ -113,79 +126,128 @@ impl FactorData {
     }
 
     pub fn rule_out_divisibility(&mut self, nonfactor: VertexId, dest: VertexId) {
-        let nonfactor = self.resolve_vid(nonfactor);
-        let dest = self.resolve_vid(dest);
-        if nonfactor == dest {
-            // happens because of recursion
-            return;
-        }
-        if self.get_edge(nonfactor, dest).is_some() {
-            return;
-        }
-        debug!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
-        self.divisibility_graph.add_edge(nonfactor, dest, NotFactor);
-        for (neighbor, divisibility) in neighbor_vids(&self.divisibility_graph, dest, Incoming) {
-            if neighbor == nonfactor {
-                continue;
-            }
-            if matches!(divisibility, Direct | Transitive) {
-                // if factor doesn't divide dest_factor, then it also doesn't divide dest_factor's factors
-                self.rule_out_divisibility(nonfactor, neighbor);
-            }
-        }
+        let mut worklist = VecDeque::new();
+        worklist.push_back(WorkItem::RuleOut { nonfactor, dest });
+        self.process_divisibility_worklist(worklist);
     }
 
     pub fn propagate_divisibility(&mut self, factor: VertexId, dest: VertexId, transitive: bool) {
-        let factor = self.resolve_vid(factor);
-        let dest = self.resolve_vid(dest);
-        if factor == dest {
-            // happens because of recursion
-            return;
-        }
-        let edge_id = self.divisibility_graph.edge_id_any(factor, dest);
-        let edge = edge_id.and_then(|edge_id| self.divisibility_graph.edge_mut(edge_id));
-        match edge {
-            Some(Direct) | Some(NotFactor) => return,
-            Some(Transitive) => {
-                if transitive {
-                    return;
-                } else {
-                    *edge.unwrap() = Direct;
-                }
-            }
-            None => {
-                self.divisibility_graph.add_edge(
+        let mut worklist = VecDeque::new();
+        worklist.push_back(WorkItem::Propagate {
+            factor,
+            dest,
+            transitive,
+        });
+        self.process_divisibility_worklist(worklist);
+    }
+
+    fn process_divisibility_worklist(&mut self, mut worklist: VecDeque<WorkItem>) {
+        while let Some(item) = worklist.pop_front() {
+            match item {
+                WorkItem::Propagate {
                     factor,
                     dest,
-                    if transitive { Transitive } else { Direct },
-                );
-            }
-        }
-        debug!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
-        self.rule_out_divisibility(dest, factor);
-        for (neighbor, divisibility) in neighbor_vids(&self.divisibility_graph, dest, Outgoing) {
-            if neighbor == factor {
-                continue;
-            }
-            match divisibility {
-                NotFactor => {
-                    // if factor divides dest_factor and dest_factor doesn't divide neighbor,
-                    // then factor doesn't divide neighbor
-                    self.rule_out_divisibility(neighbor, factor);
+                    transitive,
+                } => {
+                    let factor = self.resolve_vid(factor);
+                    let dest = self.resolve_vid(dest);
+                    if factor == dest {
+                        continue;
+                    }
+                    let edge_id = self.divisibility_graph.edge_id_any(factor, dest);
+                    let mut added_or_upgraded = false;
+
+                    let edge = edge_id.and_then(|edge_id| self.divisibility_graph.edge_mut(edge_id));
+                    match edge {
+                        Some(Direct) | Some(NotFactor) => continue,
+                        Some(Transitive) => {
+                            if !transitive {
+                                *edge.unwrap() = Direct;
+                                added_or_upgraded = true;
+                            }
+                        }
+                        None => {
+                            self.divisibility_graph.add_edge(
+                                factor,
+                                dest,
+                                if transitive { Transitive } else { Direct },
+                            );
+                            added_or_upgraded = true;
+                        }
+                    }
+
+                    if added_or_upgraded {
+                        debug!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
+                        worklist.push_back(WorkItem::RuleOut {
+                            nonfactor: dest,
+                            dest: factor,
+                        });
+                        for (neighbor, divisibility) in
+                            neighbor_vids(&self.divisibility_graph, dest, Outgoing)
+                        {
+                            if neighbor == factor {
+                                continue;
+                            }
+                            match divisibility {
+                                NotFactor => {
+                                    // if factor divides dest_factor and dest_factor doesn't divide neighbor,
+                                    // then neighbor doesn't divide factor (n|d & d!|f => n!|f)
+                                    worklist.push_back(WorkItem::RuleOut {
+                                        nonfactor: neighbor,
+                                        dest: factor,
+                                    });
+                                }
+                                _ => {
+                                    worklist.push_back(WorkItem::Propagate {
+                                        factor,
+                                        dest: neighbor,
+                                        transitive: true,
+                                    });
+                                }
+                            }
+                        }
+                        // Backward propagation: if A divides factor, and factor divides dest, then A divides dest
+                        for (upstream, divisibility) in
+                            neighbor_vids(&self.divisibility_graph, factor, Incoming)
+                        {
+                            if upstream == dest
+                                || !matches!(divisibility, Direct | Transitive)
+                            {
+                                continue;
+                            }
+                            worklist.push_back(WorkItem::Propagate {
+                                factor: upstream,
+                                dest,
+                                transitive: true,
+                            });
+                        }
+                    }
                 }
-                _ => {
-                    self.propagate_divisibility(factor, neighbor, true);
+                WorkItem::RuleOut { nonfactor, dest } => {
+                    let nonfactor = self.resolve_vid(nonfactor);
+                    let dest = self.resolve_vid(dest);
+                    if nonfactor == dest || self.get_edge(nonfactor, dest).is_some() {
+                        continue;
+                    }
+
+                    debug!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
+                    self.divisibility_graph.add_edge(nonfactor, dest, NotFactor);
+                    for (neighbor, divisibility) in
+                        neighbor_vids(&self.divisibility_graph, dest, Incoming)
+                    {
+                        if neighbor == nonfactor {
+                            continue;
+                        }
+                        if matches!(divisibility, Direct | Transitive) {
+                            // if nonfactor doesn't divide dest, then it also doesn't divide dest's factors
+                            worklist.push_back(WorkItem::RuleOut {
+                                nonfactor,
+                                dest: neighbor,
+                            });
+                        }
+                    }
                 }
             }
-        }
-        // Backward propagation: if A divides factor, and factor divides dest, then A divides dest
-        for (upstream, _) in neighbor_vids(&self.divisibility_graph, factor, Incoming) {
-            if upstream == dest {
-                continue;
-            }
-            // This is safe because we check `if factor == dest` at start, preventing 1-cycle recursion.
-            // And if A->factor exists, we add A->dest.
-            self.propagate_divisibility(upstream, dest, true);
         }
     }
 
