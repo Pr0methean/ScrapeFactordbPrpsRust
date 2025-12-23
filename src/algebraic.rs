@@ -4011,10 +4011,11 @@ mod tests {
             "10^65035*18+10^130071-1",
             "((((10)^260)-224)/32)",
         ] {
-            let (lower, _) = estimate_log10(&Factor::from(expr));
+            let (lower, upper) = estimate_log10(&Factor::from(expr));
             for factor in find_factors(expr) {
-                let (_, upper) = estimate_log10(&factor);
-                assert!(upper <= lower, "{factor} upper bound is too large");
+                let (factor_lower, factor_upper) = estimate_log10(&factor);
+                assert!(factor_lower <= lower, "{factor} lower bound is too large");
+                assert!(factor_upper <= upper, "{factor} upper bound is too large");
             }
         }
     }
