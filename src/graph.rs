@@ -178,32 +178,48 @@ impl FactorData {
 
                     if added_or_upgraded {
                         debug!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
+                        // Anti-symmetry: if f | d and f != d, then d !| f
                         worklist.push_back(WorkItem::RuleOut {
                             nonfactor: dest,
                             dest: factor,
                         });
+
+                        // Positive propagation: if f | d and d | n, then f | n
                         for (neighbor, divisibility) in
                             neighbor_vids(&self.divisibility_graph, dest, Outgoing)
                         {
                             if neighbor == factor {
                                 continue;
                             }
-                            match divisibility {
-                                NotFactor => {
-                                    // if factor divides dest_factor and dest_factor doesn't divide neighbor,
-                                    // then neighbor doesn't divide factor (n|d & d!|f => n!|f)
-                                    worklist.push_back(WorkItem::RuleOut {
-                                        nonfactor: neighbor,
-                                        dest: factor,
-                                    });
-                                }
-                                _ => {
-                                    worklist.push_back(WorkItem::Propagate {
-                                        factor,
-                                        dest: neighbor,
-                                        transitive: true,
-                                    });
-                                }
+                            if matches!(divisibility, Direct | Transitive) {
+                                worklist.push_back(WorkItem::Propagate {
+                                    factor,
+                                    dest: neighbor,
+                                    transitive: true,
+                                });
+                            }
+                        }
+                        // Non-divisibility propagation when f | d:
+                        // Rule 4: n !| d and f | d => n !| f
+                        for (neighbor, divisibility) in
+                            neighbor_vids(&self.divisibility_graph, dest, Incoming)
+                        {
+                            if divisibility == NotFactor {
+                                worklist.push_back(WorkItem::RuleOut {
+                                    nonfactor: neighbor,
+                                    dest: factor,
+                                });
+                            }
+                        }
+                        // Rule 3: f | d and f !| n => d !| n
+                        for (neighbor, divisibility) in
+                            neighbor_vids(&self.divisibility_graph, factor, Outgoing)
+                        {
+                            if divisibility == NotFactor {
+                                worklist.push_back(WorkItem::RuleOut {
+                                    nonfactor: dest,
+                                    dest: neighbor,
+                                });
                             }
                         }
                         // Backward propagation: if A divides factor, and factor divides dest, then A divides dest
