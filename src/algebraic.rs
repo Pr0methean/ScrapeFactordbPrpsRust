@@ -951,11 +951,12 @@ impl Factor {
                 true
             })
         }
-        if let Some(n) = evaluate_as_numeric(self)
-        {
+        if let Some(n) = evaluate_as_numeric(self) {
             if let Some(other_n) = evaluate_as_numeric(other) {
                 return other_n > n && other_n.is_multiple_of(n);
-            } else if let Some(m) = modulo_as_numeric(other, n) && m != 0 {
+            } else if let Some(m) = modulo_as_numeric(other, n)
+                && m != 0
+            {
                 return false;
             }
         }

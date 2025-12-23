@@ -73,7 +73,6 @@ impl Default for FactorData {
     }
 }
 
-
 enum WorkItem {
     Propagate {
         factor: VertexId,
@@ -157,7 +156,8 @@ impl FactorData {
                     let edge_id = self.divisibility_graph.edge_id_any(factor, dest);
                     let mut added_or_upgraded = false;
 
-                    let edge = edge_id.and_then(|edge_id| self.divisibility_graph.edge_mut(edge_id));
+                    let edge =
+                        edge_id.and_then(|edge_id| self.divisibility_graph.edge_mut(edge_id));
                     match edge {
                         Some(Direct) | Some(NotFactor) => continue,
                         Some(Transitive) => {
@@ -226,9 +226,7 @@ impl FactorData {
                         for (upstream, divisibility) in
                             neighbor_vids(&self.divisibility_graph, factor, Incoming)
                         {
-                            if upstream == dest
-                                || !matches!(divisibility, Direct | Transitive)
-                            {
+                            if upstream == dest || !matches!(divisibility, Direct | Transitive) {
                                 continue;
                             }
                             worklist.push_back(WorkItem::Propagate {
