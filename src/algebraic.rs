@@ -951,11 +951,6 @@ impl Factor {
                 true
             })
         }
-        if let Some(quotient) = div_exact(other, self)
-            && let Some(quotient_numeric) = evaluate_as_numeric(&quotient)
-        {
-            return quotient_numeric > 1;
-        }
         if let Some(n) = evaluate_as_numeric(self)
             && let Some(m) = modulo_as_numeric(other, n)
         {
@@ -1070,6 +1065,11 @@ impl Factor {
             } else if !self.may_be_proper_divisor_of(left) {
                 return false;
             }
+        }
+        if let Some(quotient) = div_exact(other, self)
+            && let Some(quotient_numeric) = evaluate_as_numeric(&quotient)
+        {
+            return quotient_numeric > 1;
         }
         let Some(last_digit) = self.last_digit() else {
             return true;
