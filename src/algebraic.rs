@@ -2361,8 +2361,8 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             (simplified, *exponent)
         };
 
-        if let Complex(ref c) = term {
-            if let Multiply { ref terms, .. } = **c {
+        if let Complex(ref c) = term
+            && let Multiply { ref terms, .. } = **c {
                 changed = true;
                 for (inner_term, inner_exponent) in terms.iter() {
                     let k: Factor = inner_term.clone();
@@ -2370,7 +2370,6 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
                 }
                 continue;
             }
-        }
         *new_terms.entry(term).or_insert(0) += exponent;
     }
 
