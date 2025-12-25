@@ -2430,6 +2430,8 @@ fn simplify_divide_internal(
         } else {
             Some(Factor::divide(final_left, current_right))
         }
+    } else if current_right.is_empty() {
+        Some(final_left)
     } else {
         None
     }
