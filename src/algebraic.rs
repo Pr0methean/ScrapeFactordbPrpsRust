@@ -2373,9 +2373,9 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
                 let k: Factor = inner_term.clone();
                 *new_terms.entry(k).or_insert(0) += inner_exponent * exponent;
             }
-            continue;
+        } else {
+            *new_terms.entry(term).or_insert(0) += exponent;
         }
-        *new_terms.entry(term).or_insert(0) += exponent;
     }
 
     new_terms.retain(|factor, exponent| {
