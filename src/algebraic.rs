@@ -1025,6 +1025,15 @@ impl Factor {
                         return false;
                     }
                 }
+                Complex(ref c) if matches!(**c, Divide { .. }) => {
+                    // self is a big number, other is a division.
+                    // If self >= other_numerator, it's definitely not a divisor.
+                    if let Divide { ref left, .. } = **c {
+                        if self >= left {
+                            return false;
+                        }
+                    }
+                }
                 _ => {}
             },
             Complex(ref c) => match **c {
@@ -1560,68 +1569,74 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                 }
             }
             Multiply { ref terms, .. } => {
-                let mut divisor_terms = if let Complex(ref c) = *divisor
-                    && let Multiply { ref terms, .. } = **c
-                {
-                    Cow::Borrowed(terms)
-                } else {
-                    Cow::Owned([(divisor.clone(), 1)].into())
+                let (mut divisor_terms, mut divisor_numeric): (_, NumericFactor) = match divisor {
+                    Complex(c) => {
+                        if let Multiply { ref terms, .. } = **c {
+                            (Cow::Borrowed(terms), 1)
+                        } else {
+                            (Cow::Owned([(divisor.clone(), 1)].into()), 1)
+                        }
+                    }
+                    _ => (Cow::Owned([(divisor.clone(), 1)].into()), 1),
                 };
 
-                let mut new_terms = terms.clone();
+                let mut new_terms: Option<BTreeMap<Factor, NumberLength>> = None;
                 let mut cancelled_any = false;
-                for (term, exponent) in new_terms.iter_mut() {
-                    if let Some(divisor_exponent) = divisor_terms.to_mut().get_mut(term) {
-                        let min_exponent = (*divisor_exponent).min(*exponent);
-                        *divisor_exponent -= min_exponent;
-                        *exponent -= min_exponent;
-                        cancelled_any = true;
+
+                // First pass: handle symbolic cancellation without cloning the map if possible
+                for (term, exponent) in terms.iter() {
+                    if let Some(divisor_exponent) = divisor_terms.get(term).copied() {
+                        if !cancelled_any {
+                            let mut t = terms.clone();
+                            let mut d = divisor_terms.into_owned();
+                            let min_exponent = (*d.get(term).unwrap()).min(divisor_exponent);
+                            *d.get_mut(term).unwrap() -= min_exponent;
+                            *t.get_mut(term).unwrap() -= min_exponent;
+                            new_terms = Some(t);
+                            divisor_terms = Cow::Owned(d);
+                            cancelled_any = true;
+                        } else {
+                            let d = divisor_terms.to_mut();
+                            let t = new_terms.as_mut().unwrap();
+                            let min_exponent = *d.get(term).unwrap().min(exponent);
+                            *d.get_mut(term).unwrap() -= min_exponent;
+                            *t.get_mut(term).unwrap() -= min_exponent;
+                        }
                     }
                 }
 
                 if cancelled_any {
-                    new_terms.retain(|_, exponent| *exponent != 0);
+                    let mut t = new_terms.unwrap();
+                    t.retain(|_, exponent| *exponent != 0);
+                    new_terms = Some(t);
                     divisor_terms.to_mut().retain(|_, exponent| *exponent != 0);
                 }
 
-                if divisor_terms.is_empty() {
-                    return Some(simplify_multiply(new_terms));
+                let remaining_divisor_terms = divisor_terms.into_owned();
+                if remaining_divisor_terms.is_empty() && divisor_numeric == 1 {
+                    return Some(simplify_multiply(new_terms.unwrap_or_else(|| terms.clone())));
                 }
-                if new_terms.is_empty() {
-                    // Try to see if divisor_terms (all numeric) divides 1
-                    let divisor_numeric: NumericFactor = divisor_terms
-                        .iter()
-                        .map(|(term, exponent)| {
-                            evaluate_as_numeric(term)
-                                .and_then(|numeric| numeric.checked_pow(*exponent))
-                        })
-                        .collect::<Option<Vec<_>>>()?
-                        .into_iter()
-                        .try_reduce(|x, y| x.checked_mul(y))??;
-                    if divisor_numeric == 1 {
-                        return Some(Factor::one());
+
+                // Numeric fallback
+                let mut product_numeric: NumericFactor = 1;
+                let current_terms = new_terms.as_ref().unwrap_or(terms);
+
+                for (term, exponent) in current_terms.iter() {
+                    if let Some(n) = evaluate_as_numeric(term) {
+                        product_numeric = product_numeric.checked_mul(n.checked_pow(*exponent)?)?;
+                    } else {
+                        // If we can't evaluate symbol as numeric, we can't do numeric fallback
+                        return None;
                     }
-                    return None;
                 }
 
-                // Numeric fallback using REMAINING terms
-                let divisor_numeric: NumericFactor = divisor_terms
-                    .iter()
-                    .map(|(term, exponent)| {
-                        evaluate_as_numeric(term).and_then(|numeric| numeric.checked_pow(*exponent))
-                    })
-                    .collect::<Option<Vec<_>>>()?
-                    .into_iter()
-                    .try_reduce(|x, y| x.checked_mul(y))??;
-
-                let product_numeric: NumericFactor = new_terms
-                    .iter()
-                    .map(|(term, exponent)| {
-                        evaluate_as_numeric(term).and_then(|numeric| numeric.checked_pow(*exponent))
-                    })
-                    .collect::<Option<Vec<_>>>()?
-                    .into_iter()
-                    .try_reduce(|x, y| x.checked_mul(y))??;
+                for (term, exponent) in remaining_divisor_terms.iter() {
+                    if let Some(n) = evaluate_as_numeric(term) {
+                        divisor_numeric = divisor_numeric.checked_mul(n.checked_pow(*exponent)?)?;
+                    } else {
+                        return None;
+                    }
+                }
 
                 Some(Numeric(product_numeric.div_exact(divisor_numeric)?))
             }
@@ -1764,14 +1779,21 @@ fn nth_root_of_product(
     terms: &BTreeMap<Factor, NumberLength>,
     root: NumberLength,
 ) -> Option<BTreeMap<Factor, NumberLength>> {
-    let root = NumberLength::try_from(root).ok()?;
+    let root_nl = NumberLength::try_from(root).ok()?;
     terms
         .iter()
         .map(|(term, exponent)| {
-            nth_root_exact(term, root)
-                .map(|x| (x, *exponent))
-                .or_else(|| Some((nth_root_exact(term, root.div_exact(*exponent)?)?, 1)))
-                .or_else(|| Some((term.clone(), exponent.div_exact(root)?)))
+            if let Some(exact) = nth_root_exact(term, root_nl) {
+                Some((exact, *exponent))
+            } else if let Some(reduced_root) = root_nl.div_exact(*exponent)
+                && let Some(exact) = nth_root_exact(term, reduced_root)
+            {
+                Some((exact, 1))
+            } else if let Some(reduced_exponent) = exponent.div_exact(root_nl) {
+                Some((term.clone(), reduced_exponent))
+            } else {
+                None
+            }
         })
         .collect()
 }
@@ -1994,7 +2016,7 @@ fn estimate_log10_of_product(
         lower = lower.saturating_add(power_lower);
         upper = upper.saturating_add(power_upper).saturating_add(1);
     }
-    (lower, upper - 1)
+    (lower, upper.saturating_sub(1))
 }
 
 pub(crate) fn estimate_log10(expr: &Factor) -> (NumberLength, NumberLength) {
@@ -2329,59 +2351,94 @@ fn simplify_divide_internal(
     left: &Factor,
     right: &BTreeMap<Factor, NumberLength>,
 ) -> Option<Factor> {
-    let mut new_left = left.clone();
-    let mut new_right = right.clone();
-    while let Complex(ref c) = new_left
+    let mut current_left = left;
+    let mut new_right: Option<BTreeMap<Factor, NumberLength>> = None;
+
+    // Handle nested divisions: (L/M)/R -> L/(M*R)
+    while let Complex(c) = current_left
         && let Divide {
             left: ref left_left,
             right: ref mid,
             ..
         } = **c
     {
-        // (left_left / mid) / right
+        let nr = new_right.get_or_insert_with(|| right.clone());
         for (term, exponent) in mid.iter() {
-            *new_right.entry(term.clone()).or_insert(0) += *exponent;
+            *nr.entry(term.clone()).or_insert(0) += *exponent;
         }
-        new_left = left_left.clone();
-        // left_left / (mid * right)
+        current_left = left_left;
     }
-    let mut new_left = simplify(&new_left);
-    let mut cloned_right = new_right.clone();
-    for (term, exponent) in new_right {
-        let mut simplified = simplify(&term);
-        if let Complex(ref c) = simplified
+
+    let simplified_left = simplify(current_left);
+    let mut final_left = simplified_left;
+    let nested_changed = new_right.is_some();
+    let mut current_right = new_right.unwrap_or_else(|| right.clone());
+
+    let old_right_len = current_right.len();
+    current_right.retain(|term, exponent| *exponent != 0 && *term != Factor::one());
+    let mut changed = nested_changed || final_left != *current_left || current_left != left || current_right.len() != old_right_len;
+
+    // Simplify terms in the divisor
+    let keys: Vec<_> = current_right.keys().cloned().collect();
+    for term in keys {
+        let (term, exponent) = current_right.remove_entry(&term).unwrap();
+        let simplified_term = simplify(&term);
+
+        if let Complex(ref c) = simplified_term
             && let Multiply { ref terms, .. } = **c
         {
-            cloned_right.remove(&term);
+            changed = true;
             for (subterm, subterm_exponent) in terms {
-                *cloned_right.entry(simplify(subterm)).or_insert(0) += exponent * subterm_exponent;
+                *current_right
+                    .entry(simplify(subterm))
+                    .or_insert(0) += exponent * subterm_exponent;
             }
-        } else if simplified != term {
-            if let Numeric(l) = new_left
-                && let Numeric(r) = term
-            {
-                let gcd = l.gcd(&r);
-                if gcd > 1
+        } else {
+            if simplified_term != term {
+                changed = true;
+                if let Numeric(l) = final_left
+                    && let Numeric(r) = simplified_term
+                    && let gcd = l.gcd(&r)
+                    && gcd > 1
                     && let Some(gcd_root) = gcd.nth_root_exact(exponent)
                 {
-                    new_left = Numeric(l / gcd);
-                    simplified = Numeric(r / gcd_root);
+                    final_left = Numeric(l / gcd);
+                    *current_right.entry(Numeric(r / gcd_root)).or_insert(0) += exponent;
+                } else {
+                    *current_right.entry(simplified_term).or_insert(0) += exponent;
                 }
+            } else {
+                current_right.insert(term, exponent);
             }
-            *cloned_right.entry(simplified).or_insert(0) += cloned_right.remove(&term).unwrap();
         }
     }
-    cloned_right.retain(|term, exponent| *exponent != 0 && *term != Factor::one());
-    if let Some(exponent) = cloned_right.get_mut(&new_left) {
-        *exponent -= 1;
-        new_left = Factor::one();
+
+    current_right.retain(|term, exponent| *exponent != 0 && *term != Factor::one());
+
+    // Basic cancellation: L / (L * R) -> 1 / R
+    if let Some(mut exponent) = current_right.remove(&final_left) {
+        if final_left != Factor::one() {
+            changed = true;
+            exponent -= 1;
+            let cancelled_term = final_left;
+            final_left = Factor::one();
+            if exponent > 0 {
+                current_right.insert(cancelled_term, exponent);
+            }
+        } else {
+            current_right.insert(final_left.clone(), exponent);
+        }
     }
-    if cloned_right.is_empty() {
-        Some(new_left)
-    } else if new_left == *left && cloned_right == *right {
-        None
+
+    if changed {
+        current_right.retain(|term, exponent| *exponent != 0 && *term != Factor::one());
+        if current_right.is_empty() {
+            Some(final_left)
+        } else {
+            Some(Factor::divide(final_left, current_right))
+        }
     } else {
-        Some(Factor::divide(new_left, cloned_right))
+        None
     }
 }
 
@@ -2399,15 +2456,14 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             changed = true;
         }
 
-        let (term, exponent) = if let Numeric(n) = simplified {
-            if n == 1 {
-                changed = true;
-                continue;
-            }
+        let (new_term, new_exponent) = if let Numeric(n) = simplified {
             let (factored_term, factored_exponent) = factor_power(n, *exponent);
-            if factored_term != n {
+            if factored_term != n || simplified != *term {
                 changed = true;
                 (Numeric(factored_term), factored_exponent)
+            } else if n == 1 {
+                changed = true;
+                continue;
             } else {
                 (Numeric(n), *exponent)
             }
@@ -2415,16 +2471,15 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             (simplified, *exponent)
         };
 
-        if let Complex(ref c) = term
+        if let Complex(ref c) = new_term
             && let Multiply { ref terms, .. } = **c
         {
             changed = true;
             for (inner_term, inner_exponent) in terms.iter() {
-                let k: Factor = inner_term.clone();
-                *new_terms.entry(k).or_insert(0) += inner_exponent * exponent;
+                *new_terms.entry(inner_term.clone()).or_insert(0) += inner_exponent * new_exponent;
             }
         } else {
-            *new_terms.entry(term).or_insert(0) += exponent;
+            *new_terms.entry(new_term).or_insert(0) += new_exponent;
         }
     }
 
