@@ -273,6 +273,8 @@ impl FactorData {
     }
 
     pub fn is_known_factor(&mut self, factor_vid: VertexId, composite_vid: VertexId) -> bool {
+        let factor_vid = self.resolve_vid(factor_vid);
+        let composite_vid = self.resolve_vid(composite_vid);
         factor_vid != composite_vid
             && (matches!(
                 self.get_edge(factor_vid, composite_vid),
