@@ -1428,7 +1428,7 @@ pub fn to_like_powers(
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
-                    *term = Factor::multiply([((Numeric(a), n as NumberLength))].into());
+                    *term = Factor::multiply([(Numeric(a), n as NumberLength)].into());
                     Some(n)
                 } else {
                     None
