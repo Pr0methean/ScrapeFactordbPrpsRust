@@ -938,12 +938,17 @@ impl Factor {
                 Power {
                     ref base,
                     ref exponent,
-                } => format!("({})^({})", base.to_unelided_string(), exponent.to_unelided_string()),
+                } => format!(
+                    "({})^({})",
+                    base.to_unelided_string(),
+                    exponent.to_unelided_string()
+                ),
                 Factorial(ref input) => format!("({}!)", input.to_unelided_string()),
                 Primorial(ref input) => format!("({}#)", input.to_unelided_string()),
                 Fibonacci(ref input) => format!("I({})", input.to_unelided_string()),
-                Lucas(ref input) => format!("lucas({})", input.to_unelided_string())
-            }.into()
+                Lucas(ref input) => format!("lucas({})", input.to_unelided_string()),
+            }
+            .into(),
         }
     }
 
