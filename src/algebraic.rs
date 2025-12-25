@@ -1028,11 +1028,10 @@ impl Factor {
                 Complex(ref c) if matches!(**c, Divide { .. }) => {
                     // self is a big number, other is a division.
                     // If self >= other_numerator, it's definitely not a divisor.
-                    if let Divide { ref left, .. } = **c {
-                        if self >= left {
+                    if let Divide { ref left, .. } = **c
+                        && self >= left {
                             return false;
                         }
-                    }
                 }
                 _ => {}
             },
@@ -1789,11 +1788,7 @@ fn nth_root_of_product(
                 && let Some(exact) = nth_root_exact(term, reduced_root)
             {
                 Some((exact, 1))
-            } else if let Some(reduced_exponent) = exponent.div_exact(root_nl) {
-                Some((term.clone(), reduced_exponent))
-            } else {
-                None
-            }
+            } else { exponent.div_exact(root_nl).map(|reduced_exponent| (term.clone(), reduced_exponent)) }
         })
         .collect()
 }
@@ -2393,23 +2388,21 @@ fn simplify_divide_internal(
                     .entry(simplify(subterm))
                     .or_insert(0) += exponent * subterm_exponent;
             }
-        } else {
-            if simplified_term != term {
-                changed = true;
-                if let Numeric(l) = final_left
-                    && let Numeric(r) = simplified_term
-                    && let gcd = l.gcd(&r)
-                    && gcd > 1
-                    && let Some(gcd_root) = gcd.nth_root_exact(exponent)
-                {
-                    final_left = Numeric(l / gcd);
-                    *current_right.entry(Numeric(r / gcd_root)).or_insert(0) += exponent;
-                } else {
-                    *current_right.entry(simplified_term).or_insert(0) += exponent;
-                }
+        } else if simplified_term != term {
+            changed = true;
+            if let Numeric(l) = final_left
+                && let Numeric(r) = simplified_term
+                && let gcd = l.gcd(&r)
+                && gcd > 1
+                && let Some(gcd_root) = gcd.nth_root_exact(exponent)
+            {
+                final_left = Numeric(l / gcd);
+                *current_right.entry(Numeric(r / gcd_root)).or_insert(0) += exponent;
             } else {
-                current_right.insert(term, exponent);
+                *current_right.entry(simplified_term).or_insert(0) += exponent;
             }
+        } else {
+            current_right.insert(term, exponent);
         }
     }
 
