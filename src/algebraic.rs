@@ -892,11 +892,58 @@ impl Factor {
     }
 
     #[inline(always)]
-    pub fn to_owned_string(&self) -> HipStr<'static> {
+    pub fn to_unelided_string(&self) -> HipStr<'static> {
         match self {
             Numeric(n) => n.to_string().into(),
             Factor::BigNumber(s) => s.0.clone(),
-            _ => self.to_string().into(),
+            UnknownExpression(e) => e.clone(),
+            ElidedNumber(e) => e.clone(),
+            Complex(c) => match **c {
+                AddSub {
+                    terms: (ref left, ref right),
+                    subtract,
+                } => format!(
+                    "({}{}{})",
+                    left.to_unelided_string(),
+                    if subtract { '-' } else { '+' },
+                    right.to_unelided_string(),
+                ),
+                Multiply { ref terms, .. } => format!(
+                    "({})",
+                    terms
+                        .iter()
+                        .map(|(term, exponent)| if *exponent == 1 {
+                            term.to_unelided_string().into()
+                        } else {
+                            format!("({})^{exponent}", term.to_unelided_string())
+                        })
+                        .join("*")
+                ),
+                Divide {
+                    ref left,
+                    ref right,
+                    ..
+                } => format!(
+                    "({}/{})",
+                    left.to_unelided_string(),
+                    right
+                        .iter()
+                        .map(|(term, exponent)| if *exponent == 1 {
+                            term.to_unelided_string().into()
+                        } else {
+                            format!("({})^{exponent}", term.to_unelided_string())
+                        })
+                        .join("/")
+                ),
+                Power {
+                    ref base,
+                    ref exponent,
+                } => format!("({})^({})", base.to_unelided_string(), exponent.to_unelided_string()),
+                Factorial(ref input) => format!("({}!)", input.to_unelided_string()),
+                Primorial(ref input) => format!("({}#)", input.to_unelided_string()),
+                Fibonacci(ref input) => format!("I({})", input.to_unelided_string()),
+                Lucas(ref input) => format!("lucas({})", input.to_unelided_string())
+            }.into()
         }
     }
 

@@ -263,7 +263,7 @@ impl<'a> Display for NumberSpecifier<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Id(id) => write!(f, "ID {}", id),
-            Expression(e) => write_bignum(f, &e.to_owned_string()),
+            Expression(e) => write_bignum(f, &e.to_unelided_string()),
         }
     }
 }
@@ -849,7 +849,7 @@ async fn main() -> anyhow::Result<()> {
                             };
                             for factor in factors {
                                 if factor.as_str_non_numeric().is_some() {
-                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.to_owned_string(), true)
+                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.to_unelided_string(), true)
                                         .await;
                                 }
                             }

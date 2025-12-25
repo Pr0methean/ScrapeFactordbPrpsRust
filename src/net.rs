@@ -432,7 +432,7 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(ref expr) => {
                 let url = format!(
                     "https://factordb.com/api?query={}",
-                    encode(&expr.to_owned_string())
+                    encode(&expr.to_unelided_string())
                 );
                 self.try_get_and_decode(&url).await.ok_or(None)
             }
@@ -592,7 +592,7 @@ impl FactorDbClient for RealFactorDbClient {
                     error!("Attempted to submit factor {factor} of too-small number {n}");
                     return AlreadyFullyFactored;
                 }
-                _ => (None, Some(x.to_owned_string())),
+                _ => (None, Some(x.to_unelided_string())),
             },
             Id(id) => {
                 if id <= MAX_ID_EQUAL_TO_VALUE {
@@ -610,7 +610,7 @@ impl FactorDbClient for RealFactorDbClient {
             .form(&FactorSubmission {
                 id,
                 number,
-                factor: &factor.to_owned_string(),
+                factor: &factor.to_unelided_string(),
             })
             .send()
             .and_then(Response::text)

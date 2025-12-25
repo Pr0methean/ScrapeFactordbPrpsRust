@@ -314,7 +314,7 @@ impl FactorData {
             let current_len = if current.is_elided() {
                 usize::MAX // replace elided numbers with full ones ASAP
             } else {
-                current.to_owned_string().len()
+                current.to_unelided_string().len()
             };
             let facts = self.facts_mut(factor_vid);
             let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
@@ -326,7 +326,7 @@ impl FactorData {
                 Vec::new()
             };
             new_factor_vids.extend(self.add_from_factor_finder(&equivalent, http));
-            if !equivalent.is_elided() && equivalent.to_owned_string().len() < current_len {
+            if !equivalent.is_elided() && equivalent.to_unelided_string().len() < current_len {
                 let _ = replace(
                     self.divisibility_graph.vertex_mut(factor_vid).unwrap(),
                     equivalent,
@@ -1177,7 +1177,7 @@ pub async fn find_and_submit_factors(
             );
             continue;
         }
-        let factor = factor.to_owned_string();
+        let factor = factor.to_unelided_string();
         if data.is_known_factor(factor_vid, root_vid) {
             continue;
         }
