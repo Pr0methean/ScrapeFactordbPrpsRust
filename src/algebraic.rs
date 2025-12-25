@@ -29,7 +29,6 @@ use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
-use std::iter::once;
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
 use tokio::task;
@@ -1554,7 +1553,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     && let Some(divisor_root) = nth_root_exact(divisor, exponent_numeric)
                 {
                     Some(simplify_multiply(
-                        &[(div_exact(base, &divisor_root)?, exponent_numeric)].into(),
+                        [(div_exact(base, &divisor_root)?, exponent_numeric)].into(),
                     ))
                 } else {
                     None
@@ -1586,7 +1585,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                 }
 
                 if divisor_terms.is_empty() {
-                    return Some(simplify_multiply(&new_terms));
+                    return Some(simplify_multiply(new_terms));
                 }
                 if new_terms.is_empty() {
                     // Try to see if divisor_terms (all numeric) divides 1
@@ -1735,7 +1734,7 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
                     && let Some(reduced_exponent) = exponent_numeric.div_exact(root.into())
                 {
                     Some(simplify_multiply(
-                        &[(base.clone(), reduced_exponent as NumberLength)].into(),
+                        [(base.clone(), reduced_exponent as NumberLength)].into(),
                     ))
                 } else {
                     None
@@ -1743,7 +1742,7 @@ pub fn nth_root_exact(factor: &Factor, root: NumberLength) -> Option<Factor> {
             }
             Multiply { ref terms, .. } => {
                 let new_terms = nth_root_of_product(terms, root)?;
-                Some(simplify_multiply(&new_terms))
+                Some(simplify_multiply(new_terms))
             }
             Divide {
                 ref left,
@@ -2234,7 +2233,7 @@ fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> O
                 Some(Numeric(0))
             } else {
                 Some(simplify_multiply(
-                    &[(new_left, 1), (Factor::two(), 1)].into(),
+                    [(new_left, 1), (Factor::two(), 1)].into(),
                 ))
             };
         }
@@ -2303,7 +2302,7 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
         Some(0) => Some(Factor::one()),
         Some(1) => Some(new_base),
         Some(n) => Some(simplify_multiply(
-            &once((new_base, n as NumberLength)).collect(),
+            [(new_base, n as NumberLength)].into(),
         )),
         None => {
             if *base == new_base && *exponent == new_exponent {
@@ -2386,8 +2385,8 @@ fn simplify_divide_internal(
     }
 }
 
-fn simplify_multiply(terms: &BTreeMap<Factor, NumberLength>) -> Factor {
-    simplify_multiply_internal(terms).unwrap_or_else(|| Factor::multiply(terms.clone()))
+fn simplify_multiply(terms: BTreeMap<Factor, NumberLength>) -> Factor {
+    simplify_multiply_internal(&terms).unwrap_or_else(|| Factor::multiply(terms))
 }
 
 fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<Factor> {
@@ -2692,7 +2691,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 ref right,
                                 ..
                             } => {
-                                if let Some(exact_div) = div_exact(left, &simplify_multiply(right))
+                                if let Some(exact_div) = div_exact(left, &simplify_multiply(right.clone()))
                                 {
                                     find_factors(&exact_div)
                                 } else {
