@@ -700,14 +700,12 @@ impl From<FactorBeingParsed> for Factor {
                 }
                 .into(),
             ),
-            FactorBeingParsed::Multiply { terms } => {
-                Factor::multiply(
-                    terms
-                        .into_iter()
-                        .map(|(term, power)| (Factor::from(term), power))
-                        .collect()
-                )
-            },
+            FactorBeingParsed::Multiply { terms } => Factor::multiply(
+                terms
+                    .into_iter()
+                    .map(|(term, power)| (Factor::from(term), power))
+                    .collect(),
+            ),
             FactorBeingParsed::Divide { left, right } => Factor::divide(
                 (*left).into(),
                 right
@@ -1072,7 +1070,9 @@ impl Factor {
                 return false;
             }
         }
-        if let Some(last_digit) = self.last_digit() && let Some(other_last_digit) = other.last_digit() {
+        if let Some(last_digit) = self.last_digit()
+            && let Some(other_last_digit) = other.last_digit()
+        {
             match last_digit {
                 0 => vec![0],
                 2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
@@ -1080,7 +1080,7 @@ impl Factor {
                 1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
                 _ => unsafe { unreachable_unchecked() },
             }
-                .contains(&other_last_digit)
+            .contains(&other_last_digit)
         } else if let Some(quotient) = div_exact(other, self)
             && let Some(quotient_numeric) = evaluate_as_numeric(&quotient)
         {
