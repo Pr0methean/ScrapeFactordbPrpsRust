@@ -700,11 +700,14 @@ impl From<FactorBeingParsed> for Factor {
                 }
                 .into(),
             ),
-            FactorBeingParsed::Multiply { terms } => Factor::multiply(
-                terms
-                    .into_iter()
-                    .map(|(term, power)| (Factor::from(term), power)),
-            ),
+            FactorBeingParsed::Multiply { terms } => {
+                Factor::multiply(
+                    terms
+                        .into_iter()
+                        .map(|(term, power)| (Factor::from(term), power))
+                        .collect()
+                )
+            },
             FactorBeingParsed::Divide { left, right } => Factor::divide(
                 (*left).into(),
                 right
@@ -854,8 +857,7 @@ impl Factor {
         Numeric(5)
     }
 
-    pub fn multiply(terms: impl IntoIterator<Item = (Factor, NumberLength)>) -> Self {
-        let terms = terms.into_iter().collect();
+    pub fn multiply(terms: BTreeMap<Factor, NumberLength>) -> Self {
         let terms_hash = hash(&terms);
         Complex(Multiply { terms, terms_hash }.into())
     }
@@ -1061,7 +1063,7 @@ impl Factor {
                 return false;
             }
             if let Some(right_exponent) = right.get(self) {
-                if !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))])
+                if !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))].into())
                     .may_be_proper_divisor_of(left)
                 {
                     return false;
@@ -1426,7 +1428,7 @@ pub fn to_like_powers(
             Numeric(a) => {
                 let (a, n) = factor_power(*a, 1);
                 if n > 1 {
-                    *term = Factor::multiply(once((Numeric(a), n as NumberLength)));
+                    *term = Factor::multiply([((Numeric(a), n as NumberLength))].into());
                     Some(n)
                 } else {
                     None
@@ -2398,7 +2400,7 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             if power == 1 {
                 Some(factor)
             } else {
-                Some(Factor::multiply([(factor, power)]))
+                Some(Factor::multiply([(factor, power)].into()))
             }
         }
         _ => Some(Factor::multiply(new_terms)),
@@ -4172,7 +4174,7 @@ mod tests {
         let simplified = simplify(&nested);
 
         // Should be Multiply, not Power, because exponent's numeric value is known
-        let expected = Factor::multiply([(x, 6)]);
+        let expected = Factor::multiply([(x, 6)].into());
 
         assert_eq!(simplified, expected);
     }
@@ -4253,8 +4255,8 @@ mod tests {
     fn test_div_exact_numeric_fallback_bug() {
         // (x+1)*10 / ((x+1)*2) should be 5
         let x_plus_1: Factor = "x+1".into();
-        let product = Factor::multiply([(x_plus_1.clone(), 1), (10.into(), 1)]);
-        let divisor = Factor::multiply([(x_plus_1.clone(), 1), (2.into(), 1)]);
+        let product = Factor::multiply([(x_plus_1.clone(), 1), (10.into(), 1)].into());
+        let divisor = Factor::multiply([(x_plus_1.clone(), 1), (2.into(), 1)].into());
         let result = div_exact(&product, &divisor);
         assert_eq!(result, Some(5.into()));
     }
