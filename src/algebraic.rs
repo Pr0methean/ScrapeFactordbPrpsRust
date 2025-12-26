@@ -665,12 +665,17 @@ impl Ord for ComplexFactor {
                         .then_with(|| right.cmp(other_right));
                 }
                 Multiply { terms_hash, terms } => if let Multiply {terms_hash: other_hash, terms: other_terms} = other {
+                    // keys is the slowest comparison, because it can recurse
+                    // values is O(n) but doesn't recurse
+                    // len() and hash are O(1)
                     return terms.len().cmp(&other_terms.len())
                         .then_with(|| terms_hash.cmp(other_hash))
                         .then_with(|| terms.values().cmp(other_terms.values()))
                         .then_with(|| terms.keys().cmp(other_terms.keys()));
                 }
                 Divide { left, right_hash, right } => if let Divide { left: other_left, right_hash: other_hash, right: other_right} = other {
+                    // same logic as with Multiply, but compare lefts before rights because
+                    // to compare lefts, we only recurses once
                     return other_right.len().cmp(&right.len())
                         .then_with(|| right_hash.cmp(other_hash))
                         .then_with(|| other_right.values().cmp(right.values()))
