@@ -1,3 +1,4 @@
+use alloc::vec::IntoIter;
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -32,7 +33,6 @@ use rand::rng;
 use rand::seq::SliceRandom;
 use replace_with::replace_with_or_abort;
 use std::borrow::Cow;
-use std::cmp::Ordering::{Equal, Greater, Less};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
@@ -495,30 +495,12 @@ fn merge_vertices(
             checked_for_listed_algebraic: facts.checked_for_listed_algebraic
                 || old_facts.checked_for_listed_algebraic,
             last_known_status: facts.last_known_status.max(old_facts.last_known_status),
-            factors_known_to_factordb: match facts
-                .factors_known_to_factordb
-                .len()
-                .cmp(&old_facts.factors_known_to_factordb.len())
-            {
-                Less => old_facts.factors_known_to_factordb,
-                Greater => facts.factors_known_to_factordb,
-                Equal => match facts.factors_known_to_factordb {
-                    UpToDate(f) => {
-                        if matches!(old_facts.factors_known_to_factordb, UpToDate(_)) {
-                            UpToDate(f)
-                        } else {
-                            NotUpToDate(
-                                f.into_iter()
-                                    .chain(old_facts.factors_known_to_factordb.to_vec())
+            factors_known_to_factordb: NotUpToDate(
+                                facts.factors_known_to_factordb.into_iter()
+                                    .chain(old_facts.factors_known_to_factordb.into_iter())
                                     .sorted_unstable()
                                     .unique()
-                                    .collect(),
-                            )
-                        }
-                    }
-                    x => x,
-                },
-            },
+                                    .collect()),
             checked_in_factor_finder: facts.checked_in_factor_finder
                 && old_facts.checked_in_factor_finder,
             expression_form_checked_in_factor_finder: facts
@@ -570,23 +552,19 @@ pub enum FactorsKnownToFactorDb {
     UpToDate(Vec<VertexId>),
 }
 
-impl FactorsKnownToFactorDb {
-    pub(crate) fn to_vec(&self) -> Vec<VertexId> {
+impl IntoIterator for FactorsKnownToFactorDb {
+    type Item = VertexId;
+    type IntoIter = IntoIter<VertexId>;
+
+    fn into_iter(self) -> Self::IntoIter {
         match self {
             NotQueried => vec![],
-            NotUpToDate(factors) | UpToDate(factors) => factors.clone(),
-        }
+            NotUpToDate(f) | UpToDate(f) => f
+        }.into_iter()
     }
 }
 
 impl FactorsKnownToFactorDb {
-    fn len(&self) -> usize {
-        match self {
-            NotQueried => 0,
-            NotUpToDate(factors) | UpToDate(factors) => factors.len(),
-        }
-    }
-
     fn needs_update(&self) -> bool {
         match self {
             UpToDate(_) => false,
