@@ -1015,7 +1015,7 @@ pub async fn find_and_submit_factors(
                     .map(|(existing_factor, _)| data.facts(existing_factor)
                         .expect("{id}: known_factors_upper_bound called for a number with a factor not entered in number_facts_map")
                         .lower_bound_log10)
-                    .sum());
+                    .max().unwrap_or(0)); // Can't use sum, because accepted factors might not be coprime
             let factor_facts = data.facts(factor_vid)
                 .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             if factor_facts.lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
