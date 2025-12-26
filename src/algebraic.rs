@@ -2577,17 +2577,14 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
     let mut changed = false;
 
     for (term, exponent) in terms.iter() {
-        let simplified = simplify(term);
-        if *term == Numeric(1) || exponent == 0 {
+        if *term == Numeric(1) || *exponent == 0 {
             changed = true;
             continue;
         }
-        if simplified != *term {
-            changed = true;
-        }
+        let simplified = simplify(term);
         let (new_term, new_exponent) = if let Numeric(n) = simplified {
             let (factored_term, factored_exponent) = factor_power(n, *exponent);
-            if factored_term != n || simplified != *term {
+            if *term != Numeric(factored_term) {
                 changed = true;
                 (Numeric(factored_term), factored_exponent)
             } else if n == 1 {
@@ -2597,6 +2594,9 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
                 (Numeric(n), *exponent)
             }
         } else {
+            if simplified != *term {
+                changed = true;
+            }
             (simplified, *exponent)
         };
 
