@@ -1565,7 +1565,7 @@ fn modinv(a: NumericFactor, m: NumericFactor) -> Option<NumericFactor> {
 }
 
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
-    if a == 1 {
+    if a == 1 || n == 0 {
         return (1, 1);
     }
     // A NumericFactor can't be a 128th or higher power
@@ -2564,19 +2564,13 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
         0 => return Some(Factor::one()),
         1 => {
             let (term, exp) = terms.first_key_value().unwrap();
-            if *exp == 1 {
-                return Some(simplify(term));
-            }
+            return Some(match *exp {
+                0 => Factor::one(),
+                1 => simplify(term),
+                exp => Factor::multiply([(simplify(term), exp)].into())
+            });
         }
         _ => {}
-    }
-
-    // Early check: if all terms are Numeric(1) or exponent 0, return Factor::one
-    if terms
-        .iter()
-        .all(|(term, exp)| *exp == 0 || matches!(term, Numeric(1)))
-    {
-        return Some(Factor::one());
     }
 
     let mut new_terms = BTreeMap::new();
@@ -2584,10 +2578,13 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
 
     for (term, exponent) in terms.iter() {
         let simplified = simplify(term);
+        if *term == Numeric(1) || exponent == 0 {
+            changed = true;
+            continue;
+        }
         if simplified != *term {
             changed = true;
         }
-
         let (new_term, new_exponent) = if let Numeric(n) = simplified {
             let (factored_term, factored_exponent) = factor_power(n, *exponent);
             if factored_term != n || simplified != *term {
@@ -2614,15 +2611,6 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             *new_terms.entry(new_term).or_insert(0) += new_exponent;
         }
     }
-
-    new_terms.retain(|factor, exponent| {
-        if *exponent == 0 || matches!(factor, Numeric(1)) {
-            changed = true;
-            false
-        } else {
-            true
-        }
-    });
 
     if !changed {
         return None;
