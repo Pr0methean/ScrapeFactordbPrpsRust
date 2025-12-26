@@ -493,7 +493,7 @@ fn merge_vertices(
             numeric_value: facts.numeric_value.or(old_facts.numeric_value),
             entry_id: facts.entry_id.or(old_facts.entry_id),
             checked_for_listed_algebraic: facts.checked_for_listed_algebraic
-                || old_facts.checked_for_listed_algebraic,
+                && old_facts.checked_for_listed_algebraic,
             last_known_status: facts.last_known_status.max(old_facts.last_known_status),
             factors_known_to_factordb: NotUpToDate(
                 facts
