@@ -954,7 +954,7 @@ pub async fn find_and_submit_factors(
             }
             if factor == cofactor {
                 error!(
-                    "Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
+                    "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
                 );
                 merge_vertices(&mut data, http, factor_vid, cofactor_vid);
                 continue;
