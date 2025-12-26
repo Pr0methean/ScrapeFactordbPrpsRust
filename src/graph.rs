@@ -1,4 +1,3 @@
-use alloc::vec::IntoIter;
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -18,6 +17,7 @@ use crate::net::{
     ProcessedStatusApiResponse,
 };
 use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use alloc::vec::IntoIter;
 use async_backtrace::framed;
 use gryf::Graph;
 use gryf::adapt::Subgraph;
@@ -496,11 +496,14 @@ fn merge_vertices(
                 || old_facts.checked_for_listed_algebraic,
             last_known_status: facts.last_known_status.max(old_facts.last_known_status),
             factors_known_to_factordb: NotUpToDate(
-                                facts.factors_known_to_factordb.into_iter()
-                                    .chain(old_facts.factors_known_to_factordb)
-                                    .sorted_unstable()
-                                    .unique()
-                                    .collect()),
+                facts
+                    .factors_known_to_factordb
+                    .into_iter()
+                    .chain(old_facts.factors_known_to_factordb)
+                    .sorted_unstable()
+                    .unique()
+                    .collect(),
+            ),
             checked_in_factor_finder: facts.checked_in_factor_finder
                 && old_facts.checked_in_factor_finder,
             expression_form_checked_in_factor_finder: facts
@@ -557,8 +560,9 @@ impl IntoIterator for FactorsKnownToFactorDb {
 
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            NotUpToDate(f) | UpToDate(f) => f
-        }.into_iter()
+            NotUpToDate(f) | UpToDate(f) => f,
+        }
+        .into_iter()
     }
 }
 

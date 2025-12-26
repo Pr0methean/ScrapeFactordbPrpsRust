@@ -1029,9 +1029,10 @@ impl Factor {
                     // self is a big number, other is a division.
                     // If self >= other_numerator, it's definitely not a divisor.
                     if let Divide { ref left, .. } = **c
-                        && self >= left {
-                            return false;
-                        }
+                        && self >= left
+                    {
+                        return false;
+                    }
                 }
                 _ => {}
             },
@@ -1041,7 +1042,9 @@ impl Factor {
                     ref right,
                     ..
                 } => {
-                    if *left != Factor::multiply(right.clone()) && !product_may_be_proper_divisor_of(right, left) {
+                    if *left != Factor::multiply(right.clone())
+                        && !product_may_be_proper_divisor_of(right, left)
+                    {
                         // Can't be an integer, therefore can't be a divisor
                         return false;
                     }
@@ -1613,7 +1616,9 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
 
                 let remaining_divisor_terms = divisor_terms.into_owned();
                 if remaining_divisor_terms.is_empty() && divisor_numeric == 1 {
-                    return Some(simplify_multiply(new_terms.unwrap_or_else(|| terms.clone())));
+                    return Some(simplify_multiply(
+                        new_terms.unwrap_or_else(|| terms.clone()),
+                    ));
                 }
 
                 // Numeric fallback
@@ -1788,7 +1793,11 @@ fn nth_root_of_product(
                 && let Some(exact) = nth_root_exact(term, reduced_root)
             {
                 Some((exact, 1))
-            } else { exponent.div_exact(root_nl).map(|reduced_exponent| (term.clone(), reduced_exponent)) }
+            } else {
+                exponent
+                    .div_exact(root_nl)
+                    .map(|reduced_exponent| (term.clone(), reduced_exponent))
+            }
         })
         .collect()
 }
@@ -2318,9 +2327,7 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
     match evaluate_as_numeric(&new_exponent) {
         Some(0) => Some(Factor::one()),
         Some(1) => Some(new_base),
-        Some(n) => Some(simplify_multiply(
-            [(new_base, n as NumberLength)].into(),
-        )),
+        Some(n) => Some(simplify_multiply([(new_base, n as NumberLength)].into())),
         None => {
             if *base == new_base && *exponent == new_exponent {
                 None
@@ -2371,7 +2378,10 @@ fn simplify_divide_internal(
 
     let old_right_len = current_right.len();
     current_right.retain(|term, exponent| *exponent != 0 && *term != Factor::one());
-    let mut changed = nested_changed || final_left != *current_left || current_left != left || current_right.len() != old_right_len;
+    let mut changed = nested_changed
+        || final_left != *current_left
+        || current_left != left
+        || current_right.len() != old_right_len;
 
     // Simplify terms in the divisor
     let keys: Vec<_> = current_right.keys().cloned().collect();
@@ -2384,9 +2394,7 @@ fn simplify_divide_internal(
         {
             changed = true;
             for (subterm, subterm_exponent) in terms {
-                *current_right
-                    .entry(simplify(subterm))
-                    .or_insert(0) += exponent * subterm_exponent;
+                *current_right.entry(simplify(subterm)).or_insert(0) += exponent * subterm_exponent;
             }
         } else if simplified_term != term {
             changed = true;
@@ -2741,7 +2749,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 ref right,
                                 ..
                             } => {
-                                if let Some(exact_div) = div_exact(left, &simplify_multiply(right.clone()))
+                                if let Some(exact_div) =
+                                    div_exact(left, &simplify_multiply(right.clone()))
                                 {
                                     find_factors(&exact_div)
                                 } else {
