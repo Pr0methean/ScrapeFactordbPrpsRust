@@ -667,15 +667,15 @@ impl Ord for ComplexFactor {
                 Multiply { terms_hash, terms } => if let Multiply {terms_hash: other_hash, terms: other_terms} = other {
                     return terms.len().cmp(&other_terms.len())
                         .then_with(|| terms_hash.cmp(other_hash))
-                        .then_with(|| terms.values().copied().sum::<NumberLength>().cmp(&other_terms.values().copied().sum()))
-                        .then_with(|| terms.cmp(other_terms));
+                        .then_with(|| terms.values().cmp(other_terms.values()))
+                        .then_with(|| terms.keys().cmp(other_terms.keys()));
                 }
                 Divide { left, right_hash, right } => if let Divide { left: other_left, right_hash: other_hash, right: other_right} = other {
                     return other_right.len().cmp(&right.len())
                         .then_with(|| right_hash.cmp(other_hash))
-                        .then_with(|| other_right.values().copied().sum::<NumberLength>().cmp(&right.values().copied().sum()))
+                        .then_with(|| other_right.values().cmp(right.values()))
                         .then_with(|| left.cmp(other_left))
-                        .then_with(|| right.cmp(other_right));
+                        .then_with(|| other_right.keys().cmp(right.keys()));
                 }
                 Power { base, exponent } => if let Power {base: other_base, exponent: other_exponent} = other {
                     return exponent.cmp(other_exponent).then_with(|| base.cmp(other_base));
