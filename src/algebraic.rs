@@ -747,13 +747,19 @@ impl From<FactorBeingParsed> for Factor {
                 left,
                 right,
                 subtract,
-            } => Complex(
-                AddSub {
-                    terms: (Factor::from(*left), Factor::from(*right)),
-                    subtract,
+            } => {
+                let mut left = Factor::from(*left);
+                let mut right = Factor::from(*right);
+                if !subtract && left < right {
+                    swap(&mut left, &mut right);
                 }
-                .into(),
-            ),
+                Complex(
+                AddSub {
+                    terms: (left, right),
+                    subtract,
+                }.into(),
+                )
+            },
             FactorBeingParsed::Multiply { terms } => Factor::multiply(
                 terms
                     .into_iter()
