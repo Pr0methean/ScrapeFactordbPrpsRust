@@ -1566,7 +1566,7 @@ fn modinv(a: NumericFactor, m: NumericFactor) -> Option<NumericFactor> {
 
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
     if a == 1 || n == 0 {
-        return (1, 1);
+        return (1, 0);
     }
     // A NumericFactor can't be a 128th or higher power
     for prime in [
@@ -2567,11 +2567,7 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             match *exp {
                 0 => return Some(Factor::one()),
                 1 => return Some(simplify(term)),
-                exp => if let Complex(c) = term && matches!(**c, Multiply {..}) {
-                    // Nested multiplication can still be simplified
-                } else {
-                    return Some(Factor::multiply([(simplify(term), exp)].into()));
-                }
+                _ => {}
             }
         }
         _ => {}
