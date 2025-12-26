@@ -973,7 +973,7 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
-        fn product_may_be_divisor_of(
+        fn product_may_be_proper_divisor_of(
             terms: &BTreeMap<Factor, NumberLength>,
             other: &Factor,
         ) -> bool {
@@ -1041,13 +1041,13 @@ impl Factor {
                     ref right,
                     ..
                 } => {
-                    if !product_may_be_divisor_of(right, left) {
+                    if right != left && !product_may_be_proper_divisor_of(right, left) {
                         // Can't be an integer, therefore can't be a divisor
                         return false;
                     }
                 }
                 Multiply { ref terms, .. } => {
-                    if !product_may_be_divisor_of(terms, other) {
+                    if !product_may_be_proper_divisor_of(terms, other) {
                         return false;
                     }
                 }
@@ -1116,7 +1116,7 @@ impl Factor {
                 ..
             } = **c
         {
-            if !product_may_be_divisor_of(right, left) {
+            if right != left && !product_may_be_proper_divisor_of(right, left) {
                 return false;
             }
             if let Some(right_exponent) = right.get(self) {
