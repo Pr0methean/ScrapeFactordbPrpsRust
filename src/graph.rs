@@ -383,7 +383,7 @@ pub fn add_factor_node(
         .or(matching_vid)
         .map(|x| (x, false))
         .unwrap_or_else(|| {
-            let mut factor_vid = data.divisibility_graph.add_vertex(factor.clone());
+            let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
             data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
             let factor_numeric = evaluate_as_numeric(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
@@ -409,8 +409,12 @@ pub fn add_factor_node(
             {
                 let existing_real = data.resolve_vid(existing_vid);
                 if existing_real != factor_vid {
-                    merge_vertices(data, http, existing_real, factor_vid);
-                    factor_vid = existing_real;
+                    data.divisibility_graph.remove_vertex(factor_vid);
+                    // Point the expr to the existing node
+                    data.vertex_id_by_expr.insert(factor.clone(), existing_real);
+                    // Update facts
+                    data.merge_equivalent_expressions(existing_real, factor.clone(), http);
+                    return (existing_real, false);
                 }
             }
 
