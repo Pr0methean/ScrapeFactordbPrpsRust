@@ -657,40 +657,87 @@ impl ComplexFactor {
 
 impl Ord for ComplexFactor {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.discriminant().cmp(&other.discriminant()).then_with(|| {
-            match self {
-                AddSub { terms: (left, right), subtract } => if let AddSub {terms: (other_left, other_right), subtract: other_subtract} = other {
-                    return subtract.cmp(other_subtract)
-                        .then_with(|| left.cmp(other_left))
-                        .then_with(|| right.cmp(other_right));
+        self.discriminant()
+            .cmp(&other.discriminant())
+            .then_with(|| {
+                match self {
+                    AddSub {
+                        terms: (left, right),
+                        subtract,
+                    } => {
+                        if let AddSub {
+                            terms: (other_left, other_right),
+                            subtract: other_subtract,
+                        } = other
+                        {
+                            return subtract
+                                .cmp(other_subtract)
+                                .then_with(|| left.cmp(other_left))
+                                .then_with(|| right.cmp(other_right));
+                        }
+                    }
+                    Multiply { terms_hash, terms } => {
+                        if let Multiply {
+                            terms_hash: other_hash,
+                            terms: other_terms,
+                        } = other
+                        {
+                            // keys is the slowest comparison, because it can recurse
+                            // values is O(n) but doesn't recurse
+                            // len() and hash are O(1)
+                            return terms
+                                .len()
+                                .cmp(&other_terms.len())
+                                .then_with(|| terms_hash.cmp(other_hash))
+                                .then_with(|| terms.values().cmp(other_terms.values()))
+                                .then_with(|| terms.keys().cmp(other_terms.keys()));
+                        }
+                    }
+                    Divide {
+                        left,
+                        right_hash,
+                        right,
+                    } => {
+                        if let Divide {
+                            left: other_left,
+                            right_hash: other_hash,
+                            right: other_right,
+                        } = other
+                        {
+                            // same logic as with Multiply, but compare lefts before rights because
+                            // to compare lefts, we only recurses once
+                            return other_right
+                                .len()
+                                .cmp(&right.len())
+                                .then_with(|| right_hash.cmp(other_hash))
+                                .then_with(|| other_right.values().cmp(right.values()))
+                                .then_with(|| left.cmp(other_left))
+                                .then_with(|| other_right.keys().cmp(right.keys()));
+                        }
+                    }
+                    Power { base, exponent } => {
+                        if let Power {
+                            base: other_base,
+                            exponent: other_exponent,
+                        } = other
+                        {
+                            return exponent
+                                .cmp(other_exponent)
+                                .then_with(|| base.cmp(other_base));
+                        }
+                    }
+                    Fibonacci(input) | Lucas(input) | Factorial(input) | Primorial(input) => {
+                        if let Fibonacci(other_input)
+                        | Lucas(other_input)
+                        | Factorial(other_input)
+                        | Primorial(other_input) = other
+                        {
+                            return input.cmp(other_input);
+                        }
+                    }
                 }
-                Multiply { terms_hash, terms } => if let Multiply {terms_hash: other_hash, terms: other_terms} = other {
-                    // keys is the slowest comparison, because it can recurse
-                    // values is O(n) but doesn't recurse
-                    // len() and hash are O(1)
-                    return terms.len().cmp(&other_terms.len())
-                        .then_with(|| terms_hash.cmp(other_hash))
-                        .then_with(|| terms.values().cmp(other_terms.values()))
-                        .then_with(|| terms.keys().cmp(other_terms.keys()));
-                }
-                Divide { left, right_hash, right } => if let Divide { left: other_left, right_hash: other_hash, right: other_right} = other {
-                    // same logic as with Multiply, but compare lefts before rights because
-                    // to compare lefts, we only recurses once
-                    return other_right.len().cmp(&right.len())
-                        .then_with(|| right_hash.cmp(other_hash))
-                        .then_with(|| other_right.values().cmp(right.values()))
-                        .then_with(|| left.cmp(other_left))
-                        .then_with(|| other_right.keys().cmp(right.keys()));
-                }
-                Power { base, exponent } => if let Power {base: other_base, exponent: other_exponent} = other {
-                    return exponent.cmp(other_exponent).then_with(|| base.cmp(other_base));
-                }
-                Fibonacci(input) | Lucas(input) | Factorial(input) | Primorial(input) => if let Fibonacci(other_input) | Lucas(other_input) | Factorial(other_input) | Primorial(other_input) = other {
-                    return input.cmp(other_input);
-                }
-            }
-            unsafe { unreachable_unchecked() }
-        })
+                unsafe { unreachable_unchecked() }
+            })
     }
 }
 
@@ -754,12 +801,13 @@ impl From<FactorBeingParsed> for Factor {
                     swap(&mut left, &mut right);
                 }
                 Complex(
-                AddSub {
-                    terms: (left, right),
-                    subtract,
-                }.into(),
+                    AddSub {
+                        terms: (left, right),
+                        subtract,
+                    }
+                    .into(),
                 )
-            },
+            }
             FactorBeingParsed::Multiply { terms } => Factor::multiply(
                 terms
                     .into_iter()
@@ -2519,14 +2567,15 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             if *exp == 1 {
                 return Some(simplify(term));
             }
-        },
+        }
         _ => {}
     }
 
     // Early check: if all terms are Numeric(1) or exponent 0, return Factor::one
-    if terms.iter().all(|(term, exp)| {
-        *exp == 0 || matches!(term, Numeric(1))
-    }) {
+    if terms
+        .iter()
+        .all(|(term, exp)| *exp == 0 || matches!(term, Numeric(1)))
+    {
         return Some(Factor::one());
     }
 
@@ -4368,7 +4417,10 @@ mod tests {
 
     #[test]
     fn test_equality_of_addition() {
-        assert_eq!(Factor::from("123456789^87654321+87654321^123456789"), Factor::from("87654321^123456789+123456789^87654321"));
+        assert_eq!(
+            Factor::from("123456789^87654321+87654321^123456789"),
+            Factor::from("87654321^123456789+123456789^87654321")
+        );
     }
 
     #[test]
