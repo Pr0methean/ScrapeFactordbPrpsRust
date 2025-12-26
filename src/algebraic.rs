@@ -610,9 +610,16 @@ fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
     state.write_u64(left_hash.wrapping_add(right_hash));
 }
 
-#[derive(Derivative, PartialOrd, Ord)]
+#[derive(Derivative)]
 #[derivative(Clone, Debug, Hash, Eq)]
+#[repr(u8)]
 pub enum ComplexFactor {
+    Divide {
+        left: Factor,
+        right_hash: u64,
+        #[derivative(Hash = "ignore")]
+        right: BTreeMap<Factor, NumberLength>,
+    },
     AddSub {
         #[derivative(Hash(hash_with = "crate::algebraic::hash_add_sub"))]
         terms: (Factor, Factor),
@@ -623,20 +630,63 @@ pub enum ComplexFactor {
         #[derivative(Hash = "ignore")]
         terms: BTreeMap<Factor, NumberLength>,
     },
-    Divide {
-        left: Factor,
-        right_hash: u64,
-        #[derivative(Hash = "ignore")]
-        right: BTreeMap<Factor, NumberLength>,
-    },
-    Power {
-        base: Factor,
-        exponent: Factor,
-    },
     Fibonacci(Factor),
     Lucas(Factor),
     Factorial(Factor),
     Primorial(Factor),
+    Power {
+        base: Factor,
+        exponent: Factor,
+    },
+}
+
+impl PartialOrd for ComplexFactor {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl ComplexFactor {
+    fn discriminant(&self) -> u8 {
+        // SAFETY: Because `Self` is marked `repr(u8)`, its layout is a `repr(C)` `union`
+        // between `repr(C)` structs, each of which has the `u8` discriminant as its first
+        // field, so we can read the discriminant without offsetting the pointer.
+        unsafe { *<*const _>::from(self).cast::<u8>() }
+    }
+}
+
+impl Ord for ComplexFactor {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.discriminant().cmp(&other.discriminant()).then_with(|| {
+            match self {
+                AddSub { terms: (left, right), subtract } => if let AddSub {terms: (other_left, other_right), subtract: other_subtract} = other {
+                    return subtract.cmp(other_subtract)
+                        .then_with(|| left.cmp(other_left))
+                        .then_with(|| right.cmp(other_right));
+                }
+                Multiply { terms_hash, terms } => if let Multiply {terms_hash: other_hash, terms: other_terms} = other {
+                    return terms.len().cmp(&other_terms.len())
+                        .then_with(|| terms_hash.cmp(other_hash))
+                        .then_with(|| terms.values().copied().sum::<NumberLength>().cmp(&other_terms.values().copied().sum()))
+                        .then_with(|| terms.cmp(other_terms));
+                }
+                Divide { left, right_hash, right } => if let Divide { left: other_left, right_hash: other_hash, right: other_right} = other {
+                    return other_right.len().cmp(&right.len())
+                        .then_with(|| right_hash.cmp(other_hash))
+                        .then_with(|| other_right.values().copied().sum::<NumberLength>().cmp(&right.values().copied().sum()))
+                        .then_with(|| left.cmp(other_left))
+                        .then_with(|| right.cmp(other_right));
+                }
+                Power { base, exponent } => if let Power {base: other_base, exponent: other_exponent} = other {
+                    return exponent.cmp(other_exponent).then_with(|| base.cmp(other_base));
+                }
+                Fibonacci(input) | Lucas(input) | Factorial(input) | Primorial(input) => if let Fibonacci(other_input) | Lucas(other_input) | Factorial(other_input) | Primorial(other_input) = other {
+                    return input.cmp(other_input);
+                }
+            }
+            unsafe { unreachable_unchecked() }
+        })
+    }
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -2450,6 +2500,25 @@ fn simplify_multiply(terms: BTreeMap<Factor, NumberLength>) -> Factor {
 }
 
 fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<Factor> {
+    // Handle small cases without BTreeMap overhead
+    match terms.len() {
+        0 => return Some(Factor::one()),
+        1 => {
+            let (term, exp) = terms.first_key_value().unwrap();
+            if *exp == 1 {
+                return Some(simplify(term));
+            }
+        },
+        _ => {}
+    }
+
+    // Early check: if all terms are Numeric(1) or exponent 0, return Factor::one
+    if terms.iter().all(|(term, exp)| {
+        *exp == 0 || matches!(term, Numeric(1))
+    }) {
+        return Some(Factor::one());
+    }
+
     let mut new_terms = BTreeMap::new();
     let mut changed = false;
 
@@ -2487,7 +2556,7 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
     }
 
     new_terms.retain(|factor, exponent| {
-        if *factor == Factor::one() || *exponent == 0 {
+        if *exponent == 0 || matches!(factor, Numeric(1)) {
             changed = true;
             false
         } else {
