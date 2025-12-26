@@ -481,37 +481,38 @@ fn merge_vertices(
         });
     data.deleted_synonyms.insert(matching_vid, merge_dest);
     let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
-    let old_facts = data.number_facts_map.remove(&matching_vid).unwrap();
-    replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
-        NumberFacts {
-            lower_bound_log10: facts.lower_bound_log10.max(old_facts.lower_bound_log10),
-            upper_bound_log10: facts.upper_bound_log10.min(old_facts.upper_bound_log10),
-            numeric_value: facts.numeric_value.or(old_facts.numeric_value),
-            entry_id: facts.entry_id.or(old_facts.entry_id),
-            checked_for_listed_algebraic: facts.checked_for_listed_algebraic
-                && old_facts.checked_for_listed_algebraic,
-            last_known_status: facts.last_known_status.max(old_facts.last_known_status),
-            factors_known_to_factordb: NotUpToDate(
-                facts
-                    .factors_known_to_factordb
-                    .into_iter()
-                    .chain(old_facts.factors_known_to_factordb)
-                    .sorted_unstable()
-                    .unique()
-                    .collect(),
-            ),
-            checked_in_factor_finder: facts.checked_in_factor_finder
-                && old_facts.checked_in_factor_finder,
-            expression_form_checked_in_factor_finder: facts
-                .expression_form_checked_in_factor_finder
-                && old_facts.expression_form_checked_in_factor_finder,
+    if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
+        replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
+            NumberFacts {
+                lower_bound_log10: facts.lower_bound_log10.max(old_facts.lower_bound_log10),
+                upper_bound_log10: facts.upper_bound_log10.min(old_facts.upper_bound_log10),
+                numeric_value: facts.numeric_value.or(old_facts.numeric_value),
+                entry_id: facts.entry_id.or(old_facts.entry_id),
+                checked_for_listed_algebraic: facts.checked_for_listed_algebraic
+                    && old_facts.checked_for_listed_algebraic,
+                last_known_status: facts.last_known_status.max(old_facts.last_known_status),
+                factors_known_to_factordb: NotUpToDate(
+                    facts
+                        .factors_known_to_factordb
+                        .into_iter()
+                        .chain(old_facts.factors_known_to_factordb)
+                        .sorted_unstable()
+                        .unique()
+                        .collect(),
+                ),
+                checked_in_factor_finder: facts.checked_in_factor_finder
+                    && old_facts.checked_in_factor_finder,
+                expression_form_checked_in_factor_finder: facts
+                    .expression_form_checked_in_factor_finder
+                    && old_facts.expression_form_checked_in_factor_finder,
 
-            // root_denominator only has to be done with one or the other, because it doesn't depend
-            // on the expression form among equivalents
-            checked_with_root_denominator: facts.checked_with_root_denominator
-                || old_facts.checked_with_root_denominator,
-        }
-    });
+                // root_denominator only has to be done with one or the other, because it doesn't depend
+                // on the expression form among equivalents
+                checked_with_root_denominator: facts.checked_with_root_denominator
+                    || old_facts.checked_with_root_denominator,
+            }
+        });
+    }
     data.merge_equivalent_expressions(merge_dest, old_factor, http);
 }
 

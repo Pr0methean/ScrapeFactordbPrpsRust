@@ -2564,11 +2564,15 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
         0 => return Some(Factor::one()),
         1 => {
             let (term, exp) = terms.first_key_value().unwrap();
-            return Some(match *exp {
-                0 => Factor::one(),
-                1 => simplify(term),
-                exp => Factor::multiply([(simplify(term), exp)].into())
-            });
+            match *exp {
+                0 => return Some(Factor::one()),
+                1 => return Some(simplify(term)),
+                exp => if let Complex(c) = term && matches!(**c, Multiply {..}) {
+                    // Nested multiplication can still be simplified
+                } else {
+                    return Some(Factor::multiply([(simplify(term), exp)].into()));
+                }
+            }
         }
         _ => {}
     }
