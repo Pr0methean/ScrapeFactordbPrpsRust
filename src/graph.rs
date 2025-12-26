@@ -11,7 +11,7 @@ use crate::algebraic::{
     find_unique_factors,
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
-use crate::graph::FactorsKnownToFactorDb::{NotQueried, NotUpToDate, UpToDate};
+use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
 use crate::net::NumberStatus::{FullyFactored, Prime};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
@@ -437,7 +437,7 @@ pub fn add_factor_node(
                 }
                 (cached.status, UpToDate(cached_subfactors))
             } else {
-                (None, NotQueried)
+                (None, NotUpToDate(vec![]))
             };
             data.number_facts_map.insert(
                 factor_vid,
@@ -547,7 +547,6 @@ fn neighbor_vids(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum FactorsKnownToFactorDb {
-    NotQueried,
     NotUpToDate(Vec<VertexId>),
     UpToDate(Vec<VertexId>),
 }
@@ -558,7 +557,6 @@ impl IntoIterator for FactorsKnownToFactorDb {
 
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            NotQueried => vec![],
             NotUpToDate(f) | UpToDate(f) => f
         }.into_iter()
     }
@@ -569,7 +567,6 @@ impl FactorsKnownToFactorDb {
         match self {
             UpToDate(_) => false,
             NotUpToDate(_) => true,
-            NotQueried => true,
         }
     }
 }
@@ -928,7 +925,6 @@ pub async fn find_and_submit_factors(
                         continue;
                     }
                 }
-                NotQueried => {}
             }
             if factor == cofactor {
                 error!(
