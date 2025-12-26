@@ -1041,7 +1041,7 @@ impl Factor {
                     ref right,
                     ..
                 } => {
-                    if right != left && !product_may_be_proper_divisor_of(right, left) {
+                    if *left != Factor::multiply(right.clone()) && !product_may_be_proper_divisor_of(right, left) {
                         // Can't be an integer, therefore can't be a divisor
                         return false;
                     }
@@ -1116,7 +1116,7 @@ impl Factor {
                 ..
             } = **c
         {
-            if right != left && !product_may_be_proper_divisor_of(right, left) {
+            if !product_may_be_proper_divisor_of(right, left) {
                 return false;
             }
             if let Some(right_exponent) = right.get(self) {
