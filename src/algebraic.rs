@@ -4367,6 +4367,11 @@ mod tests {
     }
 
     #[test]
+    fn test_equality_of_addition() {
+        assert_eq!(Factor::from("123456789^87654321+87654321^123456789"), Factor::from("87654321^123456789+123456789^87654321"));
+    }
+
+    #[test]
     fn test_fmt_round_trip() {
         // Verify that Factor::from(f.to_string()) == f
         let cases = [
