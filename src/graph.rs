@@ -497,7 +497,7 @@ fn merge_vertices(
             last_known_status: facts.last_known_status.max(old_facts.last_known_status),
             factors_known_to_factordb: NotUpToDate(
                                 facts.factors_known_to_factordb.into_iter()
-                                    .chain(old_facts.factors_known_to_factordb.into_iter())
+                                    .chain(old_facts.factors_known_to_factordb)
                                     .sorted_unstable()
                                     .unique()
                                     .collect()),
