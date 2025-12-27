@@ -960,6 +960,11 @@ async fn main() -> anyhow::Result<()> {
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
     let mut u_http = http.clone();
+    let mut u_start = if u_digits.is_some() {
+        0
+    } else {
+        rng().random_range(0..=MAX_START)
+    };
     let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
@@ -973,7 +978,6 @@ async fn main() -> anyhow::Result<()> {
                     .try_into()
                     .unwrap()
             });
-            let u_start = rng().random_range(0..=MAX_START);
             let u_search_url =
                 format!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start={u_start}&mindig={}", digits.get());
             let Some(results_text) = u_http.try_get_and_decode(&u_search_url).await else {
@@ -982,8 +986,11 @@ async fn main() -> anyhow::Result<()> {
             info!("U search results retrieved");
             let ids = u_http
                 .read_ids_and_exprs(&results_text)
-                .collect::<Vec<_>>()
-                .into_iter();
+                .collect::<Vec<_>>();
+            if u_digits.is_some() {
+                u_start += ids.len() as u128;
+                u_start %= MAX_START + 1;
+            }
             for (u_id, digits_or_expr) in ids {
                 if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
