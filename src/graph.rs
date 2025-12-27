@@ -634,10 +634,10 @@ pub async fn find_and_submit_factors(
         }
         if known_factors.len() == 1 && status != Some(PartlyFactoredComposite) {
             data.merge_equivalent_expressions(
-                    root_vid,
-                    known_factors.into_iter().next().unwrap(),
-                    http,
-                );
+                root_vid,
+                known_factors.into_iter().next().unwrap(),
+                http,
+            );
         } else {
             let root_factors: Vec<_> = known_factors
                 .into_iter()
@@ -655,12 +655,14 @@ pub async fn find_and_submit_factors(
             let root_facts = data.facts_mut(root_vid);
             root_facts.factors_known_to_factordb = match root_factors.len() {
                 0 => NotUpToDate(vec![]),
-                1 => if status.is_none_or(|status| status == PartlyFactoredComposite) {
-                    NotUpToDate(root_factors)
-                } else {
-                    UpToDate(root_factors)
+                1 => {
+                    if status.is_none_or(|status| status == PartlyFactoredComposite) {
+                        NotUpToDate(root_factors)
+                    } else {
+                        UpToDate(root_factors)
+                    }
                 }
-                _ => UpToDate(root_factors)
+                _ => UpToDate(root_factors),
             }
         }
         let root_facts = data.facts_mut(root_vid);
