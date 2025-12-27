@@ -1,4 +1,3 @@
-use alloc::borrow::Cow::Borrowed;
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -17,6 +16,7 @@ use crate::net::{
     ProcessedStatusApiResponse,
 };
 use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACTOR_MAX_ATTEMPTS};
+use alloc::borrow::Cow::Borrowed;
 use alloc::vec::IntoIter;
 use async_backtrace::framed;
 use gryf::Graph;
@@ -381,8 +381,8 @@ pub fn add_factor_node(
         .or_else(|| http.cached_factors(&Expression(Borrowed(&factor))));
     let cached_entry_id = cached_factors.as_ref().and_then(|factors| factors.id);
     let entry_id = entry_id.or(cached_entry_id);
-    let matching_vid_raw = entry_id
-            .and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id).copied());
+    let matching_vid_raw =
+        entry_id.and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id).copied());
     let matching_vid = matching_vid_raw.map(|vertex_id| data.resolve_vid(vertex_id));
 
     let (merge_dest, added) = existing_vertex
@@ -398,22 +398,23 @@ pub fn add_factor_node(
             }
             // Only full factorizations are stored in the cache or obtained via evaluate_as_numeric.
             let mut has_cached = false;
-            let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached_factors {
-                has_cached = true;
-                let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
-                for subfactor in cached.factors {
-                    let (subfactor_vid, _) = if subfactor == factor {
-                        (factor_vid, false)
-                    } else {
-                        let subfactor_entry_id = subfactor.known_id();
-                        add_factor_node(data, subfactor, subfactor_entry_id, http)
-                    };
-                    cached_subfactors.push(subfactor_vid);
-                }
-                (cached.status, UpToDate(cached_subfactors))
-            } else {
-                (None, NotUpToDate(vec![]))
-            };
+            let (last_known_status, factors_known_to_factordb) =
+                if let Some(cached) = cached_factors {
+                    has_cached = true;
+                    let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
+                    for subfactor in cached.factors {
+                        let (subfactor_vid, _) = if subfactor == factor {
+                            (factor_vid, false)
+                        } else {
+                            let subfactor_entry_id = subfactor.known_id();
+                            add_factor_node(data, subfactor, subfactor_entry_id, http)
+                        };
+                        cached_subfactors.push(subfactor_vid);
+                    }
+                    (cached.status, UpToDate(cached_subfactors))
+                } else {
+                    (None, NotUpToDate(vec![]))
+                };
             data.number_facts_map.insert(
                 factor_vid,
                 NumberFacts {
