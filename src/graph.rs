@@ -1,3 +1,4 @@
+use alloc::borrow::Cow::Borrowed;
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -6,8 +7,7 @@ use crate::algebraic::Factor::Numeric;
 use crate::algebraic::div_exact;
 use crate::algebraic::{ComplexFactor, simplify_divide};
 use crate::algebraic::{
-    Factor, NumericFactor, estimate_log10, evaluate_as_numeric, find_factors_of_numeric,
-    find_unique_factors,
+    Factor, NumericFactor, estimate_log10, evaluate_as_numeric, find_unique_factors,
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
@@ -369,14 +369,20 @@ impl FactorData {
 pub fn add_factor_node(
     data: &mut FactorData,
     factor: Factor,
-    mut entry_id: Option<EntryId>,
+    entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
     let existing_vertex_raw = data.vertex_id_by_expr.get(&factor).copied();
     let existing_vertex = existing_vertex_raw.map(|vertex_id| data.resolve_vid(vertex_id));
 
-    let matching_vid_raw =
-        entry_id.and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id).copied());
+    let entry_id = entry_id.or_else(|| data.facts(existing_vertex?)?.entry_id);
+    let cached_factors = entry_id
+        .and_then(|entry_id| http.cached_factors(&Id(entry_id)))
+        .or_else(|| http.cached_factors(&Expression(Borrowed(&factor))));
+    let cached_entry_id = cached_factors.as_ref().and_then(|factors| factors.id);
+    let entry_id = entry_id.or(cached_entry_id);
+    let matching_vid_raw = entry_id
+            .and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id).copied());
     let matching_vid = matching_vid_raw.map(|vertex_id| data.resolve_vid(vertex_id));
 
     let (merge_dest, added) = existing_vertex
@@ -385,45 +391,14 @@ pub fn add_factor_node(
         .unwrap_or_else(|| {
             let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
             data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
-            let factor_numeric = evaluate_as_numeric(&factor);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
-            let specifier = data.as_specifier(factor_vid);
-            let cached = http
-                .cached_factors(&specifier)
-                .or(factor_numeric.map(|eval| {
-                    let factors: Box<[_]> = find_factors_of_numeric(eval).into_keys().collect();
-                    ProcessedStatusApiResponse {
-                        status: Some(if factors.len() == 1 {
-                            Prime
-                        } else {
-                            FullyFactored
-                        }),
-                        factors,
-                        id: Numeric(eval).known_id(),
-                    }
-                }));
-            entry_id = entry_id.or(cached.as_ref().and_then(|cached| cached.id));
-
-            if let Some(entry_id) = entry_id
-                && let Some(existing_vid) = data.vertex_id_by_entry_id.get(&entry_id).copied()
-            {
-                let existing_real = data.resolve_vid(existing_vid);
-                if existing_real != factor_vid {
-                    data.divisibility_graph.remove_vertex(factor_vid);
-                    // Point the expr to the existing node
-                    data.vertex_id_by_expr.insert(factor.clone(), existing_real);
-                    // Update facts
-                    data.merge_equivalent_expressions(existing_real, factor.clone(), http);
-                    return (existing_real, false);
-                }
-            }
 
             if let Some(entry_id) = entry_id {
                 data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
             }
             // Only full factorizations are stored in the cache or obtained via evaluate_as_numeric.
             let mut has_cached = false;
-            let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached {
+            let (last_known_status, factors_known_to_factordb) = if let Some(cached) = cached_factors {
                 has_cached = true;
                 let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
                 for subfactor in cached.factors {
@@ -444,7 +419,7 @@ pub fn add_factor_node(
                 NumberFacts {
                     last_known_status,
                     factors_known_to_factordb,
-                    numeric_value: factor_numeric,
+                    numeric_value: evaluate_as_numeric(&factor),
                     lower_bound_log10,
                     upper_bound_log10,
                     entry_id,
@@ -1377,9 +1352,9 @@ mod tests {
         let (node3, added) = add_factor_node(&mut data, Factor::from("2^4-1"), None, &http);
         assert!(added);
         let (node4, added) = add_factor_node(&mut data, Factor::from("2^4+1"), None, &http);
-        assert!(!added); // 17 is already added as numeric factor of 65535
+        assert!(added);
         let (node5, added) = add_factor_node(&mut data, Factor::from("2^8+1"), None, &http);
-        assert!(!added); // 257 is already added as numeric factor of 65535
+        assert!(added);
         drop(http);
         data.propagate_divisibility(node2, node1, false);
         data.propagate_divisibility(node3, node2, false);
