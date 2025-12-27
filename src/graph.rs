@@ -639,7 +639,7 @@ pub async fn find_and_submit_factors(
                     http,
                 );
         } else {
-            let root_factors = known_factors
+            let root_factors: Vec<_> = known_factors
                 .into_iter()
                 .map(|known_factor| {
                     let entry_id = known_factor.known_id();
@@ -741,7 +741,7 @@ pub async fn find_and_submit_factors(
             AlreadyFullyFactored => return true,
             Accepted => {
                 data.propagate_divisibility(factor_vid, root_vid, false);
-                mark_stale(&mut data, root_vid);
+                mark_stale(&mut data, root_vid, http);
                 accepted_factors += 1;
             }
             DoesNotDivide => {
@@ -1054,7 +1054,7 @@ pub async fn find_and_submit_factors(
                 }
                 Accepted => {
                     data.propagate_divisibility(factor_vid, cofactor_vid, false);
-                    mark_stale(&mut data, cofactor_vid);
+                    mark_stale(&mut data, cofactor_vid, http);
                     accepted_factors += 1;
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
@@ -1158,7 +1158,9 @@ pub async fn find_and_submit_factors(
 }
 
 #[inline(always)]
-fn mark_stale(data: &mut FactorData, stale_vid: VertexId) {
+fn mark_stale(data: &mut FactorData, stale_vid: VertexId, http: &mut impl FactorDbClient) {
+    let entry_id = data.facts(stale_vid).unwrap().entry_id;
+    let expression = data.get_factor(stale_vid);
     replace_with_or_abort(data.facts_mut(stale_vid), |facts| {
         if !facts.is_final()
             && let UpToDate(factors) = facts.factors_known_to_factordb
@@ -1171,6 +1173,7 @@ fn mark_stale(data: &mut FactorData, stale_vid: VertexId) {
             facts
         }
     });
+    http.invalidate_cached_factors(entry_id, &expression);
 }
 
 fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {

@@ -97,6 +97,7 @@ pub trait FactorDbClient {
     ) -> ProcessedStatusApiResponse;
     fn cached_factors<'a>(&self, id: &'a NumberSpecifier<'a>)
     -> Option<ProcessedStatusApiResponse>;
+    fn invalidate_cached_factors(&mut self, id: Option<EntryId>, expression: &Factor);
     async fn try_report_factor<'a>(
         &self,
         u_id: NumberSpecifier<'a>,
@@ -574,6 +575,13 @@ impl FactorDbClient for RealFactorDbClient {
             info!("Factor cache hit for {id}");
         }
         cached
+    }
+
+    fn invalidate_cached_factors(&mut self, id: Option<EntryId>, expression: &Factor) {
+        if let Some(id) = id {
+            self.by_id_cache.remove(&id);
+        }
+        self.by_expr_cache.remove(expression);
     }
 
     #[framed]
