@@ -733,7 +733,7 @@ pub async fn find_and_submit_factors(
         match data.get_edge(factor_vid, root_vid) {
             Some(Direct) | Some(Transitive) | Some(NotFactor) => {
                 info!(
-                    "{id}: Skipping {factor} because it's already known to be a factor of {digits_or_expr} (status: {:?})",
+                    "{id}: Skipping {factor} because it's already known to be a factor of ID {id} (status: {:?})",
                     data.get_edge(factor_vid, root_vid)
                 );
                 // This has been submitted directly to the root already, so it's probably already been
