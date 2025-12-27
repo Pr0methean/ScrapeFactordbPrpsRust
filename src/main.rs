@@ -978,6 +978,9 @@ async fn main() -> anyhow::Result<()> {
                     .try_into()
                     .unwrap()
             });
+            if u_digits.is_none() && digits.get() == U_MIN_DIGITS {
+                u_start = 0;
+            }
             let u_search_url =
                 format!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start={u_start}&mindig={}", digits.get());
             let Some(results_text) = u_http.try_get_and_decode(&u_search_url).await else {
@@ -990,6 +993,8 @@ async fn main() -> anyhow::Result<()> {
             if u_digits.is_some() {
                 u_start += ids.len() as u128;
                 u_start %= MAX_START + 1;
+            } else {
+                u_start = rng().random_range(0..=MAX_START);
             }
             for (u_id, digits_or_expr) in ids {
                 if u_shutdown_receiver.check_for_shutdown() {
