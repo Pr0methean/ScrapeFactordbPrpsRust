@@ -512,7 +512,8 @@ impl FactorDbClient for RealFactorDbClient {
                 }
             }
         };
-        if processed.status.is_known_fully_factored() && !processed.factors.is_empty() {
+        if processed.status == Some(Prime)
+            || (processed.status == Some(FullyFactored) && processed.factors.len() > 1) {
             if let Some(id) = processed
                 .id
                 .or(if let Id(id) = id { Some(id) } else { None })
