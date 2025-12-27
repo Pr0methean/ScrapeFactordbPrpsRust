@@ -27,7 +27,7 @@ use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::storage::{AdjMatrix, Stable};
 use hipstr::HipStr;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
@@ -991,17 +991,29 @@ pub async fn find_and_submit_factors(
                     continue;
                 }
             }
-            let cofactor_remaining_factors_upper_bound_log10 = cofactor_upper_bound_log10
-                .saturating_sub(neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
-                    .into_iter()
-                    .filter(|(_, divisibility)| *divisibility != NotFactor)
-                    .map(|(existing_factor, _)| data.facts(existing_factor)
-                        .expect("{id}: known_factors_upper_bound called for a number with a factor not entered in number_facts_map")
-                        .lower_bound_log10)
-                    .max().unwrap_or(0)); // Can't use sum, because accepted factors might not be coprime
             let factor_facts = data.facts(factor_vid)
                 .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
-            if factor_facts.lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
+            let factor_is_prime = factor_facts.last_known_status == Some(Prime);
+            let factor_lower_bound_log10 = factor_facts.lower_bound_log10;
+            let (cofactor_prime_factor_log10s, cofactor_composite_factor_log10s): (Vec<_>, Vec<_>)
+                = neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
+                .into_iter()
+                .filter(|(_, divisibility)| *divisibility != NotFactor)
+                .partition_map(|(neighbor_vid, _)| {
+                    let facts = data.facts(neighbor_vid).unwrap();
+                    if facts.last_known_status == Some(Prime) {
+                        Either::Left(facts.lower_bound_log10)
+                    } else {
+                        Either::Right(facts.lower_bound_log10)
+                    }
+                });
+            let cofactor_remaining_factors_upper_bound_log10 = cofactor_upper_bound_log10
+                .saturating_sub(if factor_is_prime {
+                    cofactor_prime_factor_log10s.into_iter().sum::<NumberLength>()
+                    .max(cofactor_composite_factor_log10s.into_iter().max().unwrap_or(0)) } else {
+                    cofactor_prime_factor_log10s.into_iter().sum::<NumberLength>()
+                });
+            if factor_lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
                 info!(
                     "{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)"
                 );
