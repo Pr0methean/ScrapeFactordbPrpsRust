@@ -10,7 +10,7 @@ use crate::algebraic::{
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::NumberStatus::{FullyFactored, Prime};
+use crate::net::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
@@ -632,31 +632,35 @@ pub async fn find_and_submit_factors(
             warn!("{id}: Already fully factored");
             return true;
         }
-        match known_factors.len() {
-            0 => {}
-            1 => {
-                data.merge_equivalent_expressions(
+        if known_factors.len() == 1 && status != Some(PartlyFactoredComposite) {
+            data.merge_equivalent_expressions(
                     root_vid,
                     known_factors.into_iter().next().unwrap(),
                     http,
                 );
-            }
-            _ => {
-                let root_factors = known_factors
-                    .into_iter()
-                    .map(|known_factor| {
-                        let entry_id = known_factor.known_id();
-                        let (factor_vid, added) =
-                            add_factor_node(&mut data, known_factor, entry_id, http);
-                        if added {
-                            data.propagate_divisibility(factor_vid, root_vid, false);
-                            digits_or_expr_full.push(factor_vid);
-                        }
-                        factor_vid
-                    })
-                    .collect();
-                let root_facts = data.facts_mut(root_vid);
-                root_facts.factors_known_to_factordb = UpToDate(root_factors);
+        } else {
+            let root_factors = known_factors
+                .into_iter()
+                .map(|known_factor| {
+                    let entry_id = known_factor.known_id();
+                    let (factor_vid, added) =
+                        add_factor_node(&mut data, known_factor, entry_id, http);
+                    if added {
+                        data.propagate_divisibility(factor_vid, root_vid, false);
+                        digits_or_expr_full.push(factor_vid);
+                    }
+                    factor_vid
+                })
+                .collect();
+            let root_facts = data.facts_mut(root_vid);
+            root_facts.factors_known_to_factordb = match root_factors.len() {
+                0 => NotUpToDate(vec![]),
+                1 => if status.is_none_or(|status| status == PartlyFactoredComposite) {
+                    NotUpToDate(root_factors)
+                } else {
+                    UpToDate(root_factors)
+                }
+                _ => UpToDate(root_factors)
             }
         }
         let root_facts = data.facts_mut(root_vid);
