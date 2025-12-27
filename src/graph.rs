@@ -744,6 +744,7 @@ pub async fn find_and_submit_factors(
             Accepted => {
                 data.propagate_divisibility(factor_vid, root_vid, false);
                 mark_stale(&mut data, root_vid, http);
+                add_factors_to_graph(http, &mut data, root_vid).await;
                 accepted_factors += 1;
             }
             DoesNotDivide => {
@@ -1073,6 +1074,7 @@ pub async fn find_and_submit_factors(
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
                     if cofactor_vid == root_vid {
+                        add_factors_to_graph(http, &mut data, root_vid).await;
                         // skip put_factor_back_into_queue check
                         continue 'graph_iter;
                     }
