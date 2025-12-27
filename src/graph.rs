@@ -996,23 +996,33 @@ pub async fn find_and_submit_factors(
                 .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             let factor_is_prime = factor_facts.last_known_status == Some(Prime);
             let factor_lower_bound_log10 = factor_facts.lower_bound_log10;
-            let (cofactor_prime_factor_log10s, cofactor_composite_factor_log10s): (Vec<_>, Vec<_>)
-                = neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
-                .into_iter()
-                .filter(|(_, divisibility)| *divisibility != NotFactor)
-                .partition_map(|(neighbor_vid, _)| {
-                    let facts = data.facts(neighbor_vid).unwrap();
-                    if facts.last_known_status == Some(Prime) {
-                        Either::Left(facts.lower_bound_log10)
-                    } else {
-                        Either::Right(facts.lower_bound_log10)
-                    }
-                });
+            let (cofactor_prime_factor_log10s, cofactor_composite_factor_log10s): (Vec<_>, Vec<_>) =
+                neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
+                    .into_iter()
+                    .filter(|(_, divisibility)| *divisibility != NotFactor)
+                    .partition_map(|(neighbor_vid, _)| {
+                        let facts = data.facts(neighbor_vid).unwrap();
+                        if facts.last_known_status == Some(Prime) {
+                            Either::Left(facts.lower_bound_log10)
+                        } else {
+                            Either::Right(facts.lower_bound_log10)
+                        }
+                    });
             let cofactor_remaining_factors_upper_bound_log10 = cofactor_upper_bound_log10
                 .saturating_sub(if factor_is_prime {
-                    cofactor_prime_factor_log10s.into_iter().sum::<NumberLength>()
-                    .max(cofactor_composite_factor_log10s.into_iter().max().unwrap_or(0)) } else {
-                    cofactor_prime_factor_log10s.into_iter().sum::<NumberLength>()
+                    cofactor_prime_factor_log10s
+                        .into_iter()
+                        .sum::<NumberLength>()
+                        .max(
+                            cofactor_composite_factor_log10s
+                                .into_iter()
+                                .max()
+                                .unwrap_or(0),
+                        )
+                } else {
+                    cofactor_prime_factor_log10s
+                        .into_iter()
+                        .sum::<NumberLength>()
                 });
             if factor_lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
                 info!(
