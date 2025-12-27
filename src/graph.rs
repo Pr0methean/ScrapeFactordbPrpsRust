@@ -1083,7 +1083,7 @@ pub async fn find_and_submit_factors(
                     accepted_factors += 1;
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
-                    if cofactor_vid == root_vid {
+                    if cofactor_vid == root_vid || cofactor_upper_bound_log10 >= 50000 {
                         add_factors_to_graph(http, &mut data, root_vid).await;
                         // skip put_factor_back_into_queue check
                         continue 'graph_iter;
