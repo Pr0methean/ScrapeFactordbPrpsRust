@@ -22,7 +22,7 @@ use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp::Ordering::Equal;
+use std::cmp::Ordering::{Equal, Greater, Less};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
@@ -671,10 +671,23 @@ impl Ord for ComplexFactor {
                             subtract: other_subtract,
                         } = other
                         {
-                            return subtract
-                                .cmp(other_subtract)
-                                .then_with(|| left.cmp(other_left))
-                                .then_with(|| right.cmp(other_right));
+                            if !subtract {
+                               if *other_subtract {
+                                   return Greater;
+                               }
+                               let mut self_terms = [left, right];
+                               self_terms.sort_unstable();
+                               let mut other_terms = [other_left, other_right];
+                               other_terms.sort_unstable();
+                               return self_terms[0].cmp(other_terms[0])
+                                   .then_with(|| self_terms[1].cmp(other_terms[1]))
+                            } else {
+                                if !*other_subtract {
+                                    return Less;
+                                }
+                                return left.cmp(other_left)
+                                .then_with(|| other_right.cmp(right));
+                            }
                         }
                     }
                     Multiply { terms_hash, terms } => {
