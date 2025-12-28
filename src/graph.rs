@@ -73,7 +73,7 @@ impl Default for FactorData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq)]
 enum WorkItem {
     Propagate {
         factor: VertexId,
@@ -141,8 +141,12 @@ impl FactorData {
         self.process_divisibility_worklist(worklist);
     }
 
-    fn process_divisibility_worklist(&mut self, mut worklist: VecDeque<WorkItem>) {
-        while let Some(item) = worklist.pop_front() {
+    fn process_divisibility_worklist(&mut self, mut worklist: BTreeSet<WorkItem>) {
+        let mut already_processed = BTreeSet::new();
+        while let Some(item) = worklist.pop_first() {
+            if !already_processed.insert(item.clone()) {
+                continue;
+            }
             info!("process_divisibility_worklist: {item:?}");
             match item {
                 WorkItem::Propagate {
