@@ -126,14 +126,14 @@ impl FactorData {
     }
 
     pub fn rule_out_divisibility(&mut self, nonfactor: VertexId, dest: VertexId) {
-        let mut worklist = VecDeque::new();
-        worklist.push_back(WorkItem::RuleOut { nonfactor, dest });
+        let mut worklist = BTreeSet::new();
+        worklist.insert(WorkItem::RuleOut { nonfactor, dest });
         self.process_divisibility_worklist(worklist);
     }
 
     pub fn propagate_divisibility(&mut self, factor: VertexId, dest: VertexId, transitive: bool) {
-        let mut worklist = VecDeque::new();
-        worklist.push_back(WorkItem::Propagate {
+        let mut worklist = BTreeSet::new();
+        worklist.insert(WorkItem::Propagate {
             factor,
             dest,
             transitive,
@@ -184,7 +184,7 @@ impl FactorData {
                     if added_or_upgraded {
                         debug!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
                         // Anti-symmetry: if f | d and f != d, then d !| f
-                        worklist.push_back(WorkItem::RuleOut {
+                        worklist.insert(WorkItem::RuleOut {
                             nonfactor: dest,
                             dest: factor,
                         });
@@ -197,7 +197,7 @@ impl FactorData {
                                 continue;
                             }
                             if matches!(divisibility, Direct | Transitive) {
-                                worklist.push_back(WorkItem::Propagate {
+                                worklist.insert(WorkItem::Propagate {
                                     factor,
                                     dest: neighbor,
                                     transitive: true,
@@ -210,7 +210,7 @@ impl FactorData {
                             neighbor_vids(&self.divisibility_graph, dest, Incoming)
                         {
                             if divisibility == NotFactor {
-                                worklist.push_back(WorkItem::RuleOut {
+                                worklist.insert(WorkItem::RuleOut {
                                     nonfactor: neighbor,
                                     dest: factor,
                                 });
@@ -221,7 +221,7 @@ impl FactorData {
                             neighbor_vids(&self.divisibility_graph, factor, Outgoing)
                         {
                             if divisibility == NotFactor {
-                                worklist.push_back(WorkItem::RuleOut {
+                                worklist.insert(WorkItem::RuleOut {
                                     nonfactor: dest,
                                     dest: neighbor,
                                 });
@@ -234,7 +234,7 @@ impl FactorData {
                             if upstream == dest || !matches!(divisibility, Direct | Transitive) {
                                 continue;
                             }
-                            worklist.push_back(WorkItem::Propagate {
+                            worklist.insert(WorkItem::Propagate {
                                 factor: upstream,
                                 dest,
                                 transitive: true,
@@ -259,7 +259,7 @@ impl FactorData {
                         }
                         if matches!(divisibility, Direct | Transitive) {
                             // if nonfactor doesn't divide dest, then it also doesn't divide dest's factors
-                            worklist.push_back(WorkItem::RuleOut {
+                            worklist.insert(WorkItem::RuleOut {
                                 nonfactor,
                                 dest: neighbor,
                             });
