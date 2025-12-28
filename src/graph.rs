@@ -147,7 +147,6 @@ impl FactorData {
             if !already_processed.insert(item.clone()) {
                 continue;
             }
-            info!("process_divisibility_worklist: {item:?}");
             match item {
                 WorkItem::Propagate {
                     factor,
