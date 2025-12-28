@@ -1,3 +1,4 @@
+use std::cmp::Ordering::Equal;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
@@ -752,34 +753,7 @@ pub enum Factor {
 
 impl PartialEq for ComplexFactor {
     fn eq(&self, other: &Self) -> bool {
-        match self {
-            AddSub {
-                terms: (x, y),
-                subtract,
-            } => matches!(other, AddSub {terms: (ox, oy), subtract: os} if
-                os == subtract
-            && ((x == ox && y == oy) || (!subtract && x == oy && y == ox))),
-            Multiply { terms_hash, terms } => {
-                matches!(other, Multiply { terms_hash: other_terms_hash, terms: other_terms }
-                if terms_hash == other_terms_hash && terms == other_terms)
-            }
-            Divide {
-                left,
-                right_hash,
-                right,
-            } => {
-                matches!(other, Divide {left: other_left, right_hash: other_right_hash, right: other_right }
-                if right_hash == other_right_hash && left == other_left && right == other_right)
-            }
-            Power { base, exponent } => {
-                matches!(other, Power {base: other_base, exponent: other_exponent}
-                if base == other_base && exponent == other_exponent)
-            }
-            Fibonacci(term) => matches!(other, Fibonacci(other_term) if term == other_term),
-            Lucas(term) => matches!(other, Lucas(other_term) if term == other_term),
-            Factorial(term) => matches!(other, Factorial(other_term) if term == other_term),
-            Primorial(term) => matches!(other, Primorial(other_term) if term == other_term),
-        }
+        self.cmp(other) == Equal
     }
 }
 
