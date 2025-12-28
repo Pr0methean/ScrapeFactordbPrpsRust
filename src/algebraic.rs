@@ -1111,6 +1111,9 @@ impl Factor {
                 true
             })
         }
+        if self == other {
+            return false;
+        }
         if let Some(n) = evaluate_as_numeric(self) {
             if let Some(other_n) = evaluate_as_numeric(other) {
                 return other_n > n && other_n.is_multiple_of(n);
@@ -1237,7 +1240,8 @@ impl Factor {
                 {
                     return false;
                 }
-            } else if !self.may_be_proper_divisor_of(left) {
+            }
+            if !self.may_be_proper_divisor_of(left) {
                 return false;
             }
         }
@@ -1252,10 +1256,6 @@ impl Factor {
                 _ => unsafe { unreachable_unchecked() },
             }
             .contains(&other_last_digit)
-        } else if let Some(quotient) = div_exact(other, self)
-            && let Some(quotient_numeric) = evaluate_as_numeric(&quotient)
-        {
-            quotient_numeric > 1
         } else {
             true
         }
