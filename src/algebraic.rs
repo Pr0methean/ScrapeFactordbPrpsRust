@@ -672,21 +672,21 @@ impl Ord for ComplexFactor {
                         } = other
                         {
                             if !subtract {
-                               if *other_subtract {
-                                   return Greater;
-                               }
-                               let mut self_terms = [left, right];
-                               self_terms.sort_unstable();
-                               let mut other_terms = [other_left, other_right];
-                               other_terms.sort_unstable();
-                               return self_terms[0].cmp(other_terms[0])
-                                   .then_with(|| self_terms[1].cmp(other_terms[1]))
+                                if *other_subtract {
+                                    return Greater;
+                                }
+                                let mut self_terms = [left, right];
+                                self_terms.sort_unstable();
+                                let mut other_terms = [other_left, other_right];
+                                other_terms.sort_unstable();
+                                return self_terms[0]
+                                    .cmp(other_terms[0])
+                                    .then_with(|| self_terms[1].cmp(other_terms[1]));
                             } else {
                                 if !*other_subtract {
                                     return Less;
                                 }
-                                return left.cmp(other_left)
-                                .then_with(|| other_right.cmp(right));
+                                return left.cmp(other_left).then_with(|| other_right.cmp(right));
                             }
                         }
                     }
