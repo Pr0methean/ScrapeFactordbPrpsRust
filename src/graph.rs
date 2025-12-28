@@ -268,6 +268,7 @@ impl FactorData {
                     }
                 }
             }
+            info!("worklist has {} entries", worklist.len());
         }
     }
 
