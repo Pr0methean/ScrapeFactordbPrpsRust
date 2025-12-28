@@ -449,6 +449,10 @@ fn merge_vertices(
     merge_dest: VertexId,
     matching_vid: VertexId,
 ) {
+    // Check if we're already merging these vertices
+    if data.deleted_synonyms.contains_key(&matching_vid) {
+        return; // Already being merged
+    }
     neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
         .into_iter()
         .for_each(|(neighbor_vid, divisibility)| {
@@ -493,7 +497,11 @@ fn merge_vertices(
             }
         });
     }
-    data.merge_equivalent_expressions(merge_dest, old_factor, http);
+    // Only merge if the old_factor is different from current
+    let current_factor = data.get_factor(merge_dest);
+    if old_factor != current_factor {
+        data.merge_equivalent_expressions(merge_dest, old_factor, http);
+    }
 }
 
 fn propagate_transitive_divisibility(
