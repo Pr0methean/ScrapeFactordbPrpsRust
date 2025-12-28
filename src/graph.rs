@@ -27,7 +27,7 @@ use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::storage::{AdjMatrix, Stable};
 use hipstr::HipStr;
-use itertools::{Either, Itertools};
+use itertools::{Itertools};
 use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
@@ -996,43 +996,31 @@ pub async fn find_and_submit_factors(
                 .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
             let factor_is_prime = factor_facts.last_known_status == Some(Prime);
             let factor_lower_bound_log10 = factor_facts.lower_bound_log10;
-            let (cofactor_prime_factor_log10s, cofactor_composite_factor_log10s): (Vec<_>, Vec<_>) =
-                neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
-                    .into_iter()
-                    .filter(|(_, divisibility)| *divisibility != NotFactor)
-                    .partition_map(|(neighbor_vid, _)| {
-                        let facts = data.facts(neighbor_vid).unwrap();
-                        if facts.last_known_status == Some(Prime) {
-                            Either::Left(facts.lower_bound_log10)
-                        } else {
-                            Either::Right(facts.lower_bound_log10)
-                        }
-                    });
-            let cofactor_remaining_factors_upper_bound_log10 = cofactor_upper_bound_log10
-                .saturating_sub(if factor_is_prime {
-                    cofactor_prime_factor_log10s
+            if factor_is_prime {
+                let cofactor_prime_factor_log10s =
+                    neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
                         .into_iter()
-                        .sum::<NumberLength>()
-                        .max(
-                            cofactor_composite_factor_log10s
-                                .into_iter()
-                                .max()
-                                .unwrap_or(0),
-                        )
-                } else {
-                    cofactor_prime_factor_log10s
-                        .into_iter()
-                        .sum::<NumberLength>()
-                });
-            if factor_lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
-                info!(
-                    "{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)"
-                );
-                data.rule_out_divisibility(factor_vid, cofactor_vid);
-                if cofactor_vid == root_vid {
-                    continue 'graph_iter;
+                        .filter(|(_, divisibility)| *divisibility != NotFactor)
+                        .filter_map(|(neighbor_vid, _)| {
+                            if facts.last_known_status == Some(Prime) {
+                                Some(data.facts(neighbor_vid).unwrap().lower_bound_log10)
+                            } else {
+                                None
+                            }
+                        })
+                        .sum();
+                let cofactor_remaining_factors_upper_bound_log10 = cofactor_upper_bound_log10
+                    .saturating_sub(cofactor_prime_factor_log10s);
+                if factor_lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
+                    info!(
+                        "{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)"
+                    );
+                    data.rule_out_divisibility(factor_vid, cofactor_vid);
+                    if cofactor_vid == root_vid {
+                        continue 'graph_iter; // Skip put_factor_back_in_queue check
+                    }
+                    continue;
                 }
-                continue;
             }
             if data.is_known_factor(cofactor_vid, factor_vid) {
                 // factor is transitively divisible by cofactor
