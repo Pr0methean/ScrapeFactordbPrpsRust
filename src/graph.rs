@@ -73,6 +73,7 @@ impl Default for FactorData {
     }
 }
 
+#[derive(Debug)]
 enum WorkItem {
     Propagate {
         factor: VertexId,
@@ -142,6 +143,7 @@ impl FactorData {
 
     fn process_divisibility_worklist(&mut self, mut worklist: VecDeque<WorkItem>) {
         while let Some(item) = worklist.pop_front() {
+            info!("process_divisibility_worklist: {item:?}");
             match item {
                 WorkItem::Propagate {
                     factor,
