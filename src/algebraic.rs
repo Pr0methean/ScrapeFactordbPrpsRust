@@ -1,4 +1,3 @@
-use std::cmp::Ordering::Equal;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
@@ -23,6 +22,7 @@ use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::cmp::Ordering::Equal;
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
@@ -1211,9 +1211,9 @@ impl Factor {
             if let Some(right_exponent) = right.get(self)
                 && !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))].into())
                     .may_be_proper_divisor_of(left)
-                {
-                    return false;
-                }
+            {
+                return false;
+            }
             if !self.may_be_proper_divisor_of(left) {
                 return false;
             }
