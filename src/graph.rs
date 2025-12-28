@@ -27,7 +27,7 @@ use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::storage::{AdjMatrix, Stable};
 use hipstr::HipStr;
-use itertools::{Itertools};
+use itertools::Itertools;
 use log::{debug, error, info, warn};
 use rand::rng;
 use rand::seq::SliceRandom;
@@ -1010,8 +1010,8 @@ pub async fn find_and_submit_factors(
                             }
                         })
                         .sum();
-                let cofactor_remaining_factors_upper_bound_log10 = cofactor_upper_bound_log10
-                    .saturating_sub(cofactor_prime_factor_log10s);
+                let cofactor_remaining_factors_upper_bound_log10 =
+                    cofactor_upper_bound_log10.saturating_sub(cofactor_prime_factor_log10s);
                 if factor_lower_bound_log10 > cofactor_remaining_factors_upper_bound_log10 {
                     info!(
                         "{id}: Skipping submission of {factor} to {cofactor} because it's too large to divide any of the remaining cofactors (based on previous submissions)"
