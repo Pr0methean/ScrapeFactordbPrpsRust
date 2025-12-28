@@ -1234,13 +1234,12 @@ impl Factor {
             if !product_may_be_proper_divisor_of(right, left) {
                 return false;
             }
-            if let Some(right_exponent) = right.get(self) {
-                if !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))].into())
+            if let Some(right_exponent) = right.get(self)
+                && !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))].into())
                     .may_be_proper_divisor_of(left)
                 {
                     return false;
                 }
-            }
             if !self.may_be_proper_divisor_of(left) {
                 return false;
             }
