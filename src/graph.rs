@@ -1002,8 +1002,9 @@ pub async fn find_and_submit_factors(
                         .into_iter()
                         .filter(|(_, divisibility)| *divisibility != NotFactor)
                         .filter_map(|(neighbor_vid, _)| {
+                            let facts = data.facts(neighbor_vid).unwrap();
                             if facts.last_known_status == Some(Prime) {
-                                Some(data.facts(neighbor_vid).unwrap().lower_bound_log10)
+                                Some(facts.lower_bound_log10)
                             } else {
                                 None
                             }
