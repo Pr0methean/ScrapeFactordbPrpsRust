@@ -332,6 +332,7 @@ impl FactorData {
                     equivalent,
                 );
             }
+            info!("merge_equivalent_expressions finished");
             new_factor_vids
         }
     }
@@ -453,6 +454,7 @@ fn merge_vertices(
     if data.deleted_synonyms.contains_key(&matching_vid) {
         return; // Already being merged
     }
+    data.deleted_synonyms.insert(matching_vid, merge_dest);
     neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
         .into_iter()
         .for_each(|(neighbor_vid, divisibility)| {
@@ -463,7 +465,7 @@ fn merge_vertices(
         .for_each(|(neighbor_vid, divisibility)| {
             propagate_transitive_divisibility(data, merge_dest, neighbor_vid, divisibility)
         });
-    data.deleted_synonyms.insert(matching_vid, merge_dest);
+    info!("All divisibility edges updated");
     let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
     if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
         replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
@@ -497,6 +499,7 @@ fn merge_vertices(
             }
         });
     }
+    info!("NumberFacts updated");
     // Only merge if the old_factor is different from current
     let current_factor = data.get_factor(merge_dest);
     if old_factor != current_factor {
@@ -510,6 +513,7 @@ fn propagate_transitive_divisibility(
     to: VertexId,
     divisibility: Divisibility,
 ) {
+    info!("propagate_transitive_divisibility(data,{from:?},{to:?},{divisibility:?}");
     match divisibility {
         Direct => data.propagate_divisibility(from, to, false),
         Transitive => data.propagate_divisibility(from, to, true),
