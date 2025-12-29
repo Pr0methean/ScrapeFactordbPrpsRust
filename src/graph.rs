@@ -1249,6 +1249,9 @@ fn mark_stale(data: &mut FactorData, stale_vid: VertexId, http: &mut impl Factor
 }
 
 fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
+    if data.facts(vid).is_some_and(|f| f.is_known_fully_factored()) {
+        return;
+    }
     let facts = data.facts_mut(vid);
     facts.checked_for_listed_algebraic = true;
     facts.checked_in_factor_finder = true;
