@@ -1056,7 +1056,7 @@ impl Factor {
             Complex(c) => match **c {
                 AddSub { ref terms, .. } => {
                     let mut out = String::from("(");
-                    for (i, (term, coeff)) in terms.iter().enumerate() {
+                    for (i, (term, coeff)) in terms.iter().sorted_unstable_by_key(|(_term, coeff)| -**coeff).enumerate() {
                         if i > 0 || *coeff < 0 {
                             out += if *coeff > 0 { "+" } else { "-" };
                         }
@@ -1378,7 +1378,7 @@ impl Display for Factor {
             Complex(c) => match **c {
                 AddSub { ref terms, .. } => {
                     f.write_str("(")?;
-                    for (i, (term, coeff)) in terms.iter().enumerate() {
+                    for (i, (term, coeff)) in terms.iter().sorted_unstable_by_key(|(_term, coeff)| -**coeff).enumerate() {
                         if i > 0 || *coeff < 0 {
                             f.write_str(if *coeff > 0 { "+" } else { "-" })?;
                         }
@@ -1634,68 +1634,94 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     (a, n)
 }
 
-pub fn to_like_powers(
-    left: &Factor,
-    right: &Factor,
-    subtract: bool,
-) -> BTreeMap<Factor, NumberLength> {
+pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, NumberLength> {
     let mut exponent_factors = BTreeMap::new();
-    let mut new_left = simplify(left);
-    let mut new_right = simplify(right);
-    for term in [&mut new_left, &mut new_right] {
+    let mut simplified_terms = BTreeMap::new();
+    for (term, coeff) in terms {
+        let (new_coeff, coeff_power) = factor_power(coeff.unsigned_abs(), 1);
+        let mut term = simplify(term);
         let exponent_numeric = match term {
             Numeric(a) => {
-                let (a, n) = factor_power(*a, 1);
+                let (a, n) = factor_power(a, 1);
                 if n > 1 {
-                    *term = Factor::multiply([(Numeric(a), n as NumberLength)].into());
-                    Some(n)
-                } else {
-                    None
+                    term = Factor::multiply([(Numeric(a), n as NumberLength)].into());
                 }
+                n
             }
-            Complex(c) => match **c {
+            Complex(ref c) => match **c {
                 Power { ref exponent, .. } => {
-                    evaluate_as_numeric(exponent).and_then(|e| NumberLength::try_from(e).ok())
+                    evaluate_as_numeric(exponent).and_then(|e| NumberLength::try_from(e).ok()).unwrap_or(1)
                 }
                 Multiply { ref terms, .. } => {
                     // Return GCD of exponents without modifying the term
                     // nth_root_exact will handle the exponent division later
-                    terms.values().copied().reduce(|x, y| x.gcd(&y))
+                    terms.values().copied().reduce(|x, y| x.gcd(&y)).unwrap_or(1)
                 }
-                _ => None,
+                _ => 1,
             },
-            _ => None,
+            _ => 1,
         };
-        if let Some(exponent_numeric) = exponent_numeric {
-            exponent_factors = multiset_union(vec![
-                exponent_factors,
-                find_raw_factors_of_numeric(exponent_numeric.into()),
-            ]);
+        let mut term_factors = find_raw_factors_of_numeric(exponent_numeric.into());
+        sum_factor_btreemaps(&mut term_factors, find_raw_factors_of_numeric(coeff_power.into()));
+        exponent_factors = multiset_union(vec![
+            exponent_factors, term_factors
+        ]);
+        let entry = simplified_terms.entry(term).or_insert(0i128);
+        if *coeff < 0 {
+            *entry = entry.checked_sub_unsigned(new_coeff).unwrap();
+        } else {
+            *entry = entry.checked_add_unsigned(new_coeff).unwrap();
         }
     }
-    if exponent_factors.is_empty() {
-        return BTreeMap::new();
-    }
-    let expr = simplify_add_sub(&new_left, &new_right, subtract);
-    let mut results = BTreeMap::new();
-    for (factor, _) in exponent_factors {
-        if let Ok(factor) = NumberLength::try_from(factor)
-            && (subtract || (factor != 2))
-            && let Some(left_root) = nth_root_exact(&new_left, factor)
-            && let Some(right_root) = nth_root_exact(&new_right, factor)
-        {
-            let new_factor = simplify_add_sub(&left_root, &right_root, subtract);
-            let new_cofactor = if subtract && factor == 2 {
-                simplify_add_sub(&left_root, &right_root, false)
-            } else {
-                div_exact(&expr, &new_factor)
-                    .unwrap_or_else(|| simplify_divide(&expr, &[(new_factor.clone(), 1)].into()))
-            };
-            *results.entry(new_cofactor).or_insert(0) += 1;
-            *results.entry(new_factor).or_insert(0) += 1;
+
+    let mut result = BTreeMap::new();
+
+    let (positive_terms, negative_terms): (Vec<_>, Vec<_>)
+        = simplified_terms.into_iter().partition(|&(_, c)| c > 0);
+    for prime in exponent_factors.keys().copied() {
+        let Ok(prime) = NumberLength::try_from(prime) else {
+            continue;
+        };
+        if prime == 2 && !negative_terms.is_empty() {
+            continue;
         }
+        if prime == 131 && !terms.iter().all(|(_term, coeff)| coeff.unsigned_abs() <= 1) {
+            // i128 greater than 1 can't have roots in any larger prime
+            break;
+        }
+        let Some(pos_term_roots) = positive_terms.iter()
+            .map(|(term, coeff)| {
+                let coeff_root = coeff.nth_root_exact(prime.into())?;
+                let term_root = nth_root_exact(&simplify(term), prime.into())?;
+                Some((term_root, coeff_root))
+            })
+            .collect::<Option<Vec<_>>>() else {
+            continue;
+        };
+        let Some(neg_term_roots) = negative_terms.iter()
+            .map(|(term, coeff)| {
+                let coeff_root = coeff.nth_root_exact(prime.into())?;
+                let term_root = nth_root_exact(term, prime.into())?;
+                Some((term_root, coeff_root))
+            })
+            .collect::<Option<Vec<_>>>() else {
+            continue;
+        };
+        let (new_cofactor, new_factor) = if prime == 2 {
+            let a_plus_b = Factor::add_sub(pos_term_roots.iter().cloned().chain(neg_term_roots.iter().cloned().map(|(term, coeff)| (term, -coeff))).collect());
+            let a_minus_b = Factor::add_sub(pos_term_roots.into_iter().chain(neg_term_roots.into_iter()).collect());
+            (a_plus_b, a_minus_b)
+        } else {
+            let a_minus_b = Factor::add_sub(pos_term_roots.into_iter().chain(neg_term_roots.into_iter()).collect());
+            let terms = Factor::add_sub(terms.clone());
+            let cofactor = div_exact(&terms, &a_minus_b).unwrap_or_else(|| Factor::divide(terms, [(a_minus_b.clone(), 1)]));
+            (cofactor, a_minus_b)
+        };
+        *result.entry(new_factor).or_insert(0) += 1;
+        *result.entry(new_cofactor).or_insert(0) += 1;
     }
-    results
+
+    result
 }
 
 pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
@@ -3101,40 +3127,36 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                 }
                                 factors
                             }
-                            AddSub {
-                                terms: (ref left, ref right),
-                                subtract,
-                            } => {
-                                let left = simplify(left);
-                                let right = simplify(right);
-                                let common_factors = find_common_factors(&left, &right);
-                                let mut algebraic = BTreeMap::new();
-                                for (term, exponent) in to_like_powers(&left, &right, subtract) {
-                                    if let Numeric(n) = term {
-                                        for (sub_f, sub_e) in find_factors_of_numeric(n) {
-                                            *algebraic.entry(sub_f).or_insert(0) +=
-                                                sub_e * exponent;
+                            AddSub { ref terms, .. } => {
+                                // Handle n-way addition/subtraction
+                                let first = terms.iter().next();
+                                match first {
+                                    None => [(Numeric(0), 1)].into(),
+                                    Some((first_term, first_coeff)) => {
+                                        let mut common_factors = find_factors(first_term);
+                                        sum_factor_btreemaps(&mut common_factors,
+                                            find_factors_of_numeric(first_coeff.unsigned_abs()));
+                                        for (term, coeff) in terms.iter().skip(1) {
+                                            let mut term_factors = find_factors(term);
+                                            sum_factor_btreemaps(&mut term_factors, find_factors_of_numeric(coeff.unsigned_abs()));
+                                            common_factors = multiset_intersection(common_factors, term_factors);
+                                            if common_factors.is_empty() {
+                                                break;
+                                            }
                                         }
-                                    } else {
-                                        *algebraic.entry(term).or_insert(0) += exponent;
+                                        let mut algebraic = BTreeMap::new();
+                                        for (term, exponent) in to_like_powers(terms) {
+                                            if let Numeric(n) = term {
+                                                for (sub_f, sub_e) in find_factors_of_numeric(n) {
+                                                    *algebraic.entry(sub_f).or_insert(0) += sub_e * exponent;
+                                                }
+                                            } else {
+                                                *algebraic.entry(term).or_insert(0) += exponent;
+                                            }
+                                        }
+                                        multiset_union(vec![common_factors, algebraic])
                                     }
                                 }
-                                let factors = multiset_union(vec![common_factors, algebraic]);
-                                let cofactors = factors
-                                    .iter()
-                                    .filter_map(|(factor, exponent)| {
-                                        let mut cofactor = div_exact(expr, factor)?;
-                                        let mut remaining_exponent = exponent - 1;
-                                        while remaining_exponent > 0
-                                            && let Some(new_cofactor) = div_exact(&cofactor, factor)
-                                        {
-                                            cofactor = new_cofactor;
-                                            remaining_exponent -= 1;
-                                        }
-                                        Some((simplify(&cofactor), 1))
-                                    })
-                                    .collect();
-                                multiset_union(vec![factors, cofactors])
                             }
                         },
                     };
@@ -3223,36 +3245,12 @@ fn factor_big_num(expr: &str) -> BTreeMap<Factor, NumberLength> {
     factors
 }
 
-fn sum_factor_btreemaps(
-    factors: &mut BTreeMap<Factor, NumberLength>,
-    extra_factors: BTreeMap<Factor, NumberLength>,
+fn sum_factor_btreemaps<T: std::cmp::Ord>(
+    factors: &mut BTreeMap<T, NumberLength>,
+    extra_factors: BTreeMap<T, NumberLength>,
 ) {
     for (factor, exponent) in extra_factors {
         *factors.entry(factor).or_insert(0) += exponent;
-    }
-}
-
-#[inline]
-fn find_common_factors(expr1: &Factor, expr2: &Factor) -> BTreeMap<Factor, NumberLength> {
-    let num1 = evaluate_as_numeric(expr1);
-    if num1 == Some(1) {
-        return BTreeMap::new();
-    }
-    let num2 = evaluate_as_numeric(expr2);
-    if num2 == Some(1) {
-        return BTreeMap::new();
-    }
-    if let Some(num1) = num1
-        && let Some(num2) = num2
-    {
-        find_factors_of_numeric(num1.gcd(&num2))
-    } else {
-        let expr1_factors = find_factors(expr1);
-        if expr1_factors.is_empty() {
-            return BTreeMap::new();
-        }
-        let expr2_factors = find_factors(expr2);
-        multiset_intersection::<Factor>(expr1_factors, expr2_factors)
     }
 }
 
@@ -4444,7 +4442,7 @@ mod tests {
         let left = Factor::from("2^10");
         let right = Factor::from("3^10");
 
-        let result = to_like_powers(&left, &right, true);
+        let result = to_like_powers(&[(left, 1), (right, -1)].into());
         // Exponent factors of 10 are 1, 2, 5, 10
         // It should return btreemap with factors.
         // Logic: for factor in exponent_factors:
