@@ -204,11 +204,13 @@ impl FactorData {
                                 });
                             }
                         }
-                        // Non-divisibility propagation when f | d:
                         // Rule 4: n !| d and f | d => n !| f
                         for (neighbor, divisibility) in
                             neighbor_vids(&self.divisibility_graph, dest, Incoming)
                         {
+                            if neighbor == factor {
+                                continue;
+                            }
                             if divisibility == NotFactor {
                                 worklist.insert(WorkItem::RuleOut {
                                     nonfactor: neighbor,
@@ -220,6 +222,9 @@ impl FactorData {
                         for (neighbor, divisibility) in
                             neighbor_vids(&self.divisibility_graph, factor, Outgoing)
                         {
+                            if neighbor == factor {
+                                continue;
+                            }
                             if divisibility == NotFactor {
                                 worklist.insert(WorkItem::RuleOut {
                                     nonfactor: dest,
@@ -231,7 +236,7 @@ impl FactorData {
                         for (upstream, divisibility) in
                             neighbor_vids(&self.divisibility_graph, factor, Incoming)
                         {
-                            if upstream == dest || !matches!(divisibility, Direct | Transitive) {
+                            if upstream == factor || upstream == dest || !matches!(divisibility, Direct | Transitive) {
                                 continue;
                             }
                             worklist.insert(WorkItem::Propagate {
@@ -458,17 +463,19 @@ fn merge_vertices(
     if data.deleted_synonyms.contains_key(&matching_vid) {
         return; // Already being merged
     }
+    data.deleted_synonyms.insert(matching_vid, merge_dest);
+    let mut worklist = BTreeSet::new();
     neighbor_vids(&data.divisibility_graph, matching_vid, Incoming)
         .into_iter()
         .for_each(|(neighbor_vid, divisibility)| {
-            propagate_transitive_divisibility(data, neighbor_vid, merge_dest, divisibility)
+            queue_transitive_divisibility(&mut worklist, neighbor_vid, merge_dest, divisibility)
         });
     neighbor_vids(&data.divisibility_graph, matching_vid, Outgoing)
         .into_iter()
         .for_each(|(neighbor_vid, divisibility)| {
-            propagate_transitive_divisibility(data, merge_dest, neighbor_vid, divisibility)
+            queue_transitive_divisibility(&mut worklist, merge_dest, neighbor_vid, divisibility)
         });
-    data.deleted_synonyms.insert(matching_vid, merge_dest);
+    data.process_divisibility_worklist(worklist);
     let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
     if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
         replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
@@ -509,17 +516,28 @@ fn merge_vertices(
     }
 }
 
-fn propagate_transitive_divisibility(
-    data: &mut FactorData,
+fn queue_transitive_divisibility(
+    worklist: &mut BTreeSet<WorkItem>,
     from: VertexId,
     to: VertexId,
     divisibility: Divisibility,
 ) {
     match divisibility {
-        Direct => data.propagate_divisibility(from, to, false),
-        Transitive => data.propagate_divisibility(from, to, true),
-        NotFactor => data.rule_out_divisibility(from, to),
-    }
+        Direct => worklist.insert(WorkItem::Propagate {
+            factor: from,
+            dest: to,
+            transitive: false,
+        }),
+        Transitive => worklist.insert(WorkItem::Propagate {
+            factor: from,
+            dest: to,
+            transitive: true,
+        }),
+        NotFactor => worklist.insert(WorkItem::RuleOut {
+            nonfactor: from,
+            dest: to,
+        }),
+    };
 }
 
 fn neighbor_vids(
@@ -1663,3 +1681,4 @@ mod tests {
         assert_eq!(data.get_edge(a, c), Some(NotFactor));
     }
 }
+
