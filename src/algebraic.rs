@@ -1036,8 +1036,6 @@ impl Factor {
         }
     }
 
-
-
     #[inline(always)]
     fn last_digit(&self) -> Option<u8> {
         match self {

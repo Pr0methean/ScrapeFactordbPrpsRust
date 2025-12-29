@@ -750,7 +750,11 @@ pub async fn find_and_submit_factors(
         (None, None)
     };
     let mut all_vids: BTreeSet<VertexId> = data.divisibility_graph.vertices_by_id().collect();
-    let mut known_factors: Vec<_> = all_vids.iter().copied().filter(|&v| v != root_vid).collect();
+    let mut known_factors: Vec<_> = all_vids
+        .iter()
+        .copied()
+        .filter(|&v| v != root_vid)
+        .collect();
     known_factors.shuffle(&mut rng());
     let mut known_factors = VecDeque::from(known_factors);
     let mut factors_to_submit_in_graph = VecDeque::new();
@@ -798,7 +802,7 @@ pub async fn find_and_submit_factors(
                 let subfactors = add_factors_to_graph(http, &mut data, factor_vid).await;
                 let subfactors_found = !subfactors.is_empty();
                 if subfactors_found {
-                all_vids.extend(subfactors.iter().copied());
+                    all_vids.extend(subfactors.iter().copied());
                     factors_to_submit_in_graph.extend(subfactors);
                     dedup_and_shuffle(&mut factors_to_submit_in_graph);
                 }
@@ -910,7 +914,8 @@ pub async fn find_and_submit_factors(
             }
             continue;
         }
-        let mut dest_factors = all_vids.iter()
+        let mut dest_factors = all_vids
+            .iter()
             .copied()
             .filter(|&dest_vid|
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
@@ -1124,7 +1129,8 @@ pub async fn find_and_submit_factors(
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
                     if cofactor_vid == root_vid || cofactor_upper_bound_log10 >= 50000 {
-                        let new_root_factors = add_factors_to_graph(http, &mut data, root_vid).await;
+                        let new_root_factors =
+                            add_factors_to_graph(http, &mut data, root_vid).await;
                         all_vids.extend(new_root_factors.iter().copied());
                         // skip put_factor_back_into_queue check
                         continue 'graph_iter;
@@ -1180,7 +1186,8 @@ pub async fn find_and_submit_factors(
                 }
                 OtherError => {
                     put_factor_back_into_queue = true;
-                    let new_cofactor_factors = add_factors_to_graph(http, &mut data, cofactor_vid).await;
+                    let new_cofactor_factors =
+                        add_factors_to_graph(http, &mut data, cofactor_vid).await;
                     if !new_cofactor_factors.is_empty() {
                         all_vids.extend(new_cofactor_factors.iter().copied());
                         iters_without_progress = 0;
@@ -1195,8 +1202,7 @@ pub async fn find_and_submit_factors(
 
     for factor_vid in all_vids.iter().copied().filter(|&v| v != root_vid) {
         let factor = data.get_factor(factor_vid);
-        if factor.is_elided()
-        {
+        if factor.is_elided() {
             debug!(
                 "{id}: Skipping writing {factor} to failed-submission file because we don't know its specifier"
             );
