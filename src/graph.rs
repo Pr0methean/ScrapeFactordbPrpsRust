@@ -236,7 +236,10 @@ impl FactorData {
                         for (upstream, divisibility) in
                             neighbor_vids(&self.divisibility_graph, factor, Incoming)
                         {
-                            if upstream == factor || upstream == dest || !matches!(divisibility, Direct | Transitive) {
+                            if upstream == factor
+                                || upstream == dest
+                                || !matches!(divisibility, Direct | Transitive)
+                            {
                                 continue;
                             }
                             worklist.insert(WorkItem::Propagate {
@@ -1681,4 +1684,3 @@ mod tests {
         assert_eq!(data.get_edge(a, c), Some(NotFactor));
     }
 }
-
