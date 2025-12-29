@@ -21,16 +21,16 @@ use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp::Ordering::{Greater, Less};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
-use std::hash::{Hash, Hasher};
+use std::hash::{Hash};
 use std::hint::unreachable_unchecked;
 use std::mem::swap;
 use std::sync::{Arc, OnceLock};
+use itertools::Either::{Left, Right};
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::Verbosity::Silent;
@@ -575,9 +575,7 @@ pub enum FactorBeingParsed {
     BigNumber(BigNumber),
     ElidedNumber(HipStr<'static>),
     AddSub {
-        left: Box<FactorBeingParsed>,
-        right: Box<FactorBeingParsed>,
-        subtract: bool,
+        terms: BTreeMap<FactorBeingParsed, i128>,
     },
     Multiply {
         terms: BTreeMap<FactorBeingParsed, NumberLength>,
@@ -602,17 +600,8 @@ impl Default for FactorBeingParsed {
     }
 }
 
-fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
-    let (left, right) = terms;
-    let invariant_hasher_state = RandomState::with_seed(0x1337c0de);
-    let left_hash = invariant_hasher_state.hash_one(left);
-    let right_hash = invariant_hasher_state.hash_one(right);
-    state.write_u64(left_hash.wrapping_add(right_hash));
-}
-
 #[derive(Derivative)]
 #[derivative(Clone, Debug, Hash, Eq)]
-#[repr(u8)]
 pub enum ComplexFactor {
     Divide {
         left: Factor,
@@ -621,9 +610,9 @@ pub enum ComplexFactor {
         right: BTreeMap<Factor, NumberLength>,
     },
     AddSub {
-        #[derivative(Hash(hash_with = "crate::algebraic::hash_add_sub"))]
-        terms: (Factor, Factor),
-        subtract: bool,
+        terms_hash: u64,
+        #[derivative(Hash = "ignore")]
+        terms: BTreeMap<Factor, i128>,
     },
     Multiply {
         terms_hash: u64,
@@ -648,10 +637,16 @@ impl PartialOrd for ComplexFactor {
 
 impl ComplexFactor {
     fn discriminant(&self) -> u8 {
-        // SAFETY: Because `Self` is marked `repr(u8)`, its layout is a `repr(C)` `union`
-        // between `repr(C)` structs, each of which has the `u8` discriminant as its first
-        // field, so we can read the discriminant without offsetting the pointer.
-        unsafe { *<*const _>::from(self).cast::<u8>() }
+        match self {
+            Divide { .. } => 0,
+            AddSub { .. } => 1,
+            Multiply { .. } => 2,
+            Power { .. } => 3,
+            Fibonacci(_) => 4,
+            Lucas(_) => 5,
+            Primorial(_) => 6,
+            Factorial(_) => 7,
+        }
     }
 }
 
@@ -662,31 +657,20 @@ impl Ord for ComplexFactor {
             .then_with(|| {
                 match self {
                     AddSub {
-                        terms: (left, right),
-                        subtract,
+                        terms_hash,
+                        terms,
                     } => {
                         if let AddSub {
-                            terms: (other_left, other_right),
-                            subtract: other_subtract,
+                            terms_hash: other_hash,
+                            terms: other_terms,
                         } = other
                         {
-                            if !subtract {
-                                if *other_subtract {
-                                    return Greater;
-                                }
-                                let mut self_terms = [left, right];
-                                self_terms.sort_unstable();
-                                let mut other_terms = [other_left, other_right];
-                                other_terms.sort_unstable();
-                                return self_terms[0]
-                                    .cmp(other_terms[0])
-                                    .then_with(|| self_terms[1].cmp(other_terms[1]));
-                            } else {
-                                if !*other_subtract {
-                                    return Less;
-                                }
-                                return left.cmp(other_left).then_with(|| other_right.cmp(right));
-                            }
+                            return terms
+                                .len()
+                                .cmp(&other_terms.len())
+                                .then_with(|| terms_hash.cmp(other_hash))
+                                .then_with(|| terms.values().cmp(other_terms.values()))
+                                .then_with(|| terms.keys().cmp(other_terms.keys()));
                         }
                     }
                     Multiply { terms_hash, terms } => {
@@ -768,19 +752,14 @@ impl PartialEq for ComplexFactor {
         match (self, other) {
             (
                 AddSub {
-                    terms: (l1, r1),
-                    subtract: s1,
+                    terms_hash: h1,
+                    terms: t1,
                 },
                 AddSub {
-                    terms: (l2, r2),
-                    subtract: s2,
+                    terms_hash: h2,
+                    terms: t2,
                 },
-            ) => {
-                if s1 != s2 {
-                    return false;
-                }
-                l1 == l2 && r1 == r2 || (!s1 && l1 == r2 && r1 == l2)
-            }
+            ) => h1 == h2 && t1.values().eq(t2.values()) && t1.keys().eq(t2.keys()),
             (Multiply { terms_hash: h1, terms: t1 }, Multiply { terms_hash: h2, terms: t2 }) => {
                 h1 == h2 && t1 == t2
             }
@@ -795,7 +774,7 @@ impl PartialEq for ComplexFactor {
                     right_hash: h2,
                     right: r2,
                 },
-            ) => h1 == h2 && l1 == l2 && r1 == r2,
+            ) => h1 == h2 && r1.values().eq(r2.values()) && l1 == l2 && r1.keys().eq(r2.keys()),
             (Power { base: b1, exponent: e1 }, Power { base: b2, exponent: e2 }) => {
                 b1 == b2 && e1 == e2
             }
@@ -815,23 +794,22 @@ impl From<FactorBeingParsed> for Factor {
             FactorBeingParsed::Numeric(n) => Numeric(n),
             FactorBeingParsed::BigNumber(n) => Factor::BigNumber(n),
             FactorBeingParsed::ElidedNumber(n) => ElidedNumber(n),
-            FactorBeingParsed::AddSub {
-                left,
-                right,
-                subtract,
-            } => {
-                let mut left = Factor::from(*left);
-                let mut right = Factor::from(*right);
-                if !subtract && left < right {
-                    swap(&mut left, &mut right);
-                }
-                Complex(
-                    AddSub {
-                        terms: (left, right),
-                        subtract,
+            FactorBeingParsed::AddSub { terms } => {
+                let mut flattened_terms = BTreeMap::new();
+                for (term, coeff) in terms {
+                    let factor = Factor::from(term);
+                    if let Complex(c) = &factor
+                        && let AddSub { terms: inner, .. } = &**c
+                    {
+                        for (inner_term, inner_coeff) in inner {
+                            *flattened_terms.entry(inner_term.clone()).or_insert(0) +=
+                                inner_coeff * coeff;
+                        }
+                    } else {
+                        *flattened_terms.entry(factor).or_insert(0) += coeff;
                     }
-                    .into(),
-                )
+                }
+                Factor::add_sub(flattened_terms)
             }
             FactorBeingParsed::Multiply { terms } => Factor::multiply(
                 terms
@@ -894,8 +872,54 @@ peg::parser! {
 
     #[cache_left_rec]
     pub rule arithmetic() -> FactorBeingParsed = precedence!{
-      x:(@) "+" y:@ { FactorBeingParsed::AddSub { left: x.into(), right: y.into(), subtract: false } }
-      x:(@) "-" y:@ { FactorBeingParsed::AddSub { left: x.into(), right: y.into(), subtract: true } }
+      x:(@) "+" y:@ {
+          let mut x = x;
+          match (x, y) {
+              (FactorBeingParsed::AddSub { mut terms }, FactorBeingParsed::AddSub { terms: y_terms }) => {
+                  for (term, coeff) in y_terms {
+                      *terms.entry(term).or_insert(0) += coeff;
+                  }
+                  FactorBeingParsed::AddSub { terms }
+              }
+              (FactorBeingParsed::AddSub { mut terms }, y) => {
+                  *terms.entry(y).or_insert(0) += 1;
+                  FactorBeingParsed::AddSub { terms }
+              }
+              (x, FactorBeingParsed::AddSub { mut terms }) => {
+                  *terms.entry(x).or_insert(0) += 1;
+                  FactorBeingParsed::AddSub { terms }
+              }
+              (x, y) => {
+                  FactorBeingParsed::AddSub { terms: [(x, 1), (y, 1)].into() }
+              }
+          }
+      }
+      x:(@) "-" y:@ {
+          let mut x = x;
+          match (x, y) {
+              (FactorBeingParsed::AddSub { mut terms }, FactorBeingParsed::AddSub { terms: y_terms }) => {
+                  for (term, coeff) in y_terms {
+                      *terms.entry(term).or_insert(0) -= coeff;
+                  }
+                  FactorBeingParsed::AddSub { terms }
+              }
+              (FactorBeingParsed::AddSub { mut terms }, y) => {
+                  *terms.entry(y).or_insert(0) -= 1;
+                  FactorBeingParsed::AddSub { terms }
+              }
+              (x, FactorBeingParsed::AddSub { mut terms }) => {
+                  let mut new_terms = BTreeMap::new();
+                  new_terms.insert(x, 1);
+                  for (term, coeff) in terms {
+                      *new_terms.entry(term).or_insert(0) -= coeff;
+                  }
+                  FactorBeingParsed::AddSub { terms: new_terms }
+              }
+              (x, y) => {
+                  FactorBeingParsed::AddSub { terms: [(x, 1), (y, -1)].into() }
+              }
+          }
+      }
       --
       x:(@) "/" y:@ {
         let mut x = x;
@@ -949,7 +973,10 @@ peg::parser! {
                     output
                 }
       --
-      "M" x:@ { FactorBeingParsed::AddSub { left: FactorBeingParsed::Power { base: FactorBeingParsed::Numeric(2).into(), exponent: Box::new(x) }.into(), right: FactorBeingParsed::Numeric(1).into(), subtract: true } }
+      "M" x:@ { FactorBeingParsed::AddSub { terms: [
+          (FactorBeingParsed::Power { base: FactorBeingParsed::Numeric(2).into(), exponent: Box::new(x) }, 1),
+          (FactorBeingParsed::Numeric(1), -1)
+      ].into() } }
       --
       "I" x:@ { FactorBeingParsed::Fibonacci(x.into()) }
       --
@@ -993,6 +1020,11 @@ impl Factor {
         Complex(Multiply { terms, terms_hash }.into())
     }
 
+    pub fn add_sub(terms: BTreeMap<Factor, i128>) -> Self {
+        let terms_hash = hash(&terms);
+        Complex(AddSub { terms_hash, terms }.into())
+    }
+
     pub fn divide(left: Factor, right: impl IntoIterator<Item = (Factor, NumberLength)>) -> Self {
         let right = right.into_iter().collect();
         let right_hash = hash(&right);
@@ -1022,15 +1054,22 @@ impl Factor {
             UnknownExpression(e) => e.clone(),
             ElidedNumber(e) => e.clone(),
             Complex(c) => match **c {
-                AddSub {
-                    terms: (ref left, ref right),
-                    subtract,
-                } => format!(
-                    "({}{}{})",
-                    left.to_unelided_string(),
-                    if subtract { '-' } else { '+' },
-                    right.to_unelided_string(),
-                ),
+                AddSub { ref terms, .. } => {
+                    let mut out = String::from("(");
+                    for (i, (term, coeff)) in terms.iter().enumerate() {
+                        if i > 0 || *coeff < 0 {
+                            out += if *coeff > 0 { "+" } else { "-" };
+                        }
+                        let abs_coeff = coeff.abs();
+                        if abs_coeff != 1 {
+                            out += &*abs_coeff.to_string();
+                            out += "*";
+                        }
+                        out += &*term.to_unelided_string();
+                    }
+                    out += ")";
+                    out
+                },
                 Multiply { ref terms, .. } => format!(
                     "({})",
                     terms
@@ -1274,9 +1313,9 @@ impl Factor {
             UnknownExpression(str) => str.contains("..."),
             Complex(c) => match **c {
                 AddSub {
-                    terms: (ref left, ref right),
+                    ref terms,
                     ..
-                } => left.is_elided() || right.is_elided(),
+                } => terms.keys().any(Factor::is_elided),
                 Multiply { ref terms, .. } => terms.keys().any(Factor::is_elided),
                 Divide {
                     ref left,
@@ -1337,13 +1376,20 @@ impl Display for Factor {
             UnknownExpression(e) => e.fmt(f),
             ElidedNumber(e) => e.fmt(f),
             Complex(c) => match **c {
-                AddSub {
-                    terms: (ref left, ref right),
-                    subtract,
-                } => f.write_fmt(format_args!(
-                    "({left}{}{right})",
-                    if subtract { '-' } else { '+' }
-                )),
+                AddSub { ref terms, .. } => {
+                    f.write_str("(")?;
+                    for (i, (term, coeff)) in terms.iter().enumerate() {
+                        if i > 0 || *coeff < 0 {
+                            f.write_str(if *coeff > 0 { "+" } else { "-" })?;
+                        }
+                        let abs_coeff = coeff.abs();
+                        if abs_coeff != 1 {
+                            f.write_fmt(format_args!("{abs_coeff}*"))?;
+                        }
+                        term.fmt(f)?;
+                    }
+                    f.write_str(")")
+                }
                 Multiply { ref terms, .. } => f.write_fmt(format_args!(
                     "({})",
                     terms
@@ -1797,16 +1843,17 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                 None
             }
             AddSub {
-                terms: (ref left, ref right),
-                subtract,
+                ref terms, ..
             } => {
-                if let Some(new_left) = div_exact(left, divisor)
-                    && let Some(new_right) = div_exact(right, divisor)
-                {
-                    Some(simplify_add_sub(&new_left, &new_right, subtract))
-                } else {
-                    None
+                let mut new_terms = BTreeMap::new();
+                for (term, coeff) in terms {
+                    if let Some(new_term) = div_exact(term, divisor) {
+                        *new_terms.entry(new_term).or_insert(0) += coeff;
+                    } else {
+                        *new_terms.entry(term.clone()).or_insert(0) += coeff.div_exact(evaluate_as_numeric(divisor)?.try_into().ok()?)?;
+                    }
                 }
+                Some(Factor::add_sub(new_terms))
             }
             _ => None,
         },
@@ -2036,27 +2083,33 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                 (product_lower, product_upper)
             }
             AddSub {
-                terms: (ref left, ref right),
-                subtract,
+                ref terms, ..
             } => {
-                // addition/subtraction
-                let (left_lower, left_upper) = estimate_log10_internal(left);
-                let (right_lower, right_upper) = estimate_log10_internal(right);
-                let combined_lower = if subtract {
-                    if right_upper >= left_lower - 1 {
-                        0
-                    } else {
-                        left_lower.saturating_sub(1)
-                    }
+                let (positive_logs, negative_logs): (Vec<_>, Vec<_>)
+                    = terms.iter()
+                    .partition_map(|(term, coeff)| {
+                        let (lower, upper) = estimate_log10_internal(term);
+                        let (lower_mul, upper_mul) = log10_bounds(coeff.unsigned_abs());
+                        let multiplied = (lower.saturating_add(lower_mul), upper.saturating_add(upper_mul));
+                        if *coeff > 0 {
+                            Left(multiplied)
+                        } else {
+                            Right(multiplied)
+                        }
+                    });
+                let positive_lower = positive_logs.iter().map(|(lower, _upper)| lower).copied();
+                let positive_lower = positive_lower.clone().max().max(Some(positive_lower.min().unwrap_or(0).saturating_add(log10_bounds(positive_logs.len().try_into().unwrap()).0))).unwrap();
+                let [positive_upper, negative_upper]
+                    = [positive_logs, negative_logs].iter().map(|logs| {
+                    logs.iter().map(|(_lower, upper)| upper).max().map(|max| max.saturating_add(log10_bounds(logs.len().try_into().unwrap()).1))
+                        .unwrap_or(0)
+                }).collect::<Vec<_>>().try_into().unwrap();
+                let combined_lower = if negative_upper < positive_lower.saturating_sub(1) {
+                    positive_lower.saturating_sub(1)
                 } else {
-                    left_lower.max(right_lower)
+                    0
                 };
-                let combined_upper = if subtract {
-                    left_upper
-                } else {
-                    left_upper.max(right_upper).saturating_add(1)
-                };
-                (combined_lower, combined_upper)
+                (combined_lower, positive_upper)
             }
         },
         ElidedNumber(_) => {
@@ -2173,21 +2226,18 @@ pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option
             ElidedNumber(_) | UnknownExpression(_) => None,
             Complex(ref c) => match **c {
                 AddSub {
-                    terms: (ref left, ref right),
-                    subtract,
+                    ref terms, ..
                 } => {
-                    let left = modulo_as_numeric(left, modulus)?;
-                    let right = modulo_as_numeric(right, modulus)?;
-                    if subtract {
-                        let diff = left.abs_diff(right);
-                        Some(if left > right {
-                            diff.rem_euclid(modulus)
+                    let mut result: NumericFactor = 0;
+                    for (term, coeff) in terms.iter() {
+                        let term_mod = modulo_as_numeric(term, modulus)?.mulm(coeff.unsigned_abs(), &modulus);
+                        result = if *coeff < 0 && term_mod != 0 {
+                            result.checked_sub(term_mod).or_else(|| result.checked_add(modulus - term_mod))?
                         } else {
-                            (modulus - diff.rem_euclid(modulus)) % modulus
-                        })
-                    } else {
-                        Some((left + right) % modulus)
+                            result.checked_add(term_mod)?
+                        } % modulus;
                     }
+                    Some(result)
                 }
                 Multiply { ref terms, .. } => {
                     let mut product: NumericFactor = 1;
@@ -2320,10 +2370,9 @@ pub(crate) fn simplify(expr: &Factor) -> Factor {
                 Numeric(0) | Numeric(1) => Factor::one(),
                 _ => expr.clone(),
             },
-            AddSub {
-                terms: (ref left, ref right),
-                subtract,
-            } => simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| expr.clone()),
+            AddSub { ref terms, .. } => {
+                simplify_add_sub_internal(terms).unwrap_or_else(|| expr.clone())
+            }
             _ => expr.clone(),
         },
         _ => {
@@ -2337,65 +2386,64 @@ pub(crate) fn simplify(expr: &Factor) -> Factor {
 }
 
 fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
-    simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| {
-        Complex(
-            AddSub {
-                terms: (left.clone(), right.clone()),
-                subtract,
-            }
-            .into(),
-        )
-    })
+    let add_sub = [(left.clone(), 1), (right.clone(), if subtract {-1} else {1})].into();
+    simplify_add_sub_internal(&add_sub).unwrap_or_else(|| Factor::add_sub(add_sub))
 }
 
-fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> Option<Factor> {
-    let mut new_left = simplify(left);
-    let mut new_right = simplify(right);
-    if let Numeric(n) = new_right
-        && n == 0
-    {
-        return Some(new_left);
-    }
-    if !subtract
-        && let Numeric(n) = new_left
-        && n == 0
-    {
-        return Some(new_right);
-    }
-    match new_left.cmp(&new_right) {
-        Ordering::Less => {
-            if !subtract {
-                swap(&mut new_left, &mut new_right);
+fn simplify_add_sub_internal(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
+    let mut new_terms = BTreeMap::new();
+    let mut numeric_constant: i128 = 0;
+    let mut changed = false;
+
+    for (term, coeff) in terms {
+        let simplified = simplify(term);
+        if simplified != *term {
+            changed = true;
+        }
+
+        match simplified {
+            Numeric(n) => {
+                numeric_constant =
+                    numeric_constant.checked_add(n as i128 * coeff).unwrap_or(0); // Very basic overflow handling
+                changed = true;
+            }
+            Complex(ref c) if matches!(**c, AddSub { .. }) => {
+                changed = true;
+                if let AddSub {
+                    terms: inner_terms, ..
+                } = &**c
+                {
+                    for (inner_term, inner_coeff) in inner_terms {
+                        *new_terms.entry(inner_term.clone()).or_insert(0) += inner_coeff * coeff;
+                    }
+                }
+            }
+            _ => {
+                *new_terms.entry(simplified).or_insert(0) += coeff;
             }
         }
-        Ordering::Equal => {
-            return if subtract {
-                Some(Numeric(0))
-            } else {
-                Some(simplify_multiply(
-                    [(new_left, 1), (Factor::two(), 1)].into(),
-                ))
-            };
-        }
-        Ordering::Greater => {}
     }
-    let result_numeric = if subtract {
-        evaluate_as_numeric(&new_left)
-            .and_then(|left| left.checked_sub(evaluate_as_numeric(&new_right)?))
-    } else {
-        evaluate_as_numeric(&new_left)
-            .and_then(|left| left.checked_add(evaluate_as_numeric(&new_right)?))
-    };
-    if let Some(result_numeric) = result_numeric {
-        Some(Numeric(result_numeric))
-    } else if new_left != *left || new_right != *right {
-        Some(Complex(
-            AddSub {
-                terms: (new_left, new_right),
-                subtract,
-            }
-            .into(),
-        ))
+
+    new_terms.retain(|_, coeff| *coeff != 0);
+
+    if numeric_constant != 0 {
+        *new_terms.entry(Numeric(numeric_constant.abs() as NumericFactor)).or_insert(0) +=
+            numeric_constant.signum();
+    }
+
+    if new_terms.is_empty() {
+        return Some(Numeric(0));
+    }
+
+    if new_terms.len() == 1 {
+        let (term, coeff) = new_terms.iter().next().unwrap();
+        if *coeff == 1 {
+            return Some(term.clone());
+        }
+    }
+
+    if changed || new_terms.len() != terms.len() {
+        Some(Factor::add_sub(new_terms))
     } else {
         None
     }
@@ -2727,17 +2775,25 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                         }
                         Some(result)
                     }
-                    AddSub {
-                        terms: (ref left, ref right),
-                        subtract,
-                    } => {
-                        let left = evaluate_as_numeric(left)?;
-                        let right = evaluate_as_numeric(right)?;
-                        if subtract {
-                            left.checked_sub(right)
-                        } else {
-                            left.checked_add(right)
+                    AddSub { ref terms, .. } => {
+                        let mut pos_sum: NumericFactor = 0;
+                        let mut neg_sum: NumericFactor = 0;
+                        for (term, coeff) in terms.iter() {
+                            let val = evaluate_as_numeric(term)?;
+                            let total = val.checked_mul(coeff.unsigned_abs() as NumericFactor)?;
+                            if *coeff > 0 {
+                                match pos_sum.checked_add(total) {
+                                    Some(sum) => pos_sum = sum,
+                                    None => neg_sum = neg_sum.checked_sub(total)?,
+                                }
+                            } else {
+                                match neg_sum.checked_add(total) {
+                                    Some(sum) => neg_sum = sum,
+                                    None => pos_sum = pos_sum.checked_sub(total)?,
+                                }
+                            }
                         }
+                        pos_sum.checked_sub(neg_sum)
                     }
                 },
                 ElidedNumber(_) => None,
@@ -3266,11 +3322,18 @@ mod tests {
         div_exact, estimate_log10, factor_power, fibonacci_factors, lucas_factors, modinv,
         modulo_as_numeric, multiset_intersection, multiset_union, power_multiset,
     };
-    use ahash::RandomState;
-    use alloc::collections::BTreeSet;
-    use itertools::Itertools;
     use std::collections::BTreeMap;
+    use std::hash::Hash;
+    use ahash::RandomState;
+    use crate::algebraic::hash;
+
+    fn mk_addsub(terms: Vec<(Factor, i128)>) -> ComplexFactor {
+        let terms: BTreeMap<Factor, i128> = terms.into_iter().collect();
+        let terms_hash = hash(&terms);
+        ComplexFactor::AddSub { terms_hash, terms }
+    }
     use std::iter::repeat_n;
+    use itertools::Itertools;
 
     impl From<String> for Factor {
         fn from(value: String) -> Self {
@@ -3283,6 +3346,7 @@ mod tests {
     }
 
     fn find_factors_recursive(input: &str) -> Vec<Factor> {
+        use alloc::collections::BTreeSet;
         let mut already_decomposed = BTreeSet::new();
         let mut factors = BTreeMap::new();
         let mut results = BTreeSet::new();
@@ -3941,13 +4005,11 @@ mod tests {
     mod complexfactor_eq_and_hash {
         use super::*;
         use alloc::fmt::Debug;
-        use std::collections::BTreeMap;
-        use std::hash::Hash;
         fn assert_eq_and_same_hash<T: Eq + Hash + Debug>(left: T, right: T, message: &str) {
             assert_eq!(left, right, "In Eq: {message}");
-            let hasher = RandomState::new();
-            let left_hash = hasher.hash_one(left);
-            let right_hash = hasher.hash_one(right);
+            let hasher = RandomState::with_seed(0);
+            let left_hash = hasher.hash_one(&left);
+            let right_hash = hasher.hash_one(&right);
             assert_eq!(left_hash, right_hash, "In Hash: {message}");
         }
 
@@ -3957,15 +4019,8 @@ mod tests {
             let a = Factor::from("x");
             let b = Factor::from(42u128);
 
-            let add1 = ComplexFactor::AddSub {
-                terms: (a.clone(), b.clone()),
-                subtract: false,
-            };
-
-            let add2 = ComplexFactor::AddSub {
-                terms: (b.clone(), a.clone()),
-                subtract: false,
-            };
+            let add1 = mk_addsub(vec![(a.clone(), 1), (b.clone(), 1)]);
+            let add2 = mk_addsub(vec![(b.clone(), 1), (a.clone(), 1)]);
 
             assert_eq_and_same_hash(add1, add2, "Addition should be commutative");
         }
@@ -3976,18 +4031,10 @@ mod tests {
             let a = Factor::from("x");
             let b = Factor::from("y");
 
-            let sub1 = ComplexFactor::AddSub {
-                terms: (a.clone(), b.clone()),
-                subtract: true,
-            };
-
-            let sub2 = ComplexFactor::AddSub {
-                terms: (b.clone(), a.clone()),
-                subtract: true,
-            };
+            let sub1 = mk_addsub(vec![(a.clone(), 1), (b.clone(), -1)]);
+            let sub2 = mk_addsub(vec![(b.clone(), 1), (a.clone(), -1)]);
 
             assert_ne!(sub1, sub2, "Subtraction should not be commutative");
-            // Hashes can be different for non-equal values
         }
 
         #[test]
@@ -3996,15 +4043,8 @@ mod tests {
             let a = Factor::from(10u128);
             let b = Factor::from(5u128);
 
-            let add = ComplexFactor::AddSub {
-                terms: (a.clone(), b.clone()),
-                subtract: false,
-            };
-
-            let sub = ComplexFactor::AddSub {
-                terms: (a.clone(), b.clone()),
-                subtract: true,
-            };
+            let add = mk_addsub(vec![(a.clone(), 1), (b.clone(), 1)]);
+            let sub = mk_addsub(vec![(a.clone(), 1), (b.clone(), -1)]);
 
             assert_ne!(add, sub, "Addition and subtraction should not be equal");
         }
@@ -4015,15 +4055,8 @@ mod tests {
             let a = Factor::from("alpha");
             let b = Factor::from("beta");
 
-            let add1 = ComplexFactor::AddSub {
-                terms: (a.clone(), b.clone()),
-                subtract: false,
-            };
-
-            let add2 = ComplexFactor::AddSub {
-                terms: (a.clone(), b.clone()),
-                subtract: false,
-            };
+            let add1 = mk_addsub(vec![(a.clone(), 1), (b.clone(), 1)]);
+            let add2 = mk_addsub(vec![(a.clone(), 1), (b.clone(), 1)]);
 
             assert_eq_and_same_hash(
                 add1,
@@ -4176,15 +4209,8 @@ mod tests {
             let b = Factor::from(100u128);
 
             // Test addition commutativity hash consistency
-            let add1 = ComplexFactor::AddSub {
-                terms: (a.clone(), b.clone()),
-                subtract: false,
-            };
-
-            let add2 = ComplexFactor::AddSub {
-                terms: (b.clone(), a.clone()),
-                subtract: false,
-            };
+            let add1 = mk_addsub(vec![(a.clone(), 1), (b.clone(), 1)]);
+            let add2 = mk_addsub(vec![(b.clone(), 1), (a.clone(), 1)]);
 
             assert_eq_and_same_hash(add1, add2, "Addition should be commutative");
 
@@ -4212,28 +4238,14 @@ mod tests {
             // a + a should equal a + a (trivial but tests edge case)
             let a = Factor::from("same");
 
-            let expr1 = ComplexFactor::AddSub {
-                terms: (a.clone(), a.clone()),
-                subtract: false,
-            };
-
-            let expr2 = ComplexFactor::AddSub {
-                terms: (a.clone(), a.clone()),
-                subtract: false,
-            };
+            let expr1 = mk_addsub(vec![(a.clone(), 1), (a.clone(), 1)]);
+            let expr2 = mk_addsub(vec![(a.clone(), 1), (a.clone(), 1)]);
 
             assert_eq_and_same_hash(expr1, expr2, "identical a+a expressions should be equal");
 
             // Also test a - a
-            let sub1 = ComplexFactor::AddSub {
-                terms: (a.clone(), a.clone()),
-                subtract: true,
-            };
-
-            let sub2 = ComplexFactor::AddSub {
-                terms: (a.clone(), a.clone()),
-                subtract: true,
-            };
+            let sub1 = mk_addsub(vec![(a.clone(), 1), (a.clone(), -1)]);
+            let sub2 = mk_addsub(vec![(a.clone(), 1), (a.clone(), -1)]);
             assert_eq_and_same_hash(sub1, sub2, "identical a-a expressions should be equal");
         }
 
@@ -4244,13 +4256,7 @@ mod tests {
             let y = Factor::from("y");
             let z = Factor::from("z");
 
-            let add = Complex(
-                ComplexFactor::AddSub {
-                    terms: (x.clone(), y.clone()),
-                    subtract: false,
-                }
-                .into(),
-            );
+            let add = Complex(mk_addsub(vec![(x.clone(), 1), (y.clone(), 1)]).into());
 
             let mut map1 = BTreeMap::new();
             map1.insert(add.clone(), 1);
@@ -4292,23 +4298,11 @@ mod tests {
         let x = Factor::from("x");
         let zero = Factor::from(0u128);
         assert_eq!(
-            simplify(&Complex(
-                ComplexFactor::AddSub {
-                    terms: (x.clone(), zero.clone()),
-                    subtract: false,
-                }
-                .into()
-            )),
+            simplify(&Complex(mk_addsub(vec![(x.clone(), 1), (zero.clone(), 1)]).into())),
             x
         );
         assert_eq!(
-            simplify(&Complex(
-                ComplexFactor::AddSub {
-                    terms: (x.clone(), zero.clone()),
-                    subtract: true,
-                }
-                .into()
-            )),
+            simplify(&Complex(mk_addsub(vec![(x.clone(), 1), (zero.clone(), -1)]).into())),
             x
         );
 
