@@ -727,8 +727,8 @@ async fn main() -> anyhow::Result<()> {
                                     report_primality_proof(id, parameter, &do_checks_http).await;
                                     return None;
                                 }
-                                let divide_2 = factors.get(0).and_then(|f| f.as_numeric()) == Some(2);
-                                let divide_3 = factors.get(0).and_then(|f| f.as_numeric()) == Some(3)
+                                let divide_2 = factors.first().and_then(|f| f.as_numeric()) == Some(2);
+                                let divide_3 = factors.first().and_then(|f| f.as_numeric()) == Some(3)
                                     || factors.get(1).and_then(|f| f.as_numeric()) == Some(3);
                                 results.push(NPlusMinus1Info {
                                     id: id_to_check,
