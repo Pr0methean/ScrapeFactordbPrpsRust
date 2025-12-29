@@ -1249,6 +1249,16 @@ fn mark_stale(data: &mut FactorData, stale_vid: VertexId, http: &mut impl Factor
 }
 
 fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
+    let mut worklist = BTreeSet::new();
+    mark_fully_factored_internal(vid, data, &mut worklist);
+    data.process_divisibility_worklist(worklist);
+}
+
+fn mark_fully_factored_internal(
+    vid: VertexId,
+    data: &mut FactorData,
+    worklist: &mut BTreeSet<WorkItem>,
+) {
     if data.facts(vid).is_some_and(|f| f.is_known_fully_factored()) {
         return;
     }
@@ -1266,7 +1276,11 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
                 let neighbor_facts = data.facts_mut(neighbor);
                 neighbor_facts.factors_known_to_factordb = UpToDate(vec![neighbor]);
                 neighbor_facts.last_known_status = Some(Prime);
-                data.propagate_divisibility(neighbor, vid, false);
+                worklist.insert(WorkItem::Propagate {
+                    factor: neighbor,
+                    dest: vid,
+                    transitive: false,
+                });
             }
         }
         true
@@ -1283,13 +1297,16 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
         .collect();
 
     for other_vid in known_factors {
-        mark_fully_factored(other_vid, data);
+        mark_fully_factored_internal(other_vid, data, worklist);
     }
 
     if no_other_factors {
         for other_vid in data.vertex_ids_except(vid) {
             if data.get_edge(other_vid, vid).is_none() {
-                data.rule_out_divisibility(other_vid, vid);
+                worklist.insert(WorkItem::RuleOut {
+                    nonfactor: other_vid,
+                    dest: vid,
+                });
             }
         }
     }
