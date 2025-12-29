@@ -1617,7 +1617,7 @@ fn modinv(a: NumericFactor, m: NumericFactor) -> Option<NumericFactor> {
 
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
     if a == 1 || n == 0 {
-        return (1, 0);
+        return (1, 1);
     }
     // A NumericFactor can't be a 128th or higher power
     for prime in [
@@ -1673,8 +1673,10 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
             *entry = entry.checked_add_unsigned(new_coeff).unwrap();
         }
     }
-
-    let mut result = BTreeMap::new();
+    if exponent_factors.is_empty() {
+        return BTreeMap::new();
+    }
+    let mut results = BTreeMap::new();
 
     let (positive_terms, negative_terms): (Vec<_>, Vec<_>)
         = simplified_terms.into_iter().partition(|&(_, c)| c > 0);
@@ -1684,10 +1686,6 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         };
         if prime == 2 && !negative_terms.is_empty() {
             continue;
-        }
-        if prime == 131 && !terms.iter().all(|(_term, coeff)| coeff.unsigned_abs() <= 1) {
-            // i128 greater than 1 can't have roots in any larger prime
-            break;
         }
         let Some(pos_term_roots) = positive_terms.iter()
             .map(|(term, coeff)| {
@@ -1717,11 +1715,10 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
             let cofactor = div_exact(&terms, &a_minus_b).unwrap_or_else(|| Factor::divide(terms, [(a_minus_b.clone(), 1)]));
             (cofactor, a_minus_b)
         };
-        *result.entry(new_factor).or_insert(0) += 1;
-        *result.entry(new_cofactor).or_insert(0) += 1;
+        *results.entry(new_factor).or_insert(0) += 1;
+        *results.entry(new_cofactor).or_insert(0) += 1;
     }
-
-    result
+    results
 }
 
 pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
@@ -2002,7 +1999,9 @@ pub(crate) fn find_raw_factors_of_numeric(
     input: NumericFactor,
 ) -> BTreeMap<NumericFactor, NumberLength> {
     task::block_in_place(|| {
-        if input <= 1 << 85 {
+        if input <= 3 {
+            [(input, 1)].into()
+        } else if input <= 1 << 85 {
             factorize128(input)
                 .into_iter()
                 .map(|(factor, exponent)| (factor, exponent as NumberLength))
@@ -3135,7 +3134,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     Some((first_term, first_coeff)) => {
                                         let mut common_factors = find_factors(first_term);
                                         sum_factor_btreemaps(&mut common_factors,
-                                            find_factors_of_numeric(first_coeff.unsigned_abs()));
+                                                             find_factors_of_numeric(first_coeff.unsigned_abs()));
                                         for (term, coeff) in terms.iter().skip(1) {
                                             let mut term_factors = find_factors(term);
                                             sum_factor_btreemaps(&mut term_factors, find_factors_of_numeric(coeff.unsigned_abs()));
@@ -3154,7 +3153,22 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                 *algebraic.entry(term).or_insert(0) += exponent;
                                             }
                                         }
-                                        multiset_union(vec![common_factors, algebraic])
+                                        let factors = multiset_union(vec![common_factors, algebraic]);
+                                        let cofactors = factors
+                                            .iter()
+                                            .filter_map(|(factor, exponent)| {
+                                                let mut cofactor = div_exact(expr, factor)?;
+                                                let mut remaining_exponent = exponent - 1;
+                                                while remaining_exponent > 0
+                                                    && let Some(new_cofactor) = div_exact(&cofactor, factor)
+                                                {
+                                                    cofactor = new_cofactor;
+                                                    remaining_exponent -= 1;
+                                                }
+                                                Some((simplify(&cofactor), 1))
+                                            })
+                                            .collect();
+                                        multiset_union(vec![factors, cofactors])
                                     }
                                 }
                             }
