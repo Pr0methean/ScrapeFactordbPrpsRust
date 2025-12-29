@@ -786,9 +786,16 @@ impl PartialEq for ComplexFactor {
                 }
                 l1 == l2 && r1 == r2 || (!s1 && l1 == r2 && r1 == l2)
             }
-            (Multiply { terms_hash: h1, terms: t1 }, Multiply { terms_hash: h2, terms: t2 }) => {
-                h1 == h2 && t1 == t2
-            }
+            (
+                Multiply {
+                    terms_hash: h1,
+                    terms: t1,
+                },
+                Multiply {
+                    terms_hash: h2,
+                    terms: t2,
+                },
+            ) => h1 == h2 && t1 == t2,
             (
                 Divide {
                     left: l1,
@@ -801,9 +808,16 @@ impl PartialEq for ComplexFactor {
                     right: r2,
                 },
             ) => h1 == h2 && r1.values().eq(r2.values()) && l1 == l2 && r1.keys().eq(r2.keys()),
-            (Power { base: b1, exponent: e1 }, Power { base: b2, exponent: e2 }) => {
-                b1 == b2 && e1 == e2
-            }
+            (
+                Power {
+                    base: b1,
+                    exponent: e1,
+                },
+                Power {
+                    base: b2,
+                    exponent: e2,
+                },
+            ) => b1 == b2 && e1 == e2,
             (Fibonacci(a), Fibonacci(b)) => a == b,
             (Lucas(a), Lucas(b)) => a == b,
             (Factorial(a), Factorial(b)) => a == b,
