@@ -281,21 +281,10 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
 
 #[inline(always)]
 #[framed]
-async fn prove_by_np1(id: EntryId, http: &impl FactorDbClient) {
+async fn report_primality_proof(id: EntryId, parameter: &str, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
-            RETRY_DELAY,
-        )
-        .await;
-}
-
-#[inline(always)]
-#[framed]
-async fn prove_by_nm1(id: EntryId, http: &impl FactorDbClient) {
-    let _ = http
-        .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+            &format!("https://factordb.com/index.php?open=Prime&{parameter}=Proof&id={id}"),
             RETRY_DELAY,
         )
         .await;
@@ -731,7 +720,7 @@ async fn main() -> anyhow::Result<()> {
                             0 => {
                                 if status == Some(FullyFactored) {
                                     info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                    prove_by_nm1(id, &do_checks_http).await;
+                                    report_primality_proof(id, "nm1", &do_checks_http).await;
                                     continue;
                                 }
                             }
@@ -758,7 +747,7 @@ async fn main() -> anyhow::Result<()> {
                             0 => {
                                 if status == Some(FullyFactored) {
                                     info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                    prove_by_np1(id, &do_checks_http).await;
+                                    report_primality_proof(id, "np1", &do_checks_http).await;
                                     continue;
                                 }
                             }
@@ -779,7 +768,7 @@ async fn main() -> anyhow::Result<()> {
                         match do_checks_http.report_numeric_factor(nm1_id, 2).await {
                             AlreadyFullyFactored => {
                                 info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                prove_by_nm1(id, &do_checks_http).await;
+                                report_primality_proof(id, "nm1", &do_checks_http).await;
                                 continue;
                             }
                             Accepted => {
@@ -797,7 +786,7 @@ async fn main() -> anyhow::Result<()> {
                         match do_checks_http.report_numeric_factor(np1_id, 2).await {
                             AlreadyFullyFactored => {
                                 info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                prove_by_np1(id, &do_checks_http).await;
+                                report_primality_proof(id, "np1", &do_checks_http).await;
                                 continue;
                             }
                             Accepted => {
@@ -816,7 +805,7 @@ async fn main() -> anyhow::Result<()> {
                             match do_checks_http.report_numeric_factor(nm1_id, 3).await {
                                 AlreadyFullyFactored => {
                                     info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                    prove_by_nm1(id, &do_checks_http).await;
+                                    report_primality_proof(id, "nm1", &do_checks_http).await;
                                     continue;
                                 }
                                 Accepted => {
@@ -825,7 +814,7 @@ async fn main() -> anyhow::Result<()> {
                                 _ => match do_checks_http.report_numeric_factor(np1_id, 3).await {
                                     AlreadyFullyFactored => {
                                         info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                        prove_by_np1(id, &do_checks_http).await;
+                                        report_primality_proof(id, "np1", &do_checks_http).await;
                                         continue;
                                     }
                                     Accepted => {
