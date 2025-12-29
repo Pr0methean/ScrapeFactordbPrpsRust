@@ -612,7 +612,6 @@ fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
 
 #[derive(Derivative)]
 #[derivative(Clone, Debug, Hash, Eq)]
-#[repr(u8)]
 pub enum ComplexFactor {
     Divide {
         left: Factor,
@@ -648,10 +647,16 @@ impl PartialOrd for ComplexFactor {
 
 impl ComplexFactor {
     fn discriminant(&self) -> u8 {
-        // SAFETY: Because `Self` is marked `repr(u8)`, its layout is a `repr(C)` `union`
-        // between `repr(C)` structs, each of which has the `u8` discriminant as its first
-        // field, so we can read the discriminant without offsetting the pointer.
-        unsafe { *<*const _>::from(self).cast::<u8>() }
+        match self {
+            Divide { .. } => 0,
+            AddSub { .. } => 1,
+            Multiply { .. } => 2,
+            Power { .. } => 3,
+            Fibonacci(_) => 4,
+            Lucas(_) => 5,
+            Primorial(_) => 6,
+            Factorial(_) => 7,
+        }
     }
 }
 
@@ -795,7 +800,7 @@ impl PartialEq for ComplexFactor {
                     right_hash: h2,
                     right: r2,
                 },
-            ) => h1 == h2 && l1 == l2 && r1 == r2,
+            ) => h1 == h2 && r1.values().eq(r2.values()) && l1 == l2 && r1.keys().eq(r2.keys()),
             (Power { base: b1, exponent: e1 }, Power { base: b2, exponent: e2 }) => {
                 b1 == b2 && e1 == e2
             }
