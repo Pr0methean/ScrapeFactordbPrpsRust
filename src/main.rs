@@ -214,7 +214,8 @@ async fn check_composite(
         let mut factors_submitted = false;
         let mut factors_to_dispatch = Vec::with_capacity(factors.len());
         for factor in factors {
-            if let Some(factor_str) = factor.as_str_non_numeric() {
+            if !matches!(factor, Factor::Numeric(_)) {
+                let factor_str = factor.to_unelided_string();
                 if graph::find_and_submit_factors(http, id, factor_str, true).await {
                     factors_submitted = true;
                 } else {
@@ -848,7 +849,7 @@ async fn main() -> anyhow::Result<()> {
                                 .factors
                             };
                             for factor in factors {
-                                if factor.as_str_non_numeric().is_some() {
+                                if !matches!(factor, Factor::Numeric(_)) {
                                     graph::find_and_submit_factors(&mut do_checks_http, id, factor.to_unelided_string(), true)
                                         .await;
                                 }

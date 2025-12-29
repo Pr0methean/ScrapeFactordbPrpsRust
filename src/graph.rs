@@ -1186,9 +1186,7 @@ pub async fn find_and_submit_factors(
 
     for factor_vid in data.vertex_ids_except(root_vid) {
         let factor = data.get_factor(factor_vid);
-        if factor
-            .as_str_non_numeric()
-            .is_some_and(|expr| expr.contains("..."))
+        if factor.is_elided()
         {
             debug!(
                 "{id}: Skipping writing {factor} to failed-submission file because we don't know its specifier"

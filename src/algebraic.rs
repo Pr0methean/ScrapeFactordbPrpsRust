@@ -1036,14 +1036,7 @@ impl Factor {
         }
     }
 
-    #[inline(always)]
-    pub fn as_str_non_numeric(&self) -> Option<HipStr<'static>> {
-        match self {
-            Numeric(_) => None,
-            Factor::BigNumber(n) => Some(n.0.clone()),
-            _ => Some(self.to_string().into()),
-        }
-    }
+
 
     #[inline(always)]
     fn last_digit(&self) -> Option<u8> {
