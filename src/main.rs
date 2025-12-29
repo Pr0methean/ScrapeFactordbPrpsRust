@@ -701,149 +701,144 @@ async fn main() -> anyhow::Result<()> {
                         info!("{id}: No longer PRP");
                         continue;
                     }
-                    let mut nm1_id_if_available = None;
-                    let mut nm1_known_to_divide_2 = false;
-                    let mut nm1_known_to_divide_3 = false;
-                    let mut np1_id_if_available = None;
-                    let mut np1_known_to_divide_2 = false;
-                    let mut np1_known_to_divide_3 = false;
-                    let mut updated_nm1_factors = None;
-                    if let Some(captures) = nm1_regex.captures(&bases_text) {
-                        let nm1_id = captures[1].parse::<EntryId>().unwrap();
-                        nm1_id_if_available = Some(nm1_id);
-                        let ProcessedStatusApiResponse {
-                            status,
-                            factors: nm1_factors,
-                            ..
-                        } = do_checks_http.known_factors_as_digits(Id(nm1_id), false, false).await;
-                        match nm1_factors.len() {
-                            0 => {
-                                if status == Some(FullyFactored) {
-                                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                    report_primality_proof(id, "nm1", &do_checks_http).await;
-                                    continue;
+                    #[derive(Debug)]
+                    struct NPlusMinus1Info {
+                        id: EntryId,
+                        parameter: &'static str,
+                        known_to_divide_2: bool,
+                        known_to_divide_3: bool,
+                        factors: Option<Box<[Factor]>>,
+                    }
+
+                    if let Some(mut infos) = (async {
+                        let mut results = Vec::with_capacity(2);
+                        for (parameter, regex) in [("nm1", &nm1_regex), ("np1", &np1_regex)] {
+                            if let Some(captures) = regex.captures(&bases_text) {
+                                let id_to_check = captures[1].parse::<EntryId>().unwrap();
+                                let ProcessedStatusApiResponse {
+                                    status,
+                                    factors,
+                                    ..
+                                } = do_checks_http
+                                    .known_factors_as_digits(Id(id_to_check), false, false)
+                                    .await;
+                                if factors.is_empty() && status == Some(FullyFactored) {
+                                    info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
+                                    report_primality_proof(id, parameter, &do_checks_http).await;
+                                    return None;
                                 }
-                            }
-                            _ => {
-                                nm1_known_to_divide_2 = nm1_factors[0].as_numeric() == Some(2);
-                                nm1_known_to_divide_3 = nm1_factors[0].as_numeric() == Some(3)
-                                    || nm1_factors.get(1).and_then(|factor| factor.as_numeric()) == Some(3);
-                                updated_nm1_factors = Some(nm1_factors);
+                                let divide_2 = factors.get(0).and_then(|f| f.as_numeric()) == Some(2);
+                                let divide_3 = factors.get(0).and_then(|f| f.as_numeric()) == Some(3)
+                                    || factors.get(1).and_then(|f| f.as_numeric()) == Some(3);
+                                results.push(NPlusMinus1Info {
+                                    id: id_to_check,
+                                    parameter,
+                                    known_to_divide_2: divide_2,
+                                    known_to_divide_3: divide_3,
+                                    factors: if factors.is_empty() {
+                                        None
+                                    } else {
+                                        Some(factors)
+                                    },
+                                });
+                            } else {
+                                error!("{id}: {parameter} ID not found: {bases_text}");
                             }
                         }
-                    } else {
-                        error!("{id}: N-1 ID not found: {bases_text}");
-                    }
-                    let mut updated_np1_factors = None;
-                    if let Some(captures) = np1_regex.captures(&bases_text) {
-                        let np1_id = captures[1].parse::<EntryId>().unwrap();
-                        np1_id_if_available = Some(np1_id);
-                        let ProcessedStatusApiResponse {
-                            status,
-                            factors: np1_factors,
-                            ..
-                        } = do_checks_http.known_factors_as_digits(Id(np1_id), false, false).await;
-                        match np1_factors.len() {
-                            0 => {
-                                if status == Some(FullyFactored) {
-                                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                    report_primality_proof(id, "np1", &do_checks_http).await;
-                                    continue;
-                                }
-                            }
-                            _ => {
-                                np1_known_to_divide_2 = np1_factors[0].as_numeric() == Some(2);
-                                np1_known_to_divide_3 = np1_factors[0].as_numeric() == Some(3)
-                                    || np1_factors.get(1).and_then(|factor| factor.as_numeric()) == Some(3);
-                                updated_np1_factors = Some(np1_factors);
-                            }
-                        }
-                    } else {
-                        error!("{id}: N+1 ID not found: {bases_text}");
-                    }
-                    if let Some(nm1_id) = nm1_id_if_available
-                        && !nm1_known_to_divide_2
+                        Some(results)
+                    })
+                    .await
                     {
-                        // N wouldn't be PRP if it was even, so N-1 must be even
-                        match do_checks_http.report_numeric_factor(nm1_id, 2).await {
-                            AlreadyFullyFactored => {
-                                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                report_primality_proof(id, "nm1", &do_checks_http).await;
+                            for info in &mut infos {
+                                if !info.known_to_divide_2 {
+                                    match do_checks_http.report_numeric_factor(info.id, 2).await {
+                                        AlreadyFullyFactored => {
+                                            info!(
+                                                "{id}: {} (ID {}) is fully factored!",
+                                                info.parameter, info.id
+                                            );
+                                            report_primality_proof(id, info.parameter, &do_checks_http)
+                                                .await;
+                                            stopped_early = true;
+                                            break;
+                                        }
+                                        Accepted => {
+                                            info.factors = None;
+                                        }
+                                        _ => {
+                                            error!(
+                                                "{id}: PRP, but factor of 2 was rejected for {} (id {})",
+                                                info.parameter, info.id
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            if stopped_early {
                                 continue;
                             }
-                            Accepted => {
-                                updated_nm1_factors = None; // Should update after successfully submitting a factor
-                            }
-                            _ => {
-                                error!("{id}: PRP, but factor of 2 was rejected for N-1 (id {nm1_id})");
-                            }
-                        }
-                    }
-                    if let Some(np1_id) = np1_id_if_available
-                        && !np1_known_to_divide_2
-                    {
-                        // N wouldn't be PRP if it was even, so N+1 must be even
-                        match do_checks_http.report_numeric_factor(np1_id, 2).await {
-                            AlreadyFullyFactored => {
-                                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                report_primality_proof(id, "np1", &do_checks_http).await;
-                                continue;
-                            }
-                            Accepted => {
-                                updated_np1_factors = None; // Should update after successfully submitting a factor
-                            }
-                            _ => {
-                                error!("{id}: PRP, but factor of 2 was rejected for N+1 (id {np1_id})");
-                            }
-                        }
-                    }
-                    if let Some(nm1_id) = nm1_id_if_available
-                        && let Some(np1_id) = np1_id_if_available
-                    {
-                        if !nm1_known_to_divide_3 && !np1_known_to_divide_3 {
-                            // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-                            match do_checks_http.report_numeric_factor(nm1_id, 3).await {
-                                AlreadyFullyFactored => {
-                                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                    report_primality_proof(id, "nm1", &do_checks_http).await;
-                                    continue;
-                                }
-                                Accepted => {
-                                    updated_nm1_factors = None; // Should update after successfully submitting a factor
-                                }
-                                _ => match do_checks_http.report_numeric_factor(np1_id, 3).await {
+                            if infos.len() == 2 && !infos[0].known_to_divide_3 && !infos[1].known_to_divide_3 {
+                                match do_checks_http.report_numeric_factor(infos[0].id, 3).await {
                                     AlreadyFullyFactored => {
-                                        info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                        report_primality_proof(id, "np1", &do_checks_http).await;
-                                        continue;
+                                        info!(
+                                            "{id}: {} (ID {}) is fully factored!",
+                                            infos[0].parameter, infos[0].id
+                                        );
+                                        report_primality_proof(id, infos[0].parameter, &do_checks_http)
+                                            .await;
+                                        stopped_early = true;
                                     }
                                     Accepted => {
-                                        updated_np1_factors = None; // Should update after successfully submitting a factor
+                                        infos[0].factors = None;
                                     }
-                                    _ => {
-                                        error!(
-                                            "{id}: PRP, but factor of 3 was rejected for both N-1 (id {nm1_id}) and N+1 (id {np1_id})"
-                                        );
-                                    }
-                                },
-                            }
-                        }
-                        for (id, factors) in [(nm1_id, updated_nm1_factors), (np1_id, updated_np1_factors)] {
-                            let factors = if let Some(factors) = factors {
-                                factors
-                            } else {
-                                do_checks_http
-                                .known_factors_as_digits(Id(id), false, true)
-                                .await
-                                .factors
-                            };
-                            for factor in factors {
-                                if !matches!(factor, Factor::Numeric(_)) {
-                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.to_unelided_string(), true)
-                                        .await;
+                                    _ => match do_checks_http.report_numeric_factor(infos[1].id, 3).await {
+                                        AlreadyFullyFactored => {
+                                            info!(
+                                                "{id}: {} (ID {}) is fully factored!",
+                                                infos[1].parameter, infos[1].id
+                                            );
+                                            report_primality_proof(id, infos[1].parameter, &do_checks_http)
+                                                .await;
+                                            stopped_early = true;
+                                        }
+                                        Accepted => {
+                                            infos[1].factors = None;
+                                        }
+                                        _ => {
+                                            error!(
+                                                "{id}: PRP, but factor of 3 was rejected for both N-1 (id {}) and N+1 (id {})",
+                                                infos[0].id, infos[1].id
+                                            );
+                                        }
+                                    },
                                 }
                             }
+                            if stopped_early {
+                                continue;
+                            }
+                            for info in infos {
+                                let factors = if let Some(factors) = info.factors {
+                                    factors
+                                } else {
+                                    do_checks_http
+                                        .known_factors_as_digits(Id(info.id), false, true)
+                                        .await
+                                        .factors
+                                };
+                                for factor in factors {
+                                    if !matches!(factor, Factor::Numeric(_)) {
+                                        graph::find_and_submit_factors(
+                                            &mut do_checks_http,
+                                            info.id,
+                                            factor.to_unelided_string(),
+                                            true,
+                                        )
+                                        .await;
+                                    }
+                            }
                         }
+                    } else {
+                        continue;
                     }
                     let status_text = do_checks_http
                         .retrying_get_and_decode(

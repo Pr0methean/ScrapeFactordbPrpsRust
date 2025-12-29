@@ -749,7 +749,8 @@ pub async fn find_and_submit_factors(
     } else {
         (None, None)
     };
-    let mut known_factors = data.vertex_ids_except(root_vid);
+    let mut all_vids: BTreeSet<VertexId> = data.divisibility_graph.vertices_by_id().collect();
+    let mut known_factors: Vec<_> = all_vids.iter().copied().filter(|&v| v != root_vid).collect();
     known_factors.shuffle(&mut rng());
     let mut known_factors = VecDeque::from(known_factors);
     let mut factors_to_submit_in_graph = VecDeque::new();
@@ -775,6 +776,7 @@ pub async fn find_and_submit_factors(
             info!("{id}: Temporarily skipping {factor} because digits are missing");
             let factors_of_factor = add_factors_to_graph(http, &mut data, factor_vid).await;
             if !factors_of_factor.is_empty() {
+                all_vids.extend(factors_of_factor.iter().copied());
                 factors_to_submit_in_graph.extend(factors_of_factor);
                 dedup_and_shuffle(&mut factors_to_submit_in_graph);
             }
@@ -788,13 +790,15 @@ pub async fn find_and_submit_factors(
             Accepted => {
                 data.propagate_divisibility(factor_vid, root_vid, false);
                 mark_stale(&mut data, root_vid, http);
-                add_factors_to_graph(http, &mut data, root_vid).await;
+                let new_root_factors = add_factors_to_graph(http, &mut data, root_vid).await;
+                all_vids.extend(new_root_factors.iter().copied());
                 accepted_factors += 1;
             }
             DoesNotDivide => {
                 let subfactors = add_factors_to_graph(http, &mut data, factor_vid).await;
                 let subfactors_found = !subfactors.is_empty();
                 if subfactors_found {
+                all_vids.extend(subfactors.iter().copied());
                     factors_to_submit_in_graph.extend(subfactors);
                     dedup_and_shuffle(&mut factors_to_submit_in_graph);
                 }
@@ -808,6 +812,7 @@ pub async fn find_and_submit_factors(
                             let (divided_vid, added) =
                                 add_factor_node(&mut data, divided, None, http);
                             if added {
+                                all_vids.insert(divided_vid);
                                 factors_to_submit_in_graph.push_back(divided_vid);
                                 // Don't apply this recursively, except when divided was already in
                                 // the graph for another reason
@@ -905,12 +910,11 @@ pub async fn find_and_submit_factors(
             }
             continue;
         }
-        let mut dest_factors = data
-            .vertex_ids_except(factor_vid)
-            .into_iter()
-            .filter(|dest_vid|
+        let mut dest_factors = all_vids.iter()
+            .copied()
+            .filter(|&dest_vid|
                     // if this edge exists, FactorDB already knows whether factor is a factor of dest
-                    data.get_edge(factor_vid, *dest_vid).is_none())
+                    dest_vid != factor_vid && data.get_edge(factor_vid, dest_vid).is_none())
             .collect::<Vec<_>>();
         dest_factors.shuffle(&mut rng());
         if dest_factors.is_empty() {
@@ -963,6 +967,7 @@ pub async fn find_and_submit_factors(
                     "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
                 );
                 merge_vertices(&mut data, http, factor_vid, cofactor_vid);
+                all_vids.remove(&cofactor_vid);
                 continue;
             }
             if !factor.may_be_proper_divisor_of(&cofactor) {
@@ -1021,6 +1026,7 @@ pub async fn find_and_submit_factors(
                     let factors_to_submit_instead =
                         add_factors_to_graph(http, &mut data, factor_vid).await;
                     if !factors_to_submit_instead.is_empty() {
+                        all_vids.extend(factors_to_submit_instead.iter().copied());
                         factors_to_submit_in_graph.extend(factors_to_submit_instead);
                         dedup_and_shuffle(&mut factors_to_submit_in_graph);
                     }
@@ -1093,6 +1099,7 @@ pub async fn find_and_submit_factors(
                 // Running add_factors_to_graph may yield an equivalent expression
                 let new_factors_of_cofactor = add_factors_to_graph(http, &mut data, cofactor_vid).await;
                 if !new_factors_of_cofactor.is_empty() {
+                    all_vids.extend(new_factors_of_cofactor.iter().copied());
                     factors_to_submit_in_graph
                         .extend(new_factors_of_cofactor);
                     dedup_and_shuffle(&mut factors_to_submit_in_graph);
@@ -1117,7 +1124,8 @@ pub async fn find_and_submit_factors(
                     iters_without_progress = 0;
                     // Move newly-accepted factor to the back of the list
                     if cofactor_vid == root_vid || cofactor_upper_bound_log10 >= 50000 {
-                        add_factors_to_graph(http, &mut data, root_vid).await;
+                        let new_root_factors = add_factors_to_graph(http, &mut data, root_vid).await;
+                        all_vids.extend(new_root_factors.iter().copied());
                         // skip put_factor_back_into_queue check
                         continue 'graph_iter;
                     }
@@ -1128,6 +1136,7 @@ pub async fn find_and_submit_factors(
                     data.rule_out_divisibility(factor_vid, cofactor_vid);
                     let subfactors = add_factors_to_graph(http, &mut data, factor_vid).await;
                     if !subfactors.is_empty() {
+                        all_vids.extend(subfactors.iter().copied());
                         factors_to_submit_in_graph.extend(subfactors);
                         dedup_and_shuffle(&mut factors_to_submit_in_graph);
                     } else if let Some(ref root_denominator) = root_denominator {
@@ -1146,6 +1155,7 @@ pub async fn find_and_submit_factors(
                                 let (divided_vid, added) =
                                     add_factor_node(&mut data, divided, None, http);
                                 if added {
+                                    all_vids.insert(divided_vid);
                                     factors_to_submit_in_graph.push_back(divided_vid);
                                     // Don't apply this recursively, except when divided was already in
                                     // the graph for another reason
@@ -1170,10 +1180,9 @@ pub async fn find_and_submit_factors(
                 }
                 OtherError => {
                     put_factor_back_into_queue = true;
-                    if !add_factors_to_graph(http, &mut data, cofactor_vid)
-                        .await
-                        .is_empty()
-                    {
+                    let new_cofactor_factors = add_factors_to_graph(http, &mut data, cofactor_vid).await;
+                    if !new_cofactor_factors.is_empty() {
+                        all_vids.extend(new_cofactor_factors.iter().copied());
                         iters_without_progress = 0;
                     }
                 }
@@ -1184,7 +1193,7 @@ pub async fn find_and_submit_factors(
         }
     }
 
-    for factor_vid in data.vertex_ids_except(root_vid) {
+    for factor_vid in all_vids.iter().copied().filter(|&v| v != root_vid) {
         let factor = data.get_factor(factor_vid);
         if factor.is_elided()
         {
@@ -1256,12 +1265,23 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
         facts.last_known_status = Some(FullyFactored);
         false
     };
-    for other_vid in data.vertex_ids_except(vid) {
-        let edge = data.get_edge(other_vid, vid);
-        if matches!(edge, Some(Direct) | Some(Transitive)) {
-            mark_fully_factored(other_vid, data);
-        } else if no_other_factors {
-            data.rule_out_divisibility(other_vid, vid);
+
+    // Recursively mark all known factors as fully factored
+    let known_factors: Vec<_> = neighbor_vids(&data.divisibility_graph, vid, Incoming)
+        .into_iter()
+        .filter(|(_, edge)| matches!(edge, Direct | Transitive))
+        .map(|(other_vid, _)| other_vid)
+        .collect();
+
+    for other_vid in known_factors {
+        mark_fully_factored(other_vid, data);
+    }
+
+    if no_other_factors {
+        for other_vid in data.vertex_ids_except(vid) {
+            if data.get_edge(other_vid, vid).is_none() {
+                data.rule_out_divisibility(other_vid, vid);
+            }
         }
     }
 }

@@ -257,15 +257,30 @@ impl RealFactorDbClient {
         retry_delay: Duration,
         alt_url_supplier: impl FnOnce() -> HipStr<'a>,
     ) -> Result<HipStr<'static>, HipStr<'static>> {
-        for _ in 0..MAX_RETRIES_WITH_FALLBACK {
-            if let Some(value) = self.try_get_and_decode(url).await {
-                return Ok(value);
-            }
-            sleep(retry_delay).await;
+        if let Some(value) = self
+            .retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES_WITH_FALLBACK)
+            .await
+        {
+            return Ok(value);
         }
         let alt_url = alt_url_supplier();
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
         Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
+    }
+
+    async fn retrying_get_and_decode_internal(
+        &self,
+        url: &str,
+        retry_delay: Duration,
+        max_retries: usize,
+    ) -> Option<HipStr<'static>> {
+        for _ in 0..max_retries {
+            if let Some(value) = self.try_get_and_decode(url).await {
+                return Some(value);
+            }
+            sleep(retry_delay).await;
+        }
+        None
     }
 }
 
@@ -325,11 +340,11 @@ impl FactorDbClient for RealFactorDbClient {
     /// restarts the process if that request consistently fails.
     #[framed]
     async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> HipStr<'static> {
-        for _ in 0..MAX_RETRIES {
-            if let Some(value) = self.try_get_and_decode(url).await {
-                return value;
-            }
-            sleep(retry_delay).await;
+        if let Some(value) = self
+            .retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES)
+            .await
+        {
+            return value;
         }
         let mut shutdown_receiver = self.shutdown_receiver.clone();
         let mut raw_args = std::env::args_os();

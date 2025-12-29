@@ -2617,18 +2617,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                             0 => Some(2),
                             1 => Some(1),
                             185.. => None,
-                            n => {
-                                let mut a: NumericFactor = 2;
-                                let mut b: NumericFactor = 1;
-                                let mut result: NumericFactor = 0;
-
-                                for _ in 2..=n {
-                                    result = a + b;
-                                    a = b;
-                                    b = result;
-                                }
-                                Some(result)
-                            }
+                            n => Some(evaluate_linear_recurrence(2, 1, n)),
                         }
                     }
                     Fibonacci(ref term) => {
@@ -2637,17 +2626,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                             0 => Some(0),
                             1 | 2 => Some(1),
                             186.. => None,
-                            n => {
-                                let mut a: NumericFactor = 1;
-                                let mut b: NumericFactor = 1;
-                                let mut result: NumericFactor = 0;
-                                for _ in 3..=n {
-                                    result = a + b;
-                                    a = b;
-                                    b = result;
-                                }
-                                Some(result)
-                            }
+                            n => Some(evaluate_linear_recurrence(1, 1, n)),
                         }
                     }
                     Factorial(ref term) => {
@@ -2731,6 +2710,23 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
             numeric
         }
     }
+}
+
+fn evaluate_linear_recurrence(
+    a_init: NumericFactor,
+    b_init: NumericFactor,
+    n: NumericFactor,
+) -> NumericFactor {
+    let mut a = a_init;
+    let mut b = b_init;
+    let mut result = 0;
+    let start = if a_init == 2 && b_init == 1 { 2 } else { 3 };
+    for _ in start..=n {
+        result = a + b;
+        a = b;
+        b = result;
+    }
+    result
 }
 
 #[inline(always)]
