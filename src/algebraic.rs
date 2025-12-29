@@ -2,9 +2,8 @@ use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
-use crate::graph::EntryId;
 use crate::net::BigNumber;
-use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, hash, write_bignum};
+use crate::{NumberLength, frame_sync, hash, write_bignum};
 use ahash::RandomState;
 use async_backtrace::location;
 use derivative::Derivative;
@@ -968,16 +967,6 @@ impl Factor {
         )
     }
 
-    #[inline(always)]
-    pub fn known_id(&self) -> Option<EntryId> {
-        if let Numeric(n) = self
-            && *n <= MAX_ID_EQUAL_TO_VALUE
-        {
-            Some(*n)
-        } else {
-            None
-        }
-    }
     #[inline(always)]
     pub fn as_numeric(&self) -> Option<NumericFactor> {
         match self {

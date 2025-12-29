@@ -558,7 +558,7 @@ impl FactorDbClient for RealFactorDbClient {
                     Prime
                 }),
                 factors,
-                id: Numeric(entry_id).known_id(),
+                id: Some(entry_id)
             });
         }
         let cached = match id {

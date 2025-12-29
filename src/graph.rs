@@ -357,22 +357,28 @@ impl FactorData {
         find_unique_factors(factor)
             .into_iter()
             .filter_map(|new_factor| {
-                let entry_id = new_factor.known_id();
+                let entry_id = http
+                    .cached_factors(&Expression(Borrowed(&new_factor)))
+                    .and_then(|f| f.id);
                 let (vid, added) = add_factor_node(self, new_factor, entry_id, http);
                 if added { Some(vid) } else { None }
             })
             .collect()
     }
 
-    pub fn as_specifier(&mut self, factor_vid: VertexId) -> NumberSpecifier<'_> {
+    pub fn as_specifier(
+        &mut self,
+        factor_vid: VertexId,
+        http: &impl FactorDbClient,
+    ) -> NumberSpecifier<'_> {
         if let Some(facts) = self.facts(factor_vid)
             && let Some(factor_entry_id) = facts.entry_id
         {
             Id(factor_entry_id)
         } else {
             let factor = self.get_factor(factor_vid);
-            factor
-                .known_id()
+            http.cached_factors(&Expression(Borrowed(&factor)))
+                .and_then(|f| f.id)
                 .map(Id)
                 .unwrap_or_else(|| Expression(Cow::Owned(factor)))
         }
@@ -419,7 +425,9 @@ pub fn add_factor_node(
                         let (subfactor_vid, _) = if subfactor == factor {
                             (factor_vid, false)
                         } else {
-                            let subfactor_entry_id = subfactor.known_id();
+                            let subfactor_entry_id = http
+                                .cached_factors(&Expression(Borrowed(&subfactor)))
+                                .and_then(|f| f.id);
                             add_factor_node(data, subfactor, subfactor_entry_id, http)
                         };
                         cached_subfactors.push(subfactor_vid);
@@ -676,7 +684,9 @@ pub async fn find_and_submit_factors(
             let root_factors: Vec<_> = known_factors
                 .into_iter()
                 .map(|known_factor| {
-                    let entry_id = known_factor.known_id();
+                    let entry_id = http
+                        .cached_factors(&Expression(Borrowed(&known_factor)))
+                        .and_then(|f| f.id);
                     let (factor_vid, added) =
                         add_factor_node(&mut data, known_factor, entry_id, http);
                     if added {
@@ -1090,7 +1100,7 @@ pub async fn find_and_submit_factors(
                 put_factor_back_into_queue = true;
                 break 'per_cofactor;
             }
-            let cofactor_specifier = data.as_specifier(cofactor_vid);
+            let cofactor_specifier = data.as_specifier(cofactor_vid, http);
             match http.try_report_factor(cofactor_specifier, &factor).await {
                 AlreadyFullyFactored => {
                     if cofactor_vid == root_vid {
@@ -1275,7 +1285,7 @@ async fn add_factors_to_graph(
     let elided = factor.is_elided();
     // First, check factordb.com/api for already-known factors
     if needs_update || elided {
-        let factor_specifier = data.as_specifier(factor_vid);
+        let factor_specifier = data.as_specifier(factor_vid, http);
         let ProcessedStatusApiResponse {
             status,
             factors: known_factors,
@@ -1293,7 +1303,9 @@ async fn add_factors_to_graph(
             let new_known_factors: Vec<_> = known_factors
                 .into_iter()
                 .map(|known_factor| {
-                    let entry_id = known_factor.known_id();
+                    let entry_id = http
+                        .cached_factors(&Expression(Borrowed(&known_factor)))
+                        .and_then(|f| f.id);
                     let (known_factor_vid, is_new) =
                         add_factor_node(data, known_factor, entry_id, http);
                     data.propagate_divisibility(known_factor_vid, factor_vid, false);
@@ -1327,7 +1339,9 @@ async fn add_factors_to_graph(
     if let Some(id) = id
         && !facts.checked_for_listed_algebraic
     {
-        if let Some(known_id) = factor.known_id()
+        if let Some(known_id) = http
+            .cached_factors(&Expression(Borrowed(&factor)))
+            .and_then(|f| f.id)
             && id != known_id
         {
             error!("Tried to look up {factor} using a smaller number's id {id}");
