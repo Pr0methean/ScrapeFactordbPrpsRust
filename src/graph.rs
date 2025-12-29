@@ -1338,13 +1338,14 @@ async fn add_factors_to_graph(
             .known_factors_as_digits(factor_specifier, true, elided)
             .await;
         let known_factor_count = known_factors.len();
-        if known_factor_count == 1 {
+        let new_known_factors: Vec<_> = if known_factor_count == 1 {
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != factor {
                 data.merge_equivalent_expressions(factor_vid, known_factor, http);
             }
+            vec![factor_vid]
         } else {
-            let new_known_factors: Vec<_> = known_factors
+            known_factors
                 .into_iter()
                 .map(|known_factor| {
                     let entry_id = http
@@ -1358,13 +1359,12 @@ async fn add_factors_to_graph(
                     }
                     known_factor_vid
                 })
-                .collect();
-            if known_factor_count > 0 {
-                let facts = data.facts_mut(factor_vid);
-                facts.factors_known_to_factordb = UpToDate(new_known_factors);
-            }
-        }
+                .collect()
+        };
         let facts = data.facts_mut(factor_vid);
+        if known_factor_count > 0 {
+            facts.factors_known_to_factordb = UpToDate(new_known_factors);
+        }
         facts.entry_id = facts.entry_id.or(new_id);
         id = facts.entry_id;
         if let Some(status) = status {
