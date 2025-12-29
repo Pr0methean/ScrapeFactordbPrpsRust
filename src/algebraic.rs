@@ -21,7 +21,7 @@ use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp::Ordering::{Equal, Greater, Less};
+use std::cmp::Ordering::{Greater, Less};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
@@ -765,7 +765,46 @@ pub enum Factor {
 
 impl PartialEq for ComplexFactor {
     fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Equal
+        match (self, other) {
+            (
+                AddSub {
+                    terms: (l1, r1),
+                    subtract: s1,
+                },
+                AddSub {
+                    terms: (l2, r2),
+                    subtract: s2,
+                },
+            ) => {
+                if s1 != s2 {
+                    return false;
+                }
+                l1 == l2 && r1 == r2 || (!s1 && l1 == r2 && r1 == l2)
+            }
+            (Multiply { terms_hash: h1, terms: t1 }, Multiply { terms_hash: h2, terms: t2 }) => {
+                h1 == h2 && t1 == t2
+            }
+            (
+                Divide {
+                    left: l1,
+                    right_hash: h1,
+                    right: r1,
+                },
+                Divide {
+                    left: l2,
+                    right_hash: h2,
+                    right: r2,
+                },
+            ) => h1 == h2 && l1 == l2 && r1 == r2,
+            (Power { base: b1, exponent: e1 }, Power { base: b2, exponent: e2 }) => {
+                b1 == b2 && e1 == e2
+            }
+            (Fibonacci(a), Fibonacci(b)) => a == b,
+            (Lucas(a), Lucas(b)) => a == b,
+            (Factorial(a), Factorial(b)) => a == b,
+            (Primorial(a), Primorial(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
