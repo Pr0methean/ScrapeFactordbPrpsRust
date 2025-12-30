@@ -16,6 +16,7 @@ mod graph;
 mod monitor;
 mod net;
 
+use tokio::task::JoinSet;
 use alloc::sync::Arc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
@@ -959,6 +960,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
+        let mut graph_tasks = JoinSet::new();
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
                 warn!("Queue U's task received shutdown signal; exiting");
@@ -989,29 +991,35 @@ async fn main() -> anyhow::Result<()> {
                 u_start = rng().random_range(0..=MAX_START);
             }
             for (u_id, digits_or_expr) in ids {
+                let digits_or_expr = digits_or_expr.to_owned();
                 if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                    graph_tasks.join_all().await;
                     return;
                 }
                 if u_filter.contains(&u_id) {
                     warn!("{u_id}: Skipping duplicate U");
                     continue;
                 }
-                if graph::find_and_submit_factors(
-                    u_http.as_ref(),
-                    u_id,
-                    digits_or_expr.into(),
-                    false,
-                )
-                .await
-                {
-                    info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-                } else {
-                    let _ = u_filter.add(&u_id);
-                    if u_sender.send(u_id).await.is_ok() {
+                let _ = u_filter.add(&u_id);
+                while graph_tasks.len() >= 4 {
+                    let _ = graph_tasks.join_next().await;
+                }
+                let u_http_clone = u_http.clone();
+                let u_sender_clone = u_sender.clone();
+                graph_tasks.spawn(async move {
+                    if graph::find_and_submit_factors(
+                        u_http_clone.as_ref(),
+                        u_id,
+                        digits_or_expr.into(),
+                        false,
+                    )
+                    .await {
+                        info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
+                    } else if u_sender_clone.send(u_id).await.is_ok() {
                         info!("{u_id}: Queued U");
                     }
-                }
+                });
             }
         }
     }));
