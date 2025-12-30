@@ -295,7 +295,6 @@ const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 254;
 const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
 
 const MAX_CPU_BUDGET_TENTHS: usize = 6000;
-const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[framed]
@@ -561,6 +560,13 @@ async fn main() -> anyhow::Result<()> {
         Some(u_digits) => info!("U's will be {u_digits} digits"),
         None => info!("U's will be random sizes"),
     }
+    let unknown_status_check_backoff = if let Some(u_digits) = u_digits {
+        // max will be 15s + (200_000 * 200_000 * 200_000 / 40_000) ns = 15 s + (8e15 / 4e4)*(1e-9 s) = 215 s
+        let u_digits = u_digits.get() as u64;
+        Duration::from_secs(15) + Duration::from_nanos(u_digits * u_digits * u_digits / 40_000)
+    } else {
+        Duration::from_mins(3)
+    };
     let mut prp_start = prp_start.unwrap_or_else(|| rng().random_range(0..=MAX_START));
     info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
@@ -665,11 +671,11 @@ async fn main() -> anyhow::Result<()> {
                             }
                             Some(matched_status) => match matched_status.as_str() {
                                 "Assigned" => {
-                                    info!("Assigned PRP check for unknown-status number with ID {id}");
+                                     info!("Assigned PRP check for unknown-status number with ID {id}");
                                 }
                                 "Please wait" => {
                                     warn!("{id}: Got 'please wait' for U");
-                                    next_unknown_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                                    next_unknown_attempt = Instant::now() + unknown_status_check_backoff;
                                     task_return_permit.send(id);
                                     info!("{id}: Requeued U");
                                 }
