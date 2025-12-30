@@ -16,8 +16,6 @@ mod graph;
 mod monitor;
 mod net;
 
-use tokio::task::JoinSet;
-use alloc::sync::Arc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
@@ -25,6 +23,7 @@ use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
 use ahash::RandomState;
+use alloc::sync::Arc;
 use async_backtrace::taskdump_tree;
 use async_backtrace::ඞ::Frame;
 use async_backtrace::{Location, framed};
@@ -62,6 +61,7 @@ use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 

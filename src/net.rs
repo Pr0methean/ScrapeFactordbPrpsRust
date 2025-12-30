@@ -575,14 +575,12 @@ impl FactorDbClient for RealFactorDbClient {
             });
         }
         let cached = match id {
-            Id(id) => self
-                .by_id_cache
-                .get(id)
-                .or_else(|| {
-                    self.expression_form_cache
-                        .get(id)
-                        .as_ref().and_then(|expr| self.by_expr_cache.get(expr))
-                }),
+            Id(id) => self.by_id_cache.get(id).or_else(|| {
+                self.expression_form_cache
+                    .get(id)
+                    .as_ref()
+                    .and_then(|expr| self.by_expr_cache.get(expr))
+            }),
             Expression(expr) => self.by_expr_cache.get(expr.as_ref()),
         };
         if cached.is_some() {
