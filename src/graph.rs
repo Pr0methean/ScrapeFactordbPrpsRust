@@ -654,7 +654,7 @@ fn dedup_and_shuffle<T: Ord>(deque: &mut VecDeque<T>) {
 
 #[framed]
 pub async fn find_and_submit_factors(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     id: EntryId,
     digits_or_expr: HipStr<'static>,
     skip_looking_up_known: bool,
@@ -1230,7 +1230,7 @@ pub async fn find_and_submit_factors(
 }
 
 #[inline(always)]
-fn mark_stale(data: &mut FactorData, stale_vid: VertexId, http: &mut impl FactorDbClient) {
+fn mark_stale(data: &mut FactorData, stale_vid: VertexId, http: &impl FactorDbClient) {
     let entry_id = data.facts(stale_vid).unwrap().entry_id;
     let expression = data.get_factor(stale_vid);
     replace_with_or_abort(data.facts_mut(stale_vid), |facts| {
@@ -1314,7 +1314,7 @@ fn mark_fully_factored_internal(
 
 #[framed]
 async fn add_factors_to_graph(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     data: &mut FactorData,
     factor_vid: VertexId,
 ) -> Box<[VertexId]> {

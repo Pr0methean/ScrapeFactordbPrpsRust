@@ -16,6 +16,7 @@ mod graph;
 mod monitor;
 mod net;
 
+use alloc::sync::Arc;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
@@ -36,7 +37,7 @@ use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use primitive_types::U256;
 use quick_cache::UnitWeighter;
-use quick_cache::unsync::{Cache, DefaultLifecycle};
+use quick_cache::sync::{Cache, DefaultLifecycle};
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
 use regex::Regex;
@@ -70,7 +71,7 @@ fn get_random_state() -> &'static RandomState {
     RANDOM_STATE.get_or_init(RandomState::new)
 }
 
-pub fn create_cache<T: Eq + Hash, U>(capacity: usize) -> BasicCache<T, U> {
+pub fn create_cache<T: Eq + Hash, U: Clone>(capacity: usize) -> BasicCache<T, U> {
     Cache::with(
         capacity,
         Default::default(),
@@ -149,7 +150,7 @@ struct FactorSubmission<'a> {
 #[framed]
 async fn composites_while_waiting(
     end: Instant,
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
 ) {
@@ -177,7 +178,7 @@ async fn composites_while_waiting(
 
 #[framed]
 async fn check_composite(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     id: EntryId,
     digits_or_expr: HipStr<'static>,
@@ -299,7 +300,7 @@ static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[framed]
 async fn throttle_if_necessary(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
@@ -584,18 +585,18 @@ async fn main() -> anyhow::Result<()> {
             .await;
         max_concurrent_requests = 3;
     }
-    let http = RealFactorDbClient::new(
+    let http = Arc::new(RealFactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
         shutdown_receiver.clone(),
-    );
+    ));
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_shutdown_receiver = shutdown_receiver.clone();
     let mut c_buffer_task: JoinHandle<()> =
         task::spawn(async_backtrace::location!().frame(async move {
             queue_composites(
-                &http_clone,
+                http_clone.as_ref(),
                 &c_sender_clone,
                 c_digits,
                 &mut c_shutdown_receiver,
@@ -622,7 +623,7 @@ async fn main() -> anyhow::Result<()> {
     // Task to consume PRP's, C's and U's dispatched from the other tasks
     let mut prp_receiver = PushbackReceiver::new(prp_receiver, &prp_sender);
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
-    let mut do_checks_http = http.clone();
+    let do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
     let do_checks = task::spawn(async_backtrace::location!().named_const("Execute checks from channels").frame(async move {
         info!("do_checks task starting");
@@ -637,7 +638,7 @@ async fn main() -> anyhow::Result<()> {
         let mut bases_before_next_cpu_check = 1;
         let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
         throttle_if_necessary(
-            &mut do_checks_http,
+            do_checks_http.as_ref(),
             &mut c_receiver,
             &mut bases_before_next_cpu_check,
             false,
@@ -730,7 +731,7 @@ async fn main() -> anyhow::Result<()> {
                                     .await;
                                 if factors.is_empty() && status == Some(FullyFactored) {
                                     info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
-                                    report_primality_proof(id, parameter, &do_checks_http).await;
+                                    report_primality_proof(id, parameter, do_checks_http.as_ref()).await;
                                     return None;
                                 }
                                 let divide_2 = factors.first().and_then(|f| f.as_numeric()) == Some(2);
@@ -763,7 +764,7 @@ async fn main() -> anyhow::Result<()> {
                                                 "{id}: {} (ID {}) is fully factored!",
                                                 info.parameter, info.id
                                             );
-                                            report_primality_proof(id, info.parameter, &do_checks_http)
+                                            report_primality_proof(id, info.parameter, do_checks_http.as_ref())
                                                 .await;
                                             stopped_early = true;
                                             break;
@@ -790,7 +791,7 @@ async fn main() -> anyhow::Result<()> {
                                             "{id}: {} (ID {}) is fully factored!",
                                             infos[0].parameter, infos[0].id
                                         );
-                                        report_primality_proof(id, infos[0].parameter, &do_checks_http)
+                                        report_primality_proof(id, infos[0].parameter, do_checks_http.as_ref())
                                             .await;
                                         stopped_early = true;
                                     }
@@ -803,7 +804,7 @@ async fn main() -> anyhow::Result<()> {
                                                 "{id}: {} (ID {}) is fully factored!",
                                                 infos[1].parameter, infos[1].id
                                             );
-                                            report_primality_proof(id, infos[1].parameter, &do_checks_http)
+                                            report_primality_proof(id, infos[1].parameter, do_checks_http.as_ref())
                                                 .await;
                                             stopped_early = true;
                                         }
@@ -834,7 +835,7 @@ async fn main() -> anyhow::Result<()> {
                                 for factor in factors {
                                     if !matches!(factor, Factor::Numeric(_)) {
                                         graph::find_and_submit_factors(
-                                            &mut do_checks_http,
+                                            do_checks_http.as_ref(),
                                             info.id,
                                             factor.to_unelided_string(),
                                             true,
@@ -856,7 +857,7 @@ async fn main() -> anyhow::Result<()> {
                         error!("{id}: Failed to decode status for PRP: {status_text}");
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                            &mut do_checks_http,
+                            do_checks_http.as_ref(),
                             &mut c_receiver,
                             &mut c_filter,
                         )
@@ -904,7 +905,7 @@ async fn main() -> anyhow::Result<()> {
                             info!("{id}: Requeued PRP");
                             composites_while_waiting(
                                 Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                                &mut do_checks_http,
+                                do_checks_http.as_ref(),
                                 &mut c_receiver,
                                 &mut c_filter,
                             )
@@ -912,7 +913,7 @@ async fn main() -> anyhow::Result<()> {
                             break;
                         }
                         throttle_if_necessary(
-                            &mut do_checks_http,
+                            do_checks_http.as_ref(),
                             &mut c_receiver,
                             &mut bases_before_next_cpu_check,
                             true,
@@ -942,7 +943,7 @@ async fn main() -> anyhow::Result<()> {
                 c_task = c_receiver.recv() => {
                     let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
                     info!("{id}: Ready to check a C");
-                    check_composite(&mut do_checks_http, &mut c_filter, id, digits_or_expr, return_permit).await;
+                    check_composite(do_checks_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
                 }
             }
         }
@@ -950,7 +951,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
-    let mut u_http = http.clone();
+    let u_http = http.clone();
     let mut u_start = if u_digits.is_some() {
         0
     } else {
@@ -997,7 +998,7 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 if graph::find_and_submit_factors(
-                    &mut u_http,
+                    u_http.as_ref(),
                     u_id,
                     digits_or_expr.into(),
                     false,
@@ -1070,7 +1071,7 @@ async fn main() -> anyhow::Result<()> {
         }
         if new_c_buffer_task {
             c_buffer_task =
-                queue_composites(&http, &c_sender, c_digits, &mut shutdown_receiver).await;
+                queue_composites(http.as_ref(), &c_sender, c_digits, &mut shutdown_receiver).await;
         }
     }
 }
