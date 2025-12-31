@@ -16,7 +16,6 @@ mod graph;
 mod monitor;
 mod net;
 
-use std::sync::atomic::Ordering::AcqRel;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
@@ -55,8 +54,8 @@ use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::OnceLock;
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::atomic::Ordering::{Acquire, Release};
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};

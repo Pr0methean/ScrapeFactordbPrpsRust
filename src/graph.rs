@@ -1439,25 +1439,27 @@ async fn add_factors_to_graph(
 
 #[cfg(test)]
 pub mod tests {
+    use nonzero::nonzero;
+    use rand::RngCore;
+    use rand::rng;
     use std::env::temp_dir;
     use std::fs::File;
     use std::hint::black_box;
     use std::iter::{once, repeat};
-    use nonzero::nonzero;
-    use rand::{RngCore};
-    use rand::rng;
 
+    use crate::FAILED_U_SUBMISSIONS_OUT;
+    use crate::ReportFactorResult;
+    use crate::algebraic::Factor;
+    use crate::graph::{EntryId, NumericFactor};
+    use crate::graph::{FactorData, add_factor_node, find_and_submit_factors};
+    use crate::net::NumberStatus::Unknown;
+    use crate::net::{
+        FactorDbClientReadIdsAndExprs, MockFactorDbClient, ProcessedStatusApiResponse,
+    };
     use const_format::formatcp;
     use hipstr::HipStr;
     use mockall::predicate::eq;
     use tokio::sync::Mutex;
-    use crate::FAILED_U_SUBMISSIONS_OUT;
-    use crate::algebraic::Factor;
-    use crate::graph::{EntryId, NumericFactor};
-    use crate::graph::{FactorData, add_factor_node, find_and_submit_factors};
-    use crate::net::{FactorDbClientReadIdsAndExprs, MockFactorDbClient, ProcessedStatusApiResponse};
-    use crate::net::NumberStatus::Unknown;
-    use crate::ReportFactorResult;
 
     #[test]
     fn test_is_known_factor_numeric() {
@@ -1756,32 +1758,44 @@ pub mod tests {
         const ID: EntryId = 1100000005875321487;
         const EXPR: &str = "(10^200000-1)/9-10^58838";
 
-        const LISTED_ALGEBRAIC_FACTORS_URL: &str = formatcp!("https://factordb.com/frame_moreinfo.php?id={ID}");
+        const LISTED_ALGEBRAIC_FACTORS_URL: &str =
+            formatcp!("https://factordb.com/frame_moreinfo.php?id={ID}");
 
         #[allow(non_local_definitions)]
         impl FactorDbClientReadIdsAndExprs for MockFactorDbClient {
-            fn read_ids_and_exprs<'a>(&self, _haystack: &'a str) -> impl Iterator<Item=(EntryId, &'a str)> {
+            fn read_ids_and_exprs<'a>(
+                &self,
+                _haystack: &'a str,
+            ) -> impl Iterator<Item = (EntryId, &'a str)> {
                 once((ID, &*String::from(EXPR).leak()))
             }
         }
 
         let mut http = MockFactorDbClient::new();
-        http.expect_known_factors_as_digits().returning(|_,_,_| ProcessedStatusApiResponse {
-            status: Some(Unknown),
-            factors: Box::new([Factor::from(&*repeat('1').take(141_161).chain(once('0')).chain(repeat('1').take(58838)).collect::<String>())]),
-            id: Some(ID),
-        });
+        http.expect_known_factors_as_digits()
+            .returning(|_, _, _| ProcessedStatusApiResponse {
+                status: Some(Unknown),
+                factors: Box::new([Factor::from(
+                    &*repeat('1')
+                        .take(141_161)
+                        .chain(once('0'))
+                        .chain(repeat('1').take(58838))
+                        .collect::<String>(),
+                )]),
+                id: Some(ID),
+            });
         http.expect_cached_factors().return_const(None);
-        http.expect_try_get_and_decode().with(eq(&*LISTED_ALGEBRAIC_FACTORS_URL))
+        http.expect_try_get_and_decode()
+            .with(eq(&*LISTED_ALGEBRAIC_FACTORS_URL))
             .returning(|_| Some(HipStr::from_static("")));
-        http.expect_try_get_expression_form().returning(|_| Some(Factor::from(EXPR)));
-        http.expect_try_report_factor().return_const(ReportFactorResult::DoesNotDivide);
+        http.expect_try_get_expression_form()
+            .returning(|_| Some(Factor::from(EXPR)));
+        http.expect_try_report_factor()
+            .return_const(ReportFactorResult::DoesNotDivide);
 
         FAILED_U_SUBMISSIONS_OUT
             .get_or_init(async || {
-                Mutex::new(
-                    File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap(),
-                )
+                Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
             })
             .await;
 
