@@ -72,7 +72,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 // Configure jemalloc for profiling
 #[used]
 #[allow(non_upper_case_globals)]
-#[unsafe(export_name = "malloc_conf"]
+#[unsafe(export_name = "malloc_conf")]
 static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
