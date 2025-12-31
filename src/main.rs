@@ -71,7 +71,9 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 // Configure jemalloc for profiling
 #[used]
-static MALLOC_CONF: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
+#[allow(non_upper_case_globals)]
+#[export_name = "malloc_conf"]
+static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
