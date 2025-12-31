@@ -1084,7 +1084,7 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ReportFactorResult {
     Accepted,
     DoesNotDivide,
