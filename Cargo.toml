@@ -9,7 +9,7 @@ codegen-units = 1
 debug = "full"
 
 [dependencies]
-reqwest = "0.12"
+reqwest = { version = "0.13", features = ["form"] }
 tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time"] }
 regex = "1.12"
 primitive-types = "0.14"
