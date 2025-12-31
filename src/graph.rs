@@ -1252,10 +1252,10 @@ fn mark_fully_factored_internal(
     data: &mut FactorData,
     worklist: &mut BTreeSet<WorkItem>,
 ) {
-    if data.facts(vid).is_some_and(|f| f.is_known_fully_factored()) {
+    let facts = data.facts_mut(vid);
+    if facts.is_known_fully_factored() {
         return;
     }
-    let facts = data.facts_mut(vid);
     facts.checked_for_listed_algebraic = true;
     facts.checked_in_factor_finder = true;
     facts.expression_form_checked_in_factor_finder = true;
