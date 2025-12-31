@@ -278,13 +278,6 @@ impl FactorData {
         }
     }
 
-    pub fn vertex_ids_except(&self, root_vid: VertexId) -> Vec<VertexId> {
-        self.divisibility_graph
-            .vertices_by_id()
-            .filter(|factor_vid| *factor_vid != root_vid)
-            .collect()
-    }
-
     pub fn is_known_factor(&mut self, factor_vid: VertexId, composite_vid: VertexId) -> bool {
         let factor_vid = self.resolve_vid(factor_vid);
         let composite_vid = self.resolve_vid(composite_vid);
@@ -1301,7 +1294,9 @@ fn mark_fully_factored_internal(
     }
 
     if no_other_factors {
-        for other_vid in data.vertex_ids_except(vid) {
+        for other_vid in data.divisibility_graph
+            .vertices_by_id()
+            .filter(|factor_vid| *factor_vid != vid) {
             if data.get_edge(other_vid, vid).is_none() {
                 worklist.insert(WorkItem::RuleOut {
                     nonfactor: other_vid,
