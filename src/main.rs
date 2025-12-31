@@ -23,6 +23,7 @@ use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
 use ahash::RandomState;
+use alloc::sync::Arc;
 use async_backtrace::taskdump_tree;
 use async_backtrace::ඞ::Frame;
 use async_backtrace::{Location, framed};
@@ -36,7 +37,7 @@ use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
 use primitive_types::U256;
 use quick_cache::UnitWeighter;
-use quick_cache::unsync::{Cache, DefaultLifecycle};
+use quick_cache::sync::{Cache, DefaultLifecycle};
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
 use regex::Regex;
@@ -60,6 +61,7 @@ use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
 use tokio::sync::{Mutex, OnceCell, oneshot};
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
@@ -70,7 +72,7 @@ fn get_random_state() -> &'static RandomState {
     RANDOM_STATE.get_or_init(RandomState::new)
 }
 
-pub fn create_cache<T: Eq + Hash, U>(capacity: usize) -> BasicCache<T, U> {
+pub fn create_cache<T: Eq + Hash, U: Clone>(capacity: usize) -> BasicCache<T, U> {
     Cache::with(
         capacity,
         Default::default(),
@@ -149,7 +151,7 @@ struct FactorSubmission<'a> {
 #[framed]
 async fn composites_while_waiting(
     end: Instant,
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
 ) {
@@ -177,7 +179,7 @@ async fn composites_while_waiting(
 
 #[framed]
 async fn check_composite(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     id: EntryId,
     digits_or_expr: HipStr<'static>,
@@ -214,7 +216,8 @@ async fn check_composite(
         let mut factors_submitted = false;
         let mut factors_to_dispatch = Vec::with_capacity(factors.len());
         for factor in factors {
-            if let Some(factor_str) = factor.as_str_non_numeric() {
+            if !matches!(factor, Factor::Numeric(_)) {
+                let factor_str = factor.to_unelided_string();
                 if graph::find_and_submit_factors(http, id, factor_str, true).await {
                     factors_submitted = true;
                 } else {
@@ -280,21 +283,10 @@ pub fn write_bignum(f: &mut Formatter, e: &str) -> fmt::Result {
 
 #[inline(always)]
 #[framed]
-async fn prove_by_np1(id: EntryId, http: &impl FactorDbClient) {
+async fn report_primality_proof(id: EntryId, parameter: &str, http: &impl FactorDbClient) {
     let _ = http
         .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&np1=Proof&id={id}"),
-            RETRY_DELAY,
-        )
-        .await;
-}
-
-#[inline(always)]
-#[framed]
-async fn prove_by_nm1(id: EntryId, http: &impl FactorDbClient) {
-    let _ = http
-        .retrying_get_and_decode(
-            &format!("https://factordb.com/index.php?open=Prime&nm1=Proof&id={id}"),
+            &format!("https://factordb.com/index.php?open=Prime&{parameter}=Proof&id={id}"),
             RETRY_DELAY,
         )
         .await;
@@ -305,12 +297,11 @@ const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 254;
 const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
 
 const MAX_CPU_BUDGET_TENTHS: usize = 6000;
-const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[framed]
 async fn throttle_if_necessary(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
@@ -571,6 +562,13 @@ async fn main() -> anyhow::Result<()> {
         Some(u_digits) => info!("U's will be {u_digits} digits"),
         None => info!("U's will be random sizes"),
     }
+    let unknown_status_check_backoff = if let Some(u_digits) = u_digits {
+        // max will be 15s + (200_000 * 200_000 * 200_000 / 40_000) ns = 15 s + (8e15 / 4e4)*(1e-9 s) = 215 s
+        let u_digits = u_digits.get() as u64;
+        Duration::from_secs(15) + Duration::from_nanos(u_digits * u_digits * u_digits / 40_000)
+    } else {
+        Duration::from_mins(3)
+    };
     let mut prp_start = prp_start.unwrap_or_else(|| rng().random_range(0..=MAX_START));
     info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
@@ -588,18 +586,18 @@ async fn main() -> anyhow::Result<()> {
             .await;
         max_concurrent_requests = 3;
     }
-    let http = RealFactorDbClient::new(
+    let http = Arc::new(RealFactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
         shutdown_receiver.clone(),
-    );
+    ));
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_shutdown_receiver = shutdown_receiver.clone();
     let mut c_buffer_task: JoinHandle<()> =
         task::spawn(async_backtrace::location!().frame(async move {
             queue_composites(
-                &http_clone,
+                http_clone.as_ref(),
                 &c_sender_clone,
                 c_digits,
                 &mut c_shutdown_receiver,
@@ -626,7 +624,7 @@ async fn main() -> anyhow::Result<()> {
     // Task to consume PRP's, C's and U's dispatched from the other tasks
     let mut prp_receiver = PushbackReceiver::new(prp_receiver, &prp_sender);
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
-    let mut do_checks_http = http.clone();
+    let do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
     let do_checks = task::spawn(async_backtrace::location!().named_const("Execute checks from channels").frame(async move {
         info!("do_checks task starting");
@@ -641,7 +639,7 @@ async fn main() -> anyhow::Result<()> {
         let mut bases_before_next_cpu_check = 1;
         let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
         throttle_if_necessary(
-            &mut do_checks_http,
+            do_checks_http.as_ref(),
             &mut c_receiver,
             &mut bases_before_next_cpu_check,
             false,
@@ -675,11 +673,11 @@ async fn main() -> anyhow::Result<()> {
                             }
                             Some(matched_status) => match matched_status.as_str() {
                                 "Assigned" => {
-                                    info!("Assigned PRP check for unknown-status number with ID {id}");
+                                     info!("Assigned PRP check for unknown-status number with ID {id}");
                                 }
                                 "Please wait" => {
                                     warn!("{id}: Got 'please wait' for U");
-                                    next_unknown_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                                    next_unknown_attempt = Instant::now() + unknown_status_check_backoff;
                                     task_return_permit.send(id);
                                     info!("{id}: Requeued U");
                                 }
@@ -711,149 +709,144 @@ async fn main() -> anyhow::Result<()> {
                         info!("{id}: No longer PRP");
                         continue;
                     }
-                    let mut nm1_id_if_available = None;
-                    let mut nm1_known_to_divide_2 = false;
-                    let mut nm1_known_to_divide_3 = false;
-                    let mut np1_id_if_available = None;
-                    let mut np1_known_to_divide_2 = false;
-                    let mut np1_known_to_divide_3 = false;
-                    let mut updated_nm1_factors = None;
-                    if let Some(captures) = nm1_regex.captures(&bases_text) {
-                        let nm1_id = captures[1].parse::<EntryId>().unwrap();
-                        nm1_id_if_available = Some(nm1_id);
-                        let ProcessedStatusApiResponse {
-                            status,
-                            factors: nm1_factors,
-                            ..
-                        } = do_checks_http.known_factors_as_digits(Id(nm1_id), false, false).await;
-                        match nm1_factors.len() {
-                            0 => {
-                                if status == Some(FullyFactored) {
-                                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                    prove_by_nm1(id, &do_checks_http).await;
-                                    continue;
+                    #[derive(Debug)]
+                    struct NPlusMinus1Info {
+                        id: EntryId,
+                        parameter: &'static str,
+                        known_to_divide_2: bool,
+                        known_to_divide_3: bool,
+                        factors: Option<Box<[Factor]>>,
+                    }
+
+                    if let Some(mut infos) = (async {
+                        let mut results = Vec::with_capacity(2);
+                        for (parameter, regex) in [("nm1", &nm1_regex), ("np1", &np1_regex)] {
+                            if let Some(captures) = regex.captures(&bases_text) {
+                                let id_to_check = captures[1].parse::<EntryId>().unwrap();
+                                let ProcessedStatusApiResponse {
+                                    status,
+                                    factors,
+                                    ..
+                                } = do_checks_http
+                                    .known_factors_as_digits(Id(id_to_check), false, false)
+                                    .await;
+                                if factors.is_empty() && status == Some(FullyFactored) {
+                                    info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
+                                    report_primality_proof(id, parameter, do_checks_http.as_ref()).await;
+                                    return None;
                                 }
-                            }
-                            _ => {
-                                nm1_known_to_divide_2 = nm1_factors[0].as_numeric() == Some(2);
-                                nm1_known_to_divide_3 = nm1_factors[0].as_numeric() == Some(3)
-                                    || nm1_factors.get(1).and_then(|factor| factor.as_numeric()) == Some(3);
-                                updated_nm1_factors = Some(nm1_factors);
+                                let divide_2 = factors.first().and_then(|f| f.as_numeric()) == Some(2);
+                                let divide_3 = factors.first().and_then(|f| f.as_numeric()) == Some(3)
+                                    || factors.get(1).and_then(|f| f.as_numeric()) == Some(3);
+                                results.push(NPlusMinus1Info {
+                                    id: id_to_check,
+                                    parameter,
+                                    known_to_divide_2: divide_2,
+                                    known_to_divide_3: divide_3,
+                                    factors: if factors.is_empty() {
+                                        None
+                                    } else {
+                                        Some(factors)
+                                    },
+                                });
+                            } else {
+                                error!("{id}: {parameter} ID not found: {bases_text}");
                             }
                         }
-                    } else {
-                        error!("{id}: N-1 ID not found: {bases_text}");
-                    }
-                    let mut updated_np1_factors = None;
-                    if let Some(captures) = np1_regex.captures(&bases_text) {
-                        let np1_id = captures[1].parse::<EntryId>().unwrap();
-                        np1_id_if_available = Some(np1_id);
-                        let ProcessedStatusApiResponse {
-                            status,
-                            factors: np1_factors,
-                            ..
-                        } = do_checks_http.known_factors_as_digits(Id(np1_id), false, false).await;
-                        match np1_factors.len() {
-                            0 => {
-                                if status == Some(FullyFactored) {
-                                    info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                    prove_by_np1(id, &do_checks_http).await;
-                                    continue;
-                                }
-                            }
-                            _ => {
-                                np1_known_to_divide_2 = np1_factors[0].as_numeric() == Some(2);
-                                np1_known_to_divide_3 = np1_factors[0].as_numeric() == Some(3)
-                                    || np1_factors.get(1).and_then(|factor| factor.as_numeric()) == Some(3);
-                                updated_np1_factors = Some(np1_factors);
-                            }
-                        }
-                    } else {
-                        error!("{id}: N+1 ID not found: {bases_text}");
-                    }
-                    if let Some(nm1_id) = nm1_id_if_available
-                        && !nm1_known_to_divide_2
+                        Some(results)
+                    })
+                    .await
                     {
-                        // N wouldn't be PRP if it was even, so N-1 must be even
-                        match do_checks_http.report_numeric_factor(nm1_id, 2).await {
-                            AlreadyFullyFactored => {
-                                info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                prove_by_nm1(id, &do_checks_http).await;
+                            for info in &mut infos {
+                                if !info.known_to_divide_2 {
+                                    match do_checks_http.report_numeric_factor(info.id, 2).await {
+                                        AlreadyFullyFactored => {
+                                            info!(
+                                                "{id}: {} (ID {}) is fully factored!",
+                                                info.parameter, info.id
+                                            );
+                                            report_primality_proof(id, info.parameter, do_checks_http.as_ref())
+                                                .await;
+                                            stopped_early = true;
+                                            break;
+                                        }
+                                        Accepted => {
+                                            info.factors = None;
+                                        }
+                                        _ => {
+                                            error!(
+                                                "{id}: PRP, but factor of 2 was rejected for {} (id {})",
+                                                info.parameter, info.id
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            if stopped_early {
                                 continue;
                             }
-                            Accepted => {
-                                updated_nm1_factors = None; // Should update after successfully submitting a factor
-                            }
-                            _ => {
-                                error!("{id}: PRP, but factor of 2 was rejected for N-1 (id {nm1_id})");
-                            }
-                        }
-                    }
-                    if let Some(np1_id) = np1_id_if_available
-                        && !np1_known_to_divide_2
-                    {
-                        // N wouldn't be PRP if it was even, so N+1 must be even
-                        match do_checks_http.report_numeric_factor(np1_id, 2).await {
-                            AlreadyFullyFactored => {
-                                info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                prove_by_np1(id, &do_checks_http).await;
-                                continue;
-                            }
-                            Accepted => {
-                                updated_np1_factors = None; // Should update after successfully submitting a factor
-                            }
-                            _ => {
-                                error!("{id}: PRP, but factor of 2 was rejected for N+1 (id {np1_id})");
-                            }
-                        }
-                    }
-                    if let Some(nm1_id) = nm1_id_if_available
-                        && let Some(np1_id) = np1_id_if_available
-                    {
-                        if !nm1_known_to_divide_3 && !np1_known_to_divide_3 {
-                            // N wouldn't be PRP if it was a multiple of 3, so N-1 xor N+1 must be a multiple of 3
-                            match do_checks_http.report_numeric_factor(nm1_id, 3).await {
-                                AlreadyFullyFactored => {
-                                    info!("{id}: N-1 (ID {nm1_id}) is fully factored!");
-                                    prove_by_nm1(id, &do_checks_http).await;
-                                    continue;
-                                }
-                                Accepted => {
-                                    updated_nm1_factors = None; // Should update after successfully submitting a factor
-                                }
-                                _ => match do_checks_http.report_numeric_factor(np1_id, 3).await {
+                            if infos.len() == 2 && !infos[0].known_to_divide_3 && !infos[1].known_to_divide_3 {
+                                match do_checks_http.report_numeric_factor(infos[0].id, 3).await {
                                     AlreadyFullyFactored => {
-                                        info!("{id}: N+1 (ID {np1_id}) is fully factored!");
-                                        prove_by_np1(id, &do_checks_http).await;
-                                        continue;
+                                        info!(
+                                            "{id}: {} (ID {}) is fully factored!",
+                                            infos[0].parameter, infos[0].id
+                                        );
+                                        report_primality_proof(id, infos[0].parameter, do_checks_http.as_ref())
+                                            .await;
+                                        stopped_early = true;
                                     }
                                     Accepted => {
-                                        updated_np1_factors = None; // Should update after successfully submitting a factor
+                                        infos[0].factors = None;
                                     }
-                                    _ => {
-                                        error!(
-                                            "{id}: PRP, but factor of 3 was rejected for both N-1 (id {nm1_id}) and N+1 (id {np1_id})"
-                                        );
-                                    }
-                                },
-                            }
-                        }
-                        for (id, factors) in [(nm1_id, updated_nm1_factors), (np1_id, updated_np1_factors)] {
-                            let factors = if let Some(factors) = factors {
-                                factors
-                            } else {
-                                do_checks_http
-                                .known_factors_as_digits(Id(id), false, true)
-                                .await
-                                .factors
-                            };
-                            for factor in factors {
-                                if factor.as_str_non_numeric().is_some() {
-                                    graph::find_and_submit_factors(&mut do_checks_http, id, factor.to_unelided_string(), true)
-                                        .await;
+                                    _ => match do_checks_http.report_numeric_factor(infos[1].id, 3).await {
+                                        AlreadyFullyFactored => {
+                                            info!(
+                                                "{id}: {} (ID {}) is fully factored!",
+                                                infos[1].parameter, infos[1].id
+                                            );
+                                            report_primality_proof(id, infos[1].parameter, do_checks_http.as_ref())
+                                                .await;
+                                            stopped_early = true;
+                                        }
+                                        Accepted => {
+                                            infos[1].factors = None;
+                                        }
+                                        _ => {
+                                            error!(
+                                                "{id}: PRP, but factor of 3 was rejected for both N-1 (id {}) and N+1 (id {})",
+                                                infos[0].id, infos[1].id
+                                            );
+                                        }
+                                    },
                                 }
                             }
+                            if stopped_early {
+                                continue;
+                            }
+                            for info in infos {
+                                let factors = if let Some(factors) = info.factors {
+                                    factors
+                                } else {
+                                    do_checks_http
+                                        .known_factors_as_digits(Id(info.id), false, true)
+                                        .await
+                                        .factors
+                                };
+                                for factor in factors {
+                                    if !matches!(factor, Factor::Numeric(_)) {
+                                        graph::find_and_submit_factors(
+                                            do_checks_http.as_ref(),
+                                            info.id,
+                                            factor.to_unelided_string(),
+                                            true,
+                                        )
+                                        .await;
+                                    }
+                            }
                         }
+                    } else {
+                        continue;
                     }
                     let status_text = do_checks_http
                         .retrying_get_and_decode(
@@ -865,7 +858,7 @@ async fn main() -> anyhow::Result<()> {
                         error!("{id}: Failed to decode status for PRP: {status_text}");
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                            &mut do_checks_http,
+                            do_checks_http.as_ref(),
                             &mut c_receiver,
                             &mut c_filter,
                         )
@@ -913,7 +906,7 @@ async fn main() -> anyhow::Result<()> {
                             info!("{id}: Requeued PRP");
                             composites_while_waiting(
                                 Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                                &mut do_checks_http,
+                                do_checks_http.as_ref(),
                                 &mut c_receiver,
                                 &mut c_filter,
                             )
@@ -921,7 +914,7 @@ async fn main() -> anyhow::Result<()> {
                             break;
                         }
                         throttle_if_necessary(
-                            &mut do_checks_http,
+                            do_checks_http.as_ref(),
                             &mut c_receiver,
                             &mut bases_before_next_cpu_check,
                             true,
@@ -951,7 +944,7 @@ async fn main() -> anyhow::Result<()> {
                 c_task = c_receiver.recv() => {
                     let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
                     info!("{id}: Ready to check a C");
-                    check_composite(&mut do_checks_http, &mut c_filter, id, digits_or_expr, return_permit).await;
+                    check_composite(do_checks_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
                 }
             }
         }
@@ -959,7 +952,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
-    let mut u_http = http.clone();
+    let u_http = http.clone();
     let mut u_start = if u_digits.is_some() {
         0
     } else {
@@ -967,6 +960,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
+        let mut graph_tasks = JoinSet::new();
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
                 warn!("Queue U's task received shutdown signal; exiting");
@@ -997,29 +991,35 @@ async fn main() -> anyhow::Result<()> {
                 u_start = rng().random_range(0..=MAX_START);
             }
             for (u_id, digits_or_expr) in ids {
+                let digits_or_expr = digits_or_expr.to_owned();
                 if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                    graph_tasks.join_all().await;
                     return;
                 }
                 if u_filter.contains(&u_id) {
                     warn!("{u_id}: Skipping duplicate U");
                     continue;
                 }
-                if graph::find_and_submit_factors(
-                    &mut u_http,
-                    u_id,
-                    digits_or_expr.into(),
-                    false,
-                )
-                .await
-                {
-                    info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-                } else {
-                    let _ = u_filter.add(&u_id);
-                    if u_sender.send(u_id).await.is_ok() {
+                let _ = u_filter.add(&u_id);
+                while graph_tasks.len() >= 4 {
+                    let _ = graph_tasks.join_next().await;
+                }
+                let u_http_clone = u_http.clone();
+                let u_sender_clone = u_sender.clone();
+                graph_tasks.spawn(async move {
+                    if graph::find_and_submit_factors(
+                        u_http_clone.as_ref(),
+                        u_id,
+                        digits_or_expr.into(),
+                        false,
+                    )
+                    .await {
+                        info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
+                    } else if u_sender_clone.send(u_id).await.is_ok() {
                         info!("{u_id}: Queued U");
                     }
-                }
+                });
             }
         }
     }));
@@ -1079,7 +1079,7 @@ async fn main() -> anyhow::Result<()> {
         }
         if new_c_buffer_task {
             c_buffer_task =
-                queue_composites(&http, &c_sender, c_digits, &mut shutdown_receiver).await;
+                queue_composites(http.as_ref(), &c_sender, c_digits, &mut shutdown_receiver).await;
         }
     }
 }

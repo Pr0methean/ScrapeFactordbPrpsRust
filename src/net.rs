@@ -35,7 +35,6 @@ use std::mem::swap;
 use std::num::NonZeroU32;
 use std::os::unix::prelude::CommandExt;
 use std::process::{Command, exit};
-use std::sync::Arc;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -88,16 +87,16 @@ pub trait FactorDbClient {
         &self,
         bases_before_next_cpu_check: &mut usize,
     ) -> Option<ResourceLimits>;
-    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor>;
+    async fn try_get_expression_form(&self, entry_id: EntryId) -> Option<Factor>;
     async fn known_factors_as_digits<'a>(
-        &mut self,
+        &self,
         id: NumberSpecifier<'a>,
         include_ff: bool,
         get_digits_as_fallback: bool,
     ) -> ProcessedStatusApiResponse;
     fn cached_factors<'a>(&self, id: &'a NumberSpecifier<'a>)
     -> Option<ProcessedStatusApiResponse>;
-    fn invalidate_cached_factors(&mut self, id: Option<EntryId>, expression: &Factor);
+    fn invalidate_cached_factors(&self, id: Option<EntryId>, expression: &Factor);
     async fn try_report_factor<'a>(
         &self,
         u_id: NumberSpecifier<'a>,
@@ -116,19 +115,18 @@ pub trait FactorDbClientReadIdsAndExprs: FactorDbClient {
     -> impl Iterator<Item = (EntryId, &'a str)>;
 }
 
-#[derive(Clone)]
 pub struct RealFactorDbClient {
-    resources_regex: Arc<Regex>,
+    resources_regex: Regex,
     http: Client,
-    rate_limiter: Arc<DefaultDirectRateLimiter<StateInformationMiddleware>>,
-    requests_left_last_check: Arc<AtomicU32>,
+    rate_limiter: DefaultDirectRateLimiter<StateInformationMiddleware>,
+    requests_left_last_check: AtomicU32,
     requests_per_hour: u32,
-    request_semaphore: Arc<Semaphore>,
-    all_threads_blocked_until: Arc<AtomicInstant>,
+    request_semaphore: Semaphore,
+    all_threads_blocked_until: AtomicInstant,
     shutdown_receiver: Monitor,
-    id_and_expr_regex: Arc<Regex>,
-    digits_fallback_regex: Arc<Regex>,
-    expression_form_regex: Arc<Regex>,
+    id_and_expr_regex: Regex,
+    digits_fallback_regex: Regex,
+    expression_form_regex: Regex,
     by_id_cache: BasicCache<EntryId, ProcessedStatusApiResponse>,
     by_expr_cache: BasicCache<Factor, ProcessedStatusApiResponse>,
     expression_form_cache: BasicCache<EntryId, Factor>,
@@ -177,17 +175,17 @@ impl RealFactorDbClient {
             .unwrap();
         let requests_left_last_check = AtomicU32::new(requests_per_hour.get());
         Self {
-            resources_regex: resources_regex.into(),
+            resources_regex,
             http,
-            rate_limiter: rate_limiter.into(),
+            rate_limiter,
             requests_per_hour: requests_per_hour.get(),
-            requests_left_last_check: requests_left_last_check.into(),
-            request_semaphore: Semaphore::const_new(max_concurrent_requests).into(),
-            all_threads_blocked_until: AtomicInstant::now().into(),
+            requests_left_last_check,
+            request_semaphore: Semaphore::const_new(max_concurrent_requests),
+            all_threads_blocked_until: AtomicInstant::now(),
             shutdown_receiver,
-            id_and_expr_regex: id_and_expr_regex.into(),
-            digits_fallback_regex: digits_fallback_regex.into(),
-            expression_form_regex: expression_form_regex.into(),
+            id_and_expr_regex,
+            digits_fallback_regex,
+            expression_form_regex,
             by_id_cache: create_cache(1 << 16),
             by_expr_cache: create_cache(1 << 12),
             expression_form_cache: create_cache(1 << 16),
@@ -257,15 +255,30 @@ impl RealFactorDbClient {
         retry_delay: Duration,
         alt_url_supplier: impl FnOnce() -> HipStr<'a>,
     ) -> Result<HipStr<'static>, HipStr<'static>> {
-        for _ in 0..MAX_RETRIES_WITH_FALLBACK {
-            if let Some(value) = self.try_get_and_decode(url).await {
-                return Ok(value);
-            }
-            sleep(retry_delay).await;
+        if let Some(value) = self
+            .retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES_WITH_FALLBACK)
+            .await
+        {
+            return Ok(value);
         }
         let alt_url = alt_url_supplier();
         warn!("Giving up on reaching {url} and falling back to {alt_url}");
         Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
+    }
+
+    async fn retrying_get_and_decode_internal(
+        &self,
+        url: &str,
+        retry_delay: Duration,
+        max_retries: usize,
+    ) -> Option<HipStr<'static>> {
+        for _ in 0..max_retries {
+            if let Some(value) = self.try_get_and_decode(url).await {
+                return Some(value);
+            }
+            sleep(retry_delay).await;
+        }
+        None
     }
 }
 
@@ -325,11 +338,11 @@ impl FactorDbClient for RealFactorDbClient {
     /// restarts the process if that request consistently fails.
     #[framed]
     async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> HipStr<'static> {
-        for _ in 0..MAX_RETRIES {
-            if let Some(value) = self.try_get_and_decode(url).await {
-                return value;
-            }
-            sleep(retry_delay).await;
+        if let Some(value) = self
+            .retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES)
+            .await
+        {
+            return value;
         }
         let mut shutdown_receiver = self.shutdown_receiver.clone();
         let mut raw_args = std::env::args_os();
@@ -383,7 +396,7 @@ impl FactorDbClient for RealFactorDbClient {
     }
     #[inline]
     #[framed]
-    async fn try_get_expression_form(&mut self, entry_id: EntryId) -> Option<Factor> {
+    async fn try_get_expression_form(&self, entry_id: EntryId) -> Option<Factor> {
         if entry_id <= MAX_ID_EQUAL_TO_VALUE {
             return Some(Factor::from(entry_id));
         }
@@ -408,7 +421,7 @@ impl FactorDbClient for RealFactorDbClient {
     #[inline]
     #[framed]
     async fn known_factors_as_digits<'a>(
-        &mut self,
+        &self,
         id: NumberSpecifier<'a>,
         include_ff: bool,
         get_digits_as_fallback: bool,
@@ -558,20 +571,17 @@ impl FactorDbClient for RealFactorDbClient {
                     Prime
                 }),
                 factors,
-                id: Numeric(entry_id).known_id(),
+                id: Some(entry_id),
             });
         }
         let cached = match id {
-            Id(id) => self
-                .by_id_cache
-                .get(id)
-                .or_else(|| {
-                    self.expression_form_cache
-                        .get(id)
-                        .and_then(|expr| self.by_expr_cache.get(expr))
-                })
-                .cloned(),
-            Expression(expr) => self.by_expr_cache.get(expr.as_ref()).cloned(),
+            Id(id) => self.by_id_cache.get(id).or_else(|| {
+                self.expression_form_cache
+                    .get(id)
+                    .as_ref()
+                    .and_then(|expr| self.by_expr_cache.get(expr))
+            }),
+            Expression(expr) => self.by_expr_cache.get(expr.as_ref()),
         };
         if cached.is_some() {
             info!("Factor cache hit for {id}");
@@ -579,7 +589,7 @@ impl FactorDbClient for RealFactorDbClient {
         cached
     }
 
-    fn invalidate_cached_factors(&mut self, id: Option<EntryId>, expression: &Factor) {
+    fn invalidate_cached_factors(&self, id: Option<EntryId>, expression: &Factor) {
         if let Some(id) = id {
             self.by_id_cache.remove(&id);
         }

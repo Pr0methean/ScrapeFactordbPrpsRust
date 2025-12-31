@@ -2,9 +2,8 @@ use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
-use crate::graph::EntryId;
 use crate::net::BigNumber;
-use crate::{MAX_ID_EQUAL_TO_VALUE, NumberLength, frame_sync, hash, write_bignum};
+use crate::{NumberLength, frame_sync, hash, write_bignum};
 use ahash::RandomState;
 use async_backtrace::location;
 use derivative::Derivative;
@@ -22,7 +21,7 @@ use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp::Ordering::{Equal, Greater, Less};
+use std::cmp::Ordering::{Greater, Less};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
@@ -613,7 +612,6 @@ fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
 
 #[derive(Derivative)]
 #[derivative(Clone, Debug, Hash, Eq)]
-#[repr(u8)]
 pub enum ComplexFactor {
     Divide {
         left: Factor,
@@ -649,10 +647,16 @@ impl PartialOrd for ComplexFactor {
 
 impl ComplexFactor {
     fn discriminant(&self) -> u8 {
-        // SAFETY: Because `Self` is marked `repr(u8)`, its layout is a `repr(C)` `union`
-        // between `repr(C)` structs, each of which has the `u8` discriminant as its first
-        // field, so we can read the discriminant without offsetting the pointer.
-        unsafe { *<*const _>::from(self).cast::<u8>() }
+        match self {
+            Divide { .. } => 0,
+            AddSub { .. } => 1,
+            Multiply { .. } => 2,
+            Power { .. } => 3,
+            Fibonacci(_) => 4,
+            Lucas(_) => 5,
+            Primorial(_) => 6,
+            Factorial(_) => 7,
+        }
     }
 }
 
@@ -766,7 +770,60 @@ pub enum Factor {
 
 impl PartialEq for ComplexFactor {
     fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Equal
+        match (self, other) {
+            (
+                AddSub {
+                    terms: (l1, r1),
+                    subtract: s1,
+                },
+                AddSub {
+                    terms: (l2, r2),
+                    subtract: s2,
+                },
+            ) => {
+                if s1 != s2 {
+                    return false;
+                }
+                l1 == l2 && r1 == r2 || (!s1 && l1 == r2 && r1 == l2)
+            }
+            (
+                Multiply {
+                    terms_hash: h1,
+                    terms: t1,
+                },
+                Multiply {
+                    terms_hash: h2,
+                    terms: t2,
+                },
+            ) => h1 == h2 && t1 == t2,
+            (
+                Divide {
+                    left: l1,
+                    right_hash: h1,
+                    right: r1,
+                },
+                Divide {
+                    left: l2,
+                    right_hash: h2,
+                    right: r2,
+                },
+            ) => h1 == h2 && r1.values().eq(r2.values()) && l1 == l2 && r1.keys().eq(r2.keys()),
+            (
+                Power {
+                    base: b1,
+                    exponent: e1,
+                },
+                Power {
+                    base: b2,
+                    exponent: e2,
+                },
+            ) => b1 == b2 && e1 == e2,
+            (Fibonacci(a), Fibonacci(b)) => a == b,
+            (Lucas(a), Lucas(b)) => a == b,
+            (Factorial(a), Factorial(b)) => a == b,
+            (Primorial(a), Primorial(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
@@ -969,16 +1026,6 @@ impl Factor {
     }
 
     #[inline(always)]
-    pub fn known_id(&self) -> Option<EntryId> {
-        if let Numeric(n) = self
-            && *n <= MAX_ID_EQUAL_TO_VALUE
-        {
-            Some(*n)
-        } else {
-            None
-        }
-    }
-    #[inline(always)]
     pub fn as_numeric(&self) -> Option<NumericFactor> {
         match self {
             Numeric(n) => Some(*n),
@@ -1044,15 +1091,6 @@ impl Factor {
                 Lucas(ref input) => format!("lucas({})", input.to_unelided_string()),
             }
             .into(),
-        }
-    }
-
-    #[inline(always)]
-    pub fn as_str_non_numeric(&self) -> Option<HipStr<'static>> {
-        match self {
-            Numeric(_) => None,
-            Factor::BigNumber(n) => Some(n.0.clone()),
-            _ => Some(self.to_string().into()),
         }
     }
 
@@ -2635,18 +2673,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                             0 => Some(2),
                             1 => Some(1),
                             185.. => None,
-                            n => {
-                                let mut a: NumericFactor = 2;
-                                let mut b: NumericFactor = 1;
-                                let mut result: NumericFactor = 0;
-
-                                for _ in 2..=n {
-                                    result = a + b;
-                                    a = b;
-                                    b = result;
-                                }
-                                Some(result)
-                            }
+                            n => Some(evaluate_linear_recurrence(2, 1, n)),
                         }
                     }
                     Fibonacci(ref term) => {
@@ -2655,17 +2682,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
                             0 => Some(0),
                             1 | 2 => Some(1),
                             186.. => None,
-                            n => {
-                                let mut a: NumericFactor = 1;
-                                let mut b: NumericFactor = 1;
-                                let mut result: NumericFactor = 0;
-                                for _ in 3..=n {
-                                    result = a + b;
-                                    a = b;
-                                    b = result;
-                                }
-                                Some(result)
-                            }
+                            n => Some(evaluate_linear_recurrence(1, 1, n)),
                         }
                     }
                     Factorial(ref term) => {
@@ -2749,6 +2766,23 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
             numeric
         }
     }
+}
+
+fn evaluate_linear_recurrence(
+    a_init: NumericFactor,
+    b_init: NumericFactor,
+    n: NumericFactor,
+) -> NumericFactor {
+    let mut a = a_init;
+    let mut b = b_init;
+    let mut result = 0;
+    let start = if a_init == 2 && b_init == 1 { 2 } else { 3 };
+    for _ in start..=n {
+        result = a + b;
+        a = b;
+        b = result;
+    }
+    result
 }
 
 #[inline(always)]
