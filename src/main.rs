@@ -54,9 +54,8 @@ use std::ops::Add;
 use std::panic;
 use std::process::exit;
 use std::sync::OnceLock;
-use std::sync::atomic::Ordering::{AcqRel, Acquire, Release};
-use std::sync::atomic::{AtomicBool, AtomicUsize};
-use tikv_jemallocator::Jemalloc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::{Acquire, Release};
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -65,15 +64,6 @@ use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
-
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
-
-// Configure jemalloc for profiling
-#[used]
-#[allow(non_upper_case_globals)]
-#[unsafe(export_name = "malloc_conf")]
-static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
@@ -469,8 +459,7 @@ async fn queue_composites(
     )
 }
 
-const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(1);
-static BACKTRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
+const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 #[framed]
@@ -510,10 +499,6 @@ async fn main() -> anyhow::Result<()> {
                     break;
                 }
                 _ = sleep_until(next_backtrace) => {
-                    let mut prof_ctl = jemalloc_pprof::PROF_CTL.as_ref().unwrap().lock().await;
-                    std::fs::write(
-                        format!("heap.profile.{}", BACKTRACE_COUNT.fetch_add(1, AcqRel)),
-                        prof_ctl.dump_pprof().unwrap()).unwrap();
                     info!("Task backtraces:\n{}", taskdump_tree(false));
                     info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
                     next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
@@ -522,6 +507,15 @@ async fn main() -> anyhow::Result<()> {
         }
         if let Err(e) = shutdown_sender.send(()) {
             error!("Error sending shutdown signal: {e}");
+        }
+        loop {
+            sleep_until(next_backtrace).await;
+            info!("Task backtraces:\n{}", taskdump_tree(false));
+            info!(
+                "Task backtraces with all tasks idle:\n{}",
+                taskdump_tree(true)
+            );
+            next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
         }
     });
 

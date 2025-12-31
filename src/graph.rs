@@ -1791,5 +1791,9 @@ pub mod tests {
         let expr = HipStr::from(String::from(EXPR));
 
         black_box(find_and_submit_factors(&http, ID, expr, false).await);
+        let mut prof_ctl = jemalloc_pprof::PROF_CTL.as_ref().unwrap().lock().await;
+        std::fs::write(
+            temp_dir().join("heap.profile.test_huge_u_memory_usage"),
+            prof_ctl.dump_pprof().unwrap()).unwrap();
     }
 }
