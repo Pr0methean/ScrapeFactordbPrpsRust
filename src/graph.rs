@@ -1283,26 +1283,19 @@ fn mark_fully_factored_internal(
     };
 
     // Recursively mark all known factors as fully factored
-    let known_factors: Vec<_> = neighbor_vids(&data.divisibility_graph, vid, Incoming)
-        .into_iter()
-        .filter(|(_, edge)| matches!(edge, Direct | Transitive))
-        .map(|(other_vid, _)| other_vid)
-        .collect();
-
-    for other_vid in known_factors {
-        mark_fully_factored_internal(other_vid, data, worklist);
-    }
-
-    if no_other_factors {
-        for other_vid in data.divisibility_graph
-            .vertices_by_id()
-            .filter(|factor_vid| *factor_vid != vid) {
-            if data.get_edge(other_vid, vid).is_none() {
-                worklist.insert(WorkItem::RuleOut {
-                    nonfactor: other_vid,
+    for other_factor_vid in data.divisibility_graph
+        .vertices_by_id()
+        .filter(|factor_vid| *factor_vid != vid)
+        .collect::<Vec<_>>().into_iter() {
+        match data.get_edge(other_factor_vid, vid) {
+            Some(Direct | Transitive) => mark_fully_factored_internal(other_factor_vid, data, worklist),
+            None => if no_other_factors { worklist.insert(
+                WorkItem::RuleOut {
+                    nonfactor: other_factor_vid,
                     dest: vid,
                 });
-            }
+            },
+            _ => {}
         }
     }
 }
