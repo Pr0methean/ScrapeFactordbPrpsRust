@@ -130,12 +130,14 @@ jobs:
             echo "No unfinished yafu processes found"
           fi
       - name: Upload any failed submissions
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: Failed submissions
           path: 'failed-*.csv'
           if-no-files-found: ignore
       - name: Upload memory profiles
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: Memory profiles
