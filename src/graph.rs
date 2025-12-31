@@ -280,13 +280,6 @@ impl FactorData {
         }
     }
 
-    pub fn vertex_ids_except(&self, root_vid: VertexId) -> Vec<VertexId> {
-        self.divisibility_graph
-            .vertices_by_id()
-            .filter(|factor_vid| *factor_vid != root_vid)
-            .collect()
-    }
-
     pub fn is_known_factor(&mut self, factor_vid: VertexId, composite_vid: VertexId) -> bool {
         let factor_vid = self.resolve_vid(factor_vid);
         let composite_vid = self.resolve_vid(composite_vid);
@@ -1265,10 +1258,10 @@ fn mark_fully_factored_internal(
     data: &mut FactorData,
     worklist: &mut BTreeSet<WorkItem>,
 ) {
-    if data.facts(vid).is_some_and(|f| f.is_known_fully_factored()) {
+    let facts = data.facts_mut(vid);
+    if facts.is_known_fully_factored() {
         return;
     }
-    let facts = data.facts_mut(vid);
     facts.checked_for_listed_algebraic = true;
     facts.checked_in_factor_finder = true;
     facts.expression_form_checked_in_factor_finder = true;
@@ -1296,24 +1289,19 @@ fn mark_fully_factored_internal(
     };
 
     // Recursively mark all known factors as fully factored
-    let known_factors: Vec<_> = neighbor_vids(&data.divisibility_graph, vid, Incoming)
-        .into_iter()
-        .filter(|(_, edge)| matches!(edge, Direct | Transitive))
-        .map(|(other_vid, _)| other_vid)
-        .collect();
-
-    for other_vid in known_factors {
-        mark_fully_factored_internal(other_vid, data, worklist);
-    }
-
-    if no_other_factors {
-        for other_vid in data.vertex_ids_except(vid) {
-            if data.get_edge(other_vid, vid).is_none() {
-                worklist.insert(WorkItem::RuleOut {
-                    nonfactor: other_vid,
+    for other_factor_vid in data.divisibility_graph
+        .vertices_by_id()
+        .filter(|factor_vid| *factor_vid != vid)
+        .collect::<Vec<_>>().into_iter() {
+        match data.get_edge(other_factor_vid, vid) {
+            Some(Direct | Transitive) => mark_fully_factored_internal(other_factor_vid, data, worklist),
+            None => if no_other_factors { worklist.insert(
+                WorkItem::RuleOut {
+                    nonfactor: other_factor_vid,
                     dest: vid,
                 });
-            }
+            },
+            _ => {}
         }
     }
 }
