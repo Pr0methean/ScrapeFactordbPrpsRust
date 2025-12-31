@@ -135,3 +135,9 @@ jobs:
           name: Failed submissions
           path: 'failed-*.csv'
           if-no-files-found: ignore
+      - name: Upload memory profiles
+        uses: actions/upload-artifact@v6
+        with:
+          name: Memory profiles
+          path: 'heap.profile.*'
+          if-no-files-found: ignore

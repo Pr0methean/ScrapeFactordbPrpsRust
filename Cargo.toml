@@ -39,6 +39,8 @@ peg = "0.8"
 yamaquasi = { git = "https://github.com/remyoudompheng/yamaquasi.git" }
 derivative = "2.2"
 ahash = "0.8"
+tikv-jemallocator = { version = "0.5", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+jemalloc_pprof = "0.4"
 
 [dev-dependencies]
 mockall = "0.14"
