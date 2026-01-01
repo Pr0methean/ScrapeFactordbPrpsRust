@@ -466,7 +466,7 @@ async fn queue_composites(
     )
 }
 
-const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
+const STATS_INTERVAL: Duration = Duration::from_mins(1);
 
 pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sysinfo::System) {
     info!("Allocation stats: {:#?}", reg.change());
@@ -504,7 +504,7 @@ async fn main() -> anyhow::Result<()> {
             // Create a channel that will never receive a signal
             let (_sender, sigterm) = oneshot::channel();
         }
-        let mut next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+        let mut next_backtrace = Instant::now() + STATS_INTERVAL;
         info!("Allocation stats at start of main loop: {:#?}", reg.change());
         loop {
             select! {
@@ -519,7 +519,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 _ = sleep_until(next_backtrace) => {
                     log_stats(&mut reg, &mut sys);
-                    next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+                    next_backtrace = Instant::now() + STATS_INTERVAL;
                 }
             }
         }
@@ -530,7 +530,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             sleep_until(next_backtrace).await;
             log_stats(&mut reg, &mut sys);
-            next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+            next_backtrace = Instant::now() + STATS_INTERVAL;
         }
     });
 
