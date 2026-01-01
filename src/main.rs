@@ -518,7 +518,6 @@ async fn main() -> anyhow::Result<()> {
                     break;
                 }
                 _ = sleep_until(next_backtrace) => {
-                    log_stats(&mut reg, &mut sys);
                     next_backtrace = Instant::now() + STATS_INTERVAL;
                 }
             }
@@ -1039,6 +1038,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }));
+
+    log_stats(&mut reg, &mut sys);
 
     // Queue C's and PRP's
     'queue_tasks: loop {
