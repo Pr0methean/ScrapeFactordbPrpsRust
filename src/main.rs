@@ -16,6 +16,8 @@ mod graph;
 mod monitor;
 mod net;
 
+use sysinfo::MemoryRefreshKind;
+use sysinfo::RefreshKind;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
@@ -24,6 +26,7 @@ use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
 use ahash::RandomState;
 use alloc::sync::Arc;
+use std::alloc::{GlobalAlloc, System};
 use async_backtrace::taskdump_tree;
 use async_backtrace::ඞ::Frame;
 use async_backtrace::{Location, framed};
@@ -56,6 +59,7 @@ use std::process::exit;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -464,7 +468,7 @@ async fn queue_composites(
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
-fn log_stats(reg: &mut stats_alloc::Region, sys: &mut sysinfo::System) {
+pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sysinfo::System) {
     info!("Allocation stats: {:#?}", reg.change());
     sys.refresh_all();
     info!("System used memory: {}", sys.used_memory());
@@ -476,8 +480,8 @@ fn log_stats(reg: &mut stats_alloc::Region, sys: &mut sysinfo::System) {
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
-    let reg = stats_alloc::Region::new(&GLOBAL);
-    let mut sys = sysinfo::System::new_with_specifics(RefreshKind::memory());
+    let mut reg = stats_alloc::Region::new(&GLOBAL);
+    let mut sys = sysinfo::System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();

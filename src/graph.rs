@@ -1427,15 +1427,17 @@ async fn add_factors_to_graph(
 
 #[cfg(test)]
 pub mod tests {
-    use nonzero::nonzero;
+    use std::hint::black_box;
+use sysinfo::{MemoryRefreshKind, RefreshKind};
+use crate::GLOBAL;
+use nonzero::nonzero;
     use rand::RngCore;
     use rand::rng;
     use std::env::temp_dir;
     use std::fs::File;
-    use std::hint::black_box;
     use std::iter::{once, repeat};
 
-    use crate::FAILED_U_SUBMISSIONS_OUT;
+    use crate::{log_stats, FAILED_U_SUBMISSIONS_OUT};
     use crate::ReportFactorResult;
     use crate::algebraic::Factor;
     use crate::graph::{EntryId, NumericFactor};
@@ -1759,7 +1761,10 @@ pub mod tests {
             }
         }
 
+        simple_log::console("info").unwrap();
         let mut http = MockFactorDbClient::new();
+        let mut sys = sysinfo::System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
+
         http.expect_known_factors_as_digits()
             .returning(|_, _, _| ProcessedStatusApiResponse {
                 status: Some(Unknown),
@@ -1789,11 +1794,9 @@ pub mod tests {
 
         // ensure expr uses heap space
         let expr = HipStr::from(String::from(EXPR));
-
+        let mut reg = stats_alloc::Region::new(&GLOBAL);
         black_box(find_and_submit_factors(&http, ID, expr, false).await);
-        let mut prof_ctl = jemalloc_pprof::PROF_CTL.as_ref().unwrap().lock().await;
-        std::fs::write(
-            temp_dir().join("heap.profile.test_huge_u_memory_usage"),
-            prof_ctl.dump_pprof().unwrap()).unwrap();
+
+        log_stats(&mut reg, &mut sys);
     }
 }
