@@ -65,6 +65,9 @@ use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
+#[global_allocator]
+static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
+
 static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
 
@@ -461,9 +464,20 @@ async fn queue_composites(
 
 const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
 
+fn log_stats(reg: &mut stats_alloc::Region, sys: &mut sysinfo::System) {
+    info!("Allocation stats: {:#?}", reg.change());
+    sys.refresh_all();
+    info!("System used memory: {}", sys.used_memory());
+    info!("System available memory: {}", sys.available_memory());
+    info!("Task backtraces:\n{}", taskdump_tree(false));
+    info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+}
+
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
+    let reg = stats_alloc::Region::new(&GLOBAL);
+    let mut sys = sysinfo::System::new_with_specifics(RefreshKind::memory());
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
@@ -487,6 +501,7 @@ async fn main() -> anyhow::Result<()> {
             let (_sender, sigterm) = oneshot::channel();
         }
         let mut next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+        info!("Allocation stats at start of main loop: {:#?}", reg.change());
         loop {
             select! {
                 biased;
@@ -499,8 +514,7 @@ async fn main() -> anyhow::Result<()> {
                     break;
                 }
                 _ = sleep_until(next_backtrace) => {
-                    info!("Task backtraces:\n{}", taskdump_tree(false));
-                    info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+                    log_stats(&mut reg, &mut sys);
                     next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
                 }
             }
@@ -508,13 +522,10 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = shutdown_sender.send(()) {
             error!("Error sending shutdown signal: {e}");
         }
+        // Continue logging stats until other tasks exit
         loop {
             sleep_until(next_backtrace).await;
-            info!("Task backtraces:\n{}", taskdump_tree(false));
-            info!(
-                "Task backtraces with all tasks idle:\n{}",
-                taskdump_tree(true)
-            );
+            log_stats(&mut reg, &mut sys);
             next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
         }
     });
