@@ -11,7 +11,9 @@ use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
-use num_modular::{FixedMersenneInt, ModularInteger, MontgomeryInt, ReducedInt, Reducer, VanillaInt};
+use num_modular::{
+    FixedMersenneInt, ModularInteger, MontgomeryInt, ReducedInt, Reducer, VanillaInt,
+};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
@@ -1446,7 +1448,9 @@ impl Factor {
                         return false;
                     }
                     if let Some(right_exponent) = right.get(self)
-                        && !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))].into())
+                        && !Factor::multiply(
+                            [(self.clone(), right_exponent.saturating_add(1))].into(),
+                        )
                         .may_be_proper_divisor_of(left)
                     {
                         return false;
@@ -1455,10 +1459,10 @@ impl Factor {
                         return false;
                     }
                 }
-                Multiply {
-                    ref terms, ..
-                } => if matches!(terms.get(self), Some(x) if *x != 0) {
-                    return true;
+                Multiply { ref terms, .. } => {
+                    if matches!(terms.get(self), Some(x) if *x != 0) {
+                        return true;
+                    }
                 }
                 _ => {}
             }
@@ -2338,7 +2342,10 @@ pub(crate) fn estimate_log10(expr: &Factor) -> (NumberLength, NumberLength) {
     }
 }
 
-fn modulo_as_reduced<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, reducer: &ReducedInt<NumericFactor, T>) -> Option<ReducedInt<NumericFactor, T>> {
+fn modulo_as_reduced<T: Reducer<NumericFactor> + std::clone::Clone>(
+    expr: &Factor,
+    reducer: &ReducedInt<NumericFactor, T>,
+) -> Option<ReducedInt<NumericFactor, T>> {
     if let Some(eval) = evaluate_as_numeric(expr) {
         Some(reducer.convert(eval))
     } else {
@@ -2381,12 +2388,16 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
     // FixedMersenneInt doesn't require that p or 2^p-1 actually be prime, only that the latter
     // have no factors smaller than 17. This usually means p must be prime; the exceptions are
     // 25, 35, 49, 55, 65, 77, 85, 95, 115, 121, 125
-    with_mersenne_reducers!(5, 7, 11, 13, 17, 19, 23, 25, 29, 31, 35, 37, 41, 43, 47, 49, 53,
-        55, 59, 61, 65, 67, 71, 73, 77, 79, 83, 85, 89, 91, 95, 97, 101, 103, 107, 109, 113,
-        115, 119, 121, 125, 127)
+    with_mersenne_reducers!(
+        5, 7, 11, 13, 17, 19, 23, 25, 29, 31, 35, 37, 41, 43, 47, 49, 53, 55, 59, 61, 65, 67, 71,
+        73, 77, 79, 83, 85, 89, 91, 95, 97, 101, 103, 107, 109, 113, 115, 119, 121, 125, 127
+    )
 }
 
-fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, reducer: &ReducedInt<NumericFactor, T>) -> Option<ReducedInt<NumericFactor, T>> {
+fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
+    expr: &Factor,
+    reducer: &ReducedInt<NumericFactor, T>,
+) -> Option<ReducedInt<NumericFactor, T>> {
     match *expr {
         Numeric(n) => Some(reducer.convert(n)),
         Factor::BigNumber { .. } | ElidedNumber(_) => {
@@ -2408,17 +2419,13 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 // right is often simpler, so evaluate it first
                 let right = modulo_as_reduced(right, reducer)?;
                 let left = modulo_as_reduced(left, reducer)?;
-                Some(if subtract {
-                    left - right
-                } else {
-                    left + right
-                })
+                Some(if subtract { left - right } else { left + right })
             }
             Multiply { ref terms, .. } => {
                 let mut product = reducer.convert(1);
                 for (term, exponent) in terms.iter() {
-                    product = product *
-                        modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
+                    product = product
+                        * modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
                 }
                 Some(product)
             }
@@ -2429,7 +2436,8 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             } => {
                 let mut result = modulo_as_reduced(left, reducer)?;
                 for (term, exponent) in right.iter() {
-                    let term_mod = modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
+                    let term_mod =
+                        modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
                     result = result * term_mod.inv()?;
                 }
                 Some(result)
@@ -3491,7 +3499,11 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, div_exact, estimate_log10, factor_power, fibonacci_factors, lucas_factors, multiset_intersection, multiset_union, power_multiset, modulo_as_numeric_no_evaluate};
+    use crate::algebraic::{
+        ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
+        div_exact, estimate_log10, factor_power, fibonacci_factors, lucas_factors,
+        modulo_as_numeric_no_evaluate, multiset_intersection, multiset_union, power_multiset,
+    };
     use ahash::RandomState;
     use alloc::collections::BTreeSet;
     use itertools::Itertools;
