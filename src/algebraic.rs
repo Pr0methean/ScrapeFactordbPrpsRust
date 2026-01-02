@@ -1335,9 +1335,16 @@ impl Factor {
         {
             return false;
         }
+        let other_numeric = evaluate_as_numeric(other);
+        if other_numeric == Some(0) || other_numeric == Some(1) {
+            return false;
+        }
         let self_numeric = evaluate_as_numeric(self);
+        if self_numeric == Some(0) {
+            return false;
+        }
         if let Some(n) = self_numeric {
-            if let Some(other_n) = evaluate_as_numeric(other) {
+            if let Some(other_n) = other_numeric {
                 return other_n > n && other_n.is_multiple_of(n);
             } else if let Some(m) = modulo_as_numeric_no_evaluate(other, n)
                 && m != 0
@@ -1473,7 +1480,6 @@ impl Factor {
             .contains(&other_last_digit)
         } else {
             if self_numeric.is_none() {
-                let other_numeric = evaluate_as_numeric(other);
                 for prime in SMALL_PRIMES {
                     if let Some(m) = modulo_as_numeric_no_evaluate(self, prime.into())
                         && let Some(other_m) = if let Some(other_n) = other_numeric {
@@ -2436,7 +2442,7 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                     match modinv(term_mod, modulus) {
                         Some(inv) => result = result.mulm(inv, &modulus),
                         None => {
-                            if let Some(new_result) = result.div_exact(term_mod) {
+                            if term_mod != 0 && let Some(new_result) = result.div_exact(term_mod) {
                                 result = new_result;
                             } else {
                                 return None;
@@ -3476,8 +3482,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 if exponent != 0
                     && factor != *expr
                     && factor.as_numeric() != Some(1)
-                    && factor.may_be_proper_divisor_of(expr)
-                    && (simplified == *expr || factor.may_be_proper_divisor_of(&simplified))
+                    && factor.may_be_proper_divisor_of(expr) && (simplified == *expr || factor.may_be_proper_divisor_of(&simplified))
                 {
                     let f = simplify(&factor);
                     if let Complex { inner: ref c, .. } = f {
