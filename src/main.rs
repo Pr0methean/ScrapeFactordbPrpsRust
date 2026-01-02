@@ -58,6 +58,7 @@ use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use nonzero::nonzero;
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
 use tokio::signal::ctrl_c;
@@ -100,7 +101,9 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: usize = 32;
-const MIN_DIGITS_IN_PRP: NumberLength = 300;
+const PRP_MIN_DIGITS: NonZero<NumberLength> = nonzero!(300u32);
+const PRP_MAX_DIGITS: NonZero<NumberLength> = nonzero!(199_999u32);
+const PRP_MAX_DIGITS_FOR_START_OFFSET: NumberLength = 30489;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 256;
@@ -516,9 +519,12 @@ async fn main() -> anyhow::Result<()> {
     let mut u_digits = std::env::var("U_DIGITS")
         .ok()
         .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
-    let mut prp_start = std::env::var("PRP_START")
+    let prp_start = std::env::var("PRP_START")
         .ok()
         .and_then(|s| s.parse::<EntryId>().ok());
+    let mut prp_digits = std::env::var("PRP_DIGITS")
+        .ok()
+        .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
     if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<EntryId>()?;
         if c_digits.is_none() {
@@ -538,8 +544,9 @@ async fn main() -> anyhow::Result<()> {
                 )?;
             u_digits = Some(NumberLength::try_from(u_digits_value)?.try_into()?);
         }
-        if prp_start.is_none() {
-            prp_start = Some((run_number * 9973) % (MAX_START + 1));
+        if prp_digits.is_none() {
+            prp_digits = Some(PRP_MIN_DIGITS.saturating_add(NumberLength::try_from(
+                (run_number * 9973) % EntryId::from(PRP_MAX_DIGITS.get() - PRP_MIN_DIGITS.get() + 1))?));
         }
         info!("Run number is {run_number}");
     }
@@ -558,7 +565,15 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Duration::from_mins(3)
     };
-    let mut prp_start = prp_start.unwrap_or_else(|| rng().random_range(0..=MAX_START));
+    let mut prp_digits = prp_digits.unwrap_or_else(||
+        rng().random_range(PRP_MIN_DIGITS.get()..=PRP_MAX_DIGITS.get()).try_into().unwrap());
+    let mut prp_start = prp_start.unwrap_or_else(||
+        if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
+            0
+        } else {
+            rng().random_range(0..=MAX_START)
+        }
+    );
     info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
     let mut max_concurrent_requests = 2usize;
@@ -1073,7 +1088,7 @@ async fn main() -> anyhow::Result<()> {
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
                 let mut results_text = None;
                 while results_text.is_none() && results_per_page > 0 {
-                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}");
+                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={prp_digits}&perpage={results_per_page}&start={prp_start}");
                     let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
                         sleep(SEARCH_RETRY_DELAY).await;
                         results_per_page >>= 1;
@@ -1095,10 +1110,19 @@ async fn main() -> anyhow::Result<()> {
                     prp_permit.send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
                 }
-                prp_start += PRP_RESULTS_PER_PAGE as EntryId;
-                if prp_start > MAX_START {
-                    info!("Restarting PRP search: reached maximum starting index");
+                if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
+                    prp_digits = (prp_digits.get() + 1).try_into().unwrap();
+                    if prp_digits > PRP_MAX_DIGITS {
+                        prp_digits = PRP_MIN_DIGITS;
+                    }
                     prp_start = 0;
+                } else {
+                    prp_start += PRP_RESULTS_PER_PAGE as EntryId;
+                    if prp_start > MAX_START {
+                        info!("Restarting PRP search: reached maximum starting index");
+                        prp_start = 0;
+                        prp_digits = (prp_digits.get() + 1).try_into().unwrap();
+                    }
                 }
             }
         }
