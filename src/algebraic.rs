@@ -3495,8 +3495,10 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                             _ => {}
                         }
                     }
-                    if f == factor || (f.may_be_proper_divisor_of(expr) &&
-                        (*expr == simplified || f.may_be_proper_divisor_of(&simplified))) {
+                    if f == factor
+                        || (f.may_be_proper_divisor_of(expr)
+                            && (*expr == simplified || f.may_be_proper_divisor_of(&simplified)))
+                    {
                         factors.insert(f);
                     }
                 }
