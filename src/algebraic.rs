@@ -1139,7 +1139,14 @@ impl Factor {
         if self == other {
             return false;
         }
-        if let Some(n) = evaluate_as_numeric(self) {
+        if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
+            && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
+            && log10_self_lower > log10_other_upper
+        {
+            return false;
+        }
+        let self_numeric = evaluate_as_numeric(self);
+        if let Some(n) = self_numeric {
             if let Some(other_n) = evaluate_as_numeric(other) {
                 return other_n > n && other_n.is_multiple_of(n);
             } else if let Some(m) = modulo_as_numeric(other, n)
@@ -1147,12 +1154,6 @@ impl Factor {
             {
                 return false;
             }
-        }
-        if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
-            && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
-            && log10_self_lower > log10_other_upper
-        {
-            return false;
         }
         match *self {
             Factor::BigNumber(_) => match *other {
@@ -1281,6 +1282,15 @@ impl Factor {
             }
             .contains(&other_last_digit)
         } else {
+            if self_numeric.is_none() {
+                for prime in SMALL_PRIMES {
+                    if let Some(m) = modulo_as_numeric(self, prime.into())
+                        && let Some(other_m) = modulo_as_numeric(other, prime.into())
+                        && (m != 0) ^ (other_m != 0) {
+                        return false;
+                    }
+                }
+            }
             true
         }
     }
