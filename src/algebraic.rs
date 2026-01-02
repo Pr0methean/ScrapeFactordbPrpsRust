@@ -11,7 +11,7 @@ use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
-use num_modular::{ModularInteger, Montgomery, ReducedInt, Reducer, Vanilla};
+use num_modular::{FixedMersenneInt, ModularInteger, MontgomeryInt, ReducedInt, Reducer, VanillaInt};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
@@ -2338,39 +2338,50 @@ pub(crate) fn estimate_log10(expr: &Factor) -> (NumberLength, NumberLength) {
     }
 }
 
-fn modulo_as_reduced<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, modulus: NumericFactor) -> Option<ReducedInt<NumericFactor, T>> {
+fn modulo_as_reduced<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, reducer: &ReducedInt<NumericFactor, T>) -> Option<ReducedInt<NumericFactor, T>> {
+    if let Some(eval) = evaluate_as_numeric(expr) {
+        Some(reducer.convert(eval))
+    } else {
+        modulo_as_reduced_no_evaluate(expr, reducer)
+    }
+}
+
+fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
+    macro_rules! with_reducer {
+        ($reducer:expr) => {
+            modulo_as_reduced_no_evaluate(expr, &$reducer).map(|monty| monty.residue())
+        };
+    }
+
     match modulus {
         0 => {
             warn!("Attempted to evaluate {expr} modulo 0");
             None
         }
-        1 => Some(ReducedInt::new(0, &1)),
-        _ => {
-            if let Some(eval) = evaluate_as_numeric(expr) {
-                Some(ReducedInt::new(eval, &modulus))
-            } else {
-                modulo_as_reduced_no_evaluate(expr, modulus)
-            }
+        1 => Some(0),
+        3 => with_reducer!(FixedMersenneInt::<2, 1>::new(0, &3)),
+        7 => with_reducer!(FixedMersenneInt::<3, 1>::new(0, &7)),
+        15 => with_reducer!(FixedMersenneInt::<4, 1>::new(0, &15)),
+        31 => with_reducer!(FixedMersenneInt::<5, 1>::new(0, &31)),
+        63 => with_reducer!(FixedMersenneInt::<6, 1>::new(0, &63)),
+        127 => with_reducer!(FixedMersenneInt::<7, 1>::new(0, &127)),
+        _ => if !modulus.is_multiple_of(2) {
+            with_reducer!(MontgomeryInt::new(0, &modulus))
+        } else {
+            with_reducer!(VanillaInt::new(0, &modulus))
         }
     }
 }
 
-fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
-    if !modulus.is_multiple_of(2) {
-        modulo_as_reduced_no_evaluate::<Montgomery<_>>(expr, modulus).map(|monty| monty.residue())
-    } else {
-        modulo_as_reduced_no_evaluate::<Vanilla<_>>(expr, modulus).map(|reduced| reduced.residue())
-    }
-}
-
-fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, modulus: NumericFactor) -> Option<ReducedInt<NumericFactor, T>> {
+fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, reducer: &ReducedInt<NumericFactor, T>) -> Option<ReducedInt<NumericFactor, T>> {
     match *expr {
-        Numeric(n) => Some(ReducedInt::new(n, &modulus)),
+        Numeric(n) => Some(reducer.convert(n)),
         Factor::BigNumber { .. } | ElidedNumber(_) => {
+            let modulus = reducer.modulus();
             if (modulus == 2 || modulus == 5)
                 && let Some(last_digit) = expr.last_digit()
             {
-                Some(ReducedInt::new(last_digit as NumericFactor, &modulus))
+                Some(reducer.convert(last_digit as NumericFactor))
             } else {
                 None
             }
@@ -2382,8 +2393,8 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 subtract,
             } => {
                 // right is often simpler, so evaluate it first
-                let right = modulo_as_reduced(right, modulus)?;
-                let left = modulo_as_reduced(left, modulus)?;
+                let right = modulo_as_reduced(right, reducer)?;
+                let left = modulo_as_reduced(left, reducer)?;
                 Some(if subtract {
                     left - right
                 } else {
@@ -2391,10 +2402,10 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 })
             }
             Multiply { ref terms, .. } => {
-                let mut product = ReducedInt::new(1, &modulus);
+                let mut product = reducer.convert(1);
                 for (term, exponent) in terms.iter() {
                     product = product *
-                        modulo_as_reduced(term, modulus)?.pow(&NumericFactor::from(*exponent));
+                        modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
                 }
                 Some(product)
             }
@@ -2403,9 +2414,9 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
                 ref right,
                 ..
             } => {
-                let mut result = modulo_as_reduced(left, modulus)?;
+                let mut result = modulo_as_reduced(left, reducer)?;
                 for (term, exponent) in right.iter() {
-                    let term_mod = modulo_as_reduced(term, modulus)?.pow(&NumericFactor::from(*exponent));
+                    let term_mod = modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
                     result = result * term_mod.inv()?;
                 }
                 Some(result)
@@ -2416,36 +2427,37 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             } => {
                 // Exponent is usually simpler, so evaluate it first
                 let exp = evaluate_as_numeric(exponent)?;
-                let base_mod = modulo_as_reduced(base, modulus)?;
+                let base_mod = modulo_as_reduced(base, reducer)?;
                 Some(base_mod.pow(&exp))
             }
             Fibonacci(ref term) => {
                 let term = evaluate_as_numeric(term)?;
-                Some(ReducedInt::new(pisano(term, vec![0, 1, 1], modulus), &modulus))
+                Some(reducer.convert(pisano(term, vec![0, 1, 1], reducer.modulus())))
             }
             Lucas(ref term) => {
                 let term = evaluate_as_numeric(term)?;
-                Some(ReducedInt::new(pisano(term, vec![2, 1], modulus), &modulus))
+                Some(reducer.convert(pisano(term, vec![2, 1], reducer.modulus())))
             }
             Factorial(ref term) => {
                 let term = evaluate_as_numeric(term)?;
+                let modulus = reducer.modulus();
                 if term >= modulus {
-                    return Some(ReducedInt::new(0, &modulus));
+                    return Some(reducer.convert(0));
                 }
                 if term == modulus - 1 {
                     // Wilson's theorem
-                    return Some(if is_prime(modulus) {
-                        ReducedInt::new(term, &modulus)
+                    return Some(reducer.convert(if is_prime(modulus) {
+                        term
                     } else if modulus == 4 {
-                        ReducedInt::new(2, &4)
+                        2
                     } else {
-                        ReducedInt::new(0, &modulus)
-                    });
+                        0
+                    }));
                 }
                 let mut result = ReducedInt::new(1, &modulus);
                 for i in 2..=term {
                     result = result * i;
-                    if result.residue() == 0 {
+                    if result.is_zero() {
                         break;
                     }
                 }
@@ -2453,14 +2465,15 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             }
             Primorial(ref term) => {
                 let term = evaluate_as_numeric(term)?;
+                let modulus = reducer.modulus();
                 if term >= modulus && (is_prime(term) || is_prime(modulus)) {
-                    return Some(ReducedInt::new(0, &modulus));
+                    return Some(reducer.convert(0));
                 }
                 let mut result = ReducedInt::new(1, &modulus);
                 for i in 2..=term {
                     if is_prime(i) {
                         result = result * i;
-                        if result.residue() == 0 {
+                        if result.is_zero() {
                             break;
                         }
                     }
