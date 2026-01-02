@@ -16,8 +16,6 @@ mod graph;
 mod monitor;
 mod net;
 
-use sysinfo::MemoryRefreshKind;
-use sysinfo::RefreshKind;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
 use crate::algebraic::Factor;
@@ -26,7 +24,6 @@ use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
 use ahash::RandomState;
 use alloc::sync::Arc;
-use std::alloc::{GlobalAlloc, System};
 use async_backtrace::taskdump_tree;
 use async_backtrace::ඞ::Frame;
 use async_backtrace::{Location, framed};
@@ -46,6 +43,8 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};
+use std::alloc::{GlobalAlloc, System};
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
@@ -59,7 +58,8 @@ use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
+use sysinfo::MemoryRefreshKind;
+use sysinfo::RefreshKind;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -474,14 +474,19 @@ pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sys
     info!("System used memory: {}", sys.used_memory());
     info!("System available memory: {}", sys.available_memory());
     info!("Task backtraces:\n{}", taskdump_tree(false));
-    info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
+    info!(
+        "Task backtraces with all tasks idle:\n{}",
+        taskdump_tree(true)
+    );
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
     let mut reg = stats_alloc::Region::new(GLOBAL);
-    let mut sys = sysinfo::System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
+    let mut sys = sysinfo::System::new_with_specifics(
+        RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
+    );
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     simple_log::console("info").unwrap();
 
@@ -489,8 +494,11 @@ async fn main() -> anyhow::Result<()> {
         let sigint = Box::pin(ctrl_c());
         #[cfg(unix)]
         {
-            (sigint, signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("Failed to create SIGTERM signal stream"))
+            (
+                sigint,
+                signal::unix::signal(signal::unix::SignalKind::terminate())
+                    .expect("Failed to create SIGTERM signal stream"),
+            )
         }
         #[cfg(not(unix))]
         {

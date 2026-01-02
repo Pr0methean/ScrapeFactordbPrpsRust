@@ -1283,18 +1283,25 @@ fn mark_fully_factored_internal(
     };
 
     // Recursively mark all known factors as fully factored
-    for other_factor_vid in data.divisibility_graph
+    for other_factor_vid in data
+        .divisibility_graph
         .vertices_by_id()
         .filter(|factor_vid| *factor_vid != vid)
-        .collect::<Vec<_>>().into_iter() {
+        .collect::<Vec<_>>()
+        .into_iter()
+    {
         match data.get_edge(other_factor_vid, vid) {
-            Some(Direct | Transitive) => mark_fully_factored_internal(other_factor_vid, data, worklist),
-            None => if no_other_factors { worklist.insert(
-                WorkItem::RuleOut {
-                    nonfactor: other_factor_vid,
-                    dest: vid,
-                });
-            },
+            Some(Direct | Transitive) => {
+                mark_fully_factored_internal(other_factor_vid, data, worklist)
+            }
+            None => {
+                if no_other_factors {
+                    worklist.insert(WorkItem::RuleOut {
+                        nonfactor: other_factor_vid,
+                        dest: vid,
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -1427,17 +1434,16 @@ async fn add_factors_to_graph(
 
 #[cfg(test)]
 pub mod tests {
-    use std::hint::black_box;
-use sysinfo::{MemoryRefreshKind, RefreshKind};
-use crate::GLOBAL;
-use nonzero::nonzero;
+    use crate::GLOBAL;
+    use nonzero::nonzero;
     use rand::RngCore;
     use rand::rng;
     use std::env::temp_dir;
     use std::fs::File;
+    use std::hint::black_box;
     use std::iter::{once, repeat};
+    use sysinfo::{MemoryRefreshKind, RefreshKind};
 
-    use crate::{log_stats, FAILED_U_SUBMISSIONS_OUT};
     use crate::ReportFactorResult;
     use crate::algebraic::Factor;
     use crate::graph::{EntryId, NumericFactor};
@@ -1446,6 +1452,7 @@ use nonzero::nonzero;
     use crate::net::{
         FactorDbClientReadIdsAndExprs, MockFactorDbClient, ProcessedStatusApiResponse,
     };
+    use crate::{FAILED_U_SUBMISSIONS_OUT, log_stats};
     use const_format::formatcp;
     use hipstr::HipStr;
     use mockall::predicate::eq;
@@ -1763,7 +1770,9 @@ use nonzero::nonzero;
 
         simple_log::console("info").unwrap();
         let mut http = MockFactorDbClient::new();
-        let mut sys = sysinfo::System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
+        let mut sys = sysinfo::System::new_with_specifics(
+            RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
+        );
 
         http.expect_known_factors_as_digits()
             .returning(|_, _, _| ProcessedStatusApiResponse {

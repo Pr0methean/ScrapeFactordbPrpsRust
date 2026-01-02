@@ -2903,33 +2903,42 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     }
                                     let mut right_remaining_factors = right.clone();
                                     // Iterate through the smaller map and remove common factors in-place
-                                    let common_keys: Vec<_> = if left_remaining_factors.len() <= right_remaining_factors.len() {
-                                        left_remaining_factors.keys()
+                                    let common_keys: Vec<_> = if left_remaining_factors.len()
+                                        <= right_remaining_factors.len()
+                                    {
+                                        left_remaining_factors
+                                            .keys()
                                             .filter(|k| right_remaining_factors.contains_key(k))
                                             .cloned()
                                             .collect()
                                     } else {
-                                        right_remaining_factors.keys()
+                                        right_remaining_factors
+                                            .keys()
                                             .filter(|k| left_remaining_factors.contains_key(k))
                                             .cloned()
                                             .collect()
                                     };
                                     for factor in common_keys {
-                                        let left_count = *left_remaining_factors.get(&factor).unwrap();
-                                        let right_count = *right_remaining_factors.get(&factor).unwrap();
+                                        let left_count =
+                                            *left_remaining_factors.get(&factor).unwrap();
+                                        let right_count =
+                                            *right_remaining_factors.get(&factor).unwrap();
                                         let common_exponent = left_count.min(right_count);
-                                        
+
                                         let left_remaining_exponent = left_count - common_exponent;
-                                        let right_remaining_exponent = right_count - common_exponent;
-                                        
+                                        let right_remaining_exponent =
+                                            right_count - common_exponent;
+
                                         if left_remaining_exponent > 0 {
-                                            *left_remaining_factors.get_mut(&factor).unwrap() = left_remaining_exponent;
+                                            *left_remaining_factors.get_mut(&factor).unwrap() =
+                                                left_remaining_exponent;
                                         } else {
                                             left_remaining_factors.remove(&factor);
                                         }
-                                        
+
                                         if right_remaining_exponent > 0 {
-                                            *right_remaining_factors.get_mut(&factor).unwrap() = right_remaining_exponent;
+                                            *right_remaining_factors.get_mut(&factor).unwrap() =
+                                                right_remaining_exponent;
                                         } else {
                                             right_remaining_factors.remove(&factor);
                                         }
@@ -2985,7 +2994,10 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                 .filter_map(|left_factor| {
                                                     div_exact(left_factor, &factor).map(
                                                         |left_factor_div_factor| {
-                                                            (left_factor.clone(), left_factor_div_factor)
+                                                            (
+                                                                left_factor.clone(),
+                                                                left_factor_div_factor,
+                                                            )
                                                         },
                                                     )
                                                 })
@@ -3012,7 +3024,10 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                 .filter_map(|left_factor| {
                                                     div_exact(&factor, left_factor).map(
                                                         |factor_div_left_factor| {
-                                                            (left_factor.clone(), factor_div_left_factor)
+                                                            (
+                                                                left_factor.clone(),
+                                                                factor_div_left_factor,
+                                                            )
                                                         },
                                                     )
                                                 })
