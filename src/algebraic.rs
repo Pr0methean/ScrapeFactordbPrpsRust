@@ -787,9 +787,7 @@ impl PartialEq for Factor {
                 Factor::BigNumber { inner: s, hash: sh },
                 Factor::BigNumber { inner: o, hash: oh },
             ) => {
-                if let Some(sh) = sh.get()
-                    && let Some(oh) = oh.get()
-                    && sh != oh
+                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o))
                 {
                     return false;
                 }
@@ -799,18 +797,14 @@ impl PartialEq for Factor {
                 UnknownExpression { inner: s, hash: sh },
                 UnknownExpression { inner: o, hash: oh },
             ) => {
-                if let Some(sh) = sh.get()
-                    && let Some(oh) = oh.get()
-                    && sh != oh
+                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o))
                 {
                     return false;
                 }
                 s == o
             }
             (Complex { inner: s, hash: sh }, Complex { inner: o, hash: oh }) => {
-                if let Some(sh) = sh.get()
-                    && let Some(oh) = oh.get()
-                    && sh != oh
+                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o))
                 {
                     return false;
                 }
