@@ -11,7 +11,7 @@ use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
-use num_modular::{ModularInteger, MontgomeryInt};
+use num_modular::{ModularInteger, Montgomery, ReducedInt, Reducer, Vanilla};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
@@ -567,7 +567,6 @@ static SMALL_LUCAS_FACTORS: [&[NumericFactor]; 202] = [
 ];
 
 pub type NumericFactor = u128;
-pub type SignedNumericFactor = i128;
 
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum FactorBeingParsed {
@@ -1436,24 +1435,32 @@ impl Factor {
             },
             _ => {}
         }
-        if let Complex { inner: ref c, .. } = *other
-            && let Divide {
-                ref left,
-                ref right,
-                ..
-            } = **c
-        {
-            if !product_may_be_proper_divisor_of(right, left) {
-                return false;
-            }
-            if let Some(right_exponent) = right.get(self)
-                && !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))].into())
-                    .may_be_proper_divisor_of(left)
-            {
-                return false;
-            }
-            if !self.may_be_proper_divisor_of(left) {
-                return false;
+        if let Complex { inner: ref c, .. } = *other {
+            match **c {
+                Divide {
+                    ref left,
+                    ref right,
+                    ..
+                } => {
+                    if !product_may_be_proper_divisor_of(right, left) {
+                        return false;
+                    }
+                    if let Some(right_exponent) = right.get(self)
+                        && !Factor::multiply([(self.clone(), right_exponent.saturating_add(1))].into())
+                        .may_be_proper_divisor_of(left)
+                    {
+                        return false;
+                    }
+                    if !self.may_be_proper_divisor_of(left) {
+                        return false;
+                    }
+                }
+                Multiply {
+                    ref terms, ..
+                } => if matches!(terms.get(self), Some(x) if *x != 0) {
+                    return true;
+                }
+                _ => {}
             }
         }
         if let Some(last_digit) = self.last_digit()
@@ -1741,34 +1748,6 @@ fn power_multiset<T: PartialEq + Ord + Copy>(
         result.push(subset);
     }
     result
-}
-
-/// Modular inverse using extended Euclidean algorithm
-#[inline]
-fn modinv(a: NumericFactor, m: NumericFactor) -> Option<NumericFactor> {
-    let mut t: SignedNumericFactor = 0;
-    let mut newt: SignedNumericFactor = 1;
-    let m: SignedNumericFactor = m.try_into().ok()?;
-    let mut r = m;
-    let mut newr: SignedNumericFactor = a.try_into().ok()?;
-
-    while newr != 0 {
-        let quotient = r / newr;
-        t -= quotient * newt;
-        swap(&mut t, &mut newt);
-        r -= quotient * newr;
-        swap(&mut r, &mut newr);
-    }
-
-    if r > 1 {
-        return None; // no inverse
-    }
-
-    if t < 0 {
-        t += m;
-    }
-
-    t.try_into().ok()
 }
 
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
@@ -2359,52 +2338,39 @@ pub(crate) fn estimate_log10(expr: &Factor) -> (NumberLength, NumberLength) {
     }
 }
 
-pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
+fn modulo_as_reduced<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, modulus: NumericFactor) -> Option<ReducedInt<NumericFactor, T>> {
     match modulus {
         0 => {
             warn!("Attempted to evaluate {expr} modulo 0");
             None
         }
-        1 => Some(0),
+        1 => Some(ReducedInt::new(0, &1)),
         _ => {
             if let Some(eval) = evaluate_as_numeric(expr) {
-                Some(eval % modulus)
+                Some(ReducedInt::new(eval, &modulus))
             } else {
-                modulo_as_numeric_no_evaluate(expr, modulus)
-            }
-        }
-    }
-}
-
-fn modulo_as_montgomery(expr: &Factor, modulus: NumericFactor) -> Option<MontgomeryInt<NumericFactor>> {
-    match modulus {
-        0 => {
-            warn!("Attempted to evaluate {expr} modulo 0");
-            None
-        }
-        1 => Some(MontgomeryInt::new(0, &1)),
-        _ => {
-            if let Some(eval) = evaluate_as_numeric(expr) {
-                Some(MontgomeryInt::new(eval, &modulus))
-            } else {
-                modulo_as_montgomery_no_evaluate(expr, modulus)
+                modulo_as_reduced_no_evaluate(expr, modulus)
             }
         }
     }
 }
 
 fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
-    modulo_as_montgomery_no_evaluate(expr, modulus).map(|monty| monty.residue())
+    if !modulus.is_multiple_of(2) {
+        modulo_as_reduced_no_evaluate::<Montgomery<_>>(expr, modulus).map(|monty| monty.residue())
+    } else {
+        modulo_as_reduced_no_evaluate::<Vanilla<_>>(expr, modulus).map(|reduced| reduced.residue())
+    }
 }
 
-fn modulo_as_montgomery_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<MontgomeryInt<NumericFactor>> {
+fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, modulus: NumericFactor) -> Option<ReducedInt<NumericFactor, T>> {
     match *expr {
-        Numeric(n) => Some(MontgomeryInt::new(n, &modulus)),
+        Numeric(n) => Some(ReducedInt::new(n, &modulus)),
         Factor::BigNumber { .. } | ElidedNumber(_) => {
             if (modulus == 2 || modulus == 5)
                 && let Some(last_digit) = expr.last_digit()
             {
-                Some(MontgomeryInt::new(last_digit as NumericFactor, &modulus))
+                Some(ReducedInt::new(last_digit as NumericFactor, &modulus))
             } else {
                 None
             }
@@ -2416,8 +2382,8 @@ fn modulo_as_montgomery_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Op
                 subtract,
             } => {
                 // right is often simpler, so evaluate it first
-                let right = modulo_as_montgomery(right, modulus)?;
-                let left = modulo_as_montgomery(left, modulus)?;
+                let right = modulo_as_reduced(right, modulus)?;
+                let left = modulo_as_reduced(left, modulus)?;
                 Some(if subtract {
                     left - right
                 } else {
@@ -2425,10 +2391,10 @@ fn modulo_as_montgomery_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Op
                 })
             }
             Multiply { ref terms, .. } => {
-                let mut product = MontgomeryInt::new(1, &modulus);
+                let mut product = ReducedInt::new(1, &modulus);
                 for (term, exponent) in terms.iter() {
                     product = product *
-                        modulo_as_montgomery(term, modulus)?.pow(&NumericFactor::from(*exponent));
+                        modulo_as_reduced(term, modulus)?.pow(&NumericFactor::from(*exponent));
                 }
                 Some(product)
             }
@@ -2437,9 +2403,9 @@ fn modulo_as_montgomery_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Op
                 ref right,
                 ..
             } => {
-                let mut result = modulo_as_montgomery(left, modulus)?;
+                let mut result = modulo_as_reduced(left, modulus)?;
                 for (term, exponent) in right.iter() {
-                    let term_mod = modulo_as_montgomery(term, modulus)?.pow(&NumericFactor::from(*exponent));
+                    let term_mod = modulo_as_reduced(term, modulus)?.pow(&NumericFactor::from(*exponent));
                     result = result * term_mod.inv()?;
                 }
                 Some(result)
@@ -2450,33 +2416,33 @@ fn modulo_as_montgomery_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Op
             } => {
                 // Exponent is usually simpler, so evaluate it first
                 let exp = evaluate_as_numeric(exponent)?;
-                let base_mod = modulo_as_montgomery(base, modulus)?;
+                let base_mod = modulo_as_reduced(base, modulus)?;
                 Some(base_mod.pow(&exp))
             }
             Fibonacci(ref term) => {
                 let term = evaluate_as_numeric(term)?;
-                Some(MontgomeryInt::new(pisano(term, vec![0, 1, 1], modulus), &modulus))
+                Some(ReducedInt::new(pisano(term, vec![0, 1, 1], modulus), &modulus))
             }
             Lucas(ref term) => {
                 let term = evaluate_as_numeric(term)?;
-                Some(MontgomeryInt::new(pisano(term, vec![2, 1], modulus), &modulus))
+                Some(ReducedInt::new(pisano(term, vec![2, 1], modulus), &modulus))
             }
             Factorial(ref term) => {
                 let term = evaluate_as_numeric(term)?;
                 if term >= modulus {
-                    return Some(MontgomeryInt::new(0, &modulus));
+                    return Some(ReducedInt::new(0, &modulus));
                 }
                 if term == modulus - 1 {
                     // Wilson's theorem
                     return Some(if is_prime(modulus) {
-                        MontgomeryInt::new(term, &modulus)
+                        ReducedInt::new(term, &modulus)
                     } else if modulus == 4 {
-                        MontgomeryInt::new(2, &4)
+                        ReducedInt::new(2, &4)
                     } else {
-                        MontgomeryInt::new(0, &modulus)
+                        ReducedInt::new(0, &modulus)
                     });
                 }
-                let mut result = MontgomeryInt::new(1, &modulus);
+                let mut result = ReducedInt::new(1, &modulus);
                 for i in 2..=term {
                     result = result * i;
                     if result.residue() == 0 {
@@ -2488,9 +2454,9 @@ fn modulo_as_montgomery_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Op
             Primorial(ref term) => {
                 let term = evaluate_as_numeric(term)?;
                 if term >= modulus && (is_prime(term) || is_prime(modulus)) {
-                    return Some(MontgomeryInt::new(0, &modulus));
+                    return Some(ReducedInt::new(0, &modulus));
                 }
-                let mut result = MontgomeryInt::new(1, &modulus);
+                let mut result = ReducedInt::new(1, &modulus);
                 for i in 2..=term {
                     if is_prime(i) {
                         result = result * i;
@@ -3499,11 +3465,7 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
-    use crate::algebraic::{
-        ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
-        div_exact, estimate_log10, factor_power, fibonacci_factors, lucas_factors, modinv,
-        modulo_as_numeric, multiset_intersection, multiset_union, power_multiset,
-    };
+    use crate::algebraic::{ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS, div_exact, estimate_log10, factor_power, fibonacci_factors, lucas_factors, multiset_intersection, multiset_union, power_multiset, modulo_as_numeric_no_evaluate};
     use ahash::RandomState;
     use alloc::collections::BTreeSet;
     use itertools::Itertools;
@@ -3628,13 +3590,6 @@ mod tests {
         assert!(factors.contains(&format!("{}^3-1", NumericFactor::MAX).into()));
         assert!(factors.contains(&format!("{}^2+1", NumericFactor::MAX).into()));
         assert!(factors.contains(&format!("{}^2-1", NumericFactor::MAX).into()));
-    }
-
-    #[test]
-    fn test_modinv() {
-        assert_eq!(modinv(3, 11), Some(4));
-        assert_eq!(modinv(17, 3120), Some(2753));
-        assert_eq!(modinv(6, 9), None);
     }
 
     #[test]
@@ -4079,11 +4034,11 @@ mod tests {
 
     #[test]
     fn test_pisano() {
-        assert_eq!(modulo_as_numeric(&"I(2000)".into(), 5), Some(0));
-        assert_eq!(modulo_as_numeric(&"I(2001)".into(), 5), Some(1));
-        assert_eq!(modulo_as_numeric(&"I(2002)".into(), 5), Some(1));
-        assert_eq!(modulo_as_numeric(&"I(2003)".into(), 5), Some(2));
-        assert_eq!(modulo_as_numeric(&"I(2004)".into(), 5), Some(3));
+        assert_eq!(modulo_as_numeric_no_evaluate(&"I(2000)".into(), 5), Some(0));
+        assert_eq!(modulo_as_numeric_no_evaluate(&"I(2001)".into(), 5), Some(1));
+        assert_eq!(modulo_as_numeric_no_evaluate(&"I(2002)".into(), 5), Some(1));
+        assert_eq!(modulo_as_numeric_no_evaluate(&"I(2003)".into(), 5), Some(2));
+        assert_eq!(modulo_as_numeric_no_evaluate(&"I(2004)".into(), 5), Some(3));
     }
 
     #[test]
