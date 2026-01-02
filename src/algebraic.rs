@@ -2,7 +2,7 @@ use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
-use crate::get_from_cache;
+use crate::{get_from_cache, get_random_state};
 use crate::net::BigNumber;
 use crate::{NumberLength, frame_sync, hash, write_bignum};
 use ahash::RandomState;
@@ -605,7 +605,7 @@ impl Default for FactorBeingParsed {
 
 fn hash_add_sub<H: Hasher>(terms: &(Factor, Factor), state: &mut H) {
     let (left, right) = terms;
-    let invariant_hasher_state = RandomState::with_seed(0x1337c0de);
+    let invariant_hasher_state = get_random_state();
     let left_hash = invariant_hasher_state.hash_one(left);
     let right_hash = invariant_hasher_state.hash_one(right);
     state.write_u64(left_hash.wrapping_add(right_hash));
