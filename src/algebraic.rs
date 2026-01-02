@@ -21,7 +21,7 @@ use num_prime::nt_funcs::factorize128;
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
-use std::cell::{RefCell};
+use std::cell::RefCell;
 use std::cmp::Ordering::{Greater, Less};
 use std::cmp::{Ordering, PartialEq};
 use std::collections::{BTreeMap, BTreeSet};
@@ -763,10 +763,19 @@ impl Ord for ComplexFactor {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Factor {
     Numeric(NumericFactor),
-    BigNumber { hash: OnceLock<u64>, inner: BigNumber },
+    BigNumber {
+        hash: OnceLock<u64>,
+        inner: BigNumber,
+    },
     ElidedNumber(HipStr<'static>),
-    UnknownExpression { hash: OnceLock<u64>, inner: HipStr<'static> },
-    Complex { hash: OnceLock<u64>, inner: Arc<ComplexFactor> },
+    UnknownExpression {
+        hash: OnceLock<u64>,
+        inner: HipStr<'static>,
+    },
+    Complex {
+        hash: OnceLock<u64>,
+        inner: Arc<ComplexFactor>,
+    },
 }
 
 impl PartialOrd for Factor {
@@ -777,16 +786,20 @@ impl PartialOrd for Factor {
 
 impl Ord for Factor {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.discriminant().cmp(&other.discriminant()).then_with(||
-            match (self, other) {
+        self.discriminant()
+            .cmp(&other.discriminant())
+            .then_with(|| match (self, other) {
                 (Numeric(s), Numeric(o)) => s.cmp(o),
-                (Factor::BigNumber { inner: s, .. }, Factor::BigNumber { inner: o, .. }) => s.cmp(o),
+                (Factor::BigNumber { inner: s, .. }, Factor::BigNumber { inner: o, .. }) => {
+                    s.cmp(o)
+                }
                 (ElidedNumber(s), ElidedNumber(o)) => s.cmp(o),
-                (UnknownExpression { inner: s, .. }, UnknownExpression { inner: o, .. }) => s.cmp(o),
+                (UnknownExpression { inner: s, .. }, UnknownExpression { inner: o, .. }) => {
+                    s.cmp(o)
+                }
                 (Complex { inner: s, .. }, Complex { inner: o, .. }) => s.cmp(o),
                 _ => unsafe { unreachable_unchecked() },
-            }
-        )
+            })
     }
 }
 
@@ -878,7 +891,7 @@ impl From<FactorBeingParsed> for Factor {
             FactorBeingParsed::Numeric(n) => Numeric(n),
             FactorBeingParsed::BigNumber(n) => Factor::BigNumber {
                 inner: n,
-                hash: OnceLock::new()
+                hash: OnceLock::new(),
             },
             FactorBeingParsed::ElidedNumber(n) => ElidedNumber(n),
             FactorBeingParsed::AddSub {
@@ -961,7 +974,10 @@ impl Factor {
         Multiply { terms, terms_hash }
     }
 
-    fn divide_into_complex(left: Factor, right: impl IntoIterator<Item = (Factor, NumberLength)>) -> ComplexFactor {
+    fn divide_into_complex(
+        left: Factor,
+        right: impl IntoIterator<Item = (Factor, NumberLength)>,
+    ) -> ComplexFactor {
         let right = right.into_iter().collect();
         let right_hash = hash(&right);
         Divide {
@@ -984,7 +1000,7 @@ impl From<BigNumber> for Factor {
     fn from(value: BigNumber) -> Self {
         Factor::BigNumber {
             inner: value,
-            hash: OnceLock::new()
+            hash: OnceLock::new(),
         }
     }
 }
@@ -1003,7 +1019,7 @@ impl From<&str> for Factor {
                     error!("Error parsing expression {value}: {e}");
                     UnknownExpression {
                         inner: value.into(),
-                        hash: OnceLock::new()
+                        hash: OnceLock::new(),
                     }
                 })
         })
@@ -1217,16 +1233,18 @@ impl Factor {
                 Fibonacci(ref input) => format!("I({})", input.to_unelided_string()),
                 Lucas(ref input) => format!("lucas({})", input.to_unelided_string()),
             }
-                .into(),
+            .into(),
         }
     }
 
     #[inline(always)]
     fn last_digit(&self) -> Option<u8> {
         match self {
-            Factor::BigNumber { inner: BigNumber(n), .. } | ElidedNumber(n) => {
-                Some(n.chars().last().unwrap().to_digit(10).unwrap() as u8)
+            Factor::BigNumber {
+                inner: BigNumber(n),
+                ..
             }
+            | ElidedNumber(n) => Some(n.chars().last().unwrap().to_digit(10).unwrap() as u8),
             Numeric(n) => Some((n % 10) as u8),
             _ => None,
         }
@@ -1586,7 +1604,14 @@ fn fibonacci_factors(
         sum_factor_btreemaps(&mut factors, lucas_factors(term >> 1, subset_recursion));
         factors
     } else if !subset_recursion {
-        [(Complex { inner: Fibonacci(Numeric(term)).into(), hash: OnceLock::new()}, 1)].into()
+        [(
+            Complex {
+                inner: Fibonacci(Numeric(term)).into(),
+                hash: OnceLock::new(),
+            },
+            1,
+        )]
+        .into()
     } else {
         let factors_of_term = find_raw_factors_of_numeric(term);
         let full_set_size: NumberLength = factors_of_term.values().copied().sum();
@@ -1619,7 +1644,14 @@ fn lucas_factors(term: NumericFactor, subset_recursion: bool) -> BTreeMap<Factor
                 .map(Numeric),
         )
     } else if !subset_recursion {
-        [(Complex { inner: Lucas(Numeric(term)).into(), hash: OnceLock::new() }, 1)].into()
+        [(
+            Complex {
+                inner: Lucas(Numeric(term)).into(),
+                hash: OnceLock::new(),
+            },
+            1,
+        )]
+        .into()
     } else {
         let mut factors_of_term = find_raw_factors_of_numeric(term);
         let power_of_2 = factors_of_term.remove(&2).unwrap_or(0) as NumericFactor;
@@ -1901,7 +1933,10 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     while let Some(divisor) = divisor.div_exact(new_term) {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(&Complex { inner: Factorial(Numeric(new_term)).into(), hash: OnceLock::new() }));
+                            return Some(simplify(&Complex {
+                                inner: Factorial(Numeric(new_term)).into(),
+                                hash: OnceLock::new(),
+                            }));
                         }
                     }
                 }
@@ -1920,7 +1955,10 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                     {
                         new_term -= 1;
                         if divisor == 1 {
-                            return Some(simplify(&Complex { inner: Primorial(Numeric(new_term)).into(), hash: OnceLock::new() }));
+                            return Some(simplify(&Complex {
+                                inner: Primorial(Numeric(new_term)).into(),
+                                hash: OnceLock::new(),
+                            }));
                         }
                     }
                 }
@@ -2086,7 +2124,9 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
     }
     let bounds = match *expr {
         Numeric(n) => log10_bounds(n),
-        Factor::BigNumber { inner: ref expr, .. } => {
+        Factor::BigNumber {
+            inner: ref expr, ..
+        } => {
             let len = expr.as_ref().len();
             ((len - 1) as NumberLength, len as NumberLength)
         }
@@ -2333,7 +2373,9 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                 for (term, exponent) in terms.iter() {
                     product = product.mulm(
                         modulo_as_numeric(term, modulus)?
-                            .powm(*exponent as NumericFactor, &modulus), &modulus);
+                            .powm(*exponent as NumericFactor, &modulus),
+                        &modulus,
+                    );
                 }
                 Some(product)
             }
@@ -2476,13 +2518,13 @@ pub(crate) fn simplify(expr: &Factor) -> Factor {
 
 fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
     simplify_add_sub_internal(left, right, subtract).unwrap_or_else(|| Complex {
-            inner: AddSub {
-                terms: (left.clone(), right.clone()),
-                subtract,
-            }.into(),
-            hash: OnceLock::new()
-        },
-        )
+        inner: AddSub {
+            terms: (left.clone(), right.clone()),
+            subtract,
+        }
+        .into(),
+        hash: OnceLock::new(),
+    })
 }
 
 fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> Option<Factor> {
@@ -2526,13 +2568,13 @@ fn simplify_add_sub_internal(left: &Factor, right: &Factor, subtract: bool) -> O
     if let Some(result_numeric) = result_numeric {
         Some(Numeric(result_numeric))
     } else if new_left != *left || new_right != *right {
-        Some( Complex {
-            inner:
-            AddSub {
+        Some(Complex {
+            inner: AddSub {
                 terms: (new_left, new_right),
                 subtract,
-            }.into(),
-            hash: OnceLock::new()
+            }
+            .into(),
+            hash: OnceLock::new(),
         })
     } else {
         None
@@ -2544,8 +2586,9 @@ fn simplify_power(base: &Factor, exponent: &Factor) -> Factor {
         inner: Power {
             base: base.clone(),
             exponent: exponent.clone(),
-        }.into(),
-        hash: OnceLock::new()
+        }
+        .into(),
+        hash: OnceLock::new(),
     })
 }
 
@@ -2586,8 +2629,9 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
                     inner: Power {
                         base: new_base,
                         exponent: new_exponent,
-                    }.into(),
-                    hash: OnceLock::new()
+                    }
+                    .into(),
+                    hash: OnceLock::new(),
                 })
             }
         }
@@ -4416,8 +4460,9 @@ mod tests {
                 inner: ComplexFactor::AddSub {
                     terms: (x.clone(), y.clone()),
                     subtract: false,
-                }.into(),
-                hash: OnceLock::new()
+                }
+                .into(),
+                hash: OnceLock::new(),
             };
 
             let mut map1 = BTreeMap::new();
@@ -4464,7 +4509,8 @@ mod tests {
                 inner: ComplexFactor::AddSub {
                     terms: (x.clone(), zero.clone()),
                     subtract: false,
-                }.into(),
+                }
+                .into(),
                 hash: OnceLock::new()
             }),
             x
@@ -4475,7 +4521,7 @@ mod tests {
                     terms: (x.clone(), zero.clone()),
                     subtract: true,
                 }
-                    .into(),
+                .into(),
                 hash: OnceLock::new()
             }),
             x
@@ -4492,7 +4538,7 @@ mod tests {
                     terms: terms.clone(),
                     terms_hash: 0
                 }
-                    .into(),
+                .into(),
                 hash: OnceLock::new()
             }),
             x
@@ -4505,7 +4551,7 @@ mod tests {
                     base: x.clone(),
                     exponent: one.clone()
                 }
-                    .into(),
+                .into(),
                 hash: OnceLock::new()
             }),
             x
@@ -4520,7 +4566,8 @@ mod tests {
                     left: x.clone(),
                     right,
                     right_hash: 0
-                }.into(),
+                }
+                .into(),
                 hash: OnceLock::new()
             }),
             x
@@ -4538,7 +4585,8 @@ mod tests {
                 inner: ComplexFactor::Power {
                     base: x.clone(),
                     exponent: zero.clone()
-                }.into(),
+                }
+                .into(),
                 hash: OnceLock::new()
             }),
             Factor::one()
@@ -4557,15 +4605,17 @@ mod tests {
             inner: ComplexFactor::Power {
                 base: x.clone(),
                 exponent: two.clone(),
-            }.into(),
+            }
+            .into(),
             hash: OnceLock::new(),
         };
         let nested = Complex {
             inner: ComplexFactor::Power {
                 base: inner,
                 exponent: three.clone(),
-            }.into(),
-            hash: OnceLock::new()
+            }
+            .into(),
+            hash: OnceLock::new(),
         };
         let simplified = simplify(&nested);
 

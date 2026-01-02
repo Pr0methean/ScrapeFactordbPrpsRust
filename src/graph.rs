@@ -1,4 +1,3 @@
-use std::sync::OnceLock;
 use crate::Factor::Complex;
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
@@ -37,6 +36,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
+use std::sync::OnceLock;
 
 pub type EntryId = u128;
 
@@ -727,7 +727,8 @@ pub async fn find_and_submit_factors(
         return false;
     }
     // Simplest case: try submitting all factors as factors of the root
-    let (root_denominator_terms, root_denominator) = if let Complex { inner: ref c, .. } = root_factor
+    let (root_denominator_terms, root_denominator) = if let Complex { inner: ref c, .. } =
+        root_factor
         && let ComplexFactor::Divide {
             right, right_hash, ..
         } = &**c
@@ -737,8 +738,8 @@ pub async fn find_and_submit_factors(
                 terms_hash: *right_hash,
                 terms: right.clone(),
             }
-                .into(),
-            hash: OnceLock::new()
+            .into(),
+            hash: OnceLock::new(),
         };
         (Some(right.clone()), Some(multiply))
     } else {
