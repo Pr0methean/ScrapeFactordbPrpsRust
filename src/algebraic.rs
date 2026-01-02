@@ -3475,10 +3475,9 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
             while let Some((factor, exponent)) = raw_factors.pop() {
                 if exponent != 0
                     && factor != *expr
-                    && factor != simplified
                     && factor.as_numeric() != Some(1)
                     && factor.may_be_proper_divisor_of(expr)
-                    && factor.may_be_proper_divisor_of(&simplified)
+                    && (simplified == *expr || factor.may_be_proper_divisor_of(&simplified))
                 {
                     let f = simplify(&factor);
                     if let Complex { inner: ref c, .. } = f {
@@ -3496,7 +3495,8 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                             _ => {}
                         }
                     }
-                    if f.may_be_proper_divisor_of(expr) && f.may_be_proper_divisor_of(&simplified) {
+                    if f == factor || (f.may_be_proper_divisor_of(expr) &&
+                        (*expr == simplified || f.may_be_proper_divisor_of(&simplified))) {
                         factors.insert(f);
                     }
                 }
