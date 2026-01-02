@@ -55,7 +55,7 @@ use std::io::Write;
 use std::num::{NonZero, NonZeroU32};
 use std::ops::Add;
 use std::panic;
-use std::process::exit;
+use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
@@ -63,7 +63,7 @@ use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
@@ -483,53 +483,20 @@ async fn main() -> anyhow::Result<()> {
     let mut reg = stats_alloc::Region::new(&GLOBAL);
     let mut sys = sysinfo::System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
-    let (installed_sender, installed_receiver) = oneshot::channel();
     simple_log::console("info").unwrap();
 
-    // Monitoring task: print backtraces periodically, handle shutdown signals
-    task::spawn(async move {
-        let mut sigint = Box::pin(ctrl_c());
-        info!("Signal handlers installed");
-        installed_sender
-            .send(())
-            .expect("Error signaling main task that signal handlers are installed");
-        let mut sigterm;
+    let signal_installer = task::spawn(async move {
+        let sigint = Box::pin(ctrl_c());
         #[cfg(unix)]
         {
-            sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("Failed to create SIGTERM signal stream");
+            (sigint, signal::unix::signal(signal::unix::SignalKind::terminate())
+                .expect("Failed to create SIGTERM signal stream"))
         }
         #[cfg(not(unix))]
         {
             // Create a channel that will never receive a signal
             let (_sender, sigterm) = oneshot::channel();
-        }
-        let mut next_backtrace = Instant::now() + STATS_INTERVAL;
-        info!("Allocation stats at start of main loop: {:#?}", reg.change());
-        loop {
-            select! {
-                biased;
-                _ = sigterm.recv() => {
-                    warn!("Received SIGTERM; signaling tasks to exit");
-                    break;
-                },
-                _ = &mut sigint => {
-                    warn!("Received SIGINT; signaling tasks to exit");
-                    break;
-                }
-                _ = sleep_until(next_backtrace) => {
-                    next_backtrace = Instant::now() + STATS_INTERVAL;
-                }
-            }
-        }
-        if let Err(e) = shutdown_sender.send(()) {
-            error!("Error sending shutdown signal: {e}");
-        }
-        // Continue logging stats until other tasks exit
-        loop {
-            sleep_until(next_backtrace).await;
-            log_stats(&mut reg, &mut sys);
-            next_backtrace = Instant::now() + STATS_INTERVAL;
+            (sigint, sigterm)
         }
     });
 
@@ -633,7 +600,6 @@ async fn main() -> anyhow::Result<()> {
         })
         .await;
     let mut prp_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
-    installed_receiver.await?;
 
     // Task to consume PRP's, C's and U's dispatched from the other tasks
     let mut prp_receiver = PushbackReceiver::new(prp_receiver, &prp_sender);
@@ -1039,7 +1005,41 @@ async fn main() -> anyhow::Result<()> {
         }
     }));
 
-    log_stats(&mut reg, &mut sys);
+    // Monitoring task: print stats periodically
+    task::spawn(async move {
+        let Ok((mut sigint, mut sigterm)) = signal_installer.await else {
+            error!("Failed to install signal handlers!");
+            abort();
+        };
+        info!("Signal handlers installed");
+        log_stats(&mut reg, &mut sys);
+        let mut next_backtrace = Instant::now() + STATS_INTERVAL;
+        loop {
+            select! {
+                biased;
+                _ = sigterm.recv() => {
+                    warn!("Received SIGTERM; signaling tasks to exit");
+                    break;
+                },
+                _ = &mut sigint => {
+                    warn!("Received SIGINT; signaling tasks to exit");
+                    break;
+                }
+                _ = sleep_until(next_backtrace) => {
+                    next_backtrace = Instant::now() + STATS_INTERVAL;
+                }
+            }
+        }
+        if let Err(e) = shutdown_sender.send(()) {
+            error!("Error sending shutdown signal: {e}");
+        }
+        // Continue logging stats until other tasks exit
+        loop {
+            sleep_until(next_backtrace).await;
+            log_stats(&mut reg, &mut sys);
+            next_backtrace = Instant::now() + STATS_INTERVAL;
+        }
+    });
 
     // Queue C's and PRP's
     'queue_tasks: loop {
