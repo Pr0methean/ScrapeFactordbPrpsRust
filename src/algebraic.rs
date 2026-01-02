@@ -760,7 +760,6 @@ impl Ord for ComplexFactor {
     }
 }
 
-#[allow(clippy::mutable_key_type)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Factor {
     Numeric(NumericFactor),
