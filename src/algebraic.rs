@@ -779,6 +779,7 @@ pub enum Factor {
 }
 
 impl PartialEq for Factor {
+    #[inline(always)]
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Numeric(s), Numeric(o)) => s == o,
@@ -813,6 +814,7 @@ impl PartialOrd for Factor {
 }
 
 impl Ord for Factor {
+    #[inline(always)]
     fn cmp(&self, other: &Self) -> Ordering {
         self.discriminant()
             .cmp(&other.discriminant())
