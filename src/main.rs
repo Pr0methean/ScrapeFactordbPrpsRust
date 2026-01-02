@@ -1055,6 +1055,7 @@ async fn main() -> anyhow::Result<()> {
                     break;
                 }
                 _ = sleep_until(next_backtrace) => {
+                    log_stats(&mut reg, &mut sys);
                     next_backtrace = Instant::now() + STATS_INTERVAL;
                 }
             }
