@@ -1477,13 +1477,13 @@ impl Factor {
         } else {
             if self_numeric.is_none() {
                 for prime in SMALL_PRIMES {
-                    if let Some(m) = modulo_as_numeric_no_evaluate(self, prime.into())
+                    if let Some(0) = modulo_as_numeric_no_evaluate(self, prime.into())
                         && let Some(other_m) = if let Some(other_n) = other_numeric {
                             Some(other_n % NumericFactor::from(prime))
                         } else {
                             modulo_as_numeric_no_evaluate(other, NumericFactor::from(prime))
                         }
-                        && (m != 0) ^ (other_m != 0)
+                        && (other_m != 0)
                     {
                         return false;
                     }
