@@ -73,11 +73,15 @@ use tokio::{select, signal, task};
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
-static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
 
+static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
 fn get_random_state() -> &'static RandomState {
     RANDOM_STATE.get_or_init(RandomState::new)
+}
+
+pub fn hash(input: impl Hash) -> u64 {
+    get_random_state().hash_one(input)
 }
 
 pub fn create_cache<T: Eq + Hash, U: Clone>(capacity: usize) -> BasicCache<T, U> {
@@ -99,10 +103,6 @@ pub fn get_from_cache<'a, K: Eq + Hash, V: Clone>(
     } else {
         cache.get(key)
     }
-}
-
-pub fn hash(input: impl Hash) -> u64 {
-    get_random_state().hash_one(input)
 }
 
 pub type NumberLength = u32;
