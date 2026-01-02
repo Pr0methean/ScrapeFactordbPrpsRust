@@ -497,7 +497,7 @@ async fn main() -> anyhow::Result<()> {
         RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
     );
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
-    simple_log::console("info").unwrap();
+    simple_log::console("info,reqwest=debug").unwrap();
 
     let signal_installer = task::spawn(async move {
         let sigint = Box::pin(ctrl_c());
