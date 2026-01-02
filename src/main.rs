@@ -588,7 +588,7 @@ async fn main() -> anyhow::Result<()> {
     });
     info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
-    let mut max_concurrent_requests = 2usize;
+    let mut max_concurrent_requests = 1usize;
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
