@@ -1,4 +1,3 @@
-use crate::{get_from_cache, BasicCache};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -8,6 +7,7 @@ use crate::monitor::Monitor;
 use crate::net::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
+use crate::{BasicCache, get_from_cache};
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, create_cache,
@@ -552,7 +552,8 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(x) => {
                 if let Numeric(n) = **x {
                     Some(n)
-                } else if let Some(Some(n)) = get_from_cache(get_numeric_value_cache(), x.as_ref()) {
+                } else if let Some(Some(n)) = get_from_cache(get_numeric_value_cache(), x.as_ref())
+                {
                     Some(n)
                 } else {
                     None

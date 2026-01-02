@@ -90,7 +90,10 @@ pub fn create_cache<T: Eq + Hash, U: Clone>(capacity: usize) -> BasicCache<T, U>
     )
 }
 
-pub fn get_from_cache<'a, K: Eq + Hash, V: Clone>(cache: &'a BasicCache<K, V>, key: &'a K) -> Option<V> {
+pub fn get_from_cache<'a, K: Eq + Hash, V: Clone>(
+    cache: &'a BasicCache<K, V>,
+    key: &'a K,
+) -> Option<V> {
     if cache.is_empty() {
         None
     } else {

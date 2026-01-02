@@ -1,8 +1,8 @@
-use crate::get_from_cache;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
+use crate::get_from_cache;
 use crate::net::BigNumber;
 use crate::{NumberLength, frame_sync, hash, write_bignum};
 use ahash::RandomState;
