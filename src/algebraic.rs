@@ -2186,132 +2186,135 @@ pub(crate) fn estimate_log10(expr: &Factor) -> (NumberLength, NumberLength) {
 }
 
 pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
-    if let Some(eval) = evaluate_as_numeric(expr) {
-        return Some(eval % modulus);
-    }
-    modulo_as_numeric_no_evaluate(expr, modulus)
-}
-
-fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
     match modulus {
         0 => {
             warn!("Attempted to evaluate {expr} modulo 0");
             None
         }
         1 => Some(0),
-        _ => match *expr {
-            Numeric(n) => Some(n % modulus),
-            Factor::BigNumber(_) => {
-                if (modulus == 2 || modulus == 5)
-                    && let Some(last_digit) = expr.last_digit()
-                {
-                    Some(last_digit as NumericFactor % modulus)
+        _ => {
+            if let Some(eval) = evaluate_as_numeric(expr) {
+                Some(eval % modulus)
+            } else {
+                modulo_as_numeric_no_evaluate(expr, modulus)
+            }
+        }
+    }
+}
+
+fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
+    match *expr {
+        Numeric(n) => Some(n % modulus),
+        Factor::BigNumber(_) => {
+            if (modulus == 2 || modulus == 5)
+                && let Some(last_digit) = expr.last_digit()
+            {
+                Some(last_digit as NumericFactor % modulus)
+            } else {
+                None
+            }
+        }
+        ElidedNumber(_) | UnknownExpression(_) => None,
+        Complex(ref c) => match **c {
+            AddSub {
+                terms: (ref left, ref right),
+                subtract,
+            } => {
+                let left = modulo_as_numeric(left, modulus)?;
+                let right = modulo_as_numeric(right, modulus)?;
+                if subtract {
+                    let diff = left.abs_diff(right);
+                    Some(if left > right {
+                        diff.rem_euclid(modulus)
+                    } else {
+                        (modulus - diff.rem_euclid(modulus)) % modulus
+                    })
                 } else {
-                    None
+                    Some((left + right) % modulus)
                 }
             }
-            ElidedNumber(_) | UnknownExpression(_) => None,
-            Complex(ref c) => match **c {
-                AddSub {
-                    terms: (ref left, ref right),
-                    subtract,
-                } => {
-                    let left = modulo_as_numeric(left, modulus)?;
-                    let right = modulo_as_numeric(right, modulus)?;
-                    if subtract {
-                        let diff = left.abs_diff(right);
-                        Some(if left > right {
-                            diff.rem_euclid(modulus)
-                        } else {
-                            (modulus - diff.rem_euclid(modulus)) % modulus
-                        })
+            Multiply { ref terms, .. } => {
+                let mut product: NumericFactor = 1;
+                for (term, exponent) in terms.iter() {
+                    product = product.checked_mul(
+                        modulo_as_numeric(term, modulus)?
+                            .powm(*exponent as NumericFactor, &modulus),
+                    )? % modulus;
+                }
+                Some(product)
+            }
+            Divide {
+                ref left,
+                ref right,
+                ..
+            } => {
+                let mut result = modulo_as_numeric(left, modulus)?;
+                for (term, exponent) in right.iter() {
+                    let term_mod = modulo_as_numeric(term, modulus)?
+                        .powm(*exponent as NumericFactor, &modulus);
+                    match modinv(term_mod, modulus) {
+                        Some(inv) => result = result.mulm(inv, &modulus),
+                        None => return None,
+                    }
+                }
+                Some(result)
+            }
+            Power {
+                ref base,
+                ref exponent,
+            } => {
+                let base_mod = modulo_as_numeric(base, modulus)?;
+                let exp = evaluate_as_numeric(exponent)?;
+                Some(base_mod.powm(exp, &modulus))
+            }
+            Fibonacci(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                Some(pisano(term, vec![0, 1, 1], modulus))
+            }
+            Lucas(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                Some(pisano(term, vec![2, 1], modulus))
+            }
+            Factorial(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                if term >= modulus {
+                    return Some(0);
+                }
+                if term == modulus - 1 {
+                    // Wilson's theorem
+                    return Some(if is_prime(modulus) {
+                        term
+                    } else if modulus == 4 {
+                        2
                     } else {
-                        Some((left + right) % modulus)
-                    }
+                        0
+                    });
                 }
-                Multiply { ref terms, .. } => {
-                    let mut product: NumericFactor = 1;
-                    for (term, exponent) in terms.iter() {
-                        product = product.checked_mul(
-                            modulo_as_numeric(term, modulus)?
-                                .powm(*exponent as NumericFactor, &modulus),
-                        )? % modulus;
-                    }
-                    Some(product)
-                }
-                Divide {
-                    ref left,
-                    ref right,
-                    ..
-                } => {
-                    let mut result = modulo_as_numeric(left, modulus)?;
-                    for (term, exponent) in right.iter() {
-                        let term_mod = modulo_as_numeric(term, modulus)?
-                            .powm(*exponent as NumericFactor, &modulus);
-                        match modinv(term_mod, modulus) {
-                            Some(inv) => result = result.mulm(inv, &modulus),
-                            None => return None,
-                        }
-                    }
-                    Some(result)
-                }
-                Power {
-                    ref base,
-                    ref exponent,
-                } => {
-                    let base_mod = modulo_as_numeric(base, modulus)?;
-                    let exp = evaluate_as_numeric(exponent)?;
-                    Some(base_mod.powm(exp, &modulus))
-                }
-                Fibonacci(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    Some(pisano(term, vec![0, 1, 1], modulus))
-                }
-                Lucas(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    Some(pisano(term, vec![2, 1], modulus))
-                }
-                Factorial(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    if term >= modulus {
+                let mut result = 1;
+                for i in 2..=term {
+                    result = (result * i) % modulus;
+                    if result == 0 {
                         return Some(0);
                     }
-                    if term == modulus - 1 {
-                        // Wilson's theorem
-                        return Some(if is_prime(modulus) {
-                            term
-                        } else if modulus == 4 {
-                            2
-                        } else {
-                            0
-                        });
-                    }
-                    let mut result = 1;
-                    for i in 2..=term {
+                }
+                Some(result)
+            }
+            Primorial(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                if term >= modulus && (is_prime(term) || is_prime(modulus)) {
+                    return Some(0);
+                }
+                let mut result = 1;
+                for i in 2..=term {
+                    if is_prime(i) {
                         result = (result * i) % modulus;
                         if result == 0 {
                             return Some(0);
                         }
                     }
-                    Some(result)
                 }
-                Primorial(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    if term >= modulus && (is_prime(term) || is_prime(modulus)) {
-                        return Some(0);
-                    }
-                    let mut result = 1;
-                    for i in 2..=term {
-                        if is_prime(i) {
-                            result = (result * i) % modulus;
-                            if result == 0 {
-                                return Some(0);
-                            }
-                        }
-                    }
-                    Some(result)
-                }
-            },
+                Some(result)
+            }
         },
     }
 }
