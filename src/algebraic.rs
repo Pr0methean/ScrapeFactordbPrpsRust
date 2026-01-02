@@ -2369,7 +2369,7 @@ pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option
 fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
     match *expr {
         Numeric(n) => Some(n % modulus),
-        Factor::BigNumber { .. } => {
+        Factor::BigNumber { .. } | ElidedNumber(_) => {
             if (modulus == 2 || modulus == 5)
                 && let Some(last_digit) = expr.last_digit()
             {
@@ -2378,7 +2378,7 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                 None
             }
         }
-        ElidedNumber(_) | UnknownExpression { .. } => None,
+        UnknownExpression { .. } => None,
         Complex { inner: ref c, .. } => match **c {
             AddSub {
                 terms: (ref left, ref right),
