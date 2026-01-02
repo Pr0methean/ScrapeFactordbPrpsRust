@@ -11,7 +11,7 @@ use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
-use num_modular::{ModularCoreOps, ModularPow};
+use num_modular::{ModularInteger, MontgomeryInt};
 use num_prime::ExactRoots;
 use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
@@ -2376,14 +2376,35 @@ pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option
     }
 }
 
+fn modulo_as_montgomery(expr: &Factor, modulus: NumericFactor) -> Option<MontgomeryInt<NumericFactor>> {
+    match modulus {
+        0 => {
+            warn!("Attempted to evaluate {expr} modulo 0");
+            None
+        }
+        1 => Some(MontgomeryInt::new(0, &1)),
+        _ => {
+            if let Some(eval) = evaluate_as_numeric(expr) {
+                Some(MontgomeryInt::new(eval, &modulus))
+            } else {
+                modulo_as_montgomery_no_evaluate(expr, modulus)
+            }
+        }
+    }
+}
+
 fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
+    modulo_as_montgomery_no_evaluate(expr, modulus).map(|monty| monty.residue())
+}
+
+fn modulo_as_montgomery_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<MontgomeryInt<NumericFactor>> {
     match *expr {
-        Numeric(n) => Some(n % modulus),
+        Numeric(n) => Some(MontgomeryInt::new(n, &modulus)),
         Factor::BigNumber { .. } | ElidedNumber(_) => {
             if (modulus == 2 || modulus == 5)
                 && let Some(last_digit) = expr.last_digit()
             {
-                Some(last_digit as NumericFactor % modulus)
+                Some(MontgomeryInt::new(last_digit as NumericFactor, &modulus))
             } else {
                 None
             }
@@ -2395,27 +2416,19 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                 subtract,
             } => {
                 // right is often simpler, so evaluate it first
-                let right = modulo_as_numeric(right, modulus)?;
-                let left = modulo_as_numeric(left, modulus)?;
-                if subtract {
-                    let diff = left.abs_diff(right);
-                    Some(if left > right {
-                        diff.rem_euclid(modulus)
-                    } else {
-                        (modulus - diff.rem_euclid(modulus)) % modulus
-                    })
+                let right = modulo_as_montgomery(right, modulus)?;
+                let left = modulo_as_montgomery(left, modulus)?;
+                Some(if subtract {
+                    left - right
                 } else {
-                    Some((left + right) % modulus)
-                }
+                    left + right
+                })
             }
             Multiply { ref terms, .. } => {
-                let mut product: NumericFactor = 1;
+                let mut product = MontgomeryInt::new(1, &modulus);
                 for (term, exponent) in terms.iter() {
-                    product = product.mulm(
-                        modulo_as_numeric(term, modulus)?
-                            .powm(*exponent as NumericFactor, &modulus),
-                        &modulus,
-                    );
+                    product = product *
+                        modulo_as_montgomery(term, modulus)?.pow(&NumericFactor::from(*exponent));
                 }
                 Some(product)
             }
@@ -2424,22 +2437,10 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                 ref right,
                 ..
             } => {
-                let mut result = modulo_as_numeric(left, modulus)?;
+                let mut result = modulo_as_montgomery(left, modulus)?;
                 for (term, exponent) in right.iter() {
-                    let term_mod = modulo_as_numeric(term, modulus)?
-                        .powm(*exponent as NumericFactor, &modulus);
-                    match modinv(term_mod, modulus) {
-                        Some(inv) => result = result.mulm(inv, &modulus),
-                        None => {
-                            if term_mod != 0
-                                && let Some(new_result) = result.div_exact(term_mod)
-                            {
-                                result = new_result;
-                            } else {
-                                return None;
-                            }
-                        }
-                    }
+                    let term_mod = modulo_as_montgomery(term, modulus)?.pow(&NumericFactor::from(*exponent));
+                    result = result * term_mod.inv()?;
                 }
                 Some(result)
             }
@@ -2449,37 +2450,37 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
             } => {
                 // Exponent is usually simpler, so evaluate it first
                 let exp = evaluate_as_numeric(exponent)?;
-                let base_mod = modulo_as_numeric(base, modulus)?;
-                Some(base_mod.powm(exp, &modulus))
+                let base_mod = modulo_as_montgomery(base, modulus)?;
+                Some(base_mod.pow(&exp))
             }
             Fibonacci(ref term) => {
                 let term = evaluate_as_numeric(term)?;
-                Some(pisano(term, vec![0, 1, 1], modulus))
+                Some(MontgomeryInt::new(pisano(term, vec![0, 1, 1], modulus), &modulus))
             }
             Lucas(ref term) => {
                 let term = evaluate_as_numeric(term)?;
-                Some(pisano(term, vec![2, 1], modulus))
+                Some(MontgomeryInt::new(pisano(term, vec![2, 1], modulus), &modulus))
             }
             Factorial(ref term) => {
                 let term = evaluate_as_numeric(term)?;
                 if term >= modulus {
-                    return Some(0);
+                    return Some(MontgomeryInt::new(0, &modulus));
                 }
                 if term == modulus - 1 {
                     // Wilson's theorem
                     return Some(if is_prime(modulus) {
-                        term
+                        MontgomeryInt::new(term, &modulus)
                     } else if modulus == 4 {
-                        2
+                        MontgomeryInt::new(2, &4)
                     } else {
-                        0
+                        MontgomeryInt::new(0, &modulus)
                     });
                 }
-                let mut result = 1;
+                let mut result = MontgomeryInt::new(1, &modulus);
                 for i in 2..=term {
-                    result = (result * i) % modulus;
-                    if result == 0 {
-                        return Some(0);
+                    result = result * i;
+                    if result.residue() == 0 {
+                        break;
                     }
                 }
                 Some(result)
@@ -2487,14 +2488,14 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
             Primorial(ref term) => {
                 let term = evaluate_as_numeric(term)?;
                 if term >= modulus && (is_prime(term) || is_prime(modulus)) {
-                    return Some(0);
+                    return Some(MontgomeryInt::new(0, &modulus));
                 }
-                let mut result = 1;
+                let mut result = MontgomeryInt::new(1, &modulus);
                 for i in 2..=term {
                     if is_prime(i) {
-                        result = (result * i) % modulus;
-                        if result == 0 {
-                            return Some(0);
+                        result = result * i;
+                        if result.residue() == 0 {
+                            break;
                         }
                     }
                 }
