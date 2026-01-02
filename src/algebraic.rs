@@ -2420,7 +2420,11 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                         .powm(*exponent as NumericFactor, &modulus);
                     match modinv(term_mod, modulus) {
                         Some(inv) => result = result.mulm(inv, &modulus),
-                        None => return None,
+                        None => if let Some(new_result) = result.div_exact(term_mod) {
+                            result = new_result;
+                        } else {
+                            return None;
+                        }
                     }
                 }
                 Some(result)
