@@ -480,7 +480,7 @@ pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sys
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
-    let mut reg = stats_alloc::Region::new(&GLOBAL);
+    let mut reg = stats_alloc::Region::new(GLOBAL);
     let mut sys = sysinfo::System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()));
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
     simple_log::console("info").unwrap();
