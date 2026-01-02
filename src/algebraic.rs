@@ -2442,7 +2442,9 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                     match modinv(term_mod, modulus) {
                         Some(inv) => result = result.mulm(inv, &modulus),
                         None => {
-                            if term_mod != 0 && let Some(new_result) = result.div_exact(term_mod) {
+                            if term_mod != 0
+                                && let Some(new_result) = result.div_exact(term_mod)
+                            {
                                 result = new_result;
                             } else {
                                 return None;
@@ -3482,7 +3484,8 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 if exponent != 0
                     && factor != *expr
                     && factor.as_numeric() != Some(1)
-                    && factor.may_be_proper_divisor_of(expr) && (simplified == *expr || factor.may_be_proper_divisor_of(&simplified))
+                    && factor.may_be_proper_divisor_of(expr)
+                    && (simplified == *expr || factor.may_be_proper_divisor_of(&simplified))
                 {
                     let f = simplify(&factor);
                     if let Complex { inner: ref c, .. } = f {
