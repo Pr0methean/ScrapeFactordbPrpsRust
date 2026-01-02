@@ -11,7 +11,6 @@ use crate::{BasicCache, get_from_cache};
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, create_cache,
-    frame_sync,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
 use async_backtrace::{framed, location};
@@ -197,26 +196,24 @@ impl RealFactorDbClient {
         self.rate_limiter.until_ready().await;
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
-            let result =
-                frame_sync(location!().named(format!("curl: {}", &url[..200])), || {
-                    block_in_place(|| {
-                        CURL_CLIENT.with_borrow_mut(|curl| {
-                            curl.get(true)
-                        .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
-                        .and_then(|_| curl.timeout(E2E_TIMEOUT))
-                        .and_then(|_| curl.url(url))
-                        .and_then(|_| curl.perform())
-                        .map_err(anyhow::Error::from)
-                        .and_then(|_| {
-                            let response_code = curl.response_code()?;
-                            if response_code != 200 {
-                                error!("Error reading {url}: HTTP response code {response_code}");
+            let result = block_in_place(|| {
+                    CURL_CLIENT.with_borrow_mut(|curl| {
+                        curl.get(true)
+                            .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
+                            .and_then(|_| curl.timeout(E2E_TIMEOUT))
+                            .and_then(|_| curl.url(url))
+                            .and_then(|_| curl.perform())
+                            .map_err(anyhow::Error::from)
+                            .and_then(|_| {
+                                let response_code = curl.response_code()?;
+                                if response_code != 200 {
+                                    error!("Error reading {url}: HTTP response code {response_code}");
+                                }
+                                let response_body = curl.get_mut().take_all();
+                                curl.reset();
+                                Ok(response_body)
                             }
-                            let response_body = curl.get_mut().take_all();
-                            curl.reset();
-                            Ok(response_body)
-                        })
-                        })
+                        )
                     })
                 });
             drop(permit);

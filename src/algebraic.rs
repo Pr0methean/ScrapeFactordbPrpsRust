@@ -3,7 +3,7 @@ use crate::algebraic::ComplexFactor::{
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
 use crate::net::BigNumber;
-use crate::{NumberLength, frame_sync, hash, write_bignum};
+use crate::{NumberLength, hash, write_bignum};
 use crate::{get_from_cache, get_random_state};
 use ahash::RandomState;
 use async_backtrace::location;

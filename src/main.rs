@@ -131,10 +131,6 @@ static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
 
-pub fn frame_sync<T, F: FnOnce() -> T>(location: Location, function: F) -> T {
-    Box::pin(Frame::new(location)).as_mut().in_scope(function)
-}
-
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
     id: EntryId,
