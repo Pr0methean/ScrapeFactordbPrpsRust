@@ -197,25 +197,24 @@ impl RealFactorDbClient {
         let permit = self.request_semaphore.acquire().await.unwrap();
         let result = if url.len() > REQWEST_MAX_URL_LEN {
             let result = block_in_place(|| {
-                    CURL_CLIENT.with_borrow_mut(|curl| {
-                        curl.get(true)
-                            .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
-                            .and_then(|_| curl.timeout(E2E_TIMEOUT))
-                            .and_then(|_| curl.url(url))
-                            .and_then(|_| curl.perform())
-                            .map_err(anyhow::Error::from)
-                            .and_then(|_| {
-                                let response_code = curl.response_code()?;
-                                if response_code != 200 {
-                                    error!("Error reading {url}: HTTP response code {response_code}");
-                                }
-                                let response_body = curl.get_mut().take_all();
-                                curl.reset();
-                                Ok(response_body)
+                CURL_CLIENT.with_borrow_mut(|curl| {
+                    curl.get(true)
+                        .and_then(|_| curl.connect_timeout(CONNECT_TIMEOUT))
+                        .and_then(|_| curl.timeout(E2E_TIMEOUT))
+                        .and_then(|_| curl.url(url))
+                        .and_then(|_| curl.perform())
+                        .map_err(anyhow::Error::from)
+                        .and_then(|_| {
+                            let response_code = curl.response_code()?;
+                            if response_code != 200 {
+                                error!("Error reading {url}: HTTP response code {response_code}");
                             }
-                        )
-                    })
-                });
+                            let response_body = curl.get_mut().take_all();
+                            curl.reset();
+                            Ok(response_body)
+                        })
+                })
+            });
             drop(permit);
             result.and_then(|response_body| Ok(String::from_utf8(response_body)?))
         } else {

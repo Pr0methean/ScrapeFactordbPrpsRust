@@ -787,8 +787,7 @@ impl PartialEq for Factor {
                 Factor::BigNumber { inner: s, hash: sh },
                 Factor::BigNumber { inner: o, hash: oh },
             ) => {
-                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o))
-                {
+                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o)) {
                     return false;
                 }
                 s == o
@@ -797,15 +796,13 @@ impl PartialEq for Factor {
                 UnknownExpression { inner: s, hash: sh },
                 UnknownExpression { inner: o, hash: oh },
             ) => {
-                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o))
-                {
+                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o)) {
                     return false;
                 }
                 s == o
             }
             (Complex { inner: s, hash: sh }, Complex { inner: o, hash: oh }) => {
-                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o))
-                {
+                if sh.get_or_init(|| hash(s)) != oh.get_or_init(|| hash(o)) {
                     return false;
                 }
                 s == o
@@ -3025,10 +3022,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                             if let Some(term_number) = evaluate_as_numeric(term) {
                                 lucas_factors(term_number, true)
                             } else {
-                                warn!(
-                                    "Could not parse term number of a Lucas number: {}",
-                                    term
-                                );
+                                warn!("Could not parse term number of a Lucas number: {}", term);
                                 BTreeMap::new()
                             }
                         }
@@ -3049,10 +3043,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                             if let Some(input) = evaluate_as_numeric(term) {
                                 let mut factors = BTreeMap::new();
                                 for i in 2..=input {
-                                    sum_factor_btreemaps(
-                                        &mut factors,
-                                        find_factors_of_numeric(i),
-                                    );
+                                    sum_factor_btreemaps(&mut factors, find_factors_of_numeric(i));
                                 }
                                 factors
                             } else {
@@ -3128,15 +3119,13 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         .collect()
                                 };
                                 for factor in common_keys {
-                                    let left_count =
-                                        *left_remaining_factors.get(&factor).unwrap();
+                                    let left_count = *left_remaining_factors.get(&factor).unwrap();
                                     let right_count =
                                         *right_remaining_factors.get(&factor).unwrap();
                                     let common_exponent = left_count.min(right_count);
 
                                     let left_remaining_exponent = left_count - common_exponent;
-                                    let right_remaining_exponent =
-                                        right_count - common_exponent;
+                                    let right_remaining_exponent = right_count - common_exponent;
 
                                     if left_remaining_exponent > 0 {
                                         *left_remaining_factors.get_mut(&factor).unwrap() =
@@ -3191,11 +3180,9 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         left_exponent -= min_exponent;
                                         let right_exponent = exponent - min_exponent;
                                         if right_exponent != 0 {
-                                            right_remaining_factors
-                                                .insert(factor, right_exponent);
+                                            right_remaining_factors.insert(factor, right_exponent);
                                         } else if left_exponent != 0 {
-                                            left_remaining_factors
-                                                .insert(factor, left_exponent);
+                                            left_remaining_factors.insert(factor, left_exponent);
                                         }
                                     } else if let Some((left_factor, left_factor_div_factor)) =
                                         left_remaining_factors
@@ -3212,18 +3199,15 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             })
                                             .next()
                                     {
-                                        let mut left_exponent = left_remaining_factors
-                                            .remove(&left_factor)
-                                            .unwrap();
+                                        let mut left_exponent =
+                                            left_remaining_factors.remove(&left_factor).unwrap();
                                         let min_exponent = left_exponent.min(exponent);
                                         left_exponent -= min_exponent;
                                         let right_exponent = exponent - min_exponent;
                                         if right_exponent != 0 {
-                                            right_remaining_factors
-                                                .insert(factor, right_exponent);
+                                            right_remaining_factors.insert(factor, right_exponent);
                                         } else if left_exponent != 0 {
-                                            left_remaining_factors
-                                                .insert(factor, left_exponent);
+                                            left_remaining_factors.insert(factor, left_exponent);
                                         }
                                         left_remaining_factors
                                             .insert(left_factor_div_factor, min_exponent);
@@ -3242,18 +3226,15 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             })
                                             .next()
                                     {
-                                        let mut left_exponent = left_remaining_factors
-                                            .remove(&left_factor)
-                                            .unwrap();
+                                        let mut left_exponent =
+                                            left_remaining_factors.remove(&left_factor).unwrap();
                                         let min_exponent = left_exponent.min(exponent);
                                         left_exponent -= min_exponent;
                                         let right_exponent = exponent - min_exponent;
                                         if right_exponent != 0 {
-                                            right_remaining_factors
-                                                .insert(factor, right_exponent);
+                                            right_remaining_factors.insert(factor, right_exponent);
                                         } else if left_exponent != 0 {
-                                            left_remaining_factors
-                                                .insert(factor, left_exponent);
+                                            left_remaining_factors.insert(factor, left_exponent);
                                         }
                                         right_remaining_factors
                                             .insert(factor_div_left_factor, min_exponent);
@@ -3312,8 +3293,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                             for (term, exponent) in to_like_powers(&left, &right, subtract) {
                                 if let Numeric(n) = term {
                                     for (sub_f, sub_e) in find_factors_of_numeric(n) {
-                                        *algebraic.entry(sub_f).or_insert(0) +=
-                                            sub_e * exponent;
+                                        *algebraic.entry(sub_f).or_insert(0) += sub_e * exponent;
                                     }
                                 } else {
                                     *algebraic.entry(term).or_insert(0) += exponent;
@@ -3346,8 +3326,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                         for prime in SMALL_PRIMES {
                             let mut prime_to_power = prime as NumericFactor;
                             let mut power = 0;
-                            while modulo_as_numeric_no_evaluate(expr, prime_to_power) == Some(0)
-                            {
+                            while modulo_as_numeric_no_evaluate(expr, prime_to_power) == Some(0) {
                                 power += 1;
                                 let Some(new_power) =
                                     prime_to_power.checked_mul(prime as NumericFactor)
