@@ -2220,8 +2220,9 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                 terms: (ref left, ref right),
                 subtract,
             } => {
-                let left = modulo_as_numeric(left, modulus)?;
+                // right is often simpler, so evaluate it first
                 let right = modulo_as_numeric(right, modulus)?;
+                let left = modulo_as_numeric(left, modulus)?;
                 if subtract {
                     let diff = left.abs_diff(right);
                     Some(if left > right {
@@ -2236,10 +2237,9 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
             Multiply { ref terms, .. } => {
                 let mut product: NumericFactor = 1;
                 for (term, exponent) in terms.iter() {
-                    product = product.checked_mul(
+                    product = product.mulm(
                         modulo_as_numeric(term, modulus)?
-                            .powm(*exponent as NumericFactor, &modulus),
-                    )? % modulus;
+                            .powm(*exponent as NumericFactor, &modulus), &modulus);
                 }
                 Some(product)
             }
@@ -2263,8 +2263,9 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                 ref base,
                 ref exponent,
             } => {
-                let base_mod = modulo_as_numeric(base, modulus)?;
+                // Exponent is usually simpler, so evaluate it first
                 let exp = evaluate_as_numeric(exponent)?;
+                let base_mod = modulo_as_numeric(base, modulus)?;
                 Some(base_mod.powm(exp, &modulus))
             }
             Fibonacci(ref term) => {
