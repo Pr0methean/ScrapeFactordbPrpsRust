@@ -760,7 +760,7 @@ impl Ord for ComplexFactor {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq)]
 pub enum Factor {
     Numeric(NumericFactor),
     BigNumber {
@@ -776,6 +776,34 @@ pub enum Factor {
         hash: OnceLock<u64>,
         inner: Arc<ComplexFactor>,
     },
+}
+
+impl PartialEq for Factor {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Numeric(s), Numeric(o)) => s == o,
+            (ElidedNumber(s), ElidedNumber(o)) => s == o,
+            (Factor::BigNumber { inner: s, hash: sh }, Factor::BigNumber { inner: o, hash: oh }) => {
+                if let Some(sh) = sh.get() && let Some(oh) = oh.get() && sh != oh {
+                    return false;
+                }
+                s == o
+            },
+            (UnknownExpression { inner: s, hash: sh }, UnknownExpression { inner: o, hash: oh }) => {
+                if let Some(sh) = sh.get() && let Some(oh) = oh.get() && sh != oh {
+                    return false;
+                }
+                s == o
+            },
+            (Complex { inner: s, hash: sh }, Complex { inner: o, hash: oh }) => {
+                if let Some(sh) = sh.get() && let Some(oh) = oh.get() && sh != oh {
+                    return false;
+                }
+                s == o
+            }
+            _ => false
+        }
+    }
 }
 
 impl PartialOrd for Factor {
