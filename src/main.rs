@@ -35,6 +35,7 @@ use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
+use nonzero::nonzero;
 use primitive_types::U256;
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
@@ -58,7 +59,6 @@ use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
-use nonzero::nonzero;
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
 use tokio::signal::ctrl_c;
@@ -546,7 +546,9 @@ async fn main() -> anyhow::Result<()> {
         }
         if prp_digits.is_none() {
             prp_digits = Some(PRP_MIN_DIGITS.saturating_add(NumberLength::try_from(
-                (run_number * 9973) % EntryId::from(PRP_MAX_DIGITS.get() - PRP_MIN_DIGITS.get() + 1))?));
+                (run_number * 9973)
+                    % EntryId::from(PRP_MAX_DIGITS.get() - PRP_MIN_DIGITS.get() + 1),
+            )?));
         }
         info!("Run number is {run_number}");
     }
@@ -565,15 +567,19 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Duration::from_mins(3)
     };
-    let mut prp_digits = prp_digits.unwrap_or_else(||
-        rng().random_range(PRP_MIN_DIGITS.get()..=PRP_MAX_DIGITS.get()).try_into().unwrap());
-    let mut prp_start = prp_start.unwrap_or_else(||
+    let mut prp_digits = prp_digits.unwrap_or_else(|| {
+        rng()
+            .random_range(PRP_MIN_DIGITS.get()..=PRP_MAX_DIGITS.get())
+            .try_into()
+            .unwrap()
+    });
+    let mut prp_start = prp_start.unwrap_or_else(|| {
         if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
             0
         } else {
             rng().random_range(0..=MAX_START)
         }
-    );
+    });
     info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
     let mut max_concurrent_requests = 2usize;
