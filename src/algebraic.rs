@@ -1149,7 +1149,7 @@ impl Factor {
         if let Some(n) = self_numeric {
             if let Some(other_n) = evaluate_as_numeric(other) {
                 return other_n > n && other_n.is_multiple_of(n);
-            } else if let Some(m) = modulo_as_numeric(other, n)
+            } else if let Some(m) = modulo_as_numeric_no_evaluate(other, n)
                 && m != 0
             {
                 return false;
@@ -1283,10 +1283,14 @@ impl Factor {
             .contains(&other_last_digit)
         } else {
             if self_numeric.is_none() {
+                let other_numeric = evaluate_as_numeric(other);
                 for prime in SMALL_PRIMES {
-                    if let Some(m) = modulo_as_numeric(self, prime.into())
-                        && let Some(other_m) = modulo_as_numeric(other, prime.into())
-                        && (m != 0) ^ (other_m != 0) {
+                    if let Some(m) = modulo_as_numeric_no_evaluate(self, prime.into())
+                        && let Some(other_m) = if let Some(other_n) = other_numeric {
+                            other_n % prime.into()
+                        } else {
+                            modulo_as_numeric_no_evaluate(other, prime.into())
+                        } && (m != 0) ^ (other_m != 0) {
                         return false;
                     }
                 }
@@ -2182,6 +2186,10 @@ pub(crate) fn modulo_as_numeric(expr: &Factor, modulus: NumericFactor) -> Option
     if let Some(eval) = evaluate_as_numeric(expr) {
         return Some(eval % modulus);
     }
+    modulo_as_numeric_no_evaluate(expr, &modulus)
+}
+
+fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: &NumericFactor) -> Option<NumericFactor> {
     match modulus {
         0 => {
             warn!("Attempted to evaluate {expr} modulo 0");
@@ -3147,7 +3155,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                             for prime in SMALL_PRIMES {
                                 let mut prime_to_power = prime as NumericFactor;
                                 let mut power = 0;
-                                while modulo_as_numeric(expr, prime_to_power) == Some(0) {
+                                while modulo_as_numeric_no_evaluate(expr, prime_to_power) == Some(0) {
                                     power += 1;
                                     let Some(new_power) =
                                         prime_to_power.checked_mul(prime as NumericFactor)
