@@ -2,9 +2,9 @@ use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
-use crate::{get_from_cache, get_random_state};
 use crate::net::BigNumber;
 use crate::{NumberLength, frame_sync, hash, write_bignum};
+use crate::{get_from_cache, get_random_state};
 use ahash::RandomState;
 use async_backtrace::location;
 use derivative::Derivative;
@@ -784,25 +784,40 @@ impl PartialEq for Factor {
         match (self, other) {
             (Numeric(s), Numeric(o)) => s == o,
             (ElidedNumber(s), ElidedNumber(o)) => s == o,
-            (Factor::BigNumber { inner: s, hash: sh }, Factor::BigNumber { inner: o, hash: oh }) => {
-                if let Some(sh) = sh.get() && let Some(oh) = oh.get() && sh != oh {
-                    return false;
-                }
-                s == o
-            },
-            (UnknownExpression { inner: s, hash: sh }, UnknownExpression { inner: o, hash: oh }) => {
-                if let Some(sh) = sh.get() && let Some(oh) = oh.get() && sh != oh {
-                    return false;
-                }
-                s == o
-            },
-            (Complex { inner: s, hash: sh }, Complex { inner: o, hash: oh }) => {
-                if let Some(sh) = sh.get() && let Some(oh) = oh.get() && sh != oh {
+            (
+                Factor::BigNumber { inner: s, hash: sh },
+                Factor::BigNumber { inner: o, hash: oh },
+            ) => {
+                if let Some(sh) = sh.get()
+                    && let Some(oh) = oh.get()
+                    && sh != oh
+                {
                     return false;
                 }
                 s == o
             }
-            _ => false
+            (
+                UnknownExpression { inner: s, hash: sh },
+                UnknownExpression { inner: o, hash: oh },
+            ) => {
+                if let Some(sh) = sh.get()
+                    && let Some(oh) = oh.get()
+                    && sh != oh
+                {
+                    return false;
+                }
+                s == o
+            }
+            (Complex { inner: s, hash: sh }, Complex { inner: o, hash: oh }) => {
+                if let Some(sh) = sh.get()
+                    && let Some(oh) = oh.get()
+                    && sh != oh
+                {
+                    return false;
+                }
+                s == o
+            }
+            _ => false,
         }
     }
 }
@@ -2420,10 +2435,12 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                         .powm(*exponent as NumericFactor, &modulus);
                     match modinv(term_mod, modulus) {
                         Some(inv) => result = result.mulm(inv, &modulus),
-                        None => if let Some(new_result) = result.div_exact(term_mod) {
-                            result = new_result;
-                        } else {
-                            return None;
+                        None => {
+                            if let Some(new_result) = result.div_exact(term_mod) {
+                                result = new_result;
+                            } else {
+                                return None;
+                            }
                         }
                     }
                 }
