@@ -13,7 +13,7 @@ use crate::{
     MAX_ID_EQUAL_TO_VALUE, ReportFactorResult, SUBMIT_FACTOR_MAX_ATTEMPTS, create_cache,
 };
 use crate::{Factor, NumberSpecifier, NumberStatusApiResponse, RETRY_DELAY};
-use async_backtrace::{framed, location};
+use async_backtrace::framed;
 use atomic_time::AtomicInstant;
 use core::cell::RefCell;
 use core::fmt::{Display, Formatter};
