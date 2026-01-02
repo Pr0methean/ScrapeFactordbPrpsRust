@@ -2353,24 +2353,37 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
         };
     }
 
-    match modulus {
-        0 => {
-            warn!("Attempted to evaluate {expr} modulo 0");
-            None
-        }
-        1 => Some(0),
-        3 => with_reducer!(FixedMersenneInt::<2, 1>::new(0, &3)),
-        7 => with_reducer!(FixedMersenneInt::<3, 1>::new(0, &7)),
-        15 => with_reducer!(FixedMersenneInt::<4, 1>::new(0, &15)),
-        31 => with_reducer!(FixedMersenneInt::<5, 1>::new(0, &31)),
-        63 => with_reducer!(FixedMersenneInt::<6, 1>::new(0, &63)),
-        127 => with_reducer!(FixedMersenneInt::<7, 1>::new(0, &127)),
-        _ => if !modulus.is_multiple_of(2) {
-            with_reducer!(MontgomeryInt::new(0, &modulus))
-        } else {
-            with_reducer!(VanillaInt::new(0, &modulus))
-        }
+    macro_rules! with_mersenne_reducers {
+        ($($x:expr),+) => {
+            {
+                paste::paste! {
+                    $(
+                        const [<M_ $x>]: NumericFactor = (1 << $x) - 1;
+                    )+
+                    match modulus {
+                        0 => {
+                            warn!("Attempted to evaluate {expr} modulo 0");
+                            None
+                        }
+                        1 => Some(0),
+                        $([<M_ $x>] => with_reducer!(FixedMersenneInt::<$x, 1>::new(0, &[<M_ $x>])),)+
+                        _ => if !modulus.is_multiple_of(2) {
+                            with_reducer!(MontgomeryInt::new(0, &modulus))
+                        } else {
+                            with_reducer!(VanillaInt::new(0, &modulus))
+                        }
+                    }
+                }
+            }
+        };
     }
+
+    // FixedMersenneInt doesn't require that p or 2^p-1 actually be prime, only that the latter
+    // have no factors smaller than 17. This usually means p must be prime; the exceptions are
+    // 25, 35, 49, 55, 65, 77, 85, 95, 115, 121, 125
+    with_mersenne_reducers!(5, 7, 11, 13, 17, 19, 23, 25, 29, 31, 35, 37, 41, 43, 47, 49, 53,
+        55, 59, 61, 65, 67, 71, 73, 77, 79, 83, 85, 89, 91, 95, 97, 101, 103, 107, 109, 113,
+        115, 119, 121, 125, 127)
 }
 
 fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(expr: &Factor, reducer: &ReducedInt<NumericFactor, T>) -> Option<ReducedInt<NumericFactor, T>> {
