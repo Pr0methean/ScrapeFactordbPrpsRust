@@ -1290,7 +1290,9 @@ impl Factor {
                             Some(other_n % NumericFactor::from(prime))
                         } else {
                             modulo_as_numeric_no_evaluate(other, NumericFactor::from(prime))
-                        } && (m != 0) ^ (other_m != 0) {
+                        }
+                        && (m != 0) ^ (other_m != 0)
+                    {
                         return false;
                     }
                 }
@@ -3155,7 +3157,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                             for prime in SMALL_PRIMES {
                                 let mut prime_to_power = prime as NumericFactor;
                                 let mut power = 0;
-                                while modulo_as_numeric_no_evaluate(expr, prime_to_power) == Some(0) {
+                                while modulo_as_numeric_no_evaluate(expr, prime_to_power) == Some(0)
+                                {
                                     power += 1;
                                     let Some(new_power) =
                                         prime_to_power.checked_mul(prime as NumericFactor)
