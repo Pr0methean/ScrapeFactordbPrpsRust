@@ -90,6 +90,14 @@ pub fn create_cache<T: Eq + Hash, U: Clone>(capacity: usize) -> BasicCache<T, U>
     )
 }
 
+pub fn get_from_cache<'a, K: Eq + Hash, V: Clone>(cache: &'a BasicCache<K, V>, key: &'a K) -> Option<V> {
+    if cache.is_empty() {
+        None
+    } else {
+        cache.get(key)
+    }
+}
+
 pub fn hash(input: impl Hash) -> u64 {
     get_random_state().hash_one(input)
 }

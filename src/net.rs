@@ -1,4 +1,4 @@
-use crate::BasicCache;
+use crate::{get_from_cache, BasicCache};
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, OtherError};
 use crate::algebraic::Factor::Numeric;
@@ -552,7 +552,7 @@ impl FactorDbClient for RealFactorDbClient {
             Expression(x) => {
                 if let Numeric(n) = **x {
                     Some(n)
-                } else if let Some(Some(n)) = get_numeric_value_cache().get(x.as_ref()) {
+                } else if let Some(Some(n)) = get_from_cache(get_numeric_value_cache(), x.as_ref()) {
                     Some(n)
                 } else {
                     None
@@ -579,9 +579,9 @@ impl FactorDbClient for RealFactorDbClient {
                 self.expression_form_cache
                     .get(id)
                     .as_ref()
-                    .and_then(|expr| self.by_expr_cache.get(expr))
+                    .and_then(|expr| get_from_cache(&self.by_expr_cache, expr))
             }),
-            Expression(expr) => self.by_expr_cache.get(expr.as_ref()),
+            Expression(expr) => get_from_cache(&self.by_expr_cache, expr.as_ref()),
         };
         if cached.is_some() {
             info!("Factor cache hit for {id}");

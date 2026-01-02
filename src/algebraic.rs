@@ -1,3 +1,4 @@
+use crate::get_from_cache;
 use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
@@ -2109,12 +2110,12 @@ fn get_cached_log10_bounds(expr: &Factor) -> Option<(NumberLength, NumberLength)
         return Some(log10_bounds(numeric_value));
     }
     let log10_estimate_cache = get_log10_cache();
-    if let Some(Some(numeric_value)) = get_numeric_value_cache().get(expr) {
+    if let Some(Some(numeric_value)) = get_from_cache(get_numeric_value_cache(), expr) {
         // Any old estimate is no longer worth saving
         log10_estimate_cache.remove(expr);
         return Some(log10_bounds(numeric_value));
     }
-    log10_estimate_cache.get(expr)
+    get_from_cache(log10_estimate_cache, expr)
 }
 
 fn get_log10_cache() -> &'static SyncFactorCache<(NumberLength, NumberLength)> {
@@ -2679,7 +2680,7 @@ pub(crate) fn evaluate_as_numeric(expr: &Factor) -> Option<NumericFactor> {
         return Some(*n);
     }
     let numeric_value_cache = get_numeric_value_cache();
-    let cached = numeric_value_cache.get(expr);
+    let cached = get_from_cache(numeric_value_cache, expr);
     match cached {
         Some(numeric) => numeric,
         None => {
@@ -2816,7 +2817,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
         return find_factors_of_numeric(*n);
     }
     let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE));
-    let cached = factor_cache.get(expr);
+    let cached = get_from_cache(factor_cache, expr);
     match cached {
         Some(cached) => cached,
         None => {
@@ -3273,7 +3274,7 @@ fn find_common_factors(expr1: &Factor, expr2: &Factor) -> BTreeMap<Factor, Numbe
 pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
     let unique_factor_cache =
         UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(UNIQUE_FACTOR_CACHE_SIZE));
-    let cached = unique_factor_cache.get(expr);
+    let cached = get_from_cache(unique_factor_cache, expr);
     match cached {
         Some(cached) => cached,
         None => {
