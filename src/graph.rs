@@ -92,7 +92,10 @@ impl FactorData {
         Self::resolve_vid_internal(&mut self.deleted_synonyms, vertex_id)
     }
 
-    pub fn resolve_vid_internal(deleted_synonyms: &mut BTreeMap<VertexId, VertexId>, mut vertex_id: VertexId) -> VertexId {
+    pub fn resolve_vid_internal(
+        deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
+        mut vertex_id: VertexId,
+    ) -> VertexId {
         let mut synonyms_to_forward = Vec::new();
         while let Some(synonym) = deleted_synonyms.get(&vertex_id) {
             synonyms_to_forward.push(*synonym);
