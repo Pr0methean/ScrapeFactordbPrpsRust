@@ -3498,7 +3498,10 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 }
             }
             if factors.is_empty() {
-                warn!("No factors found for expression {expr} after {:?}", Instant::now() - start_time);
+                warn!(
+                    "No factors found for expression {expr} after {:?}",
+                    Instant::now() - start_time
+                );
             } else {
                 info!(
                     "Found factors of expression {expr} after {:?}: {}",
