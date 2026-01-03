@@ -5,7 +5,7 @@ use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression
 use crate::net::BigNumber;
 use crate::{NumberLength, hash, write_bignum};
 use crate::{get_from_cache, get_random_state};
-use ahash::RandomState;
+use ahash::{HashMap, HashMapExt, RandomState};
 use derivative::Derivative;
 use hipstr::HipStr;
 use itertools::Itertools;
@@ -32,7 +32,7 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::mem::swap;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use tokio::task;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::Verbosity::Silent;
@@ -2353,10 +2353,18 @@ fn modulo_as_reduced<T: Reducer<NumericFactor> + std::clone::Clone>(
     }
 }
 
+static SMALL_PRIME_MONTGOMERIES: LazyLock<HashMap<NumericFactor, MontgomeryInt<NumericFactor>>> = LazyLock::new(|| {
+    let mut map = HashMap::with_capacity(SMALL_PRIMES.len() - 1);
+    for prime in SMALL_PRIMES.iter().copied().skip(1) {
+        map.insert(prime as NumericFactor, MontgomeryInt::new(0, &(prime as NumericFactor)));
+    }
+    map
+});
+
 fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
     macro_rules! with_reducer {
         ($reducer:expr) => {
-            modulo_as_reduced_no_evaluate(expr, &$reducer).map(|monty| monty.residue())
+            modulo_as_reduced_no_evaluate(expr, $reducer).map(|monty| monty.residue())
         };
     }
 
@@ -2373,11 +2381,15 @@ fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Optio
                             None
                         }
                         1 => Some(0),
-                        $([<M_ $x>] => with_reducer!(FixedMersenneInt::<$x, 1>::new(0, &[<M_ $x>])),)+
+                        $([<M_ $x>] => with_reducer!(&FixedMersenneInt::<$x, 1>::new(0, &[<M_ $x>])),)+
                         _ => if !modulus.is_multiple_of(2) {
-                            with_reducer!(MontgomeryInt::new(0, &modulus))
+                            if let Some(prebuilt_monty) = SMALL_PRIME_MONTGOMERIES.get(&modulus) {
+                                with_reducer!(prebuilt_monty)
+                            } else {
+                                with_reducer!(&MontgomeryInt::new(0, &modulus))
+                            }
                         } else {
-                            with_reducer!(VanillaInt::new(0, &modulus))
+                            with_reducer!(&VanillaInt::new(0, &modulus))
                         }
                     }
                 }
