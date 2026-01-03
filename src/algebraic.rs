@@ -34,6 +34,7 @@ use std::hint::unreachable_unchecked;
 use std::mem::swap;
 use std::sync::{Arc, LazyLock, OnceLock};
 use tokio::task;
+use tokio::time::Instant;
 use yamaquasi::Algo::Siqs;
 use yamaquasi::Verbosity::Silent;
 use yamaquasi::{Preferences, factor};
@@ -3461,6 +3462,7 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
     match cached {
         Some(cached) => cached,
         None => {
+            let start_time = Instant::now();
             let simplified = simplify(expr);
             let mut factors = BTreeSet::new();
             let mut raw_factors: Vec<_> = find_factors(expr).into_iter().collect();
@@ -3496,10 +3498,11 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                 }
             }
             if factors.is_empty() {
-                warn!("No factors found for expression {expr}");
+                warn!("No factors found for expression {expr} after {:?}", Instant::now() - start_time);
             } else {
                 info!(
-                    "Found factors of expression {expr}: {}",
+                    "Found factors of expression {expr} after {:?}: {}",
+                    Instant::now() - start_time,
                     factors.iter().join(", ")
                 );
             }
