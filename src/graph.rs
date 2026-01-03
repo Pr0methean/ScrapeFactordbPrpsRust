@@ -88,9 +88,13 @@ enum WorkItem {
 }
 
 impl FactorData {
-    pub fn resolve_vid(&mut self, mut vertex_id: VertexId) -> VertexId {
+    pub fn resolve_vid(&mut self, vertex_id: VertexId) -> VertexId {
+        Self::resolve_vid_internal(&mut self.deleted_synonyms, vertex_id)
+    }
+
+    pub fn resolve_vid_internal(deleted_synonyms: &mut BTreeMap<VertexId, VertexId>, mut vertex_id: VertexId) -> VertexId {
         let mut synonyms_to_forward = Vec::new();
-        while let Some(synonym) = self.deleted_synonyms.get(&vertex_id) {
+        while let Some(synonym) = deleted_synonyms.get(&vertex_id) {
             synonyms_to_forward.push(*synonym);
             vertex_id = *synonym;
         }
@@ -98,10 +102,24 @@ impl FactorData {
             vertex_id = *last;
             // Optimization: path compression
             for synonym in synonyms_to_forward.into_iter().rev().skip(1) {
-                self.deleted_synonyms.insert(synonym, vertex_id);
+                deleted_synonyms.insert(synonym, vertex_id);
             }
         }
         vertex_id
+    }
+
+    pub fn vid_for_entry_id(&mut self, entry_id: EntryId) -> Option<VertexId> {
+        let raw_vid = self.vertex_id_by_entry_id.get_mut(&entry_id)?;
+        let vid = Self::resolve_vid_internal(&mut self.deleted_synonyms, *raw_vid);
+        *raw_vid = vid;
+        Some(vid)
+    }
+
+    pub fn vid_for_expr(&mut self, expr: &Factor) -> Option<VertexId> {
+        let raw_vid = self.vertex_id_by_expr.get_mut(expr)?;
+        let vid = Self::resolve_vid_internal(&mut self.deleted_synonyms, *raw_vid);
+        *raw_vid = vid;
+        Some(vid)
     }
 
     pub fn get_factor(&mut self, vertex_id: VertexId) -> Factor {
@@ -306,14 +324,14 @@ impl FactorData {
         let current = self.get_factor(factor_vid);
         let factor_vid = self.resolve_vid(factor_vid);
         if equivalent == current {
-            vec![]
-        } else if let Some(existing_vid) = self.vertex_id_by_expr.get(&equivalent).copied()
-            && self.resolve_vid(existing_vid) == factor_vid
-        {
+            return vec![];
+        }
+        let existing_vid = self.vid_for_expr(&equivalent);
+        if existing_vid == Some(factor_vid) {
             vec![]
         } else {
             info!("Merging equivalent expressions {current} and {equivalent}");
-            if let Some(existing_vid) = self.vertex_id_by_expr.get(&equivalent).copied() {
+            if let Some(existing_vid) = existing_vid {
                 merge_vertices(self, http, factor_vid, existing_vid);
             }
             self.vertex_id_by_expr
@@ -385,19 +403,14 @@ pub fn add_factor_node(
     entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
-    let existing_vertex_raw = data.vertex_id_by_expr.get(&factor).copied();
-    let existing_vertex = existing_vertex_raw.map(|vertex_id| data.resolve_vid(vertex_id));
-
+    let existing_vertex = data.vid_for_expr(&factor);
     let entry_id = entry_id.or_else(|| data.facts(existing_vertex?)?.entry_id);
     let cached_factors = entry_id
         .and_then(|entry_id| http.cached_factors(&Id(entry_id)))
         .or_else(|| http.cached_factors(&Expression(Borrowed(&factor))));
     let cached_entry_id = cached_factors.as_ref().and_then(|factors| factors.id);
     let entry_id = entry_id.or(cached_entry_id);
-    let matching_vid_raw =
-        entry_id.and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id).copied());
-    let matching_vid = matching_vid_raw.map(|vertex_id| data.resolve_vid(vertex_id));
-
+    let matching_vid = entry_id.and_then(|entry_id| data.vid_for_entry_id(entry_id));
     let (merge_dest, added) = existing_vertex
         .or(matching_vid)
         .map(|x| (x, false))
