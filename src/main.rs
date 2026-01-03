@@ -601,7 +601,7 @@ async fn main() -> anyhow::Result<()> {
                 Mutex::new(File::options().append(true).open("composites").unwrap())
             })
             .await;
-        max_concurrent_requests = 3;
+        max_concurrent_requests = 2;
     }
     let http = Arc::new(RealFactorDbClient::new(
         rph_limit,
