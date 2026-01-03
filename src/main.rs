@@ -1001,7 +1001,6 @@ async fn main() -> anyhow::Result<()> {
             let mut id_count = 0;
             for (u_id, digits_or_expr) in ids {
                 id_count += 1;
-                let digits_or_expr = digits_or_expr.to_owned();
                 if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
                     graph_tasks.join_all().await;
@@ -1012,11 +1011,17 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 let _ = u_filter.add(&u_id);
-                while graph_tasks.len() >= 2 {
-                    let _ = graph_tasks.join_next().await;
-                }
+                let digits_or_expr = digits_or_expr.to_owned();
                 let u_http_clone = u_http.clone();
                 let u_sender_clone = u_sender.clone();
+                while graph_tasks.len() >= 2 {
+                    let _ = graph_tasks.join_next().await;
+                    if u_shutdown_receiver.check_for_shutdown() {
+                        warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                        graph_tasks.join_all().await;
+                        return;
+                    }
+                }
                 graph_tasks.spawn(async move {
                     if graph::find_and_submit_factors(
                         u_http_clone.as_ref(),
