@@ -1012,7 +1012,7 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 let _ = u_filter.add(&u_id);
-                while graph_tasks.len() >= 4 {
+                while graph_tasks.len() >= 3 {
                     let _ = graph_tasks.join_next().await;
                 }
                 let u_http_clone = u_http.clone();
