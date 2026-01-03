@@ -2353,13 +2353,17 @@ fn modulo_as_reduced<T: Reducer<NumericFactor> + std::clone::Clone>(
     }
 }
 
-static SMALL_PRIME_MONTGOMERIES: LazyLock<HashMap<NumericFactor, MontgomeryInt<NumericFactor>>> = LazyLock::new(|| {
-    let mut map = HashMap::with_capacity(SMALL_PRIMES.len() - 1);
-    for prime in SMALL_PRIMES.iter().copied().skip(1) {
-        map.insert(prime as NumericFactor, MontgomeryInt::new(0, &(prime as NumericFactor)));
-    }
-    map
-});
+static SMALL_PRIME_MONTGOMERIES: LazyLock<HashMap<NumericFactor, MontgomeryInt<NumericFactor>>> =
+    LazyLock::new(|| {
+        let mut map = HashMap::with_capacity(SMALL_PRIMES.len() - 1);
+        for prime in SMALL_PRIMES.iter().copied().skip(1) {
+            map.insert(
+                prime as NumericFactor,
+                MontgomeryInt::new(0, &(prime as NumericFactor)),
+            );
+        }
+        map
+    });
 
 fn modulo_as_numeric_no_evaluate(expr: &Factor, modulus: NumericFactor) -> Option<NumericFactor> {
     macro_rules! with_reducer {
