@@ -40,8 +40,9 @@ yamaquasi = { git = "https://github.com/remyoudompheng/yamaquasi.git" }
 derivative = "2.2"
 ahash = "0.8"
 sysinfo = "0.37"
-stats_alloc = "0.1"
+stats_alloc = { version = "0.1", features = ["nightly"] }
 paste = "1.0"
+tikv-jemallocator = "0.6"
 
 [dev-dependencies]
 mockall = "0.14"

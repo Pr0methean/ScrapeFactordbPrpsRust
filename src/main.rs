@@ -43,8 +43,8 @@ use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};
-use std::alloc::{GlobalAlloc, System};
+use stats_alloc::{StatsAlloc};
+use std::alloc::{GlobalAlloc};
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
@@ -60,6 +60,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
+use tikv_jemallocator::Jemalloc;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
@@ -70,7 +71,7 @@ use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
 #[global_allocator]
-static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
+static GLOBAL: StatsAlloc<Jemalloc> = StatsAlloc::new(Jemalloc);
 
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
 
@@ -492,7 +493,7 @@ pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sys
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
-    let mut reg = stats_alloc::Region::new(GLOBAL);
+    let mut reg = stats_alloc::Region::new(&GLOBAL);
     let mut sys = sysinfo::System::new_with_specifics(
         RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
     );
