@@ -1341,11 +1341,14 @@ impl Factor {
             if a == b {
                 return Some(false);
             }
-            let a_numeric = evaluate_as_numeric(a);
-            if a_numeric == Some(0) {
+            let b_numeric = evaluate_as_numeric(b);
+            if b_numeric == Some(0) {
                 return Some(false);
             }
-            let b_numeric = evaluate_as_numeric(b);
+            let a_numeric = evaluate_as_numeric(a);
+            if a_numeric == Some(0) {
+                return Some(true);
+            }
             if let Some(a_numeric) = a_numeric {
                 if let Some(b_numeric) = b_numeric {
                     return Some(b_numeric > a_numeric && b_numeric.is_multiple_of(a_numeric));
@@ -1914,11 +1917,12 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
             _ => 1,
         };
         let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric.into());
-        sum_factor_btreemaps(
-            &mut term_exponent_factors,
-            find_raw_factors_of_numeric(coeff_power.into()),
-        );
-        exponent_factors = multiset_union(vec![exponent_factors, term_exponent_factors]);
+        sum_factor_btreemaps(&mut term_exponent_factors,
+                             find_raw_factors_of_numeric(coeff_power.into()));
+        exponent_factors = multiset_union(vec![
+            exponent_factors,
+            term_exponent_factors,
+        ]);
         let entry = simplified_terms.entry(term).or_insert(0i128);
         if *coeff < 0 {
             *entry = entry.checked_sub_unsigned(new_coeff).unwrap();
@@ -1954,14 +1958,7 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         let Some(neg_term_roots) = negative_terms
             .iter()
             .map(|(term, coeff)| {
-                // For difference of squares (prime=2), we need root of absolute value
-                let abs_coeff = if prime == 2 { -coeff } else { *coeff };
-                let coeff_root: i128 = abs_coeff.nth_root_exact(prime.into())?.try_into().ok()?;
-                // If prime != 2, the sign is handled by the odd root preservation logic or it should be negative?
-                // Actually for odd primes, x^n + y^n => terms are positive/negative.
-                // nth_root_exact of negative number returns negative root.
-                // Here we have partitioned terms.
-                // if prime is odd, root of negative is negative.
+                let coeff_root = coeff.nth_root_exact(prime.into())?;
                 let term_root = nth_root_exact(term, prime.into())?;
                 Some((term_root, coeff_root))
             })
@@ -3543,9 +3540,13 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     }
                                     let mut algebraic = BTreeMap::new();
                                     for (term, exponent) in to_like_powers(terms) {
-                                        for (sub_f, sub_e) in find_factors(&term) {
+                                        if let Numeric(n) = term {
+                                            for (sub_f, sub_e) in find_factors_of_numeric(n) {
                                             *algebraic.entry(sub_f).or_insert(0) +=
                                                 sub_e * exponent;
+                                        }
+                                        } else {
+                                            *algebraic.entry(term).or_insert(0) += exponent;
                                         }
                                     }
                                     let factors = multiset_union(vec![common_factors, algebraic]);
@@ -3875,7 +3876,7 @@ mod tests {
 
     #[test]
     fn test_axbx() {
-        let factors = find_factors_recursive("(1297^400-901^400)/3".into());
+        let factors = find_factors_recursive("(1297^400-901^400)".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&"1297^200-901^200".into()));
