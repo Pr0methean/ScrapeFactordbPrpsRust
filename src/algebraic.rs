@@ -1356,13 +1356,35 @@ impl Factor {
                         return false;
                     }
                 }
-                Complex { inner: ref c, .. } if matches!(**c, Divide { .. }) => {
+                Complex { inner: ref c, .. } => if let Divide { ref right, .. } = **c {
                     // self is a big number, other is a division.
-                    // If self >= other_numerator, it's definitely not a divisor.
-                    if let Divide { ref left, .. } = **c
-                        && self >= left
-                    {
-                        return false;
+                    // If self == other_numerator, it's definitely not a divisor.
+                    if let Divide { ref left, .. } = **c {
+                        if self == left
+                        {
+                            return false;
+                        }
+                        let simplified_left = simplify(left);
+                        let denom_product = simplify_multiply(right.clone());
+                        if div_exact(&simplified_left, &denom_product).is_none()
+                            && !product_may_be_proper_divisor_of(right, left)
+                        {
+                            // Can't be an integer, therefore can't be a divisor
+                            return false;
+                        }
+                        // If the left hand side is not divisible by the product represented by the
+                        // right-hand factors (after simplification), then it can't be an integer,
+                        // therefore it can't be a proper divisor.
+                        //
+                        // Use a real divisibility check rather than a brittle structural equality.
+                        let simplified_left = simplify(left);
+                        let denom_product = simplify_multiply(right.clone());
+                        if div_exact(&simplified_left, &denom_product).is_none()
+                            && !product_may_be_proper_divisor_of(&right, left)
+                        {
+                            // Can't be an integer, therefore can't be a divisor
+                            return false;
+                        }
                     }
                 }
                 _ => {}
