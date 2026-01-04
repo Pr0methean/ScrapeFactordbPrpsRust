@@ -1337,6 +1337,7 @@ impl Factor {
         //   Some(false) => no, `b` is not divisible by `a`
         //   None        => unknown
         fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
+            // quick exit: identical expressions are not proper divisors
             if a == b {
                 return Some(false);
             }
@@ -1345,9 +1346,6 @@ impl Factor {
                 return Some(false);
             }
             let b_numeric = evaluate_as_numeric(b);
-            if b_numeric == Some(0) {
-                return Some(false);
-            }
             if let Some(a_numeric) = a_numeric {
                 if let Some(b_numeric) = b_numeric {
                     return Some(b_numeric > a_numeric && b_numeric.is_multiple_of(a_numeric));
@@ -1418,7 +1416,6 @@ impl Factor {
                 true
             })
         }
-        // quick exit: identical expressions are not proper divisors
         if let Some(exact) = divides_exactly(self, other) {
             return exact;
         }
@@ -1468,9 +1465,8 @@ impl Factor {
                                 Some(true) => return true,
                                 Some(false) => return false,
                                 None => { /* unknown — fall through to general heuristics */ }
-                                }
                             }
-                            if !product_may_be_proper_divisor_of(other, self) {
+                            if !product_may_be_proper_divisor_of(right, self) {
                                 return false;
                             }
                             return true;
@@ -4316,6 +4312,7 @@ mod tests {
         ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
         assert!(may_be_proper_divisor_of("(2^1234-1)/3", "2^1234-1"));
+        assert!(may_be_proper_divisor_of("5", "12345"));
         assert!(may_be_proper_divisor_of("0", "12345"));
         assert!(!may_be_proper_divisor_of("12345", "0"));
     }
@@ -4967,7 +4964,7 @@ mod tests {
     fn test_mod_3() {
         let s = "2^1234-1";
         let f = Factor::from(s);
-        let m = modulo_as_numeric_no_evaluate(&f, 3.into());
+        let m = modulo_as_numeric_no_evaluate(&f, 3u128.into());
         println!("2^1234-1 mod 3 = {:?}", m);
         assert_eq!(m, Some(0));
     }
