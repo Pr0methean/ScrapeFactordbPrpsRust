@@ -1331,62 +1331,63 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
-        // Try to determine whether `a` is exactly divisible by `b`.
+        // Try to determine whether `b` is exactly divisible by `a`.
         // Returns:
-        //   Some(true)  => yes, `a` is divisible by `b`
-        //   Some(false) => no, `a` is not divisible by `b`
-        //   None        => unknown (can't determine cheaply/robustly for BigNumber with large modulus)
-        // Try to determine whether `a` is exactly divisible by `b`.
-        // Returns:
-        //   Some(true)  => yes, `a` is divisible by `b`
-        //   Some(false) => no, `a` is not divisible by `b`
-        //   None        => unknown (should be rare with this approach)
+        //   Some(true)  => yes, `b` is divisible by `a`
+        //   Some(false) => no, `b` is not divisible by `a`
+        //   None        => unknown
         fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
-            if let Some(b_numeric) = evaluate_as_numeric(b) {
-                // If a is a BigNumber / ElidedNumber, do a safe per-digit modular reduction
-                // when modulus fits in u64 (u128 arithmetic used for intermediate).
-                match a {
-                    Factor::BigNumber { inner, .. } => {
-                        if b_numeric <= u64::MAX as u128 {
-                            let mut rem: u128 = 0;
-                            let modulus = b_numeric;
-                            for ch in inner.as_ref().chars() {
-                                let d = ch.to_digit(10)? as u128;
-                                rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
-                            }
-                            return Some(rem == 0);
-                        }
-                        // else fallthrough to modulo_as_numeric_no_evaluate attempt
-                    }
-                    Factor::ElidedNumber(s) => {
-                        if b_numeric <= u64::MAX as u128 {
-                            let mut rem: u128 = 0;
-                            let modulus = b_numeric;
-                            for ch in s.chars() {
-                                let d = ch.to_digit(10)? as u128;
-                                rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
-                            }
-                            return Some(rem == 0);
-                        }
-                        // else fallthrough to modulo_as_numeric_no_evaluate attempt
-                    }
-                    _ => {}
-                }
-
-                // Try computing remainder via modulo_as_numeric_no_evaluate which understands
-                // algebraic forms (Power, AddSub, Multiply, etc.). If it gives a remainder, use it.
-                if let Some(rem) = modulo_as_numeric_no_evaluate(a, b_numeric) {
-                    return Some(rem == 0);
-                }
-
-                // Last resort: attempt an exact symbolic division. If it succeeds it's divisible.
-                // (This won't detect many numeric divisibilities that modulo_as_numeric_no_evaluate would,
-                // but combined with the above checks it is a reasonable fallback.)
-                Some(div_exact(a, b).is_some())
-            } else {
-                // Non-numeric divisor: attempt symbolic exact division.
-                Some(div_exact(a, b).is_some())
+            if a == b {
+                return Some(false);
             }
+            let a_numeric = evaluate_as_numeric(a);
+            if a_numeric == Some(0) {
+                return Some(true);
+            }
+            let b_numeric = evaluate_as_numeric(b);
+            if b_numeric == Some(0) {
+                return Some(false);
+            }
+            if let Some(a_numeric) = a_numeric {
+                if let Some(b_numeric) = b_numeric {
+                    return Some(b_numeric > a_numeric && b_numeric.is_multiple_of(a_numeric));
+                } else if let Some(b_mod_a) = modulo_as_numeric_no_evaluate(b, a_numeric)
+                    && b_mod_a != 0
+                {
+                    return Some(false);
+                }
+            } else {
+                if let Some(b_numeric) = b_numeric {
+                    // Try computing remainder via modulo_as_numeric_no_evaluate which understands
+                    // algebraic forms (Power, AddSub, Multiply, etc.). If it gives a remainder, use it.
+                    if let Some(a_mod_b) = modulo_as_numeric_no_evaluate(a, b_numeric) {
+                        return Some(a_mod_b == 0);
+                    }
+                } else {
+                    for prime in [
+                        900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18,
+                        15, 12, 10, 9, 6, 4,
+                    ]
+                    .iter()
+                    .chain(SMALL_PRIMES.iter())
+                    .copied()
+                    {
+                        if let Some(0) = modulo_as_numeric_no_evaluate(a, prime.into()) {
+                            let b_mod_p = if let Some(b_numeric) = b_numeric {
+                                Some(b_numeric % NumericFactor::from(prime))
+                            } else {
+                                modulo_as_numeric_no_evaluate(b, NumericFactor::from(prime))
+                            };
+                            if let Some(b_mod_p) = b_mod_p
+                                && (b_mod_p != 0)
+                            {
+                                return Some(false);
+                            }
+                        }
+                    }
+                }
+            }
+            None
         }
         fn product_may_be_proper_divisor_of(
             terms: &BTreeMap<Factor, NumberLength>,
@@ -1418,8 +1419,8 @@ impl Factor {
             })
         }
         // quick exit: identical expressions are not proper divisors
-        if self == other {
-            return false;
+        if let Some(exact) = divides_exactly(self, other) {
+            return exact;
         }
         if let Complex { inner: ref c, .. } = *self
             && let Divide {
@@ -1441,24 +1442,6 @@ impl Factor {
             && log10_self_lower > log10_other_upper
         {
             return false;
-        }
-
-        let other_numeric = evaluate_as_numeric(other);
-        if other_numeric == Some(0) || other_numeric == Some(1) {
-            return false;
-        }
-        let self_numeric = evaluate_as_numeric(self);
-        if self_numeric == Some(0) {
-            return false;
-        }
-        if let Some(n) = self_numeric {
-            if let Some(other_n) = other_numeric {
-                return other_n > n && other_n.is_multiple_of(n);
-            } else if let Some(m) = modulo_as_numeric_no_evaluate(other, n)
-                && m != 0
-            {
-                return false;
-            }
         }
         match *self {
             Factor::BigNumber { .. } => match *other {
@@ -1578,11 +1561,6 @@ impl Factor {
             },
             _ => {}
         }
-        eprintln!("DEBUG may_be_proper_divisor_of: self = {}", simplify(self));
-        eprintln!(
-            "DEBUG may_be_proper_divisor_of: other = {}",
-            simplify(other)
-        );
         if let Complex { inner: ref c, .. } = *other {
             match **c {
                 Divide {
@@ -1593,9 +1571,6 @@ impl Factor {
                     let simplified_left = simplify(left);
                     let simplified_self = simplify(self);
                     let denom_product = simplify_multiply(right.clone());
-                    eprintln!("DEBUG other.divide.left = {}", left);
-                    eprintln!("DEBUG simplify(left) = {}", simplified_left);
-                    eprintln!("DEBUG denom product = {}", denom_product);
                     if simplified_left == simplified_self && denom_product != Factor::one() {
                         return false;
                     }
@@ -1621,27 +1596,6 @@ impl Factor {
                     }
                 }
                 _ => {}
-            }
-        }
-        if self_numeric.is_none() {
-            for prime in [
-                900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18, 15, 12,
-                10, 9, 6, 4,
-            ]
-            .iter()
-            .chain(SMALL_PRIMES.iter())
-            .copied()
-            {
-                if let Some(0) = modulo_as_numeric_no_evaluate(self, prime.into())
-                    && let Some(other_m) = if let Some(other_n) = other_numeric {
-                        Some(other_n % NumericFactor::from(prime))
-                    } else {
-                        modulo_as_numeric_no_evaluate(other, NumericFactor::from(prime))
-                    }
-                    && (other_m != 0)
-                {
-                    return false;
-                }
             }
         }
         true
@@ -2664,21 +2618,16 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             ..
         } => {
             let modulus = reducer.modulus();
-            if 900.is_multiple_of(&modulus) {
-                let mod_100 = expr.last_two_digits()? as NumericFactor;
-                let mod_9 = if 100.is_multiple_of(&modulus) {
-                    0
-                } else {
-                    inner_expr
-                        .0
-                        .chars()
-                        .map(|digit| Some((digit.to_digit(10)? % 9) as NumericFactor))
-                        .collect::<Option<Vec<_>>>()?
-                        .into_iter()
-                        .sum::<NumericFactor>()
-                        % 9
-                };
-                return Some(reducer.convert(mod_100 + 801 * mod_9));
+            if 100.is_multiple_of(&modulus) {
+                return Some(reducer.convert(expr.last_two_digits()? as NumericFactor % modulus));
+            }
+            if modulus <= (u128::MAX - 9) / 10 {
+                let mut rem: u128 = 0;
+                for ch in inner_expr.as_ref().chars() {
+                    let d = ch.to_digit(10)? as u128;
+                    rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
+                }
+                return Some(reducer.convert(rem));
             }
             None
         }
@@ -4274,6 +4223,14 @@ mod tests {
     }
 
     #[test]
+    fn test_modulo_as_numeric_no_evaluate() {
+        assert_eq!(
+            Some(1),
+            modulo_as_numeric_no_evaluate(&"1234512345123451234512345123451234512345".into(), 2)
+        );
+    }
+
+    #[test]
     fn test_may_be_proper_divisor_of() {
         fn may_be_proper_divisor_of(left: &str, right: &str) -> bool {
             Factor::from(left).may_be_proper_divisor_of(&Factor::from(right))
@@ -4301,6 +4258,26 @@ mod tests {
             "1234512345123451234512345123451234512345"
         ));
         assert!(may_be_proper_divisor_of(
+            "12345",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(may_be_proper_divisor_of(
+            "12345/1",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(!may_be_proper_divisor_of(
+            "123456",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(!may_be_proper_divisor_of(
+            "123456/1",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(!may_be_proper_divisor_of(
+            "1234512345123451234512345123451234512345/0",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(may_be_proper_divisor_of(
             "1234512345123451234512345123451234512345",
             "1234512345123451234512345123451234512345^2"
         ));
@@ -4310,6 +4287,8 @@ mod tests {
         ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
         assert!(may_be_proper_divisor_of("(2^1234-1)/3", "2^1234-1"));
+        assert!(may_be_proper_divisor_of("0", "12345"));
+        assert!(!may_be_proper_divisor_of("12345", "0"));
     }
 
     #[test]
