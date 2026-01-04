@@ -1459,28 +1459,9 @@ impl Factor {
                         if self == left {
                             return false;
                         }
-                        if left == other {
-                            let denom_product = simplify_multiply(right.clone());
-                            match divides_exactly(left, &denom_product) {
-                                Some(true) => return true,
-                                Some(false) => return false,
-                                None => { /* unknown — fall through to general heuristics */ }
-                            }
-                            if !product_may_be_proper_divisor_of(right, self) {
-                                return false;
-                            }
-                            return true;
-                        } else {
-                            let simplified_self = simplify(self);
-                            if let Some(true) = divides_exactly(other, &simplified_self) {
-                                // other divides self exactly => self > other (except equality handled above)
-                                // so self cannot be proper divisor of other
-                                return false;
-                            }
-                        }
                         let simplified_left = simplify(left);
                         let denom_product = simplify_multiply(right.clone());
-                        match divides_exactly(&denom_product, &simplified_left) {
+                        match divides_exactly(&simplified_left, &denom_product) {
                             Some(true) => { /* divisor divides numerator — OK */ }
                             Some(false) => {
                                 if !product_may_be_proper_divisor_of(right, left) {
@@ -1510,8 +1491,8 @@ impl Factor {
                     if div_exact(&simplified_left, &denom_product).is_none()
                         && !product_may_be_proper_divisor_of(right, left)
                     {
-                            // Can't be an integer, therefore can't be a divisor
-                            return false;
+                        // Can't be an integer, therefore can't be a divisor
+                        return false;
                     }
                 }
                 Multiply { ref terms, .. } => {
@@ -3498,11 +3479,11 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                         for (subfactor, subfactor_exponent) in subfactors
                                             .into_iter()
                                             .filter(|(subfactor, _)| *subfactor != factor && !matches!(subfactor, Complex { inner: c, .. } if matches!(**c, Divide {ref left, ..} if *left == factor)))
-                                            {
-                                                *right_remaining_factors
-                                                    .entry(subfactor)
-                                                    .or_insert(0) += subfactor_exponent * exponent;
-                                            }
+                                        {
+                                            *right_remaining_factors
+                                                .entry(subfactor)
+                                                .or_insert(0) += subfactor_exponent * exponent;
+                                        }
                                     }
                                 }
                                 sum_factor_btreemaps(
