@@ -1293,6 +1293,63 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
+        // Try to determine whether `a` is exactly divisible by `b`.
+        // Returns:
+        //   Some(true)  => yes, `a` is divisible by `b`
+        //   Some(false) => no, `a` is not divisible by `b`
+        //   None        => unknown (can't determine cheaply/robustly for BigNumber with large modulus)
+        // Try to determine whether `a` is exactly divisible by `b`.
+        // Returns:
+        //   Some(true)  => yes, `a` is divisible by `b`
+        //   Some(false) => no, `a` is not divisible by `b`
+        //   None        => unknown (should be rare with this approach)
+        fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
+            if let Some(b_numeric) = evaluate_as_numeric(b) {
+                // If a is a BigNumber / ElidedNumber, do a safe per-digit modular reduction
+                // when modulus fits in u64 (u128 arithmetic used for intermediate).
+                match a {
+                    Factor::BigNumber { inner, .. } => {
+                        if b_numeric <= u64::MAX as u128 {
+                            let mut rem: u128 = 0;
+                            let modulus = b_numeric;
+                            for ch in inner.as_ref().chars() {
+                                let d = ch.to_digit(10)? as u128;
+                                rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
+                            }
+                            return Some(rem == 0);
+                        }
+                        // else fallthrough to modulo_as_numeric_no_evaluate attempt
+                    }
+                    Factor::ElidedNumber(s) => {
+                        if b_numeric <= u64::MAX as u128 {
+                            let mut rem: u128 = 0;
+                            let modulus = b_numeric;
+                            for ch in s.chars() {
+                                let d = ch.to_digit(10)? as u128;
+                                rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
+                            }
+                            return Some(rem == 0);
+                        }
+                        // else fallthrough to modulo_as_numeric_no_evaluate attempt
+                    }
+                    _ => {}
+                }
+
+                // Try computing remainder via modulo_as_numeric_no_evaluate which understands
+                // algebraic forms (Power, AddSub, Multiply, etc.). If it gives a remainder, use it.
+                if let Some(rem) = modulo_as_numeric_no_evaluate(a, b_numeric) {
+                    return Some(rem == 0);
+                }
+
+                // Last resort: attempt an exact symbolic division. If it succeeds it's divisible.
+                // (This won't detect many numeric divisibilities that modulo_as_numeric_no_evaluate would,
+                // but combined with the above checks it is a reasonable fallback.)
+                return Some(div_exact(a, b).is_some());
+            } else {
+                // Non-numeric divisor: attempt symbolic exact division.
+                Some(div_exact(a, b).is_some())
+            }
+        }
         fn product_may_be_proper_divisor_of(
             terms: &BTreeMap<Factor, NumberLength>,
             other: &Factor,
@@ -1322,8 +1379,21 @@ impl Factor {
                 true
             })
         }
+        // quick exit: identical expressions are not proper divisors
         if self == other {
             return false;
+        }
+        if let Complex { inner: ref c, .. } = *self {
+            if let Divide { ref left, ref right, .. } = **c {
+                if left == other {
+                    let denom_product = simplify_multiply(right.clone());
+                    match divides_exactly(left, &denom_product) {
+                        Some(true) => return true,
+                        Some(false) => return false,
+                        None => { /* unknown — fall through to general heuristics */ }
+                    }
+                }
+            }
         }
         if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
             && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
@@ -1331,6 +1401,7 @@ impl Factor {
         {
             return false;
         }
+
         let other_numeric = evaluate_as_numeric(other);
         if other_numeric == Some(0) || other_numeric == Some(1) {
             return false;
@@ -1356,34 +1427,24 @@ impl Factor {
                         return false;
                     }
                 }
-                Complex { inner: ref c, .. } => if let Divide { ref right, .. } = **c {
-                    // self is a big number, other is a division.
-                    // If self == other_numerator, it's definitely not a divisor.
-                    if let Divide { ref left, .. } = **c {
-                        if self == left
-                        {
-                            return false;
+                Complex { inner: ref c, .. } => if let Divide { ref left, ref right, .. } = **c {
+                    // self is a big number and other is left/right
+                    if self == left {
+                        return false;
+                    }
+                    let simplified_left = simplify(left);
+                    let denom_product = simplify_multiply(right.clone());
+                    match divides_exactly(&simplified_left, &denom_product) {
+                        Some(true) => { /* divisor divides numerator — OK */ }
+                        Some(false) => {
+                            if !product_may_be_proper_divisor_of(right, left) {
+                                return false;
+                            }
                         }
-                        let simplified_left = simplify(left);
-                        let denom_product = simplify_multiply(right.clone());
-                        if div_exact(&simplified_left, &denom_product).is_none()
-                            && !product_may_be_proper_divisor_of(right, left)
-                        {
-                            // Can't be an integer, therefore can't be a divisor
-                            return false;
-                        }
-                        // If the left hand side is not divisible by the product represented by the
-                        // right-hand factors (after simplification), then it can't be an integer,
-                        // therefore it can't be a proper divisor.
-                        //
-                        // Use a real divisibility check rather than a brittle structural equality.
-                        let simplified_left = simplify(left);
-                        let denom_product = simplify_multiply(right.clone());
-                        if div_exact(&simplified_left, &denom_product).is_none()
-                            && !product_may_be_proper_divisor_of(&right, left)
-                        {
-                            // Can't be an integer, therefore can't be a divisor
-                            return false;
+                        None => {
+                            if !product_may_be_proper_divisor_of(right, left) {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -1395,7 +1456,11 @@ impl Factor {
                     ref right,
                     ..
                 } => {
-                    if *left != Factor::multiply(right.clone())
+                    // If numerator is not divisible by the product of right (after simplification),
+                    // then this division cannot be an integer, so it can't be a proper divisor.
+                    let simplified_left = simplify(left);
+                    let denom_product = simplify_multiply(right.clone());
+                    if div_exact(&simplified_left, &denom_product).is_none()
                         && !product_may_be_proper_divisor_of(right, left)
                     {
                         // Can't be an integer, therefore can't be a divisor
@@ -1465,27 +1530,35 @@ impl Factor {
             },
             _ => {}
         }
+        eprintln!("DEBUG may_be_proper_divisor_of: self = {}", simplify(self));
+        eprintln!("DEBUG may_be_proper_divisor_of: other = {}", simplify(other));
         if let Complex { inner: ref c, .. } = *other {
-            match **c {
-                Divide {
-                    ref left,
-                    ref right,
-                    ..
-                } => {
-                    if !product_may_be_proper_divisor_of(right, left) {
+match **c {
+                Divide { ref left, ref right, .. } => {
+                    let simplified_left = simplify(left);
+                    let simplified_self = simplify(self);
+                    let denom_product = simplify_multiply(right.clone());
+                    eprintln!("DEBUG other.divide.left = {}", left);
+                    eprintln!("DEBUG simplify(left) = {}", simplified_left);
+                    eprintln!("DEBUG denom product = {}", denom_product);
+                    if simplified_left == simplified_self && denom_product != Factor::one() {
                         return false;
                     }
-                    if let Some(right_exponent) = right.get(self)
-                        && !Factor::multiply(
-                            [(self.clone(), right_exponent.saturating_add(1))].into(),
-                        )
-                        .may_be_proper_divisor_of(left)
-                    {
-                        return false;
-                    }
-                    if !self.may_be_proper_divisor_of(left) {
-                        return false;
-                    }
+                match divides_exactly(&simplified_left, &denom_product) {
+                Some(true) => { /* numerator divisible — OK, don't reject */ }
+                Some(false) => {
+                if !product_may_be_proper_divisor_of(right, left) {
+                return false;
+                }
+                }
+                None => {
+                // Unknown divisibility for BigNumber-like numerator and modulus not dividing 900.
+                // Fall back to symbolic heuristic only:
+                if !product_may_be_proper_divisor_of(right, left) {
+                return false;
+                }
+                }
+                }
                 }
                 Multiply { ref terms, .. } => {
                     if matches!(terms.get(self), Some(x) if *x != 0) {
