@@ -1320,18 +1320,6 @@ impl Factor {
                         }
                         // else fallthrough to modulo_as_numeric_no_evaluate attempt
                     }
-                    Factor::ElidedNumber(s) => {
-                        if b_numeric <= u64::MAX as u128 {
-                            let mut rem: u128 = 0;
-                            let modulus = b_numeric;
-                            for ch in s.chars() {
-                                let d = ch.to_digit(10)? as u128;
-                                rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
-                            }
-                            return Some(rem == 0);
-                        }
-                        // else fallthrough to modulo_as_numeric_no_evaluate attempt
-                    }
                     _ => {}
                 }
 
