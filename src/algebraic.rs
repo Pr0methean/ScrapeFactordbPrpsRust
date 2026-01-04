@@ -1285,7 +1285,7 @@ impl Factor {
                 let ones = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
                 let tens = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
                 Some(u8::try_from(tens * 10 + ones).unwrap())
-            },
+            }
             Numeric(n) => Some((n % 100) as u8),
             _ => None,
         }
@@ -1474,7 +1474,14 @@ impl Factor {
             }
         }
         if self_numeric.is_none() {
-            for prime in [900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18, 15, 12, 10, 9, 6, 4].iter().chain(SMALL_PRIMES.iter()).copied() {
+            for prime in [
+                900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18, 15, 12,
+                10, 9, 6, 4,
+            ]
+            .iter()
+            .chain(SMALL_PRIMES.iter())
+            .copied()
+            {
                 if let Some(0) = modulo_as_numeric_no_evaluate(self, prime.into())
                     && let Some(other_m) = if let Some(other_n) = other_numeric {
                         Some(other_n % NumericFactor::from(prime))
@@ -2416,14 +2423,24 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             }
             None
         }
-        Factor::BigNumber { inner: ref inner_expr, .. } => {
+        Factor::BigNumber {
+            inner: ref inner_expr,
+            ..
+        } => {
             let modulus = reducer.modulus();
             if 900.is_multiple_of(&modulus) {
                 let mod_100 = expr.last_two_digits()? as NumericFactor;
                 let mod_9 = if 100.is_multiple_of(&modulus) {
                     0
                 } else {
-                    inner_expr.0.chars().map(|digit| Some((digit.to_digit(10)? % 9) as NumericFactor)).collect::<Option<Vec<_>>>()?.into_iter().sum::<NumericFactor>() % 9
+                    inner_expr
+                        .0
+                        .chars()
+                        .map(|digit| Some((digit.to_digit(10)? % 9) as NumericFactor))
+                        .collect::<Option<Vec<_>>>()?
+                        .into_iter()
+                        .sum::<NumericFactor>()
+                        % 9
                 };
                 return Some(reducer.convert(mod_100 + 801 * mod_9));
             }
