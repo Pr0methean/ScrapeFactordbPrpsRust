@@ -1293,23 +1293,18 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
-        // Try to determine whether `a` is exactly divisible by `b`.
+        // Try to determine whether `b` is exactly divisible by `a`.
         // Returns:
-        //   Some(true)  => yes, `a` is divisible by `b`
-        //   Some(false) => no, `a` is not divisible by `b`
-        //   None        => unknown (can't determine cheaply/robustly for BigNumber with large modulus)
-        // Try to determine whether `a` is exactly divisible by `b`.
-        // Returns:
-        //   Some(true)  => yes, `a` is divisible by `b`
-        //   Some(false) => no, `a` is not divisible by `b`
-        //   None        => unknown (should be rare with this approach)
+        //   Some(true)  => yes, `b` is divisible by `a`
+        //   Some(false) => no, `b` is not divisible by `a`
+        //   None        => unknown
         fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
             if a == b {
                 return Some(false);
             }
             let a_numeric = evaluate_as_numeric(a);
             if a_numeric == Some(0) {
-                return Some(false);
+                return Some(true);
             }
             let b_numeric = evaluate_as_numeric(b);
             if b_numeric == Some(0) {
@@ -4123,6 +4118,26 @@ mod tests {
             "1234512345123451234512345123451234512345"
         ));
         assert!(may_be_proper_divisor_of(
+            "12345",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(may_be_proper_divisor_of(
+            "12345/1",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(!may_be_proper_divisor_of(
+            "123456",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(!may_be_proper_divisor_of(
+            "123456/1",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(!may_be_proper_divisor_of(
+            "1234512345123451234512345123451234512345/0",
+            "1234512345123451234512345123451234512345"
+        ));
+        assert!(may_be_proper_divisor_of(
             "1234512345123451234512345123451234512345",
             "1234512345123451234512345123451234512345^2"
         ));
@@ -4132,6 +4147,8 @@ mod tests {
         ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
         assert!(may_be_proper_divisor_of("(2^1234-1)/3", "2^1234-1"));
+        assert!(may_be_proper_divisor_of("0", "12345"));
+        assert!(!may_be_proper_divisor_of("12345", "0"));
     }
 
     #[test]
