@@ -1868,7 +1868,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(
 
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
     if a == 1 || n == 0 {
-        return (1, 1);
+        return (1, 0);
     }
     // A NumericFactor can't be a 128th or higher power
     for prime in [
