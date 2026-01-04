@@ -2,12 +2,13 @@ use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
+use crate::get_from_cache;
 use crate::net::BigNumber;
 use crate::{NumberLength, hash, write_bignum};
-use crate::{get_from_cache, get_random_state};
 use ahash::{HashMap, HashMapExt, RandomState};
 use derivative::Derivative;
 use hipstr::HipStr;
+use itertools::Either::{Left, Right};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use num_integer::Integer;
@@ -28,11 +29,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::f64::consts::LN_10;
 use std::fmt::{Display, Formatter};
-use std::hash::{Hash};
+use std::hash::{Hash, Hasher};
 use std::hint::unreachable_unchecked;
 use std::mem::swap;
 use std::sync::{Arc, LazyLock, OnceLock};
-use itertools::Either::{Left, Right};
 use tokio::task;
 use tokio::time::Instant;
 use yamaquasi::Algo::Siqs;
@@ -658,10 +658,7 @@ impl Ord for ComplexFactor {
             .cmp(&other.discriminant())
             .then_with(|| {
                 match self {
-                    AddSub {
-                        terms_hash,
-                        terms,
-                    } => {
+                    AddSub { terms_hash, terms } => {
                         if let AddSub {
                             terms_hash: other_hash,
                             terms: other_terms,
@@ -876,9 +873,16 @@ impl PartialEq for ComplexFactor {
                     right: r2,
                 },
             ) => h1 == h2 && r1.values().eq(r2.values()) && l1 == l2 && r1.keys().eq(r2.keys()),
-            (Power { base: b1, exponent: e1 }, Power { base: b2, exponent: e2 }) => {
-                b1 == b2 && e1 == e2
-            }
+            (
+                Power {
+                    base: b1,
+                    exponent: e1,
+                },
+                Power {
+                    base: b2,
+                    exponent: e2,
+                },
+            ) => b1 == b2 && e1 == e2,
             (Fibonacci(a), Fibonacci(b)) => a == b,
             (Lucas(a), Lucas(b)) => a == b,
             (Factorial(a), Factorial(b)) => a == b,
@@ -902,7 +906,7 @@ impl From<FactorBeingParsed> for Factor {
                 let mut flattened_terms = BTreeMap::new();
                 for (term, coeff) in terms {
                     let factor = Factor::from(term);
-                    if let Complex(c) = &factor
+                    if let Complex { inner: c, .. } = &factor
                         && let AddSub { terms: inner, .. } = &**c
                     {
                         for (inner_term, inner_coeff) in inner {
@@ -1214,7 +1218,10 @@ impl Factor {
 
     pub fn add_sub(terms: BTreeMap<Factor, i128>) -> Self {
         let terms_hash = hash(&terms);
-        Complex(AddSub { terms_hash, terms }.into())
+        Complex {
+            inner: AddSub { terms_hash, terms }.into(),
+            hash: OnceLock::new(),
+        }
     }
 
     pub fn divide(left: Factor, right: impl IntoIterator<Item = (Factor, NumberLength)>) -> Self {
@@ -1242,7 +1249,11 @@ impl Factor {
             Complex { inner: c, .. } => match **c {
                 AddSub { ref terms, .. } => {
                     let mut out = String::from("(");
-                    for (i, (term, coeff)) in terms.iter().sorted_unstable_by_key(|(_term, coeff)| -**coeff).enumerate() {
+                    for (i, (term, coeff)) in terms
+                        .iter()
+                        .sorted_unstable_by_key(|(_term, coeff)| -**coeff)
+                        .enumerate()
+                    {
                         if i > 0 || *coeff < 0 {
                             out += if *coeff > 0 { "+" } else { "-" };
                         }
@@ -1255,7 +1266,7 @@ impl Factor {
                     }
                     out += ")";
                     out
-                },
+                }
                 Multiply { ref terms, .. } => format!(
                     "({})",
                     terms
@@ -1643,10 +1654,7 @@ impl Factor {
             ElidedNumber(_) => true,
             UnknownExpression { inner: str, .. } => str.contains("..."),
             Complex { inner: c, .. } => match **c {
-                AddSub {
-                    ref terms,
-                    ..
-                } => terms.keys().any(Factor::is_elided),
+                AddSub { ref terms, .. } => terms.keys().any(Factor::is_elided),
                 Multiply { ref terms, .. } => terms.keys().any(Factor::is_elided),
                 Divide {
                     ref left,
@@ -1677,7 +1685,11 @@ impl Display for Factor {
             Complex { inner: c, .. } => match **c {
                 AddSub { ref terms, .. } => {
                     f.write_str("(")?;
-                    for (i, (term, coeff)) in terms.iter().sorted_unstable_by_key(|(_term, coeff)| -**coeff).enumerate() {
+                    for (i, (term, coeff)) in terms
+                        .iter()
+                        .sorted_unstable_by_key(|(_term, coeff)| -**coeff)
+                        .enumerate()
+                    {
                         if i > 0 || *coeff < 0 {
                             f.write_str(if *coeff > 0 { "+" } else { "-" })?;
                         }
@@ -1921,7 +1933,7 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
 
 pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, NumberLength> {
     let mut exponent_factors = BTreeMap::new();
-    let mut simplified_terms = BTreeMap::new();
+    let mut simplified_terms = BTreeMap::<Factor, i128>::new();
     for (term, coeff) in terms {
         let (new_coeff, coeff_power) = factor_power(coeff.unsigned_abs(), 1);
         let mut term = simplify(term);
@@ -1933,23 +1945,29 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
                 }
                 n
             }
-            Complex { inner: c, .. } => match **c {
-                Power { ref exponent, .. } => {
-                    evaluate_as_numeric(exponent).and_then(|e| NumberLength::try_from(e).ok()).unwrap_or(1)
-                }
+            Complex { inner: ref c, .. } => match **c {
+                Power { ref exponent, .. } => evaluate_as_numeric(exponent)
+                    .and_then(|e| NumberLength::try_from(e).ok())
+                    .unwrap_or(1),
                 Multiply { ref terms, .. } => {
                     // Return GCD of exponents without modifying the term
                     // nth_root_exact will handle the exponent division later
-                    terms.values().copied().reduce(|x, y| x.gcd(&y)).unwrap_or(1)
+                    terms
+                        .values()
+                        .copied()
+                        .reduce(|x, y| x.gcd(&y))
+                        .unwrap_or(1)
                 }
                 _ => 1,
             },
             _ => 1,
         };
-        let mut term_factors = find_raw_factors_of_numeric(exponent_numeric.into());
-        sum_factor_btreemaps(&mut term_factors, find_raw_factors_of_numeric(coeff_power.into()));
+        let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric.into());
+        sum_factor_btreemaps(&mut term_exponent_factors,
+                             find_raw_factors_of_numeric(coeff_power.into()));
         exponent_factors = multiset_union(vec![
-            exponent_factors, term_factors
+            exponent_factors,
+            term_exponent_factors,
         ]);
         let entry = simplified_terms.entry(term).or_insert(0i128);
         if *coeff < 0 {
@@ -1963,41 +1981,67 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
     }
     let mut results = BTreeMap::new();
 
-    let (positive_terms, negative_terms): (Vec<_>, Vec<_>)
-        = simplified_terms.into_iter().partition(|&(_, c)| c > 0);
-    for prime in exponent_factors.keys().copied() {
+    let (positive_terms, negative_terms): (Vec<_>, Vec<_>) =
+        simplified_terms.into_iter().partition(|&(_, c)| c > 0);
+    for prime in exponent_factors.keys().copied().filter(|prime| *prime != 0) {
         let Ok(prime) = NumberLength::try_from(prime) else {
             continue;
         };
         if prime == 2 && !negative_terms.is_empty() {
             continue;
         }
-        let Some(pos_term_roots) = positive_terms.iter()
+        let Some(pos_term_roots) = positive_terms
+            .iter()
             .map(|(term, coeff)| {
                 let coeff_root = coeff.nth_root_exact(prime.into())?;
                 let term_root = nth_root_exact(&simplify(term), prime.into())?;
                 Some((term_root, coeff_root))
             })
-            .collect::<Option<Vec<_>>>() else {
+            .collect::<Option<Vec<_>>>()
+        else {
             continue;
         };
-        let Some(neg_term_roots) = negative_terms.iter()
+        let Some(neg_term_roots) = negative_terms
+            .iter()
             .map(|(term, coeff)| {
                 let coeff_root = coeff.nth_root_exact(prime.into())?;
                 let term_root = nth_root_exact(term, prime.into())?;
                 Some((term_root, coeff_root))
             })
-            .collect::<Option<Vec<_>>>() else {
+            .collect::<Option<Vec<_>>>()
+        else {
             continue;
         };
         let (new_cofactor, new_factor) = if prime == 2 {
-            let a_plus_b = Factor::add_sub(pos_term_roots.iter().cloned().chain(neg_term_roots.iter().cloned().map(|(term, coeff)| (term, -coeff))).collect());
-            let a_minus_b = Factor::add_sub(pos_term_roots.into_iter().chain(neg_term_roots.into_iter()).collect());
+            let a_plus_b = Factor::add_sub(
+                pos_term_roots
+                    .iter()
+                    .cloned()
+                    .chain(
+                        neg_term_roots
+                            .iter()
+                            .cloned()
+                            .map(|(term, coeff)| (term, -coeff)),
+                    )
+                    .collect(),
+            );
+            let a_minus_b = Factor::add_sub(
+                pos_term_roots
+                    .into_iter()
+                    .chain(neg_term_roots.into_iter())
+                    .collect(),
+            );
             (a_plus_b, a_minus_b)
         } else {
-            let a_minus_b = Factor::add_sub(pos_term_roots.into_iter().chain(neg_term_roots.into_iter()).collect());
+            let a_minus_b = Factor::add_sub(
+                pos_term_roots
+                    .into_iter()
+                    .chain(neg_term_roots.into_iter())
+                    .collect(),
+            );
             let terms = Factor::add_sub(terms.clone());
-            let cofactor = div_exact(&terms, &a_minus_b).unwrap_or_else(|| Factor::divide(terms, [(a_minus_b.clone(), 1)]));
+            let cofactor = div_exact(&terms, &a_minus_b)
+                .unwrap_or_else(|| Factor::divide(terms, [(a_minus_b.clone(), 1)]));
             (cofactor, a_minus_b)
         };
         *results.entry(new_factor).or_insert(0) += 1;
@@ -2156,15 +2200,14 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
                 }
                 None
             }
-            AddSub {
-                ref terms, ..
-            } => {
+            AddSub { ref terms, .. } => {
                 let mut new_terms = BTreeMap::new();
                 for (term, coeff) in terms {
                     if let Some(new_term) = div_exact(term, divisor) {
                         *new_terms.entry(new_term).or_insert(0) += coeff;
                     } else {
-                        *new_terms.entry(term.clone()).or_insert(0) += coeff.div_exact(evaluate_as_numeric(divisor)?.try_into().ok()?)?;
+                        *new_terms.entry(term.clone()).or_insert(0) +=
+                            coeff.div_exact(evaluate_as_numeric(divisor)?.try_into().ok()?)?;
                     }
                 }
                 Some(Factor::add_sub(new_terms))
@@ -2400,15 +2443,15 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                 let (product_lower, product_upper) = estimate_log10_of_product(terms);
                 (product_lower, product_upper)
             }
-            AddSub {
-                ref terms, ..
-            } => {
-                let (positive_logs, negative_logs): (Vec<_>, Vec<_>)
-                    = terms.iter()
-                    .partition_map(|(term, coeff)| {
+            AddSub { ref terms, .. } => {
+                let (positive_logs, negative_logs): (Vec<_>, Vec<_>) =
+                    terms.iter().partition_map(|(term, coeff)| {
                         let (lower, upper) = estimate_log10_internal(term);
                         let (lower_mul, upper_mul) = log10_bounds(coeff.unsigned_abs());
-                        let multiplied = (lower.saturating_add(lower_mul), upper.saturating_add(upper_mul));
+                        let multiplied = (
+                            lower.saturating_add(lower_mul),
+                            upper.saturating_add(upper_mul),
+                        );
                         if *coeff > 0 {
                             Left(multiplied)
                         } else {
@@ -2416,12 +2459,27 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                         }
                     });
                 let positive_lower = positive_logs.iter().map(|(lower, _upper)| lower).copied();
-                let positive_lower = positive_lower.clone().max().max(Some(positive_lower.min().unwrap_or(0).saturating_add(log10_bounds(positive_logs.len().try_into().unwrap()).0))).unwrap();
-                let [positive_upper, negative_upper]
-                    = [positive_logs, negative_logs].iter().map(|logs| {
-                    logs.iter().map(|(_lower, upper)| upper).max().map(|max| max.saturating_add(log10_bounds(logs.len().try_into().unwrap()).1))
-                        .unwrap_or(0)
-                }).collect::<Vec<_>>().try_into().unwrap();
+                let positive_lower = positive_lower
+                    .clone()
+                    .max()
+                    .max(Some(positive_lower.min().unwrap_or(0).saturating_add(
+                        log10_bounds(positive_logs.len().try_into().unwrap()).0,
+                    )))
+                    .unwrap();
+                let [positive_upper, negative_upper] = [positive_logs, negative_logs]
+                    .iter()
+                    .map(|logs| {
+                        logs.iter()
+                            .map(|(_lower, upper)| upper)
+                            .max()
+                            .map(|max| {
+                                max.saturating_add(log10_bounds(logs.len().try_into().unwrap()).1)
+                            })
+                            .unwrap_or(0)
+                    })
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap();
                 let combined_lower = if negative_upper < positive_lower.saturating_sub(1) {
                     positive_lower.saturating_sub(1)
                 } else {
@@ -2625,104 +2683,94 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             None
         }
         UnknownExpression { .. } => None,
-            Complex(ref c) => match **c {
-                AddSub {
-                    ref terms, ..
-                } => {
-                    let mut result: NumericFactor = 0;
-                    for (term, coeff) in terms.iter() {
-                        let term_mod = modulo_as_numeric(term, modulus)?.mulm(coeff.unsigned_abs(), &modulus);
-                        result = if *coeff < 0 && term_mod != 0 {
-                            result.checked_sub(term_mod).or_else(|| result.checked_add(modulus - term_mod))?
-                        } else {
-                            result.checked_add(term_mod)?
-                        } % modulus;
-                    }
-                    Some(result)
+        Complex { inner: ref c, .. } => match **c {
+            AddSub { ref terms, .. } => {
+                let mut result = reducer.convert(0);
+                for (term, coeff) in terms.iter() {
+                    result = modulo_as_reduced(term, reducer)? * coeff.unsigned_abs();
                 }
-                Multiply { ref terms, .. } => {
-                    let mut product: NumericFactor = 1;
-                    for (term, exponent) in terms.iter() {
-                        product = product.checked_mul(
-                            modulo_as_numeric(term, modulus)?
-                                .powm(*exponent as NumericFactor, &modulus),
-                        )? % modulus;
-                    }
-                    Some(product)
+                Some(result)
+            }
+            Multiply { ref terms, .. } => {
+                let mut product = reducer.convert(1);
+                for (term, exponent) in terms.iter() {
+                    product = product
+                        * modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
                 }
-                Divide {
-                    ref left,
-                    ref right,
-                    ..
-                } => {
-                    let mut result = modulo_as_numeric(left, modulus)?;
-                    for (term, exponent) in right.iter() {
-                        let term_mod = modulo_as_numeric(term, modulus)?
-                            .powm(*exponent as NumericFactor, &modulus);
-                        match modinv(term_mod, modulus) {
-                            Some(inv) => result = result.mulm(inv, &modulus),
-                            None => return None,
+                Some(product)
+            }
+            Divide {
+                ref left,
+                ref right,
+                ..
+            } => {
+                let mut result = modulo_as_reduced(left, reducer)?;
+                for (term, exponent) in right.iter() {
+                    let term_mod =
+                        modulo_as_reduced(term, reducer)?.pow(&NumericFactor::from(*exponent));
+                    result = result * term_mod.inv()?;
+                }
+                Some(result)
+            }
+            Power {
+                ref base,
+                ref exponent,
+            } => {
+                // Exponent is usually simpler, so evaluate it first
+                let exp = evaluate_as_numeric(exponent)?;
+                let base_mod = modulo_as_reduced(base, reducer)?;
+                Some(base_mod.pow(&exp))
+            }
+            Fibonacci(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                Some(reducer.convert(pisano(term, vec![0, 1, 1], reducer.modulus())))
+            }
+            Lucas(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                Some(reducer.convert(pisano(term, vec![2, 1], reducer.modulus())))
+            }
+            Factorial(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                let modulus = reducer.modulus();
+                if term >= modulus {
+                    return Some(reducer.convert(0));
+                }
+                if term == modulus - 1 {
+                    // Wilson's theorem
+                    return Some(reducer.convert(if is_prime(modulus) {
+                        term
+                    } else if modulus == 4 {
+                        2
+                    } else {
+                        0
+                    }));
+                }
+                let mut result = ReducedInt::new(1, &modulus);
+                for i in 2..=term {
+                    result = result * i;
+                    if result.is_zero() {
+                        break;
+                    }
+                }
+                Some(result)
+            }
+            Primorial(ref term) => {
+                let term = evaluate_as_numeric(term)?;
+                let modulus = reducer.modulus();
+                if term >= modulus && (is_prime(term) || is_prime(modulus)) {
+                    return Some(reducer.convert(0));
+                }
+                let mut result = ReducedInt::new(1, &modulus);
+                for i in 2..=term {
+                    if is_prime(i) {
+                        result = result * i;
+                        if result.is_zero() {
+                            break;
                         }
                     }
-                    Some(result)
                 }
-                Power {
-                    ref base,
-                    ref exponent,
-                } => {
-                    let base_mod = modulo_as_numeric(base, modulus)?;
-                    let exp = evaluate_as_numeric(exponent)?;
-                    Some(base_mod.powm(exp, &modulus))
-                }
-                Fibonacci(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    Some(pisano(term, vec![0, 1, 1], modulus))
-                }
-                Lucas(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    Some(pisano(term, vec![2, 1], modulus))
-                }
-                Factorial(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    if term >= modulus {
-                        return Some(0);
-                    }
-                    if term == modulus - 1 {
-                        // Wilson's theorem
-                        return Some(if is_prime(modulus) {
-                            term
-                        } else if modulus == 4 {
-                            2
-                        } else {
-                            0
-                        });
-                    }
-                    let mut result = 1;
-                    for i in 2..=term {
-                        result = (result * i) % modulus;
-                        if result == 0 {
-                            return Some(0);
-                        }
-                    }
-                    Some(result)
-                }
-                Primorial(ref term) => {
-                    let term = evaluate_as_numeric(term)?;
-                    if term >= modulus && (is_prime(term) || is_prime(modulus)) {
-                        return Some(0);
-                    }
-                    let mut result = 1;
-                    for i in 2..=term {
-                        if is_prime(i) {
-                            result = (result * i) % modulus;
-                            if result == 0 {
-                                return Some(0);
-                            }
-                        }
-                    }
-                    Some(result)
-                }
-            },
+                Some(result)
+            }
         },
     }
 }
@@ -2787,7 +2835,11 @@ pub(crate) fn simplify(expr: &Factor) -> Factor {
 }
 
 fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
-    let add_sub = [(left.clone(), 1), (right.clone(), if subtract {-1} else {1})].into();
+    let add_sub = [
+        (left.clone(), 1),
+        (right.clone(), if subtract { -1 } else { 1 }),
+    ]
+    .into();
     simplify_add_sub_internal(&add_sub).unwrap_or_else(|| Factor::add_sub(add_sub))
 }
 
@@ -2804,11 +2856,10 @@ fn simplify_add_sub_internal(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
 
         match simplified {
             Numeric(n) => {
-                numeric_constant =
-                    numeric_constant.checked_add(n as i128 * coeff).unwrap_or(0); // Very basic overflow handling
+                numeric_constant = numeric_constant.checked_add(n as i128 * coeff).unwrap_or(0); // Very basic overflow handling
                 changed = true;
             }
-            Complex(ref c) if matches!(**c, AddSub { .. }) => {
+            Complex { inner: ref c, .. } if matches!(**c, AddSub { .. }) => {
                 changed = true;
                 if let AddSub {
                     terms: inner_terms, ..
@@ -2828,8 +2879,9 @@ fn simplify_add_sub_internal(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
     new_terms.retain(|_, coeff| *coeff != 0);
 
     if numeric_constant != 0 {
-        *new_terms.entry(Numeric(numeric_constant.abs() as NumericFactor)).or_insert(0) +=
-            numeric_constant.signum();
+        *new_terms
+            .entry(Numeric(numeric_constant.abs() as NumericFactor))
+            .or_insert(0) += numeric_constant.signum();
     }
 
     if new_terms.is_empty() {
@@ -3477,85 +3529,93 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                                     .entry(subfactor)
                                                     .or_insert(0) += subfactor_exponent * exponent;
                                             }
-                                        }
-                                    }
-                                    sum_factor_btreemaps(
-                                        &mut left_recursive_factors,
-                                        left_remaining_factors,
-                                    );
-                                    left_recursive_factors
-                                }
-                            }
-                            Multiply { ref terms, .. } => {
-                                if terms.is_empty() {
-                                    return BTreeMap::new();
-                                }
-                                if terms.len() == 1 {
-                                    let (factor, power) = terms.first_key_value().unwrap();
-                                    return match power {
-                                        0 => BTreeMap::new(),
-                                        1 => find_factors(&simplify(factor)),
-                                        _ => [(simplify(factor), *power)].into(),
-                                    };
-                                }
-                                // multiplication
-                                let mut factors = BTreeMap::new();
-                                for (term, exponent) in terms {
-                                    let term = simplify(term);
-                                    let term_factors = find_factors(&term);
-                                    if term_factors.is_empty() {
-                                        *factors.entry(term).or_insert(0) += exponent;
-                                    } else {
-                                        sum_factor_btreemaps(&mut factors, term_factors);
                                     }
                                 }
-                                factors
+                                sum_factor_btreemaps(
+                                    &mut left_recursive_factors,
+                                    left_remaining_factors,
+                                );
+                                left_recursive_factors
                             }
-                            AddSub { ref terms, .. } => {
-                                // Handle n-way addition/subtraction
+                        }
+                        Multiply { ref terms, .. } => {
+                            if terms.is_empty() {
+                                return BTreeMap::new();
+                            }
+                            if terms.len() == 1 {
+                                let (factor, power) = terms.first_key_value().unwrap();
+                                return match power {
+                                    0 => BTreeMap::new(),
+                                    1 => find_factors(&simplify(factor)),
+                                    _ => [(simplify(factor), *power)].into(),
+                                };
+                            }
+                            // multiplication
+                            let mut factors = BTreeMap::new();
+                            for (term, exponent) in terms {
+                                let term = simplify(term);
+                                let term_factors = find_factors(&term);
+                                if term_factors.is_empty() {
+                                    *factors.entry(term).or_insert(0) += exponent;
+                                } else {
+                                    sum_factor_btreemaps(&mut factors, term_factors);
+                                }
+                            }
+                            factors
+                        }
+                        AddSub { ref terms, .. } => {
+                            // Handle n-way addition/subtraction
                             let first = terms.iter().next();
                             match first {
-                                    None => [(Numeric(0), 1)].into(),
-                                    Some((first_term, first_coeff)) => {
-                                        let mut common_factors = find_factors(first_term);
-                                        sum_factor_btreemaps(&mut common_factors,
-                                                             find_factors_of_numeric(first_coeff.unsigned_abs()));
-                                        for (term, coeff) in terms.iter().skip(1) {
-                                            let mut term_factors = find_factors(term);
-                                            sum_factor_btreemaps(&mut term_factors, find_factors_of_numeric(coeff.unsigned_abs()));
-                                            common_factors = multiset_intersection(common_factors, term_factors);
-                                            if common_factors.is_empty() {
-                                                break;
-                                            }
+                                None => [(Numeric(0), 1)].into(),
+                                Some((first_term, first_coeff)) => {
+                                    let mut common_factors = find_factors(first_term);
+                                    sum_factor_btreemaps(
+                                        &mut common_factors,
+                                        find_factors_of_numeric(first_coeff.unsigned_abs()),
+                                    );
+                                    for (term, coeff) in terms.iter().skip(1) {
+                                        let mut term_factors = find_factors(term);
+                                        sum_factor_btreemaps(
+                                            &mut term_factors,
+                                            find_factors_of_numeric(coeff.unsigned_abs()),
+                                        );
+                                        common_factors =
+                                            multiset_intersection(common_factors, term_factors);
+                                        if common_factors.is_empty() {
+                                            break;
                                         }
-                                        let mut algebraic = BTreeMap::new();
-                                        for (term, exponent) in to_like_powers(terms) {
-                                            if let Numeric(n) = term {
-                                                for (sub_f, sub_e) in find_factors_of_numeric(n) {
-                                                    *algebraic.entry(sub_f).or_insert(0) += sub_e * exponent;
-                                                }
-                                            } else {
-                                                *algebraic.entry(term).or_insert(0) += exponent;
-                                            }
-                                        }
-                                        let factors = multiset_union(vec![common_factors, algebraic]);
-                                        let cofactors = factors
-                                            .iter()
-                                            .filter_map(|(factor, exponent)| {
-                                                let mut cofactor = div_exact(expr, factor)?;
-                                                let mut remaining_exponent = exponent - 1;
-                                                while remaining_exponent > 0
-                                                    && let Some(new_cofactor) = div_exact(&cofactor, factor)
-                                                {
-                                                    cofactor = new_cofactor;
-                                                    remaining_exponent -= 1;
-                                                }
-                                                Some((simplify(&cofactor), 1))
-                                            })
-                                            .collect();
-                                        multiset_union(vec![factors, cofactors])
                                     }
+                                    let mut algebraic = BTreeMap::new();
+                                    for (term, exponent) in to_like_powers(terms) {
+                                        if let Numeric(n) = term {
+                                            for (sub_f, sub_e) in find_factors_of_numeric(n) {
+                                                *algebraic.entry(sub_f).or_insert(0) +=
+                                                    sub_e * exponent;
+                                            }
+                                        } else {
+                                            *algebraic.entry(term).or_insert(0) += exponent;
+                                        }
+                                    }
+                                    let factors = multiset_union(vec![common_factors, algebraic]);
+                                    let cofactors = factors
+                                        .iter()
+                                        .filter_map(|(factor, exponent)| {
+                                            let mut cofactor = div_exact(expr, factor)?;
+                                            let mut remaining_exponent = exponent - 1;
+                                            while remaining_exponent > 0
+                                                && let Some(new_cofactor) =
+                                                    div_exact(&cofactor, factor)
+                                            {
+                                                cofactor = new_cofactor;
+                                                remaining_exponent -= 1;
+                                            }
+                                            Some((simplify(&cofactor), 1))
+                                        })
+                                        .collect();
+                                    multiset_union(vec![factors, cofactors])
                                 }
+                            }
                         }
                     },
                 };
@@ -3720,23 +3780,22 @@ mod tests {
     use crate::NumberLength;
     use crate::algebraic::ComplexFactor::Divide;
     use crate::algebraic::Factor::{Complex, Numeric};
+    use crate::algebraic::hash;
     use crate::algebraic::{
         ComplexFactor, Factor, NumericFactor, SMALL_FIBONACCI_FACTORS, SMALL_LUCAS_FACTORS,
         div_exact, estimate_log10, factor_power, fibonacci_factors, lucas_factors,
         modulo_as_numeric_no_evaluate, multiset_intersection, multiset_union, power_multiset,
     };
-    use std::collections::BTreeMap;
-    use std::hash::Hash;
     use ahash::RandomState;
-    use crate::algebraic::hash;
+    use std::collections::BTreeMap;
 
     fn mk_addsub(terms: Vec<(Factor, i128)>) -> ComplexFactor {
         let terms: BTreeMap<Factor, i128> = terms.into_iter().collect();
         let terms_hash = hash(&terms);
         ComplexFactor::AddSub { terms_hash, terms }
     }
-    use std::iter::repeat_n;
     use itertools::Itertools;
+    use std::iter::repeat_n;
     use std::sync::OnceLock;
 
     impl From<String> for Factor {
@@ -4404,13 +4463,12 @@ mod tests {
         use alloc::fmt::Debug;
         use std::collections::BTreeMap;
         use std::hash::Hash;
-        use std::sync::OnceLock;
 
         fn assert_eq_and_same_hash<T: Eq + Hash + Debug>(left: T, right: T, message: &str) {
             assert_eq!(left, right, "In Eq: {message}");
-            let hasher = RandomState::with_seed(0);
-            let left_hash = hasher.hash_one(&left);
-            let right_hash = hasher.hash_one(&right);
+            let hasher = RandomState::new();
+            let left_hash = hasher.hash_one(left);
+            let right_hash = hasher.hash_one(right);
             assert_eq!(left_hash, right_hash, "In Hash: {message}");
         }
 
@@ -4657,7 +4715,7 @@ mod tests {
             let y = Factor::from("y");
             let z = Factor::from("z");
 
-            let add = Complex(mk_addsub(vec![(x.clone(), 1), (y.clone(), 1)]).into());
+            let add = Factor::add_sub([(x.clone(), 1), (y.clone(), 1)].into());
 
             let mut map1 = BTreeMap::new();
             map1.insert(add.clone(), 1);
@@ -4699,11 +4757,13 @@ mod tests {
         let x = Factor::from("x");
         let zero = Factor::from(0u128);
         assert_eq!(
-            simplify(&Complex(mk_addsub(vec![(x.clone(), 1), (zero.clone(), 1)]).into())),
+            simplify(&Factor::add_sub([(x.clone(), 1), (zero.clone(), 1)].into())),
             x
         );
         assert_eq!(
-            simplify(&Complex(mk_addsub(vec![(x.clone(), 1), (zero.clone(), -1)]).into())),
+            simplify(&Factor::add_sub(
+                [(x.clone(), 1), (zero.clone(), -1)].into()
+            )),
             x
         );
 
