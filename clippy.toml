@@ -1,0 +1,3 @@
+ignore-interior-mutability = [
+    "ScrapeFactordbPrpsRust::algebraic::Factor",
+]

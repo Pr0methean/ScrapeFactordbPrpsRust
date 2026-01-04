@@ -36,6 +36,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
+use std::sync::OnceLock;
 
 pub type EntryId = u128;
 
@@ -87,9 +88,16 @@ enum WorkItem {
 }
 
 impl FactorData {
-    pub fn resolve_vid(&mut self, mut vertex_id: VertexId) -> VertexId {
+    pub fn resolve_vid(&mut self, vertex_id: VertexId) -> VertexId {
+        Self::resolve_vid_internal(&mut self.deleted_synonyms, vertex_id)
+    }
+
+    pub fn resolve_vid_internal(
+        deleted_synonyms: &mut BTreeMap<VertexId, VertexId>,
+        mut vertex_id: VertexId,
+    ) -> VertexId {
         let mut synonyms_to_forward = Vec::new();
-        while let Some(synonym) = self.deleted_synonyms.get(&vertex_id) {
+        while let Some(synonym) = deleted_synonyms.get(&vertex_id) {
             synonyms_to_forward.push(*synonym);
             vertex_id = *synonym;
         }
@@ -97,10 +105,24 @@ impl FactorData {
             vertex_id = *last;
             // Optimization: path compression
             for synonym in synonyms_to_forward.into_iter().rev().skip(1) {
-                self.deleted_synonyms.insert(synonym, vertex_id);
+                deleted_synonyms.insert(synonym, vertex_id);
             }
         }
         vertex_id
+    }
+
+    pub fn vid_for_entry_id(&mut self, entry_id: EntryId) -> Option<VertexId> {
+        let raw_vid = self.vertex_id_by_entry_id.get_mut(&entry_id)?;
+        let vid = Self::resolve_vid_internal(&mut self.deleted_synonyms, *raw_vid);
+        *raw_vid = vid;
+        Some(vid)
+    }
+
+    pub fn vid_for_expr(&mut self, expr: &Factor) -> Option<VertexId> {
+        let raw_vid = self.vertex_id_by_expr.get_mut(expr)?;
+        let vid = Self::resolve_vid_internal(&mut self.deleted_synonyms, *raw_vid);
+        *raw_vid = vid;
+        Some(vid)
     }
 
     pub fn get_factor(&mut self, vertex_id: VertexId) -> Factor {
@@ -278,13 +300,6 @@ impl FactorData {
         }
     }
 
-    pub fn vertex_ids_except(&self, root_vid: VertexId) -> Vec<VertexId> {
-        self.divisibility_graph
-            .vertices_by_id()
-            .filter(|factor_vid| *factor_vid != root_vid)
-            .collect()
-    }
-
     pub fn is_known_factor(&mut self, factor_vid: VertexId, composite_vid: VertexId) -> bool {
         let factor_vid = self.resolve_vid(factor_vid);
         let composite_vid = self.resolve_vid(composite_vid);
@@ -312,14 +327,14 @@ impl FactorData {
         let current = self.get_factor(factor_vid);
         let factor_vid = self.resolve_vid(factor_vid);
         if equivalent == current {
-            vec![]
-        } else if let Some(existing_vid) = self.vertex_id_by_expr.get(&equivalent).copied()
-            && self.resolve_vid(existing_vid) == factor_vid
-        {
+            return vec![];
+        }
+        let existing_vid = self.vid_for_expr(&equivalent);
+        if existing_vid == Some(factor_vid) {
             vec![]
         } else {
             info!("Merging equivalent expressions {current} and {equivalent}");
-            if let Some(existing_vid) = self.vertex_id_by_expr.get(&equivalent).copied() {
+            if let Some(existing_vid) = existing_vid {
                 merge_vertices(self, http, factor_vid, existing_vid);
             }
             self.vertex_id_by_expr
@@ -391,19 +406,14 @@ pub fn add_factor_node(
     entry_id: Option<EntryId>,
     http: &impl FactorDbClient,
 ) -> (VertexId, bool) {
-    let existing_vertex_raw = data.vertex_id_by_expr.get(&factor).copied();
-    let existing_vertex = existing_vertex_raw.map(|vertex_id| data.resolve_vid(vertex_id));
-
+    let existing_vertex = data.vid_for_expr(&factor);
     let entry_id = entry_id.or_else(|| data.facts(existing_vertex?)?.entry_id);
     let cached_factors = entry_id
         .and_then(|entry_id| http.cached_factors(&Id(entry_id)))
         .or_else(|| http.cached_factors(&Expression(Borrowed(&factor))));
     let cached_entry_id = cached_factors.as_ref().and_then(|factors| factors.id);
     let entry_id = entry_id.or(cached_entry_id);
-    let matching_vid_raw =
-        entry_id.and_then(|entry_id| data.vertex_id_by_entry_id.get(&entry_id).copied());
-    let matching_vid = matching_vid_raw.map(|vertex_id| data.resolve_vid(vertex_id));
-
+    let matching_vid = entry_id.and_then(|entry_id| data.vid_for_entry_id(entry_id));
     let (merge_dest, added) = existing_vertex
         .or(matching_vid)
         .map(|x| (x, false))
@@ -654,7 +664,7 @@ fn dedup_and_shuffle<T: Ord>(deque: &mut VecDeque<T>) {
 
 #[framed]
 pub async fn find_and_submit_factors(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     id: EntryId,
     digits_or_expr: HipStr<'static>,
     skip_looking_up_known: bool,
@@ -733,18 +743,20 @@ pub async fn find_and_submit_factors(
         return false;
     }
     // Simplest case: try submitting all factors as factors of the root
-    let (root_denominator_terms, root_denominator) = if let Complex(ref c) = root_factor
+    let (root_denominator_terms, root_denominator) = if let Complex { inner: ref c, .. } =
+        root_factor
         && let ComplexFactor::Divide {
             right, right_hash, ..
         } = &**c
     {
-        let multiply = Complex(
-            Multiply {
+        let multiply = Complex {
+            inner: Multiply {
                 terms_hash: *right_hash,
                 terms: right.clone(),
             }
             .into(),
-        );
+            hash: OnceLock::new(),
+        };
         (Some(right.clone()), Some(multiply))
     } else {
         (None, None)
@@ -863,7 +875,7 @@ pub async fn find_and_submit_factors(
         && edge_count < complete_graph_edge_count
     {
         if iters_to_next_report == 0 {
-            iters_to_next_report = node_count.min(100);
+            iters_to_next_report = node_count.min(20);
             let (direct_divisors, non_factors) = data
                 .divisibility_graph
                 .edges()
@@ -968,7 +980,7 @@ pub async fn find_and_submit_factors(
                 }
             }
             if factor == cofactor {
-                error!(
+                warn!(
                     "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
                 );
                 merge_vertices(&mut data, http, factor_vid, cofactor_vid);
@@ -1230,7 +1242,7 @@ pub async fn find_and_submit_factors(
 }
 
 #[inline(always)]
-fn mark_stale(data: &mut FactorData, stale_vid: VertexId, http: &mut impl FactorDbClient) {
+fn mark_stale(data: &mut FactorData, stale_vid: VertexId, http: &impl FactorDbClient) {
     let entry_id = data.facts(stale_vid).unwrap().entry_id;
     let expression = data.get_factor(stale_vid);
     replace_with_or_abort(data.facts_mut(stale_vid), |facts| {
@@ -1259,10 +1271,10 @@ fn mark_fully_factored_internal(
     data: &mut FactorData,
     worklist: &mut BTreeSet<WorkItem>,
 ) {
-    if data.facts(vid).is_some_and(|f| f.is_known_fully_factored()) {
+    let facts = data.facts_mut(vid);
+    if facts.is_known_fully_factored() {
         return;
     }
-    let facts = data.facts_mut(vid);
     facts.checked_for_listed_algebraic = true;
     facts.checked_in_factor_finder = true;
     facts.expression_form_checked_in_factor_finder = true;
@@ -1290,31 +1302,33 @@ fn mark_fully_factored_internal(
     };
 
     // Recursively mark all known factors as fully factored
-    let known_factors: Vec<_> = neighbor_vids(&data.divisibility_graph, vid, Incoming)
+    for other_factor_vid in data
+        .divisibility_graph
+        .vertices_by_id()
+        .filter(|factor_vid| *factor_vid != vid)
+        .collect::<Vec<_>>()
         .into_iter()
-        .filter(|(_, edge)| matches!(edge, Direct | Transitive))
-        .map(|(other_vid, _)| other_vid)
-        .collect();
-
-    for other_vid in known_factors {
-        mark_fully_factored_internal(other_vid, data, worklist);
-    }
-
-    if no_other_factors {
-        for other_vid in data.vertex_ids_except(vid) {
-            if data.get_edge(other_vid, vid).is_none() {
-                worklist.insert(WorkItem::RuleOut {
-                    nonfactor: other_vid,
-                    dest: vid,
-                });
+    {
+        match data.get_edge(other_factor_vid, vid) {
+            Some(Direct | Transitive) => {
+                mark_fully_factored_internal(other_factor_vid, data, worklist)
             }
+            None => {
+                if no_other_factors {
+                    worklist.insert(WorkItem::RuleOut {
+                        nonfactor: other_factor_vid,
+                        dest: vid,
+                    });
+                }
+            }
+            _ => {}
         }
     }
 }
 
 #[framed]
 async fn add_factors_to_graph(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     data: &mut FactorData,
     factor_vid: VertexId,
 ) -> Box<[VertexId]> {
@@ -1338,13 +1352,14 @@ async fn add_factors_to_graph(
             .known_factors_as_digits(factor_specifier, true, elided)
             .await;
         let known_factor_count = known_factors.len();
-        if known_factor_count == 1 {
+        let new_known_factors: Vec<_> = if known_factor_count == 1 {
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != factor {
                 data.merge_equivalent_expressions(factor_vid, known_factor, http);
             }
+            vec![factor_vid]
         } else {
-            let new_known_factors: Vec<_> = known_factors
+            known_factors
                 .into_iter()
                 .map(|known_factor| {
                     let entry_id = http
@@ -1358,13 +1373,12 @@ async fn add_factors_to_graph(
                     }
                     known_factor_vid
                 })
-                .collect();
-            if known_factor_count > 0 {
-                let facts = data.facts_mut(factor_vid);
-                facts.factors_known_to_factordb = UpToDate(new_known_factors);
-            }
-        }
+                .collect()
+        };
         let facts = data.facts_mut(factor_vid);
+        if known_factor_count > 0 {
+            facts.factors_known_to_factordb = UpToDate(new_known_factors);
+        }
         facts.entry_id = facts.entry_id.or(new_id);
         id = facts.entry_id;
         if let Some(status) = status {
@@ -1438,12 +1452,30 @@ async fn add_factors_to_graph(
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::FAILED_U_SUBMISSIONS_OUT;
+pub mod tests {
+    use crate::GLOBAL;
+    use nonzero::nonzero;
+    use rand::RngCore;
+    use rand::rng;
+    use std::env::temp_dir;
+    use std::fs::File;
+    use std::hint::black_box;
+    use std::iter::{once, repeat};
+    use sysinfo::{MemoryRefreshKind, RefreshKind};
+
+    use crate::ReportFactorResult;
     use crate::algebraic::Factor;
-    use crate::graph::NumericFactor;
+    use crate::graph::{EntryId, NumericFactor};
     use crate::graph::{FactorData, add_factor_node, find_and_submit_factors};
-    use crate::net::MockFactorDbClient;
+    use crate::net::NumberStatus::Unknown;
+    use crate::net::{
+        FactorDbClientReadIdsAndExprs, MockFactorDbClient, ProcessedStatusApiResponse,
+    };
+    use crate::{FAILED_U_SUBMISSIONS_OUT, log_stats};
+    use const_format::formatcp;
+    use hipstr::HipStr;
+    use mockall::predicate::eq;
+    use tokio::sync::Mutex;
 
     #[test]
     fn test_is_known_factor_numeric() {
@@ -1569,11 +1601,6 @@ mod tests {
     fn test_find_and_submit() {
         use crate::RealFactorDbClient;
         use crate::monitor::Monitor;
-        use nonzero::nonzero;
-        use rand::RngCore;
-        use rand::rng;
-        use std::env::temp_dir;
-        use std::fs::File;
         use tokio::runtime::Runtime;
         use tokio::sync::Mutex;
 
@@ -1740,5 +1767,64 @@ mod tests {
 
         use crate::graph::Divisibility::NotFactor;
         assert_eq!(data.get_edge(a, c), Some(NotFactor));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    pub async fn test_huge_u_memory_usage() {
+        const ID: EntryId = 1100000005875321487;
+        const EXPR: &str = "(10^200000-1)/9-10^58838";
+
+        const LISTED_ALGEBRAIC_FACTORS_URL: &str =
+            formatcp!("https://factordb.com/frame_moreinfo.php?id={ID}");
+
+        #[allow(non_local_definitions)]
+        impl FactorDbClientReadIdsAndExprs for MockFactorDbClient {
+            fn read_ids_and_exprs<'a>(
+                &self,
+                _haystack: &'a str,
+            ) -> impl Iterator<Item = (EntryId, &'a str)> {
+                once((ID, &*String::from(EXPR).leak()))
+            }
+        }
+
+        simple_log::console("info").unwrap();
+        let mut http = MockFactorDbClient::new();
+        let mut sys = sysinfo::System::new_with_specifics(
+            RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
+        );
+
+        http.expect_known_factors_as_digits()
+            .returning(|_, _, _| ProcessedStatusApiResponse {
+                status: Some(Unknown),
+                factors: Box::new([Factor::from(
+                    &*repeat('1')
+                        .take(141_161)
+                        .chain(once('0'))
+                        .chain(repeat('1').take(58838))
+                        .collect::<String>(),
+                )]),
+                id: Some(ID),
+            });
+        http.expect_cached_factors().return_const(None);
+        http.expect_try_get_and_decode()
+            .with(eq(&*LISTED_ALGEBRAIC_FACTORS_URL))
+            .returning(|_| Some(HipStr::from_static("")));
+        http.expect_try_get_expression_form()
+            .returning(|_| Some(Factor::from(EXPR)));
+        http.expect_try_report_factor()
+            .return_const(ReportFactorResult::DoesNotDivide);
+
+        FAILED_U_SUBMISSIONS_OUT
+            .get_or_init(async || {
+                Mutex::new(File::create_new(temp_dir().join(rng().next_u64().to_string())).unwrap())
+            })
+            .await;
+
+        // ensure expr uses heap space
+        let expr = HipStr::from(String::from(EXPR));
+        let mut reg = stats_alloc::Region::new(&GLOBAL);
+        black_box(find_and_submit_factors(&http, ID, expr, false).await);
+
+        log_stats(&mut reg, &mut sys);
     }
 }

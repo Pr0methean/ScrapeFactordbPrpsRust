@@ -23,9 +23,9 @@ use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
 use ahash::RandomState;
+use alloc::sync::Arc;
+use async_backtrace::framed;
 use async_backtrace::taskdump_tree;
-use async_backtrace::ඞ::Frame;
-use async_backtrace::{Location, framed};
 use channel::PushbackReceiver;
 use cuckoofilter::CuckooFilter;
 use futures_util::FutureExt;
@@ -34,14 +34,17 @@ use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
+use nonzero::nonzero;
 use primitive_types::U256;
 use quick_cache::UnitWeighter;
-use quick_cache::unsync::{Cache, DefaultLifecycle};
+use quick_cache::sync::{Cache, DefaultLifecycle};
 use rand::seq::SliceRandom;
 use rand::{Rng, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use stats_alloc::StatsAlloc;
+use std::alloc::GlobalAlloc;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
@@ -51,26 +54,37 @@ use std::io::Write;
 use std::num::{NonZero, NonZeroU32};
 use std::ops::Add;
 use std::panic;
-use std::process::exit;
+use std::process::{abort, exit};
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
+use sysinfo::MemoryRefreshKind;
+use sysinfo::RefreshKind;
+use tikv_jemallocator::Jemalloc;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
-use tokio::sync::{Mutex, OnceCell, oneshot};
+use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
-static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
+#[global_allocator]
+static GLOBAL: StatsAlloc<Jemalloc> = StatsAlloc::new(Jemalloc);
+
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
 
+static RANDOM_STATE: OnceLock<RandomState> = OnceLock::new();
 fn get_random_state() -> &'static RandomState {
     RANDOM_STATE.get_or_init(RandomState::new)
 }
 
-pub fn create_cache<T: Eq + Hash, U>(capacity: usize) -> BasicCache<T, U> {
+pub fn hash(input: impl Hash) -> u64 {
+    get_random_state().hash_one(input)
+}
+
+pub fn create_cache<T: Eq + Hash, U: Clone>(capacity: usize) -> BasicCache<T, U> {
     Cache::with(
         capacity,
         Default::default(),
@@ -80,8 +94,15 @@ pub fn create_cache<T: Eq + Hash, U>(capacity: usize) -> BasicCache<T, U> {
     )
 }
 
-pub fn hash(input: impl Hash) -> u64 {
-    get_random_state().hash_one(input)
+pub fn get_from_cache<'a, K: Eq + Hash, V: Clone>(
+    cache: &'a BasicCache<K, V>,
+    key: &'a K,
+) -> Option<V> {
+    if cache.is_empty() {
+        None
+    } else {
+        cache.get(key)
+    }
 }
 
 pub type NumberLength = u32;
@@ -91,7 +112,9 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: usize = 32;
-const MIN_DIGITS_IN_PRP: NumberLength = 300;
+const PRP_MIN_DIGITS: NonZero<NumberLength> = nonzero!(300u32);
+const PRP_MAX_DIGITS: NonZero<NumberLength> = nonzero!(199_999u32);
+const PRP_MAX_DIGITS_FOR_START_OFFSET: NumberLength = 30489;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 256;
@@ -107,10 +130,6 @@ static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
 static COMPOSITES_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 static HAVE_DISPATCHED_TO_YAFU: AtomicBool = AtomicBool::new(false);
-
-pub fn frame_sync<T, F: FnOnce() -> T>(location: Location, function: F) -> T {
-    Box::pin(Frame::new(location)).as_mut().in_scope(function)
-}
 
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
@@ -149,7 +168,7 @@ struct FactorSubmission<'a> {
 #[framed]
 async fn composites_while_waiting(
     end: Instant,
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     c_filter: &mut CuckooFilter<DefaultHasher>,
 ) {
@@ -177,7 +196,7 @@ async fn composites_while_waiting(
 
 #[framed]
 async fn check_composite(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_filter: &mut CuckooFilter<DefaultHasher>,
     id: EntryId,
     digits_or_expr: HipStr<'static>,
@@ -295,12 +314,11 @@ const MAX_BASES_BETWEEN_RESOURCE_CHECKS: usize = 254;
 const MIN_BASES_BETWEEN_RESOURCE_CHECKS: usize = 16;
 
 const MAX_CPU_BUDGET_TENTHS: usize = 6000;
-const UNKNOWN_STATUS_CHECK_BACKOFF: Duration = Duration::from_mins(5);
 static NO_RESERVE: AtomicBool = AtomicBool::new(false);
 
 #[framed]
 async fn throttle_if_necessary(
-    http: &mut impl FactorDbClientReadIdsAndExprs,
+    http: &impl FactorDbClientReadIdsAndExprs,
     c_receiver: &mut PushbackReceiver<CompositeCheckTask>,
     bases_before_next_cpu_check: &mut usize,
     sleep_first: bool,
@@ -458,63 +476,45 @@ async fn queue_composites(
     )
 }
 
-const STACK_TRACES_INTERVAL: Duration = Duration::from_mins(5);
+const STATS_INTERVAL: Duration = Duration::from_mins(1);
+
+pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sysinfo::System) {
+    info!("Allocation stats: {:#?}", reg.change());
+    sys.refresh_all();
+    info!("System used memory: {}", sys.used_memory());
+    info!("System available memory: {}", sys.available_memory());
+    info!("Task backtraces:\n{}", taskdump_tree(false));
+    info!(
+        "Task backtraces with all tasks idle:\n{}",
+        taskdump_tree(true)
+    );
+}
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 #[framed]
 async fn main() -> anyhow::Result<()> {
+    let mut reg = stats_alloc::Region::new(&GLOBAL);
+    let mut sys = sysinfo::System::new_with_specifics(
+        RefreshKind::nothing().with_memory(MemoryRefreshKind::everything()),
+    );
     let (shutdown_sender, mut shutdown_receiver) = Monitor::new();
-    let (installed_sender, installed_receiver) = oneshot::channel();
-    simple_log::console("info").unwrap();
+    simple_log::console("info,reqwest=trace").unwrap();
 
-    // Monitoring task: print backtraces periodically, handle shutdown signals
-    task::spawn(async move {
-        let mut sigint = Box::pin(ctrl_c());
-        info!("Signal handlers installed");
-        installed_sender
-            .send(())
-            .expect("Error signaling main task that signal handlers are installed");
-        let mut sigterm;
+    let signal_installer = task::spawn(async move {
+        let sigint = Box::pin(ctrl_c());
         #[cfg(unix)]
         {
-            sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-                .expect("Failed to create SIGTERM signal stream");
+            (
+                sigint,
+                signal::unix::signal(signal::unix::SignalKind::terminate())
+                    .expect("Failed to create SIGTERM signal stream"),
+            )
         }
         #[cfg(not(unix))]
         {
             // Create a channel that will never receive a signal
             let (_sender, sigterm) = oneshot::channel();
-        }
-        let mut next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
-        loop {
-            select! {
-                biased;
-                _ = sigterm.recv() => {
-                    warn!("Received SIGTERM; signaling tasks to exit");
-                    break;
-                },
-                _ = &mut sigint => {
-                    warn!("Received SIGINT; signaling tasks to exit");
-                    break;
-                }
-                _ = sleep_until(next_backtrace) => {
-                    info!("Task backtraces:\n{}", taskdump_tree(false));
-                    info!("Task backtraces with all tasks idle:\n{}", taskdump_tree(true));
-                    next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
-                }
-            }
-        }
-        if let Err(e) = shutdown_sender.send(()) {
-            error!("Error sending shutdown signal: {e}");
-        }
-        loop {
-            sleep_until(next_backtrace).await;
-            info!("Task backtraces:\n{}", taskdump_tree(false));
-            info!(
-                "Task backtraces with all tasks idle:\n{}",
-                taskdump_tree(true)
-            );
-            next_backtrace = Instant::now() + STACK_TRACES_INTERVAL;
+            (sigint, sigterm)
         }
     });
 
@@ -526,9 +526,12 @@ async fn main() -> anyhow::Result<()> {
     let mut u_digits = std::env::var("U_DIGITS")
         .ok()
         .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
-    let mut prp_start = std::env::var("PRP_START")
+    let prp_start = std::env::var("PRP_START")
         .ok()
         .and_then(|s| s.parse::<EntryId>().ok());
+    let mut prp_digits = std::env::var("PRP_DIGITS")
+        .ok()
+        .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
     if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<EntryId>()?;
         if c_digits.is_none() {
@@ -548,8 +551,11 @@ async fn main() -> anyhow::Result<()> {
                 )?;
             u_digits = Some(NumberLength::try_from(u_digits_value)?.try_into()?);
         }
-        if prp_start.is_none() {
-            prp_start = Some((run_number * 9973) % (MAX_START + 1));
+        if prp_digits.is_none() {
+            prp_digits = Some(PRP_MIN_DIGITS.saturating_add(NumberLength::try_from(
+                (run_number * 9973)
+                    % EntryId::from(PRP_MAX_DIGITS.get() - PRP_MIN_DIGITS.get() + 1),
+            )?));
         }
         info!("Run number is {run_number}");
     }
@@ -561,10 +567,29 @@ async fn main() -> anyhow::Result<()> {
         Some(u_digits) => info!("U's will be {u_digits} digits"),
         None => info!("U's will be random sizes"),
     }
-    let mut prp_start = prp_start.unwrap_or_else(|| rng().random_range(0..=MAX_START));
+    let unknown_status_check_backoff = if let Some(u_digits) = u_digits {
+        // max will be 15s + (200_000 * 200_000 * 200_000 / 40_000) ns = 15 s + (8e15 / 4e4)*(1e-9 s) = 215 s
+        let u_digits = u_digits.get() as u64;
+        Duration::from_secs(15) + Duration::from_nanos(u_digits * u_digits * u_digits / 40_000)
+    } else {
+        Duration::from_mins(3)
+    };
+    let mut prp_digits = prp_digits.unwrap_or_else(|| {
+        rng()
+            .random_range(PRP_MIN_DIGITS.get()..=PRP_MAX_DIGITS.get())
+            .try_into()
+            .unwrap()
+    });
+    let mut prp_start = prp_start.unwrap_or_else(|| {
+        if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
+            0
+        } else {
+            rng().random_range(0..=MAX_START)
+        }
+    });
     info!("PRP initial start is {prp_start}");
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
-    let mut max_concurrent_requests = 2usize;
+    let mut max_concurrent_requests = 1usize;
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
     let (c_sender, c_raw_receiver) = channel(C_TASK_BUFFER_SIZE);
@@ -576,20 +601,20 @@ async fn main() -> anyhow::Result<()> {
                 Mutex::new(File::options().append(true).open("composites").unwrap())
             })
             .await;
-        max_concurrent_requests = 3;
+        max_concurrent_requests = 2;
     }
-    let http = RealFactorDbClient::new(
+    let http = Arc::new(RealFactorDbClient::new(
         rph_limit,
         max_concurrent_requests,
         shutdown_receiver.clone(),
-    );
+    ));
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_shutdown_receiver = shutdown_receiver.clone();
     let mut c_buffer_task: JoinHandle<()> =
         task::spawn(async_backtrace::location!().frame(async move {
             queue_composites(
-                &http_clone,
+                http_clone.as_ref(),
                 &c_sender_clone,
                 c_digits,
                 &mut c_shutdown_receiver,
@@ -611,12 +636,11 @@ async fn main() -> anyhow::Result<()> {
         })
         .await;
     let mut prp_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
-    installed_receiver.await?;
 
     // Task to consume PRP's, C's and U's dispatched from the other tasks
     let mut prp_receiver = PushbackReceiver::new(prp_receiver, &prp_sender);
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
-    let mut do_checks_http = http.clone();
+    let do_checks_http = http.clone();
     let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
     let do_checks = task::spawn(async_backtrace::location!().named_const("Execute checks from channels").frame(async move {
         info!("do_checks task starting");
@@ -631,7 +655,7 @@ async fn main() -> anyhow::Result<()> {
         let mut bases_before_next_cpu_check = 1;
         let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
         throttle_if_necessary(
-            &mut do_checks_http,
+            do_checks_http.as_ref(),
             &mut c_receiver,
             &mut bases_before_next_cpu_check,
             false,
@@ -665,11 +689,11 @@ async fn main() -> anyhow::Result<()> {
                             }
                             Some(matched_status) => match matched_status.as_str() {
                                 "Assigned" => {
-                                    info!("Assigned PRP check for unknown-status number with ID {id}");
+                                     info!("Assigned PRP check for unknown-status number with ID {id}");
                                 }
                                 "Please wait" => {
                                     warn!("{id}: Got 'please wait' for U");
-                                    next_unknown_attempt = Instant::now() + UNKNOWN_STATUS_CHECK_BACKOFF;
+                                    next_unknown_attempt = Instant::now() + unknown_status_check_backoff;
                                     task_return_permit.send(id);
                                     info!("{id}: Requeued U");
                                 }
@@ -724,7 +748,7 @@ async fn main() -> anyhow::Result<()> {
                                     .await;
                                 if factors.is_empty() && status == Some(FullyFactored) {
                                     info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
-                                    report_primality_proof(id, parameter, &do_checks_http).await;
+                                    report_primality_proof(id, parameter, do_checks_http.as_ref()).await;
                                     return None;
                                 }
                                 let divide_2 = factors.first().and_then(|f| f.as_numeric()) == Some(2);
@@ -757,7 +781,7 @@ async fn main() -> anyhow::Result<()> {
                                                 "{id}: {} (ID {}) is fully factored!",
                                                 info.parameter, info.id
                                             );
-                                            report_primality_proof(id, info.parameter, &do_checks_http)
+                                            report_primality_proof(id, info.parameter, do_checks_http.as_ref())
                                                 .await;
                                             stopped_early = true;
                                             break;
@@ -784,7 +808,7 @@ async fn main() -> anyhow::Result<()> {
                                             "{id}: {} (ID {}) is fully factored!",
                                             infos[0].parameter, infos[0].id
                                         );
-                                        report_primality_proof(id, infos[0].parameter, &do_checks_http)
+                                        report_primality_proof(id, infos[0].parameter, do_checks_http.as_ref())
                                             .await;
                                         stopped_early = true;
                                     }
@@ -797,7 +821,7 @@ async fn main() -> anyhow::Result<()> {
                                                 "{id}: {} (ID {}) is fully factored!",
                                                 infos[1].parameter, infos[1].id
                                             );
-                                            report_primality_proof(id, infos[1].parameter, &do_checks_http)
+                                            report_primality_proof(id, infos[1].parameter, do_checks_http.as_ref())
                                                 .await;
                                             stopped_early = true;
                                         }
@@ -828,7 +852,7 @@ async fn main() -> anyhow::Result<()> {
                                 for factor in factors {
                                     if !matches!(factor, Factor::Numeric(_)) {
                                         graph::find_and_submit_factors(
-                                            &mut do_checks_http,
+                                            do_checks_http.as_ref(),
                                             info.id,
                                             factor.to_unelided_string(),
                                             true,
@@ -850,7 +874,7 @@ async fn main() -> anyhow::Result<()> {
                         error!("{id}: Failed to decode status for PRP: {status_text}");
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                            &mut do_checks_http,
+                            do_checks_http.as_ref(),
                             &mut c_receiver,
                             &mut c_filter,
                         )
@@ -898,7 +922,7 @@ async fn main() -> anyhow::Result<()> {
                             info!("{id}: Requeued PRP");
                             composites_while_waiting(
                                 Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                                &mut do_checks_http,
+                                do_checks_http.as_ref(),
                                 &mut c_receiver,
                                 &mut c_filter,
                             )
@@ -906,7 +930,7 @@ async fn main() -> anyhow::Result<()> {
                             break;
                         }
                         throttle_if_necessary(
-                            &mut do_checks_http,
+                            do_checks_http.as_ref(),
                             &mut c_receiver,
                             &mut bases_before_next_cpu_check,
                             true,
@@ -936,7 +960,7 @@ async fn main() -> anyhow::Result<()> {
                 c_task = c_receiver.recv() => {
                     let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
                     info!("{id}: Ready to check a C");
-                    check_composite(&mut do_checks_http, &mut c_filter, id, digits_or_expr, return_permit).await;
+                    check_composite(do_checks_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
                 }
             }
         }
@@ -944,7 +968,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Task to queue unknowns
     let mut u_shutdown_receiver = shutdown_receiver.clone();
-    let mut u_http = http.clone();
+    let u_http = http.clone();
     let mut u_start = if u_digits.is_some() {
         0
     } else {
@@ -952,6 +976,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
+        let mut graph_tasks = JoinSet::new();
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
                 warn!("Queue U's task received shutdown signal; exiting");
@@ -973,41 +998,90 @@ async fn main() -> anyhow::Result<()> {
             };
             info!("U search results retrieved");
             let ids = u_http
-                .read_ids_and_exprs(&results_text)
-                .collect::<Vec<_>>();
-            if u_digits.is_some() {
-                u_start += ids.len() as u128;
-                u_start %= MAX_START + 1;
-            } else {
-                u_start = rng().random_range(0..=MAX_START);
-            }
+                .read_ids_and_exprs(&results_text);
+            let mut id_count = 0;
             for (u_id, digits_or_expr) in ids {
+                id_count += 1;
                 if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                    graph_tasks.join_all().await;
                     return;
                 }
                 if u_filter.contains(&u_id) {
                     warn!("{u_id}: Skipping duplicate U");
                     continue;
                 }
-                if graph::find_and_submit_factors(
-                    &mut u_http,
-                    u_id,
-                    digits_or_expr.into(),
-                    false,
-                )
-                .await
-                {
-                    info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-                } else {
-                    let _ = u_filter.add(&u_id);
-                    if u_sender.send(u_id).await.is_ok() {
-                        info!("{u_id}: Queued U");
+                let _ = u_filter.add(&u_id);
+                let digits_or_expr = digits_or_expr.to_owned();
+                let u_http_clone = u_http.clone();
+                let u_sender_clone = u_sender.clone();
+                while graph_tasks.len() >= 2 {
+                    let _ = graph_tasks.join_next().await;
+                    if u_shutdown_receiver.check_for_shutdown() {
+                        warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                        graph_tasks.join_all().await;
+                        return;
                     }
                 }
+                graph_tasks.spawn(async move {
+                    if graph::find_and_submit_factors(
+                        u_http_clone.as_ref(),
+                        u_id,
+                        digits_or_expr.into(),
+                        false,
+                    )
+                    .await {
+                        info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
+                    } else if u_sender_clone.send(u_id).await.is_ok() {
+                        info!("{u_id}: Queued U");
+                    }
+                });
+            }
+            if u_digits.is_some() {
+                u_start += id_count as u128;
+                u_start %= MAX_START + 1;
+            } else {
+                u_start = rng().random_range(0..=MAX_START);
             }
         }
     }));
+
+    // Monitoring task: print stats periodically
+    task::spawn(async move {
+        let Ok((mut sigint, mut sigterm)) = signal_installer.await else {
+            error!("Failed to install signal handlers!");
+            abort();
+        };
+        info!("Signal handlers installed");
+        log_stats(&mut reg, &mut sys);
+        let mut next_backtrace = Instant::now() + STATS_INTERVAL;
+        loop {
+            select! {
+                biased;
+                _ = sigterm.recv() => {
+                    warn!("Received SIGTERM; signaling tasks to exit");
+                    break;
+                },
+                _ = &mut sigint => {
+                    warn!("Received SIGINT; signaling tasks to exit");
+                    break;
+                }
+                _ = sleep_until(next_backtrace) => {
+                    log_stats(&mut reg, &mut sys);
+                    next_backtrace = Instant::now() + STATS_INTERVAL;
+                }
+            }
+        }
+        if let Err(e) = shutdown_sender.send(()) {
+            error!("Error sending shutdown signal: {e}");
+        }
+        // Continue logging stats until other tasks exit
+        loop {
+            sleep_until(next_backtrace).await;
+            log_stats(&mut reg, &mut sys);
+            next_backtrace = Instant::now() + STATS_INTERVAL;
+        }
+    });
 
     // Queue C's and PRP's
     'queue_tasks: loop {
@@ -1033,7 +1107,7 @@ async fn main() -> anyhow::Result<()> {
                 let mut results_per_page = PRP_RESULTS_PER_PAGE;
                 let mut results_text = None;
                 while results_text.is_none() && results_per_page > 0 {
-                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={MIN_DIGITS_IN_PRP}&perpage={results_per_page}&start={prp_start}");
+                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={prp_digits}&perpage={results_per_page}&start={prp_start}");
                     let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
                         sleep(SEARCH_RETRY_DELAY).await;
                         results_per_page >>= 1;
@@ -1046,7 +1120,7 @@ async fn main() -> anyhow::Result<()> {
                 let Some(results_text) = results_text else {
                     continue 'queue_tasks;
                 };
-                for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).collect::<Vec<_>>().into_iter().zip(prp_permits)
+                for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
                 {
                     if let Ok(false) = prp_filter.test_and_add(&prp_id) {
                         warn!("{prp_id}: Skipping duplicate PRP");
@@ -1055,21 +1129,30 @@ async fn main() -> anyhow::Result<()> {
                     prp_permit.send(prp_id);
                     info!("{prp_id}: Queued PRP from search");
                 }
-                prp_start += PRP_RESULTS_PER_PAGE as EntryId;
-                if prp_start > MAX_START {
-                    info!("Restarting PRP search: reached maximum starting index");
+                if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
+                    prp_digits = (prp_digits.get() + 1).try_into().unwrap();
+                    if prp_digits > PRP_MAX_DIGITS {
+                        prp_digits = PRP_MIN_DIGITS;
+                    }
                     prp_start = 0;
+                } else {
+                    prp_start += PRP_RESULTS_PER_PAGE as EntryId;
+                    if prp_start > MAX_START {
+                        info!("Restarting PRP search: reached maximum starting index");
+                        prp_start = 0;
+                        prp_digits = (prp_digits.get() + 1).try_into().unwrap();
+                    }
                 }
             }
         }
         if new_c_buffer_task {
             c_buffer_task =
-                queue_composites(&http, &c_sender, c_digits, &mut shutdown_receiver).await;
+                queue_composites(http.as_ref(), &c_sender, c_digits, &mut shutdown_receiver).await;
         }
     }
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ReportFactorResult {
     Accepted,
     DoesNotDivide,

@@ -9,7 +9,7 @@ codegen-units = 1
 debug = "full"
 
 [dependencies]
-reqwest = "0.12"
+reqwest = { version = "0.13", features = ["form"] }
 tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time"] }
 regex = "1.12"
 primitive-types = "0.14"
@@ -39,6 +39,11 @@ peg = "0.8"
 yamaquasi = { git = "https://github.com/remyoudompheng/yamaquasi.git" }
 derivative = "2.2"
 ahash = "0.8"
+sysinfo = "0.37"
+stats_alloc = { version = "0.1", features = ["nightly"] }
+paste = "1.0"
+tikv-jemallocator = "0.6"
 
 [dev-dependencies]
 mockall = "0.14"
+const_format = "0.2"

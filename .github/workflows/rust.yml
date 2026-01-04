@@ -18,6 +18,10 @@ on:
         description: "Length of unknown-status numbers to process, in decimal digits"
         required: false
         type: number
+      prp_digits:
+        description: "Length of probable primes to process, in decimal digits"
+        required: false
+        type: number
       prp_start:
         description: "Number of probable primes to skip before the first one to process"
         required: false
@@ -30,6 +34,7 @@ env:
   CARGO_TERM_COLOR: always
   C_DIGITS: ${{ inputs.c_digits }}
   U_DIGITS: ${{ inputs.u_digits }}
+  PRP_DIGITS: ${{ inputs.prp_digits }}
   PRP_START: ${{ inputs.prp_start }}
   SCCACHE_CACHE_SIZE: "10G"
   RUSTC_WRAPPER: "/usr/bin/sccache"
@@ -130,6 +135,7 @@ jobs:
             echo "No unfinished yafu processes found"
           fi
       - name: Upload any failed submissions
+        if: always()
         uses: actions/upload-artifact@v6
         with:
           name: Failed submissions
