@@ -1312,6 +1312,9 @@ impl Factor {
                 return Some(false);
             }
             let b_numeric = evaluate_as_numeric(b);
+            if b_numeric == Some(0) {
+                return Some(false);
+            }
             if let Some(a_numeric) = a_numeric {
                 if let Some(b_numeric) = b_numeric {
                     return Some(b_numeric > a_numeric && b_numeric.is_multiple_of(a_numeric));
@@ -1403,11 +1406,6 @@ impl Factor {
             && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
             && log10_self_lower > log10_other_upper
         {
-            return false;
-        }
-
-        let other_numeric = evaluate_as_numeric(other);
-        if other_numeric == Some(0) || other_numeric == Some(1) {
             return false;
         }
         match *self {
