@@ -1331,7 +1331,7 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
-        // Try to determine whether `b` is exactly divisible by `a`.
+        // Try to determine whether `b > a` and `b` is exactly divisible by `a`.
         // Returns:
         //   Some(true)  => yes, `b` is divisible by `a`
         //   Some(false) => no, `b` is not divisible by `a`
@@ -1342,7 +1342,7 @@ impl Factor {
             }
             let a_numeric = evaluate_as_numeric(a);
             if a_numeric == Some(0) {
-                return Some(true);
+                return Some(false);
             }
             let b_numeric = evaluate_as_numeric(b);
             if b_numeric == Some(0) {
@@ -1462,9 +1462,29 @@ impl Factor {
                         if self == left {
                             return false;
                         }
+                        if left == other {
+                            let denom_product = simplify_multiply(right.clone());
+                            match divides_exactly(left, &denom_product) {
+                                Some(true) => return true,
+                                Some(false) => return false,
+                                None => { /* unknown — fall through to general heuristics */ }
+                                }
+                            }
+                            if !product_may_be_proper_divisor_of(other, self) {
+                                return false;
+                            }
+                            return true;
+                        } else {
+                            let simplified_self = simplify(self);
+                            if let Some(true) = divides_exactly(other, &simplified_self) {
+                                // other divides self exactly => self > other (except equality handled above)
+                                // so self cannot be proper divisor of other
+                                return false;
+                            }
+                        }
                         let simplified_left = simplify(left);
                         let denom_product = simplify_multiply(right.clone());
-                        match divides_exactly(&simplified_left, &denom_product) {
+                        match divides_exactly(&denom_product, &simplified_left) {
                             Some(true) => { /* divisor divides numerator — OK */ }
                             Some(false) => {
                                 if !product_may_be_proper_divisor_of(right, left) {
@@ -1494,8 +1514,8 @@ impl Factor {
                     if div_exact(&simplified_left, &denom_product).is_none()
                         && !product_may_be_proper_divisor_of(right, left)
                     {
-                        // Can't be an integer, therefore can't be a divisor
-                        return false;
+                            // Can't be an integer, therefore can't be a divisor
+                            return false;
                     }
                 }
                 Multiply { ref terms, .. } => {
@@ -1917,12 +1937,11 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
             _ => 1,
         };
         let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric.into());
-        sum_factor_btreemaps(&mut term_exponent_factors,
-                             find_raw_factors_of_numeric(coeff_power.into()));
-        exponent_factors = multiset_union(vec![
-            exponent_factors,
-            term_exponent_factors,
-        ]);
+        sum_factor_btreemaps(
+            &mut term_exponent_factors,
+            find_raw_factors_of_numeric(coeff_power.into()),
+        );
+        exponent_factors = multiset_union(vec![exponent_factors, term_exponent_factors]);
         let entry = simplified_terms.entry(term).or_insert(0i128);
         if *coeff < 0 {
             *entry = entry.checked_sub_unsigned(new_coeff).unwrap();
@@ -1937,7 +1956,7 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
 
     let (positive_terms, negative_terms): (Vec<_>, Vec<_>) =
         simplified_terms.into_iter().partition(|&(_, c)| c > 0);
-    for prime in exponent_factors.keys().copied().filter(|prime| *prime != 0) {
+    for prime in exponent_factors.keys().copied().filter(|prime| *prime > 1) {
         let Ok(prime) = NumberLength::try_from(prime) else {
             continue;
         };
@@ -1958,7 +1977,14 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         let Some(neg_term_roots) = negative_terms
             .iter()
             .map(|(term, coeff)| {
-                let coeff_root = coeff.nth_root_exact(prime.into())?;
+                // For difference of squares (prime=2), we need root of absolute value
+                let abs_coeff = if prime == 2 { -coeff } else { *coeff };
+                let coeff_root: i128 = abs_coeff.nth_root_exact(prime.into())?.try_into().ok()?;
+                // If prime != 2, the sign is handled by the odd root preservation logic or it should be negative?
+                // Actually for odd primes, x^n + y^n => terms are positive/negative.
+                // nth_root_exact of negative number returns negative root.
+                // Here we have partitioned terms.
+                // if prime is odd, root of negative is negative.
                 let term_root = nth_root_exact(term, prime.into())?;
                 Some((term_root, coeff_root))
             })
@@ -2636,7 +2662,12 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             AddSub { ref terms, .. } => {
                 let mut result = reducer.convert(0);
                 for (term, coeff) in terms.iter() {
-                    result = modulo_as_reduced(term, reducer)? * coeff.unsigned_abs();
+                    let term_val = modulo_as_reduced(term, reducer)? * coeff.unsigned_abs();
+                    if *coeff < 0 {
+                        result = result - term_val;
+                    } else {
+                        result = result + term_val;
+                    }
                 }
                 Some(result)
             }
@@ -3229,10 +3260,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     if FIND_FACTORS_STACK.with(|stack| stack.borrow().contains(expr)) {
         return [(expr.clone(), 1)].into();
     }
-    if let Numeric(n) = expr
-        && *n < 1 << 64
-    {
-        return find_factors_of_numeric(*n);
+    if let Some(n) = evaluate_as_numeric(expr) {
+        return find_factors_of_numeric(n);
     }
     let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE));
     let cached = get_from_cache(factor_cache, expr);
@@ -3537,13 +3566,9 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     }
                                     let mut algebraic = BTreeMap::new();
                                     for (term, exponent) in to_like_powers(terms) {
-                                        if let Numeric(n) = term {
-                                            for (sub_f, sub_e) in find_factors_of_numeric(n) {
-                                                *algebraic.entry(sub_f).or_insert(0) +=
-                                                    sub_e * exponent;
-                                            }
-                                        } else {
-                                            *algebraic.entry(term).or_insert(0) += exponent;
+                                        for (sub_f, sub_e) in find_factors(&term) {
+                                            *algebraic.entry(sub_f).or_insert(0) +=
+                                                sub_e * exponent;
                                         }
                                     }
                                     let factors = multiset_union(vec![common_factors, algebraic]);
@@ -3568,7 +3593,11 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                         }
                     },
                 };
-                if factors.is_empty() || (factors.len() == 1 && factors.get(expr) == Some(&1)) {
+                let simplified_expr = simplify(expr);
+                let has_nontrivial_factors = factors
+                    .iter()
+                    .any(|(f, _)| f != expr && *f != simplified_expr && f.as_numeric() != Some(1));
+                if !has_nontrivial_factors {
                     if let Some(n) = evaluate_as_numeric(expr) {
                         find_factors_of_numeric(n)
                     } else {
@@ -4932,5 +4961,14 @@ mod tests {
         let divisor = Factor::multiply([(x_plus_1.clone(), 1), (2.into(), 1)].into());
         let result = div_exact(&product, &divisor);
         assert_eq!(result, Some(5.into()));
+    }
+
+    #[test]
+    fn test_mod_3() {
+        let s = "2^1234-1";
+        let f = Factor::from(s);
+        let m = modulo_as_numeric_no_evaluate(&f, 3.into());
+        println!("2^1234-1 mod 3 = {:?}", m);
+        assert_eq!(m, Some(0));
     }
 }
