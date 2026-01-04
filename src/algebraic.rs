@@ -1384,15 +1384,20 @@ impl Factor {
             return false;
         }
         if let Complex { inner: ref c, .. } = *self
-            && let Divide { ref left, ref right, .. } = **c
-                && left == other {
-                    let denom_product = simplify_multiply(right.clone());
-                    match divides_exactly(left, &denom_product) {
-                        Some(true) => return true,
-                        Some(false) => return false,
-                        None => { /* unknown — fall through to general heuristics */ }
-                    }
-                }
+            && let Divide {
+                ref left,
+                ref right,
+                ..
+            } = **c
+            && left == other
+        {
+            let denom_product = simplify_multiply(right.clone());
+            match divides_exactly(left, &denom_product) {
+                Some(true) => return true,
+                Some(false) => return false,
+                None => { /* unknown — fall through to general heuristics */ }
+            }
+        }
         if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
             && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
             && log10_self_lower > log10_other_upper
@@ -1425,23 +1430,30 @@ impl Factor {
                         return false;
                     }
                 }
-                Complex { inner: ref c, .. } => if let Divide { ref left, ref right, .. } = **c {
-                    // self is a big number and other is left/right
-                    if self == left {
-                        return false;
-                    }
-                    let simplified_left = simplify(left);
-                    let denom_product = simplify_multiply(right.clone());
-                    match divides_exactly(&simplified_left, &denom_product) {
-                        Some(true) => { /* divisor divides numerator — OK */ }
-                        Some(false) => {
-                            if !product_may_be_proper_divisor_of(right, left) {
-                                return false;
-                            }
+                Complex { inner: ref c, .. } => {
+                    if let Divide {
+                        ref left,
+                        ref right,
+                        ..
+                    } = **c
+                    {
+                        // self is a big number and other is left/right
+                        if self == left {
+                            return false;
                         }
-                        None => {
-                            if !product_may_be_proper_divisor_of(right, left) {
-                                return false;
+                        let simplified_left = simplify(left);
+                        let denom_product = simplify_multiply(right.clone());
+                        match divides_exactly(&simplified_left, &denom_product) {
+                            Some(true) => { /* divisor divides numerator — OK */ }
+                            Some(false) => {
+                                if !product_may_be_proper_divisor_of(right, left) {
+                                    return false;
+                                }
+                            }
+                            None => {
+                                if !product_may_be_proper_divisor_of(right, left) {
+                                    return false;
+                                }
                             }
                         }
                     }
@@ -1529,10 +1541,17 @@ impl Factor {
             _ => {}
         }
         eprintln!("DEBUG may_be_proper_divisor_of: self = {}", simplify(self));
-        eprintln!("DEBUG may_be_proper_divisor_of: other = {}", simplify(other));
+        eprintln!(
+            "DEBUG may_be_proper_divisor_of: other = {}",
+            simplify(other)
+        );
         if let Complex { inner: ref c, .. } = *other {
-match **c {
-                Divide { ref left, ref right, .. } => {
+            match **c {
+                Divide {
+                    ref left,
+                    ref right,
+                    ..
+                } => {
                     let simplified_left = simplify(left);
                     let simplified_self = simplify(self);
                     let denom_product = simplify_multiply(right.clone());
@@ -1542,21 +1561,21 @@ match **c {
                     if simplified_left == simplified_self && denom_product != Factor::one() {
                         return false;
                     }
-                match divides_exactly(&simplified_left, &denom_product) {
-                Some(true) => { /* numerator divisible — OK, don't reject */ }
-                Some(false) => {
-                if !product_may_be_proper_divisor_of(right, left) {
-                return false;
-                }
-                }
-                None => {
-                // Unknown divisibility for BigNumber-like numerator and modulus not dividing 900.
-                // Fall back to symbolic heuristic only:
-                if !product_may_be_proper_divisor_of(right, left) {
-                return false;
-                }
-                }
-                }
+                    match divides_exactly(&simplified_left, &denom_product) {
+                        Some(true) => { /* numerator divisible — OK, don't reject */ }
+                        Some(false) => {
+                            if !product_may_be_proper_divisor_of(right, left) {
+                                return false;
+                            }
+                        }
+                        None => {
+                            // Unknown divisibility for BigNumber-like numerator and modulus not dividing 900.
+                            // Fall back to symbolic heuristic only:
+                            if !product_may_be_proper_divisor_of(right, left) {
+                                return false;
+                            }
+                        }
+                    }
                 }
                 Multiply { ref terms, .. } => {
                     if matches!(terms.get(self), Some(x) if *x != 0) {
