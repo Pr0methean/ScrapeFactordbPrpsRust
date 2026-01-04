@@ -3876,7 +3876,7 @@ mod tests {
 
     #[test]
     fn test_axbx() {
-        let factors = find_factors_recursive("(1297^400-901^400)".into());
+        let factors = find_factors_recursive("(1297^400-901^400)/3".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&"1297^200-901^200".into()));
