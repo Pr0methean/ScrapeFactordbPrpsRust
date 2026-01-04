@@ -1305,24 +1305,6 @@ impl Factor {
         //   None        => unknown (should be rare with this approach)
         fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
             if let Some(b_numeric) = evaluate_as_numeric(b) {
-                // If a is a BigNumber / ElidedNumber, do a safe per-digit modular reduction
-                // when modulus fits in u64 (u128 arithmetic used for intermediate).
-                match a {
-                    Factor::BigNumber { inner, .. } => {
-                        if b_numeric <= u64::MAX as u128 {
-                            let mut rem: u128 = 0;
-                            let modulus = b_numeric;
-                            for ch in inner.as_ref().chars() {
-                                let d = ch.to_digit(10)? as u128;
-                                rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
-                            }
-                            return Some(rem == 0);
-                        }
-                        // else fallthrough to modulo_as_numeric_no_evaluate attempt
-                    }
-                    _ => {}
-                }
-
                 // Try computing remainder via modulo_as_numeric_no_evaluate which understands
                 // algebraic forms (Power, AddSub, Multiply, etc.). If it gives a remainder, use it.
                 if let Some(rem) = modulo_as_numeric_no_evaluate(a, b_numeric) {
@@ -2520,21 +2502,16 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
             ..
         } => {
             let modulus = reducer.modulus();
-            if 900.is_multiple_of(&modulus) {
-                let mod_100 = expr.last_two_digits()? as NumericFactor;
-                let mod_9 = if 100.is_multiple_of(&modulus) {
-                    0
-                } else {
-                    inner_expr
-                        .0
-                        .chars()
-                        .map(|digit| Some((digit.to_digit(10)? % 9) as NumericFactor))
-                        .collect::<Option<Vec<_>>>()?
-                        .into_iter()
-                        .sum::<NumericFactor>()
-                        % 9
-                };
-                return Some(reducer.convert(mod_100 + 801 * mod_9));
+            if 100.is_multiple_of(&modulus) {
+                return Some(reducer.convert(expr.last_two_digits()? as NumericFactor % modulus));
+            }
+            if modulus <= (u128::MAX - 9) / 10 {
+                let mut rem: u128 = 0;
+                for ch in inner_expr.as_ref().chars() {
+                    let d = ch.to_digit(10)? as u128;
+                    rem = (rem.wrapping_mul(10).wrapping_add(d)) % modulus;
+                }
+                return Some(reducer.convert(rem));
             }
             None
         }
@@ -4116,6 +4093,11 @@ mod tests {
         );
         assert_eq!(evaluate_as_numeric("(5^6+1)^2-1"), Some(244171875));
         assert_eq!(evaluate_as_numeric("3^3+4^4+5^5"), Some(3408));
+    }
+
+    #[test]
+    fn test_modulo_as_numeric_no_evaluate() {
+        assert_eq!(Some(1), modulo_as_numeric_no_evaluate(&"1234512345123451234512345123451234512345".into(), 2));
     }
 
     #[test]
