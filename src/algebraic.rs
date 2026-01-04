@@ -1344,7 +1344,7 @@ impl Factor {
                 // Last resort: attempt an exact symbolic division. If it succeeds it's divisible.
                 // (This won't detect many numeric divisibilities that modulo_as_numeric_no_evaluate would,
                 // but combined with the above checks it is a reasonable fallback.)
-                return Some(div_exact(a, b).is_some());
+                Some(div_exact(a, b).is_some())
             } else {
                 // Non-numeric divisor: attempt symbolic exact division.
                 Some(div_exact(a, b).is_some())
@@ -1383,9 +1383,9 @@ impl Factor {
         if self == other {
             return false;
         }
-        if let Complex { inner: ref c, .. } = *self {
-            if let Divide { ref left, ref right, .. } = **c {
-                if left == other {
+        if let Complex { inner: ref c, .. } = *self
+            && let Divide { ref left, ref right, .. } = **c
+                && left == other {
                     let denom_product = simplify_multiply(right.clone());
                     match divides_exactly(left, &denom_product) {
                         Some(true) => return true,
@@ -1393,8 +1393,6 @@ impl Factor {
                         None => { /* unknown — fall through to general heuristics */ }
                     }
                 }
-            }
-        }
         if let Some((log10_self_lower, _)) = get_cached_log10_bounds(self)
             && let Some((_, log10_other_upper)) = get_cached_log10_bounds(other)
             && log10_self_lower > log10_other_upper
