@@ -1327,12 +1327,12 @@ impl Factor {
                     }
                 } else {
                     for prime in [
-                        900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18, 15, 12,
-                        10, 9, 6, 4,
+                        900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18,
+                        15, 12, 10, 9, 6, 4,
                     ]
-                        .iter()
-                        .chain(SMALL_PRIMES.iter())
-                        .copied()
+                    .iter()
+                    .chain(SMALL_PRIMES.iter())
+                    .copied()
                     {
                         if let Some(0) = modulo_as_numeric_no_evaluate(a, prime.into()) {
                             let b_mod_p = if let Some(b_numeric) = b_numeric {
@@ -1340,7 +1340,9 @@ impl Factor {
                             } else {
                                 modulo_as_numeric_no_evaluate(b, NumericFactor::from(prime))
                             };
-                            if let Some(b_mod_p) = b_mod_p && (b_mod_p != 0) {
+                            if let Some(b_mod_p) = b_mod_p
+                                && (b_mod_p != 0)
+                            {
                                 return Some(false);
                             }
                         }
@@ -4087,7 +4089,10 @@ mod tests {
 
     #[test]
     fn test_modulo_as_numeric_no_evaluate() {
-        assert_eq!(Some(1), modulo_as_numeric_no_evaluate(&"1234512345123451234512345123451234512345".into(), 2));
+        assert_eq!(
+            Some(1),
+            modulo_as_numeric_no_evaluate(&"1234512345123451234512345123451234512345".into(), 2)
+        );
     }
 
     #[test]
