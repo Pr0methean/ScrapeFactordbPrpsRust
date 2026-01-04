@@ -1889,7 +1889,6 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
     let mut exponent_factors = BTreeMap::new();
     let mut simplified_terms = BTreeMap::<Factor, i128>::new();
     for (term, coeff) in terms {
-        let (new_coeff, coeff_power) = factor_power(coeff.unsigned_abs(), 1);
         let mut term = simplify(term);
         let exponent_numeric = match term {
             Numeric(a) => {
@@ -1918,17 +1917,13 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         };
         let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric.into());
         sum_factor_btreemaps(&mut term_exponent_factors,
-                             find_raw_factors_of_numeric(coeff_power.into()));
+                             find_raw_factors_of_numeric(coeff.unsigned_abs()));
         exponent_factors = multiset_union(vec![
             exponent_factors,
             term_exponent_factors,
         ]);
         let entry = simplified_terms.entry(term).or_insert(0i128);
-        if *coeff < 0 {
-            *entry = entry.checked_sub_unsigned(new_coeff).unwrap();
-        } else {
-            *entry = entry.checked_add_unsigned(new_coeff).unwrap();
-        }
+        *entry += *coeff;
     }
     if exponent_factors.is_empty() {
         return BTreeMap::new();
@@ -1936,7 +1931,7 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
     let mut results = BTreeMap::new();
 
     let (positive_terms, negative_terms): (Vec<_>, Vec<_>) =
-        simplified_terms.into_iter().partition(|&(_, c)| c > 0);
+        simplified_terms.iter().partition(|&(_, c)| *c > 0);
     for prime in exponent_factors.keys().copied().filter(|prime| *prime > 1) {
         let Ok(prime) = NumberLength::try_from(prime) else {
             continue;
