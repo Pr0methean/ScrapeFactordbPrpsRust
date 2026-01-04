@@ -1868,7 +1868,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(
 
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
     if a == 1 || n == 0 {
-        return (1, 1);
+        return (1, 0);
     }
     // A NumericFactor can't be a 128th or higher power
     for prime in [
@@ -1885,121 +1885,66 @@ fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLeng
     (a, n)
 }
 
-pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, NumberLength> {
+pub fn to_like_powers(
+    left: &Factor,
+    right: &Factor,
+    subtract: bool,
+) -> BTreeMap<Factor, NumberLength> {
     let mut exponent_factors = BTreeMap::new();
-    let mut simplified_terms = BTreeMap::<Factor, i128>::new();
-    for (term, coeff) in terms {
-        let (new_coeff, coeff_power) = factor_power(coeff.unsigned_abs(), 1);
-        let mut term = simplify(term);
+    let mut new_left = simplify(left);
+    let mut new_right = simplify(right);
+    for term in [&mut new_left, &mut new_right] {
         let exponent_numeric = match term {
             Numeric(a) => {
-                let (a, n) = factor_power(a, 1);
+                let (a, n) = factor_power(*a, 1);
                 if n > 1 {
-                    term = Factor::multiply([(Numeric(a), n as NumberLength)].into());
+                    *term = Factor::multiply([(Numeric(a), n as NumberLength)].into());
+                    Some(n)
+                } else {
+                    None
                 }
-                n
             }
-            Complex { inner: ref c, .. } => match **c {
-                Power { ref exponent, .. } => evaluate_as_numeric(exponent)
-                    .and_then(|e| NumberLength::try_from(e).ok())
-                    .unwrap_or(1),
+            Complex { inner: c, .. } => match **c {
+                Power { ref exponent, .. } => {
+                    evaluate_as_numeric(exponent).and_then(|e| NumberLength::try_from(e).ok())
+                }
                 Multiply { ref terms, .. } => {
                     // Return GCD of exponents without modifying the term
                     // nth_root_exact will handle the exponent division later
-                    terms
-                        .values()
-                        .copied()
-                        .reduce(|x, y| x.gcd(&y))
-                        .unwrap_or(1)
+                    terms.values().copied().reduce(|x, y| x.gcd(&y))
                 }
-                _ => 1,
+                _ => None,
             },
-            _ => 1,
+            _ => None,
         };
-        let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric.into());
-        sum_factor_btreemaps(&mut term_exponent_factors,
-                             find_raw_factors_of_numeric(coeff_power.into()));
-        exponent_factors = multiset_union(vec![
-            exponent_factors,
-            term_exponent_factors,
-        ]);
-        let entry = simplified_terms.entry(term).or_insert(0i128);
-        if *coeff < 0 {
-            *entry = entry.checked_sub_unsigned(new_coeff).unwrap();
-        } else {
-            *entry = entry.checked_add_unsigned(new_coeff).unwrap();
+        if let Some(exponent_numeric) = exponent_numeric {
+            exponent_factors = multiset_union(vec![
+                exponent_factors,
+                find_raw_factors_of_numeric(exponent_numeric.into()),
+            ]);
         }
     }
     if exponent_factors.is_empty() {
         return BTreeMap::new();
     }
+    let expr = simplify_add_sub(&new_left, &new_right, subtract);
     let mut results = BTreeMap::new();
-
-    let (positive_terms, negative_terms): (Vec<_>, Vec<_>) =
-        simplified_terms.into_iter().partition(|&(_, c)| c > 0);
-    for prime in exponent_factors.keys().copied().filter(|prime| *prime > 1) {
-        let Ok(prime) = NumberLength::try_from(prime) else {
-            continue;
-        };
-        if prime == 2 && !negative_terms.is_empty() {
-            continue;
+    for (factor, _) in exponent_factors {
+        if let Ok(factor) = NumberLength::try_from(factor)
+            && (subtract || (factor != 2))
+            && let Some(left_root) = nth_root_exact(&new_left, factor)
+            && let Some(right_root) = nth_root_exact(&new_right, factor)
+        {
+            let new_factor = simplify_add_sub(&left_root, &right_root, subtract);
+            let new_cofactor = if subtract && factor == 2 {
+                simplify_add_sub(&left_root, &right_root, false)
+            } else {
+                div_exact(&expr, &new_factor)
+                    .unwrap_or_else(|| simplify_divide(&expr, &[(new_factor.clone(), 1)].into()))
+            };
+            *results.entry(new_cofactor).or_insert(0) += 1;
+            *results.entry(new_factor).or_insert(0) += 1;
         }
-        let Some(pos_term_roots) = positive_terms
-            .iter()
-            .map(|(term, coeff)| {
-                let coeff_root = coeff.nth_root_exact(prime.into())?;
-                let term_root = nth_root_exact(&simplify(term), prime.into())?;
-                Some((term_root, coeff_root))
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
-        let Some(neg_term_roots) = negative_terms
-            .iter()
-            .map(|(term, coeff)| {
-                let coeff_root = coeff.nth_root_exact(prime.into())?;
-                let term_root = nth_root_exact(term, prime.into())?;
-                Some((term_root, coeff_root))
-            })
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
-        let (new_cofactor, new_factor) = if prime == 2 {
-            let a_plus_b = Factor::add_sub(
-                pos_term_roots
-                    .iter()
-                    .cloned()
-                    .chain(
-                        neg_term_roots
-                            .iter()
-                            .cloned()
-                            .map(|(term, coeff)| (term, -coeff)),
-                    )
-                    .collect(),
-            );
-            let a_minus_b = Factor::add_sub(
-                pos_term_roots
-                    .into_iter()
-                    .chain(neg_term_roots.into_iter())
-                    .collect(),
-            );
-            (a_plus_b, a_minus_b)
-        } else {
-            let a_minus_b = Factor::add_sub(
-                pos_term_roots
-                    .into_iter()
-                    .chain(neg_term_roots.into_iter())
-                    .collect(),
-            );
-            let terms = Factor::add_sub(terms.clone());
-            let cofactor = div_exact(&terms, &a_minus_b)
-                .unwrap_or_else(|| Factor::divide(terms, [(a_minus_b.clone(), 1)]));
-            (cofactor, a_minus_b)
-        };
-        *results.entry(new_factor).or_insert(0) += 1;
-        *results.entry(new_cofactor).or_insert(0) += 1;
     }
     results
 }
