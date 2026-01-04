@@ -1293,22 +1293,23 @@ impl Factor {
 
     #[inline]
     pub fn may_be_proper_divisor_of(&self, other: &Factor) -> bool {
-        // Try to determine whether `b` is exactly divisible by `a`.
+        // Try to determine whether `b > a` and `b` is exactly divisible by `a`.
         // Returns:
         //   Some(true)  => yes, `b` is divisible by `a`
         //   Some(false) => no, `b` is not divisible by `a`
         //   None        => unknown
         fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
+            // quick exit: identical expressions are not proper divisors
             if a == b {
+                return Some(false);
+            }
+            let b_numeric = evaluate_as_numeric(b);
+            if b_numeric == Some(0) {
                 return Some(false);
             }
             let a_numeric = evaluate_as_numeric(a);
             if a_numeric == Some(0) {
                 return Some(true);
-            }
-            let b_numeric = evaluate_as_numeric(b);
-            if b_numeric == Some(0) {
-                return Some(false);
             }
             if let Some(a_numeric) = a_numeric {
                 if let Some(b_numeric) = b_numeric {
@@ -1380,7 +1381,6 @@ impl Factor {
                 true
             })
         }
-        // quick exit: identical expressions are not proper divisors
         if let Some(exact) = divides_exactly(self, other) {
             return exact;
         }
@@ -3097,9 +3097,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     if FIND_FACTORS_STACK.with(|stack| stack.borrow().contains(expr)) {
         return [(expr.clone(), 1)].into();
     }
-    if let Numeric(n) = expr
-        && *n < 1 << 64
-    {
+    if let Numeric(n) = expr {
         return find_factors_of_numeric(*n);
     }
     let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE));
@@ -3416,7 +3414,11 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                         }
                     },
                 };
-                if factors.is_empty() || (factors.len() == 1 && factors.get(expr) == Some(&1)) {
+                let simplified_expr = simplify(expr);
+                let has_nontrivial_factors = factors
+                    .iter()
+                    .any(|(f, _)| f != expr && *f != simplified_expr && f.as_numeric() != Some(1));
+                if !has_nontrivial_factors {
                     if let Some(n) = evaluate_as_numeric(expr) {
                         find_factors_of_numeric(n)
                     } else {
@@ -3734,7 +3736,7 @@ mod tests {
 
     #[test]
     fn test_axbx() {
-        let factors = find_factors_recursive("(1297^400-901^400)/3".into());
+        let factors = find_factors_recursive("(1297^400-901^400)".into());
         println!("{}", factors.iter().sorted().unique().join(","));
         assert!(factors.contains(&Numeric(2)));
         assert!(factors.contains(&"1297^200-901^200".into()));
@@ -4152,6 +4154,7 @@ mod tests {
         ));
         assert!(!may_be_proper_divisor_of("2^1234-1", "(2^1234-1)/3"));
         assert!(may_be_proper_divisor_of("(2^1234-1)/3", "2^1234-1"));
+        assert!(may_be_proper_divisor_of("5", "12345"));
         assert!(may_be_proper_divisor_of("0", "12345"));
         assert!(!may_be_proper_divisor_of("12345", "0"));
     }
@@ -4867,5 +4870,14 @@ mod tests {
         let divisor = Factor::multiply([(x_plus_1.clone(), 1), (2.into(), 1)].into());
         let result = div_exact(&product, &divisor);
         assert_eq!(result, Some(5.into()));
+    }
+
+    #[test]
+    fn test_mod_3() {
+        let s = "2^1234-1";
+        let f = Factor::from(s);
+        let m = modulo_as_numeric_no_evaluate(&f, 3u128.into());
+        println!("2^1234-1 mod 3 = {:?}", m);
+        assert_eq!(m, Some(0));
     }
 }
