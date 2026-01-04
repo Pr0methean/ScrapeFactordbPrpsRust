@@ -1274,14 +1274,19 @@ impl Factor {
     }
 
     #[inline(always)]
-    fn last_digit(&self) -> Option<u8> {
+    fn last_two_digits(&self) -> Option<u8> {
         match self {
             Factor::BigNumber {
                 inner: BigNumber(n),
                 ..
             }
-            | ElidedNumber(n) => Some(n.chars().last().unwrap().to_digit(10).unwrap() as u8),
-            Numeric(n) => Some((n % 10) as u8),
+            | ElidedNumber(n) => {
+                let mut chars = n.chars().rev().take(2);
+                let ones = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                let tens = chars.next().and_then(|c| c.to_digit(10)).unwrap_or(0);
+                Some(u8::try_from(tens * 10 + ones).unwrap())
+            },
+            Numeric(n) => Some((n % 100) as u8),
             _ => None,
         }
     }
@@ -1468,34 +1473,21 @@ impl Factor {
                 _ => {}
             }
         }
-        if let Some(last_digit) = self.last_digit()
-            && let Some(other_last_digit) = other.last_digit()
-        {
-            match last_digit {
-                0 => vec![0],
-                2 | 4 | 6 | 8 => vec![0, 2, 4, 6, 8],
-                5 => vec![0, 5],
-                1 | 3 | 7 | 9 => vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
-                _ => unsafe { unreachable_unchecked() },
-            }
-            .contains(&other_last_digit)
-        } else {
-            if self_numeric.is_none() {
-                for prime in SMALL_PRIMES {
-                    if let Some(0) = modulo_as_numeric_no_evaluate(self, prime.into())
-                        && let Some(other_m) = if let Some(other_n) = other_numeric {
-                            Some(other_n % NumericFactor::from(prime))
-                        } else {
-                            modulo_as_numeric_no_evaluate(other, NumericFactor::from(prime))
-                        }
-                        && (other_m != 0)
-                    {
-                        return false;
+        if self_numeric.is_none() {
+            for prime in [900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18, 15, 12, 10, 9, 6, 4].iter().chain(SMALL_PRIMES.iter()).copied() {
+                if let Some(0) = modulo_as_numeric_no_evaluate(self, prime.into())
+                    && let Some(other_m) = if let Some(other_n) = other_numeric {
+                        Some(other_n % NumericFactor::from(prime))
+                    } else {
+                        modulo_as_numeric_no_evaluate(other, NumericFactor::from(prime))
                     }
+                    && (other_m != 0)
+                {
+                    return false;
                 }
             }
-            true
         }
+        true
     }
 
     pub fn is_elided(&self) -> bool {
@@ -2417,15 +2409,25 @@ fn modulo_as_reduced_no_evaluate<T: Reducer<NumericFactor> + std::clone::Clone>(
 ) -> Option<ReducedInt<NumericFactor, T>> {
     match *expr {
         Numeric(n) => Some(reducer.convert(n)),
-        Factor::BigNumber { .. } | ElidedNumber(_) => {
+        ElidedNumber(_) => {
             let modulus = reducer.modulus();
-            if (modulus == 2 || modulus == 5)
-                && let Some(last_digit) = expr.last_digit()
-            {
-                Some(reducer.convert(last_digit as NumericFactor))
-            } else {
-                None
+            if 100.is_multiple_of(&modulus) {
+                return Some(reducer.convert(expr.last_two_digits()? as NumericFactor % modulus));
             }
+            None
+        }
+        Factor::BigNumber { inner: ref inner_expr, .. } => {
+            let modulus = reducer.modulus();
+            if 900.is_multiple_of(&modulus) {
+                let mod_100 = expr.last_two_digits()? as NumericFactor;
+                let mod_9 = if 100.is_multiple_of(&modulus) {
+                    0
+                } else {
+                    inner_expr.0.chars().map(|digit| Some((digit.to_digit(10)? % 9) as NumericFactor)).collect::<Option<Vec<_>>>()?.into_iter().sum::<NumericFactor>() % 9
+                };
+                return Some(reducer.convert(mod_100 + 801 * mod_9));
+            }
+            None
         }
         UnknownExpression { .. } => None,
         Complex { inner: ref c, .. } => match **c {
