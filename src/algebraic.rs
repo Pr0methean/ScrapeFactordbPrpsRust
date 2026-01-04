@@ -1540,11 +1540,6 @@ impl Factor {
             },
             _ => {}
         }
-        eprintln!("DEBUG may_be_proper_divisor_of: self = {}", simplify(self));
-        eprintln!(
-            "DEBUG may_be_proper_divisor_of: other = {}",
-            simplify(other)
-        );
         if let Complex { inner: ref c, .. } = *other {
             match **c {
                 Divide {
@@ -1555,9 +1550,6 @@ impl Factor {
                     let simplified_left = simplify(left);
                     let simplified_self = simplify(self);
                     let denom_product = simplify_multiply(right.clone());
-                    eprintln!("DEBUG other.divide.left = {}", left);
-                    eprintln!("DEBUG simplify(left) = {}", simplified_left);
-                    eprintln!("DEBUG denom product = {}", denom_product);
                     if simplified_left == simplified_self && denom_product != Factor::one() {
                         return false;
                     }
