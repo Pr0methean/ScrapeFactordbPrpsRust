@@ -1304,21 +1304,52 @@ impl Factor {
         //   Some(false) => no, `a` is not divisible by `b`
         //   None        => unknown (should be rare with this approach)
         fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
-            if let Some(b_numeric) = evaluate_as_numeric(b) {
-                // Try computing remainder via modulo_as_numeric_no_evaluate which understands
-                // algebraic forms (Power, AddSub, Multiply, etc.). If it gives a remainder, use it.
-                if let Some(rem) = modulo_as_numeric_no_evaluate(a, b_numeric) {
-                    return Some(rem == 0);
-                }
-
-                // Last resort: attempt an exact symbolic division. If it succeeds it's divisible.
-                // (This won't detect many numeric divisibilities that modulo_as_numeric_no_evaluate would,
-                // but combined with the above checks it is a reasonable fallback.)
-                Some(div_exact(a, b).is_some())
-            } else {
-                // Non-numeric divisor: attempt symbolic exact division.
-                Some(div_exact(a, b).is_some())
+            if a == b {
+                return Some(false);
             }
+            let a_numeric = evaluate_as_numeric(a);
+            if a_numeric == Some(0) {
+                return Some(false);
+            }
+            let b_numeric = evaluate_as_numeric(b);
+            if let Some(a_numeric) = a_numeric {
+                if let Some(b_numeric) = b_numeric {
+                    return Some(b_numeric > a_numeric && b_numeric.is_multiple_of(a_numeric));
+                } else if let Some(b_mod_a) = modulo_as_numeric_no_evaluate(b, a_numeric)
+                    && b_mod_a != 0
+                {
+                    return Some(false);
+                }
+            } else {
+                if let Some(b_numeric) = b_numeric {
+                    // Try computing remainder via modulo_as_numeric_no_evaluate which understands
+                    // algebraic forms (Power, AddSub, Multiply, etc.). If it gives a remainder, use it.
+                    if let Some(a_mod_b) = modulo_as_numeric_no_evaluate(a, b_numeric) {
+                        return Some(a_mod_b == 0);
+                    }
+                } else {
+                    for prime in [
+                        900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18, 15, 12,
+                        10, 9, 6, 4,
+                    ]
+                        .iter()
+                        .chain(SMALL_PRIMES.iter())
+                        .copied()
+                    {
+                        if let Some(0) = modulo_as_numeric_no_evaluate(a, prime.into()) {
+                            let b_mod_p = if let Some(b_numeric) = b_numeric {
+                                Some(b_numeric % NumericFactor::from(prime))
+                            } else {
+                                modulo_as_numeric_no_evaluate(b, NumericFactor::from(prime))
+                            };
+                            if let Some(b_mod_p) = b_mod_p && (b_mod_p != 0) {
+                                return Some(false);
+                            }
+                        }
+                    }
+                }
+            }
+            None
         }
         fn product_may_be_proper_divisor_of(
             terms: &BTreeMap<Factor, NumberLength>,
@@ -1350,8 +1381,8 @@ impl Factor {
             })
         }
         // quick exit: identical expressions are not proper divisors
-        if self == other {
-            return false;
+        if let Some(exact) = divides_exactly(self, other) {
+            return exact;
         }
         if let Complex { inner: ref c, .. } = *self
             && let Divide {
@@ -1378,19 +1409,6 @@ impl Factor {
         let other_numeric = evaluate_as_numeric(other);
         if other_numeric == Some(0) || other_numeric == Some(1) {
             return false;
-        }
-        let self_numeric = evaluate_as_numeric(self);
-        if self_numeric == Some(0) {
-            return false;
-        }
-        if let Some(n) = self_numeric {
-            if let Some(other_n) = other_numeric {
-                return other_n > n && other_n.is_multiple_of(n);
-            } else if let Some(m) = modulo_as_numeric_no_evaluate(other, n)
-                && m != 0
-            {
-                return false;
-            }
         }
         match *self {
             Factor::BigNumber { .. } => match *other {
@@ -1545,27 +1563,6 @@ impl Factor {
                     }
                 }
                 _ => {}
-            }
-        }
-        if self_numeric.is_none() {
-            for prime in [
-                900, 450, 300, 225, 180, 150, 100, 90, 75, 60, 50, 45, 36, 30, 25, 20, 18, 15, 12,
-                10, 9, 6, 4,
-            ]
-            .iter()
-            .chain(SMALL_PRIMES.iter())
-            .copied()
-            {
-                if let Some(0) = modulo_as_numeric_no_evaluate(self, prime.into())
-                    && let Some(other_m) = if let Some(other_n) = other_numeric {
-                        Some(other_n % NumericFactor::from(prime))
-                    } else {
-                        modulo_as_numeric_no_evaluate(other, NumericFactor::from(prime))
-                    }
-                    && (other_m != 0)
-                {
-                    return false;
-                }
             }
         }
         true
