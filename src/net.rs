@@ -749,6 +749,14 @@ impl<T: Into<HipStr<'static>>> From<T> for BigNumber {
     }
 }
 
+impl core::str::FromStr for BigNumber {
+    type Err = core::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(BigNumber::from(s.to_string()))
+    }
+}
+
 #[derive(Clone, Default, Debug)]
 pub struct ProcessedStatusApiResponse {
     pub status: Option<NumberStatus>,
