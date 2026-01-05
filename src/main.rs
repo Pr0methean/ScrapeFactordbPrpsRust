@@ -1013,11 +1013,10 @@ async fn main() -> anyhow::Result<()> {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
                     return;
                 }
-                if u_filter.contains(&u_id) {
+                if !matches!(u_filter.test_and_add(&u_id), Ok(true)) {
                     warn!("{u_id}: Skipping duplicate U");
                     continue;
                 }
-                let _ = u_filter.add(&u_id);
                 let digits_or_expr = digits_or_expr.to_owned();
                 if graph::find_and_submit_factors(
                     &*u_http,
@@ -1116,7 +1115,7 @@ async fn main() -> anyhow::Result<()> {
                 };
                 for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
                 {
-                    if let Ok(false) = prp_filter.test_and_add(&prp_id) {
+                    if !matches!(prp_filter.test_and_add(&prp_id), Ok(true)) {
                         warn!("{prp_id}: Skipping duplicate PRP");
                         continue;
                     }
