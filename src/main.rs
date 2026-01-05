@@ -478,16 +478,25 @@ async fn queue_composites(
 
 const STATS_INTERVAL: Duration = Duration::from_mins(1);
 
-pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sysinfo::System) {
+pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sysinfo::System,
+                                 backtraces_paused_task: &mut Option<JoinHandle<()>>) {
     info!("Allocation stats: {:#?}", reg.change());
     sys.refresh_all();
     info!("System used memory: {}", sys.used_memory());
     info!("System available memory: {}", sys.available_memory());
     info!("Task backtraces:\n{}", taskdump_tree(false));
-    info!(
-        "Task backtraces with all tasks idle:\n{}",
-        taskdump_tree(true)
-    );
+    match backtraces_paused_task {
+        Some(task) => if !task.is_finished() {
+            return;
+        }
+        None => return,
+    }
+    *backtraces_paused_task = Some(task::spawn(async {
+        info!(
+            "Task backtraces with all tasks idle:\n{}",
+            taskdump_tree(true)
+        )
+    }));
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
@@ -1045,7 +1054,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }));
-
+    let mut backtraces_paused_task = None;
     // Monitoring task: print stats periodically
     task::spawn(async move {
         let Ok((mut sigint, mut sigterm)) = signal_installer.await else {
@@ -1053,7 +1062,7 @@ async fn main() -> anyhow::Result<()> {
             abort();
         };
         info!("Signal handlers installed");
-        log_stats(&mut reg, &mut sys);
+        log_stats(&mut reg, &mut sys, &mut backtraces_paused_task);
         let mut next_backtrace = Instant::now() + STATS_INTERVAL;
         loop {
             select! {
@@ -1067,7 +1076,7 @@ async fn main() -> anyhow::Result<()> {
                     break;
                 }
                 _ = sleep_until(next_backtrace) => {
-                    log_stats(&mut reg, &mut sys);
+                    log_stats(&mut reg, &mut sys, &mut backtraces_paused_task);
                     next_backtrace = Instant::now() + STATS_INTERVAL;
                 }
             }
@@ -1078,7 +1087,7 @@ async fn main() -> anyhow::Result<()> {
         // Continue logging stats until other tasks exit
         loop {
             sleep_until(next_backtrace).await;
-            log_stats(&mut reg, &mut sys);
+            log_stats(&mut reg, &mut sys, &mut backtraces_paused_task);
             next_backtrace = Instant::now() + STATS_INTERVAL;
         }
     });
