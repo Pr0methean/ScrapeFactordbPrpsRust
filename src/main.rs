@@ -1019,17 +1019,15 @@ async fn main() -> anyhow::Result<()> {
                 }
                 let _ = u_filter.add(&u_id);
                 let digits_or_expr = digits_or_expr.to_owned();
-                let u_http_clone = u_http.clone();
-                let u_sender_clone = u_sender.clone();
                 if graph::find_and_submit_factors(
-                    u_http_clone.as_ref(),
+                    &*u_http,
                     u_id,
                     digits_or_expr.into(),
                     false,
                 )
                 .await {
                     info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-                } else if u_sender_clone.send(u_id).await.is_ok() {
+                } else if u_sender.send(u_id).await.is_ok() {
                     info!("{u_id}: Queued U");
                 }
             }
