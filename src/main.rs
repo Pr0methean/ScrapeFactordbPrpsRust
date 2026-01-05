@@ -66,7 +66,6 @@ use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
@@ -985,7 +984,6 @@ async fn main() -> anyhow::Result<()> {
     };
     let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
-        let mut graph_tasks = JoinSet::new();
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
                 warn!("Queue U's task received shutdown signal; exiting");
@@ -1013,7 +1011,6 @@ async fn main() -> anyhow::Result<()> {
                 id_count += 1;
                 if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
-                    graph_tasks.join_all().await;
                     return;
                 }
                 if u_filter.contains(&u_id) {
@@ -1024,27 +1021,17 @@ async fn main() -> anyhow::Result<()> {
                 let digits_or_expr = digits_or_expr.to_owned();
                 let u_http_clone = u_http.clone();
                 let u_sender_clone = u_sender.clone();
-                while graph_tasks.len() >= 2 {
-                    let _ = graph_tasks.join_next().await;
-                    if u_shutdown_receiver.check_for_shutdown() {
-                        warn!("try_queue_unknowns thread received shutdown signal; exiting");
-                        graph_tasks.join_all().await;
-                        return;
-                    }
+                if graph::find_and_submit_factors(
+                    u_http_clone.as_ref(),
+                    u_id,
+                    digits_or_expr.into(),
+                    false,
+                )
+                .await {
+                    info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
+                } else if u_sender_clone.send(u_id).await.is_ok() {
+                    info!("{u_id}: Queued U");
                 }
-                graph_tasks.spawn(async move {
-                    if graph::find_and_submit_factors(
-                        u_http_clone.as_ref(),
-                        u_id,
-                        digits_or_expr.into(),
-                        false,
-                    )
-                    .await {
-                        info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-                    } else if u_sender_clone.send(u_id).await.is_ok() {
-                        info!("{u_id}: Queued U");
-                    }
-                });
             }
             if u_digits.is_some() {
                 u_start += id_count as u128;
