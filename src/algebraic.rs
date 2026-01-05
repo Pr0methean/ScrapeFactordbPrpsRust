@@ -1922,7 +1922,7 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
             },
             _ => 1,
         };
-        let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric.into());
+        let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric);
         sum_factor_btreemaps(&mut term_exponent_factors,
                              find_raw_factors_of_numeric(coeff.unsigned_abs()));
         exponent_factors = multiset_union(vec![
@@ -1951,8 +1951,8 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         let Some(pos_term_roots) = positive_terms
             .iter()
             .map(|(term, coeff)| {
-                let coeff_root = coeff.nth_root_exact(prime.into())?;
-                let term_root = nth_root_exact(term, prime.into())?;
+                let coeff_root = coeff.nth_root_exact(prime)?;
+                let term_root = nth_root_exact(term, prime)?;
                 Some((term_root, coeff_root))
             })
             .collect::<Option<Vec<_>>>()
@@ -1962,8 +1962,8 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         let Some(neg_term_roots) = negative_terms
             .iter()
             .map(|(term, coeff)| {
-                let coeff_root = coeff.unsigned_abs().nth_root_exact(prime.into())?;
-                let term_root = nth_root_exact(term, prime.into())?;
+                let coeff_root = coeff.unsigned_abs().nth_root_exact(prime)?;
+                let term_root = nth_root_exact(term, prime)?;
                 Some((term_root, 0i128.checked_sub_unsigned(coeff_root).unwrap()))
             })
             .collect::<Option<Vec<_>>>()
@@ -2293,7 +2293,7 @@ pub(crate) fn find_factors_of_numeric(input: NumericFactor) -> BTreeMap<Factor, 
 pub(crate) fn find_raw_factors_of_numeric(
     input: NumericFactor,
 ) -> BTreeMap<NumericFactor, NumberLength> {
-    const MAX_FACTORIZE128: NumericFactor = 1 << 85 - 1;
+    const MAX_FACTORIZE128: NumericFactor = 1 << (85 - 1);
     task::block_in_place(|| match input {
         1 => BTreeMap::new(),
         0 | 2 | 3 => [(input, 1)].into(),
@@ -2847,7 +2847,7 @@ fn simplify_add_sub_internal(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
 
     if numeric_constant != 0 {
         *new_terms
-            .entry(Numeric(numeric_constant.abs() as NumericFactor))
+            .entry(Numeric(numeric_constant.unsigned_abs()))
             .or_insert(0) += numeric_constant.signum();
     }
 
