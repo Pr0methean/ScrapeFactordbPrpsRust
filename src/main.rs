@@ -1088,10 +1088,11 @@ async fn main() -> anyhow::Result<()> {
         select! {
             biased;
             _ = shutdown_receiver.recv() => {
-                warn!("Main thread received shutdown signal; exiting");
+                warn!("Main task received shutdown signal; waiting for other tasks to exit");
                 c_buffer_task.abort();
                 let _ = queue_u.await;
                 let _ = do_checks.await;
+                let _ = c_buffer_task.await;
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
