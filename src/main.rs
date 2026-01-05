@@ -1139,7 +1139,11 @@ async fn main() -> anyhow::Result<()> {
                     info!("{prp_id}: Queued PRP from search");
                 }
                 if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
-                    prp_digits = (prp_digits.get() + 1).try_into().unwrap();
+                    prp_digits = (prp_digits.get() + if prp_digits.get() > 100_001 {
+                        100
+                    } else {
+                        1
+                    }).try_into().unwrap();
                     if prp_digits > PRP_MAX_DIGITS {
                         prp_digits = PRP_MIN_DIGITS;
                     }
