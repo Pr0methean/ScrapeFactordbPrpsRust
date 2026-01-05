@@ -477,16 +477,21 @@ async fn queue_composites(
 
 const STATS_INTERVAL: Duration = Duration::from_mins(1);
 
-pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sysinfo::System,
-                                 backtraces_paused_task: &mut Option<JoinHandle<()>>) {
+pub fn log_stats<T: GlobalAlloc>(
+    reg: &mut stats_alloc::Region<T>,
+    sys: &mut sysinfo::System,
+    backtraces_paused_task: &mut Option<JoinHandle<()>>,
+) {
     info!("Allocation stats: {:#?}", reg.change());
     sys.refresh_all();
     info!("System used memory: {}", sys.used_memory());
     info!("System available memory: {}", sys.available_memory());
     info!("Task backtraces:\n{}", taskdump_tree(false));
     match backtraces_paused_task {
-        Some(task) => if !task.is_finished() {
-            return;
+        Some(task) => {
+            if !task.is_finished() {
+                return;
+            }
         }
         None => return,
     }
