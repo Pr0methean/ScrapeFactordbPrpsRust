@@ -21,6 +21,7 @@ use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
+use primitive_types::U256;
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
@@ -59,6 +60,111 @@ egg::define_language! {
     }
 }
 
+use egg::{Analysis, DidMerge, EGraph};
+
+#[derive(Default)]
+pub struct FactorAnalysis;
+
+impl Analysis<FactorLanguage> for FactorAnalysis {
+    type Data = Option<Factor>;
+
+    fn make(
+        egraph: &mut EGraph<FactorLanguage, Self>,
+        enode: &FactorLanguage,
+        _id: Id,
+    ) -> Self::Data {
+        let x = |i: &Id| egraph[*i].data.as_ref();
+        match enode {
+            FactorLanguage::Numeric(n) => Some(Numeric(*n)),
+            FactorLanguage::BigNumber(n) => Some(Factor::BigNumber {
+                inner: n.clone(),
+                hash: OnceLock::new(),
+            }),
+            FactorLanguage::Add([a, b]) => {
+                if let (Some(left), Some(right)) = (x(a), x(b)) {
+                    simplify_add_sub_shallow(&[(left.clone(), 1), (right.clone(), 1)].into())
+                } else {
+                    None
+                }
+            }
+            FactorLanguage::Sub([a, b]) => {
+                if let (Some(left), Some(right)) = (x(a), x(b)) {
+                    simplify_add_sub_shallow(&[(left.clone(), 1), (right.clone(), -1)].into())
+                } else {
+                    None
+                }
+            }
+            FactorLanguage::Mul([a, b]) => {
+                if let (Some(left), Some(right)) = (x(a), x(b)) {
+                    let mut terms = BTreeMap::new();
+                    for f in [left.clone(), right.clone()] {
+                        if let Complex { inner, .. } = &f
+                            && let Multiply {
+                                terms: inner_terms, ..
+                            } = &**inner
+                        {
+                            for (term, exp) in inner_terms {
+                                *terms.entry(term.clone()).or_insert(0) += exp;
+                            }
+                        } else {
+                            *terms.entry(f).or_insert(0) += 1;
+                        }
+                    }
+                    simplify_multiply_shallow(&terms)
+                } else {
+                    None
+                }
+            }
+            FactorLanguage::Div([a, b]) => {
+                if let (Some(left), Some(right)) = (x(a), x(b)) {
+                    let mut right_map = BTreeMap::new();
+                    if let Complex { inner, .. } = right
+                        && let Multiply {
+                            terms: inner_terms, ..
+                        } = &**inner
+                    {
+                        for (term, exp) in inner_terms {
+                            *right_map.entry(term.clone()).or_insert(0) += exp;
+                        }
+                    } else {
+                        right_map.insert(right.clone(), 1);
+                    }
+                    simplify_divide_shallow(left, &right_map)
+                } else {
+                    None
+                }
+            }
+            FactorLanguage::Pow([a, b]) => {
+                if let (Some(base), Some(exponent)) = (x(a), x(b)) {
+                    simplify_power_shallow(base, exponent)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn merge(&mut self, to: &mut Self::Data, from: Self::Data) -> DidMerge {
+        egg::merge_option(to, from, |a, b| {
+            if a != &b {
+                // If we found two different "simplified" factors for the same e-class,
+                // we should probably prefer the "simpler" one if possible,
+                // but for now we just keep the existing one.
+                // In egg, them being in the same e-class means they are equivalent.
+            }
+            DidMerge(false, false)
+        })
+    }
+
+    fn modify(egraph: &mut EGraph<FactorLanguage, Self>, id: Id) {
+        if let Some(Numeric(n)) = egraph[id].data {
+            let added = egraph.add(FactorLanguage::Numeric(n));
+            egraph.union(id, added);
+        }
+    }
+}
+
 impl Factor {
     pub fn from_expr(expr: &egg::RecExpr<FactorLanguage>) -> Factor {
         let id = Id::from(expr.as_ref().len() - 1);
@@ -80,12 +186,14 @@ impl Factor {
             FactorLanguage::Add([a, b]) => {
                 let left = Self::from_id(expr, *a);
                 let right = Self::from_id(expr, *b);
-                simplify_add_sub(&left, &right, false)
+                simplify_add_sub_shallow(&[(left.clone(), 1), (right.clone(), 1)].into())
+                    .unwrap_or_else(|| Factor::add_sub([(left, 1), (right, 1)].into()))
             }
             FactorLanguage::Sub([a, b]) => {
                 let left = Self::from_id(expr, *a);
                 let right = Self::from_id(expr, *b);
-                simplify_add_sub(&left, &right, true)
+                simplify_add_sub_shallow(&[(left.clone(), 1), (right.clone(), -1)].into())
+                    .unwrap_or_else(|| Factor::add_sub([(left, 1), (right, -1)].into()))
             }
             FactorLanguage::Mul([a, b]) => {
                 let left = Self::from_id(expr, *a);
@@ -105,7 +213,7 @@ impl Factor {
                         *terms.entry(f).or_insert(0) += 1;
                     }
                 }
-                simplify_multiply(terms)
+                simplify_multiply_shallow(&terms).unwrap_or_else(|| Factor::multiply(terms))
             }
             FactorLanguage::Div([a, b]) => {
                 let left = Self::from_id(expr, *a);
@@ -122,12 +230,16 @@ impl Factor {
                 } else {
                     right_map.insert(right, 1);
                 }
-                simplify_divide(&left, &right_map)
+                simplify_divide_shallow(&left, &right_map)
+                    .unwrap_or_else(|| Factor::divide(left, right_map))
             }
             FactorLanguage::Pow([a, b]) => {
                 let base = Self::from_id(expr, *a);
                 let exponent = Self::from_id(expr, *b);
-                simplify_power(&base, &exponent)
+                simplify_power_shallow(&base, &exponent).unwrap_or_else(|| Complex {
+                    inner: Power { base, exponent }.into(),
+                    hash: OnceLock::new(),
+                })
             }
             FactorLanguage::Factorial(a) => {
                 let term = Self::from_id(expr, *a);
@@ -277,33 +389,109 @@ impl Factor {
     }
 }
 
-pub static REWRITE_RULES: LazyLock<Vec<Rewrite<FactorLanguage, ()>>> = LazyLock::new(|| {
-    vec![
-        egg::rewrite!("commute-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
-        egg::rewrite!("commute-mul"; "(* ?a ?b)" => "(* ?b ?a)"),
-        egg::rewrite!("assoc-add"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)"),
-        egg::rewrite!("assoc-mul"; "(* ?a (* ?b ?c))" => "(* (* ?a ?b) ?c)"),
-        egg::rewrite!("add-0"; "(+ ?a 0)" => "?a"),
-        egg::rewrite!("mul-0"; "(* ?a 0)" => "0"),
-        egg::rewrite!("mul-1"; "(* ?a 1)" => "?a"),
-        egg::rewrite!("div-1"; "(/ ?a 1)" => "?a"),
-        egg::rewrite!("pow-0"; "(^ ?a 0)" => "1"),
-        egg::rewrite!("pow-1"; "(^ ?a 1)" => "?a"),
-        egg::rewrite!("pow-mul"; "(* (^ ?a ?b) (^ ?a ?c))" => "(^ ?a (+ ?b ?c))"),
-        egg::rewrite!("pow-pow"; "(^ (^ ?a ?b) ?c)" => "(^ ?a (* ?b ?c))"),
-        egg::rewrite!("pow-distrib"; "(^ (* ?a ?b) ?c)" => "(* (^ ?a ?c) (^ ?b ?c))"),
-        egg::rewrite!("distribute"; "(* ?a (+ ?b ?c))" => "(+ (* ?a ?b) (* ?a ?c))"),
-        egg::rewrite!("factor"; "(+ (* ?a ?b) (* ?a ?c))" => "(* ?a (+ ?b ?c))"),
-        egg::rewrite!("diff-squares"; "(- (^ ?a 2) (^ ?b 2))" => "(* (- ?a ?b) (+ ?a ?b))"),
-        // identities to help numerical difference of squares
-        egg::rewrite!("num-25-sq"; "25" => "(^ 5 2)"),
-        egg::rewrite!("num-16-sq"; "16" => "(^ 4 2)"),
-        egg::rewrite!("num-100-sq"; "100" => "(^ 10 2)"),
-        egg::rewrite!("num-36-sq"; "36" => "(^ 6 2)"),
-        egg::rewrite!("diff-cubes"; "(- (^ ?a 3) (^ ?b 3))" => "(* (- ?a ?b) (+ (+ (^ ?a 2) (* ?a ?b)) (^ ?b 2)))"),
-        egg::rewrite!("sum-cubes"; "(+ (^ ?a 3) (^ ?b 3))" => "(* (+ ?a ?b) (+ (- (^ ?a 2) (* ?a ?b)) (^ ?b 2)))"),
-    ]
-});
+#[derive(Debug)]
+struct DiffSquaresEven {
+    n_var: egg::Var,
+    a_var: egg::Var,
+}
+
+impl egg::Applier<FactorLanguage, FactorAnalysis> for DiffSquaresEven {
+    fn apply_one(
+        &self,
+        egraph: &mut EGraph<FactorLanguage, FactorAnalysis>,
+        id: Id,
+        subst: &egg::Subst,
+        _searcher_ast: Option<&egg::PatternAst<FactorLanguage>>,
+        _rule_name: Symbol,
+    ) -> Vec<Id> {
+        if let Some(Numeric(n)) = egraph[subst[self.n_var]].data {
+            if n > 0 && n % 2 == 0 {
+                let half_n = n / 2;
+                let half_n_id = egraph.add(FactorLanguage::Numeric(half_n));
+                let a_id = subst[self.a_var];
+                let a_pow_half_n = egraph.add(FactorLanguage::Pow([a_id, half_n_id]));
+                let one_id = egraph.add(FactorLanguage::Numeric(1));
+                let sub_id = egraph.add(FactorLanguage::Sub([a_pow_half_n, one_id]));
+                let add_id = egraph.add(FactorLanguage::Add([a_pow_half_n, one_id]));
+                let mul_id = egraph.add(FactorLanguage::Mul([sub_id, add_id]));
+                if egraph.union(id, mul_id) {
+                    return vec![id];
+                }
+            }
+        }
+        vec![]
+    }
+}
+
+pub static REWRITE_RULES: LazyLock<Vec<Rewrite<FactorLanguage, FactorAnalysis>>> = LazyLock::new(
+    || {
+        vec![
+            egg::rewrite!("commute-add"; "(+ ?a ?b)" => "(+ ?b ?a)"),
+            egg::rewrite!("commute-mul"; "(* ?a ?b)" => "(* ?b ?a)"),
+            egg::rewrite!("assoc-add"; "(+ ?a (+ ?b ?c))" => "(+ (+ ?a ?b) ?c)"),
+            egg::rewrite!("assoc-mul"; "(* ?a (* ?b ?c))" => "(* (* ?a ?b) ?c)"),
+            egg::rewrite!("add-0"; "(+ ?a 0)" => "?a"),
+            egg::rewrite!("mul-0"; "(* ?a 0)" => "0"),
+            egg::rewrite!("mul-1"; "(* ?a 1)" => "?a"),
+            egg::rewrite!("div-1"; "(/ ?a 1)" => "?a"),
+            egg::rewrite!("pow-0"; "(^ ?a 0)" => "1"),
+            egg::rewrite!("pow-1"; "(^ ?a 1)" => "?a"),
+            egg::rewrite!("pow-mul"; "(* (^ ?a ?b) (^ ?a ?c))" => "(^ ?a (+ ?b ?c))"),
+            egg::rewrite!("pow-pow"; "(^ (^ ?a ?b) ?c)" => "(^ ?a (* ?b ?c))"),
+            egg::rewrite!("pow-distrib"; "(^ (* ?a ?b) ?c)" => "(* (^ ?a ?c) (^ ?b ?c))"),
+            egg::rewrite!("distribute"; "(* ?a (+ ?b ?c))" => "(+ (* ?a ?b) (* ?a ?c))"),
+            egg::rewrite!("factor"; "(+ (* ?a ?b) (* ?a ?c))" => "(* ?a (+ ?b ?c))"),
+            egg::rewrite!("diff-squares"; "(- (^ ?a 2) (^ ?b 2))" => "(* (- ?a ?b) (+ ?a ?b))"),
+            Rewrite::new(
+                "diff-squares-even",
+                "(- (^ ?a ?n) 1)"
+                    .parse::<egg::Pattern<FactorLanguage>>()
+                    .unwrap(),
+                DiffSquaresEven {
+                    n_var: "?n".parse().unwrap(),
+                    a_var: "?a".parse().unwrap(),
+                },
+            )
+            .unwrap(),
+            // identities to help numerical difference of squares
+            egg::rewrite!("num-25-sq"; "25" => "(^ 5 2)"),
+            egg::rewrite!("num-16-sq"; "16" => "(^ 4 2)"),
+            egg::rewrite!("num-100-sq"; "100" => "(^ 10 2)"),
+            egg::rewrite!("num-36-sq"; "36" => "(^ 6 2)"),
+            egg::rewrite!("diff-cubes"; "(- (^ ?a 3) (^ ?b 3))" => "(* (- ?a ?b) (+ (+ (^ ?a 2) (* ?a ?b)) (^ ?b 2)))"),
+            egg::rewrite!("sum-cubes"; "(+ (^ ?a 3) (^ ?b 3))" => "(* (+ ?a ?b) (+ (- (^ ?a 2) (* ?a ?b)) (^ ?b 2)))"),
+            egg::rewrite!("div-cancel-1"; "(/ (* ?x ?a) ?x)" => "?a"),
+            egg::rewrite!("div-cancel-2"; "(/ ?x (* ?x ?a))" => "(/ 1 ?a)"),
+            egg::rewrite!("div-cancel-3"; "(/ (* ?a ?x) (* ?x ?b))" => "(/ ?a ?b)"),
+            egg::rewrite!("div-cancel-4"; "(/ (* ?a ?x) (* ?b ?x))" => "(/ ?a ?b)"),
+            egg::rewrite!("nested-div-1"; "(/ (/ ?a ?b) ?c)" => "(/ ?a (* ?b ?c))"),
+            egg::rewrite!("nested-div-2"; "(/ ?a (/ ?b ?c))" => "(/ (* ?a ?c) ?b)"),
+            egg::rewrite!("nested-mul-1"; "(* (* ?a ?b) ?c)" => "(* ?a (* ?b ?c))"),
+            egg::rewrite!("nested-add-1"; "(+ (+ ?a ?b) ?c)" => "(+ ?a (+ ?b ?c))"),
+            // Distribution and Factoring
+            egg::rewrite!("distribute-mul"; "(* ?a (+ ?b ?c))" => "(+ (* ?a ?b) (* ?a ?c))"),
+            egg::rewrite!("distribute-pow"; "(^ (* ?a ?b) ?c)" => "(* (^ ?a ?c) (^ ?b ?c))"),
+            egg::rewrite!("pow-pow-mul"; "(^ (^ ?a ?b) ?c)" => "(^ ?a (* ?b ?c))"),
+            // Identities
+            egg::rewrite!("add-self"; "(+ ?x ?x)" => "(* 2 ?x)"),
+            egg::rewrite!("sub-self"; "(- ?x ?x)" => "0"),
+            egg::rewrite!("mul-self-pow"; "(* ?x ?x)" => "(^ ?x 2)"),
+            egg::rewrite!("pow-mul-same-base"; "(* (^ ?x ?a) (^ ?x ?b))" => "(^ ?x (+ ?a ?b))"),
+            egg::rewrite!("pow-div-same-base"; "(/ (^ ?x ?a) (^ ?x ?b))" => "(^ ?x (- ?a ?b))"),
+            // One and Zero rules
+            egg::rewrite!("one-pow"; "(^ 1 ?a)" => "1"),
+            egg::rewrite!("pow-one"; "(^ ?a 1)" => "?a"),
+            egg::rewrite!("zero-pow"; "(^ 0 ?a)" => "0"), // assumes ?a > 0
+            egg::rewrite!("pow-zero"; "(^ ?a 0)" => "1"),
+            egg::rewrite!("sub-0"; "(- ?a 0)" => "?a"),
+            egg::rewrite!("0-sub"; "(- 0 ?a)" => "(* -1 ?a)"),
+            egg::rewrite!("sub-assoc-1"; "(- ?a (- ?b ?c))" => "(+ (- ?a ?b) ?c)"),
+            egg::rewrite!("sub-assoc-2"; "(- (- ?a ?b) ?c)" => "(- ?a (+ ?b ?c))"),
+            egg::rewrite!("distribute-neg"; "(* -1 (+ ?a ?b))" => "(+ (* -1 ?a) (* -1 ?b))"),
+            egg::rewrite!("factor-neg"; "(+ (* -1 ?a) (* -1 ?b))" => "(* -1 (+ ?a ?b))"),
+        ]
+    },
+);
 
 pub fn simplify_with_egg(expr: &Factor) -> Factor {
     if SIMPLIFY_STACK.with(|stack| stack.borrow().contains(expr)) {
@@ -316,6 +504,13 @@ pub fn simplify_with_egg(expr: &Factor) -> Factor {
         .with_expr(&rec_expr)
         .run(&*REWRITE_RULES);
     let root = runner.roots[0];
+
+    // Check if analysis has a "better" version
+    if let Some(fact) = &runner.egraph[root].data {
+        SIMPLIFY_STACK.with(|stack| stack.borrow_mut().remove(expr));
+        return fact.clone();
+    }
+
     let extractor = egg::Extractor::new(&runner.egraph, egg::AstSize);
     let (_best_cost, best_expr) = extractor.find_best(root);
     let result = Factor::from_expr(&best_expr);
@@ -2585,10 +2780,16 @@ pub(crate) fn find_raw_factors_of_numeric(
     task::block_in_place(|| match input {
         1 => BTreeMap::new(),
         0 | 2 | 3 => [(input, 1)].into(),
-        4..=MAX_FACTORIZE128 => factorize128(input)
-            .into_iter()
-            .map(|(factor, exponent)| (factor, exponent as NumberLength))
-            .collect(),
+        4..=MAX_FACTORIZE128 => {
+            let mut factors: BTreeMap<NumericFactor, NumberLength> = factorize128(input)
+                .into_iter()
+                .map(|(factor, exponent)| (factor, exponent as NumberLength))
+                .collect();
+            if factors.is_empty() && input > 1 {
+                factors.insert(input, 1);
+            }
+            factors
+        }
         _ => {
             let mut prefs = Preferences::default();
             prefs.verbosity = Silent;
@@ -2597,6 +2798,9 @@ pub(crate) fn find_raw_factors_of_numeric(
                 *factors
                     .entry(NumericFactor::try_from(factor).unwrap())
                     .or_insert(0 as NumberLength) += 1;
+            }
+            if factors.is_empty() && input > 1 {
+                factors.insert(input, 1);
             }
             factors
         }
@@ -3060,44 +3264,56 @@ pub(crate) fn simplify(expr: &Factor) -> Factor {
 }
 
 fn simplify_add_sub(left: &Factor, right: &Factor, subtract: bool) -> Factor {
-    let add_sub = [
+    let terms = [
         (left.clone(), 1),
         (right.clone(), if subtract { -1 } else { 1 }),
     ]
     .into();
-    simplify_add_sub_internal(&add_sub).unwrap_or_else(|| Factor::add_sub(add_sub))
+    simplify(&Factor::add_sub(terms))
 }
 
-fn simplify_add_sub_internal(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
+fn simplify_add_sub_shallow(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
     let mut new_terms = BTreeMap::new();
-    let mut numeric_constant: i128 = 0;
+    let mut pos_sum = U256::zero();
+    let mut neg_sum = U256::zero();
     let mut changed = false;
 
     for (term, coeff) in terms {
-        let simplified = simplify(term);
-        if simplified != *term {
-            changed = true;
-        }
+        let simplified = term; // Don't call simplify() here to avoid recursion
 
-        if let Some(n) = evaluate_as_numeric(&simplified) {
-            numeric_constant = numeric_constant.checked_add(n as i128 * coeff).unwrap_or(0);
+        if let Numeric(n) = simplified {
+            let val = U256::from(*n) * U256::from(coeff.unsigned_abs());
+            if *coeff > 0 {
+                pos_sum += val;
+            } else {
+                neg_sum += val;
+            }
             changed = true;
         } else {
             match simplified {
-                Complex { inner: ref c, .. } if matches!(**c, AddSub { .. }) => {
+                Complex { inner: c, .. } if matches!(**c, AddSub { .. }) => {
                     changed = true;
                     if let AddSub {
                         terms: inner_terms, ..
                     } = &**c
                     {
                         for (inner_term, inner_coeff) in inner_terms {
-                            *new_terms.entry(inner_term.clone()).or_insert(0) +=
-                                inner_coeff * coeff;
+                            let total_coeff = inner_coeff * coeff;
+                            if let Numeric(n) = inner_term {
+                                let val = U256::from(*n) * U256::from(total_coeff.unsigned_abs());
+                                if total_coeff > 0 {
+                                    pos_sum += val;
+                                } else {
+                                    neg_sum += val;
+                                }
+                            } else {
+                                *new_terms.entry(inner_term.clone()).or_insert(0) += total_coeff;
+                            }
                         }
                     }
                 }
                 _ => {
-                    *new_terms.entry(simplified).or_insert(0) += coeff;
+                    *new_terms.entry(simplified.clone()).or_insert(0) += coeff;
                 }
             }
         }
@@ -3105,22 +3321,46 @@ fn simplify_add_sub_internal(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
 
     new_terms.retain(|_, coeff| *coeff != 0);
 
-    // Merge numeric_constant into final_terms
-    let mut numeric_total: i128 = numeric_constant;
+    // Merge numeric sums into final_terms
     let mut final_terms = BTreeMap::new();
     for (term, coeff) in new_terms {
-        if let Some(n) = evaluate_as_numeric(&term) {
-            numeric_total += n as i128 * coeff;
+        if let Numeric(n) = term {
+            let val = U256::from(n) * U256::from(coeff.unsigned_abs());
+            if coeff > 0 {
+                pos_sum += val;
+            } else {
+                neg_sum += val;
+            }
+            changed = true;
+        } else if let Some(n) = evaluate_as_numeric(&term) {
+            let val = U256::from(n) * U256::from(coeff.unsigned_abs());
+            if coeff > 0 {
+                pos_sum += val;
+            } else {
+                neg_sum += val;
+            }
             changed = true;
         } else {
             final_terms.insert(term, coeff);
         }
     }
 
-    if numeric_total != 0 {
-        *final_terms
-            .entry(Numeric(numeric_total.unsigned_abs()))
-            .or_insert(0) += numeric_total.signum();
+    // Re-calculate final numeric based on ALL terms (including those from new_terms that were numeric)
+    let (final_numeric_val, final_numeric_sign) = if pos_sum >= neg_sum {
+        (pos_sum - neg_sum, 1i128)
+    } else {
+        (neg_sum - pos_sum, -1i128)
+    };
+
+    if final_numeric_val != U256::zero() {
+        let low_u128 = final_numeric_val.low_u128();
+        // If it fits in u128, use it. But wait, if it's > u128, we need BigNumber!
+        let factor = if final_numeric_val <= U256::from(u128::MAX) {
+            Numeric(low_u128)
+        } else {
+            Factor::from(final_numeric_val.to_string().as_str())
+        };
+        *final_terms.entry(factor).or_insert(0) += final_numeric_sign;
     }
 
     if final_terms.is_empty() {
@@ -3134,15 +3374,16 @@ fn simplify_add_sub_internal(terms: &BTreeMap<Factor, i128>) -> Option<Factor> {
         }
     }
 
-    if changed || final_terms.len() != terms.len() {
+    let res = if changed || final_terms.len() != terms.len() {
         Some(Factor::add_sub(final_terms))
     } else {
         None
-    }
+    };
+    res
 }
 
 fn simplify_power(base: &Factor, exponent: &Factor) -> Factor {
-    simplify_power_internal(base, exponent).unwrap_or_else(|| Complex {
+    simplify(&Complex {
         inner: Power {
             base: base.clone(),
             exponent: exponent.clone(),
@@ -3152,9 +3393,9 @@ fn simplify_power(base: &Factor, exponent: &Factor) -> Factor {
     })
 }
 
-fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
-    let mut new_base = simplify(base);
-    let mut new_exponent = simplify(exponent);
+fn simplify_power_shallow(base: &Factor, exponent: &Factor) -> Option<Factor> {
+    let mut new_base = base.clone();
+    let mut new_exponent = exponent.clone();
     if let Numeric(n) = new_exponent {
         if n == 0 {
             return Some(Factor::one());
@@ -3199,11 +3440,10 @@ fn simplify_power_internal(base: &Factor, exponent: &Factor) -> Option<Factor> {
 }
 
 pub fn simplify_divide(left: &Factor, right: &BTreeMap<Factor, NumberLength>) -> Factor {
-    simplify_divide_internal(left, right)
-        .unwrap_or_else(|| Factor::divide(left.clone(), right.clone()))
+    simplify(&Factor::divide(left.clone(), right.clone()))
 }
 
-fn simplify_divide_internal(
+fn simplify_divide_shallow(
     left: &Factor,
     right: &BTreeMap<Factor, NumberLength>,
 ) -> Option<Factor> {
@@ -3225,8 +3465,8 @@ fn simplify_divide_internal(
         current_left = left_left;
     }
 
-    let simplified_left = simplify(current_left);
-    let mut final_left = simplified_left;
+    let simplified_left = current_left;
+    let mut final_left = simplified_left.clone();
     let nested_changed = new_right.is_some();
     let mut current_right = new_right.unwrap_or_else(|| right.clone());
 
@@ -3241,30 +3481,27 @@ fn simplify_divide_internal(
     let keys: Vec<_> = current_right.keys().cloned().collect();
     for term in keys {
         let (term, exponent) = current_right.remove_entry(&term).unwrap();
-        let simplified_term = simplify(&term);
-
-        if let Complex { inner: ref c, .. } = simplified_term
+        if let Complex { inner: ref c, .. } = term
             && let Multiply { ref terms, .. } = **c
         {
             changed = true;
             for (subterm, subterm_exponent) in terms {
-                *current_right.entry(simplify(subterm)).or_insert(0) += exponent * subterm_exponent;
+                *current_right.entry(subterm.clone()).or_insert(0) += exponent * subterm_exponent;
             }
-        } else if simplified_term != term {
-            changed = true;
+        } else {
+            // Check for GCD simplification
             if let Numeric(l) = final_left
-                && let Numeric(r) = simplified_term
+                && let Numeric(r) = term.clone()
                 && let gcd = l.gcd(&r)
                 && gcd > 1
                 && let Some(gcd_root) = gcd.nth_root_exact(exponent)
             {
+                changed = true;
                 final_left = Numeric(l / gcd);
                 *current_right.entry(Numeric(r / gcd_root)).or_insert(0) += exponent;
             } else {
-                *current_right.entry(simplified_term).or_insert(0) += exponent;
+                current_right.insert(term, exponent);
             }
-        } else {
-            current_right.insert(term, exponent);
         }
     }
 
@@ -3300,10 +3537,10 @@ fn simplify_divide_internal(
 }
 
 fn simplify_multiply(terms: BTreeMap<Factor, NumberLength>) -> Factor {
-    simplify_multiply_internal(&terms).unwrap_or_else(|| Factor::multiply(terms))
+    simplify(&Factor::multiply(terms))
 }
 
-fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<Factor> {
+fn simplify_multiply_shallow(terms: &BTreeMap<Factor, NumberLength>) -> Option<Factor> {
     // Handle small cases without BTreeMap overhead
     match terms.len() {
         0 => return Some(Factor::one()),
@@ -3311,7 +3548,7 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             let (term, exp) = terms.first_key_value().unwrap();
             match *exp {
                 0 => return Some(Factor::one()),
-                1 => return Some(simplify(term)),
+                1 => return Some(term.clone()), // Don't simplify recursively
                 _ => {}
             }
         }
@@ -3326,8 +3563,8 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
             changed = true;
             continue;
         }
-        let simplified = simplify(term);
-        let (new_term, new_exponent) = if let Numeric(n) = simplified {
+        let simplified = term; // Don't call simplify() here
+        let (new_term, new_exponent) = if let Numeric(n) = *simplified {
             let (factored_term, factored_exponent) = factor_power(n, *exponent);
             if *term != Numeric(factored_term) {
                 changed = true;
@@ -3339,10 +3576,7 @@ fn simplify_multiply_internal(terms: &BTreeMap<Factor, NumberLength>) -> Option<
                 (Numeric(n), *exponent)
             }
         } else {
-            if simplified != *term {
-                changed = true;
-            }
-            (simplified, *exponent)
+            (simplified.clone(), *exponent)
         };
 
         if let Complex { inner: ref c, .. } = new_term
