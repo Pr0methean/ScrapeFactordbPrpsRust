@@ -1623,7 +1623,6 @@ pub mod tests {
     #[test]
     fn test_find_and_submit() {
         use crate::RealFactorDbClient;
-        use crate::monitor::Monitor;
         use tokio::runtime::Runtime;
         use tokio::sync::Mutex;
 
@@ -1637,8 +1636,7 @@ pub mod tests {
                     )
                 })
                 .await;
-            let (_channel, shutdown) = Monitor::new();
-            let mut http = RealFactorDbClient::new(nonzero!(10_000u32), shutdown);
+            let mut http = RealFactorDbClient::new(nonzero!(10_000u32));
             find_and_submit_factors(
                 &mut http,
                 11_000_000_004_420_33401,

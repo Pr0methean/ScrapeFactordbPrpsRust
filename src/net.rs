@@ -3,7 +3,6 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, O
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{NumericFactor, find_factors_of_numeric, get_numeric_value_cache};
 use crate::graph::EntryId;
-use crate::monitor::Monitor;
 use crate::net::NumberStatus::{
     FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
 };
@@ -32,8 +31,7 @@ use std::cmp;
 use std::io::Write;
 use std::mem::swap;
 use std::num::NonZeroU32;
-use std::os::unix::prelude::CommandExt;
-use std::process::{Command, exit};
+use std::process::exit;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -43,7 +41,6 @@ use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
 
 pub const MAX_RETRIES: usize = 40;
-const MAX_RETRIES_WITH_FALLBACK: usize = 10;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_mins(1);
 const E2E_TIMEOUT: Duration = Duration::from_mins(2);
@@ -81,7 +78,7 @@ pub trait FactorDbClient {
     ) -> Option<ResourceLimits>;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> HipStr<'static>;
+    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Option<HipStr<'static>>;
     async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>>;
     async fn try_get_resource_limits(
         &self,
@@ -123,7 +120,6 @@ pub struct RealFactorDbClient {
     requests_per_hour: u32,
     request_mutex: Mutex<()>,
     all_threads_blocked_until: AtomicInstant,
-    shutdown_receiver: Monitor,
     id_and_expr_regex: Regex,
     digits_fallback_regex: Regex,
     expression_form_regex: Regex,
@@ -138,7 +134,7 @@ pub struct ResourceLimits {
 }
 
 impl RealFactorDbClient {
-    pub fn new(requests_per_hour: NonZeroU32, shutdown_receiver: Monitor) -> Self {
+    pub fn new(requests_per_hour: NonZeroU32) -> Self {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
@@ -178,7 +174,6 @@ impl RealFactorDbClient {
             requests_left_last_check,
             request_mutex: Mutex::const_new(()),
             all_threads_blocked_until: AtomicInstant::now(),
-            shutdown_receiver,
             id_and_expr_regex,
             digits_fallback_regex,
             expression_form_regex,
@@ -245,24 +240,6 @@ impl RealFactorDbClient {
                 }
             }
         }
-    }
-
-    #[framed]
-    async fn retrying_get_and_decode_or<'a>(
-        &self,
-        url: &str,
-        retry_delay: Duration,
-        alt_url_supplier: impl FnOnce() -> HipStr<'a>,
-    ) -> Result<HipStr<'static>, HipStr<'static>> {
-        if let Some(value) = self
-            .retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES_WITH_FALLBACK)
-            .await
-        {
-            return Ok(value);
-        }
-        let alt_url = alt_url_supplier();
-        warn!("Giving up on reaching {url} and falling back to {alt_url}");
-        Err(self.retrying_get_and_decode(&alt_url, retry_delay).await)
     }
 
     async fn retrying_get_and_decode_internal(
@@ -336,24 +313,8 @@ impl FactorDbClient for RealFactorDbClient {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     #[framed]
-    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> HipStr<'static> {
-        if let Some(value) = self
-            .retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES)
-            .await
-        {
-            return value;
-        }
-        let mut shutdown_receiver = self.shutdown_receiver.clone();
-        let mut raw_args = std::env::args_os();
-        let cmd = raw_args.next().unwrap();
-        if shutdown_receiver.check_for_shutdown() {
-            error!("Retried {url} too many times after shutdown was signaled; exiting");
-            exit(0);
-        } else {
-            error!("Retried {url} too many times; restarting");
-            let e = Command::new(cmd).args(raw_args).exec();
-            panic!("Failed to restart: {e}");
-        }
+    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Option<HipStr<'static>> {
+        self.retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES).await
     }
 
     #[framed]
@@ -432,14 +393,14 @@ impl FactorDbClient for RealFactorDbClient {
         let response = match id {
             Id(id) => {
                 let url = format!("https://factordb.com/api?id={id}");
-                if get_digits_as_fallback {
-                    self.retrying_get_and_decode_or(&url, RETRY_DELAY, || {
-                        format!("https://factordb.com/index.php?showid={id}").into()
-                    })
-                    .await
-                    .map_err(Some)
+                if let Some(response) = self.try_get_and_decode(&url).await {
+                    Ok(response)
+                } else if get_digits_as_fallback {
+                    sleep(RETRY_DELAY).await;
+                    Err(self.try_get_and_decode(&format!("https://factordb.com/index.php?showid={id}"))
+                        .await)
                 } else {
-                    self.try_get_and_decode(&url).await.ok_or(None)
+                    Err(None)
                 }
             }
             Expression(ref expr) => {
@@ -447,7 +408,7 @@ impl FactorDbClient for RealFactorDbClient {
                     "https://factordb.com/api?query={}",
                     encode(&expr.to_unelided_string())
                 );
-                self.try_get_and_decode(&url).await.ok_or(None)
+                self.try_get_and_decode(&url).await.map(Ok).unwrap_or(Err(None))
             }
         };
         debug!("{id}: Got API response:\n{response:?}");

@@ -616,7 +616,6 @@ async fn main() -> anyhow::Result<()> {
     }
     let http = Arc::new(RealFactorDbClient::new(
         rph_limit,
-        shutdown_receiver.clone(),
     ));
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
@@ -684,7 +683,11 @@ async fn main() -> anyhow::Result<()> {
                 => {
                     info!("{id}: Ready to check a U");
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-                    let result = do_checks_http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                    let Some(result) = do_checks_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
+                        task_return_permit.send(id);
+                        info!("{id}: Requeued U");
+                        continue;
+                    };
                     if let Some(status) = u_status_regex.captures_iter(&result).next() {
                         match status.get(1) {
                             None => {
@@ -725,12 +728,16 @@ async fn main() -> anyhow::Result<()> {
                     info!("{id}: Ready to check a PRP");
                     let mut stopped_early = false;
                     let mut bases_left = U256::MAX - 3;
-                    let bases_text = do_checks_http
+                    let Some(bases_text) = do_checks_http
                         .retrying_get_and_decode(
                             &format!("https://factordb.com/frame_prime.php?id={id}"),
                             RETRY_DELAY,
                         )
-                        .await;
+                        .await else {
+                        task_return_permit.send(id);
+                        info!("{id}: Requeued PRP");
+                        continue;
+                    };
                     if bases_text.contains("Proven") {
                         info!("{id}: No longer PRP");
                         continue;
@@ -878,10 +885,9 @@ async fn main() -> anyhow::Result<()> {
                         .retrying_get_and_decode(
                             &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}"),
                             RETRY_DELAY,
-                        )
-                        .await;
-                    if !status_text.contains("&lt;") {
-                        error!("{id}: Failed to decode status for PRP: {status_text}");
+                        ).await;
+                    if !status_text.as_ref().is_some_and(|status_text| status_text.contains("&lt;")) {
+                        error!("{id}: Failed to decode status for PRP: {status_text:?}");
                         composites_while_waiting(
                             Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
                             do_checks_http.as_ref(),
@@ -892,7 +898,8 @@ async fn main() -> anyhow::Result<()> {
                         task_return_permit.send(id);
                         info!("{id}: Requeued PRP");
                         continue;
-                    }
+                    };
+                    let status_text = status_text.unwrap();
                     if status_text.contains(" is prime") || !status_text.contains("PRP") {
                         info!("{id}: No longer PRP");
                         continue;
@@ -925,7 +932,10 @@ async fn main() -> anyhow::Result<()> {
                         let url = format!(
                             "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
                         );
-                        let text = do_checks_http.retrying_get_and_decode(&url, RETRY_DELAY).await;
+                        let Some(text) = do_checks_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
+                            error!("{id}: PRP check with base {base} failed");
+                            continue;
+                        };
                         if !text.contains(">number<") {
                             error!("Failed to decode result from {url}: {text}");
                             task_return_permit.send(id);
@@ -977,17 +987,17 @@ async fn main() -> anyhow::Result<()> {
     }));
 
     // Task to queue unknowns
-    let mut u_shutdown_receiver = shutdown_receiver.clone();
     let u_http = http.clone();
     let mut u_start = if u_digits.is_some() {
         0
     } else {
         rng().random_range(0..=MAX_START)
     };
+    let mut u_shutdown_receiver = shutdown_receiver.clone();
     let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
         loop {
-            if u_shutdown_receiver.check_for_shutdown() {
+            if shutdown_receiver.check_for_shutdown() {
                 warn!("Queue U's task received shutdown signal; exiting");
                 return;
             }
@@ -1011,7 +1021,7 @@ async fn main() -> anyhow::Result<()> {
             let mut id_count = 0;
             for (u_id, digits_or_expr) in ids {
                 id_count += 1;
-                if u_shutdown_receiver.check_for_shutdown() {
+                if shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
                     return;
                 }
@@ -1084,7 +1094,7 @@ async fn main() -> anyhow::Result<()> {
         let select_start = Instant::now();
         select! {
             biased;
-            _ = shutdown_receiver.recv() => {
+            _ = u_shutdown_receiver.recv() => {
                 warn!("Main task received shutdown signal; waiting for other tasks to exit");
                 c_buffer_task.abort();
                 let _ = queue_u.await;
@@ -1147,7 +1157,7 @@ async fn main() -> anyhow::Result<()> {
         }
         if new_c_buffer_task {
             c_buffer_task =
-                queue_composites(http.as_ref(), &c_sender, c_digits, &mut shutdown_receiver).await;
+                queue_composites(http.as_ref(), &c_sender, c_digits, &mut u_shutdown_receiver).await;
         }
     }
 }
