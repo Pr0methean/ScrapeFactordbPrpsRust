@@ -3246,8 +3246,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     if FIND_FACTORS_STACK.with(|stack| stack.borrow().contains(expr)) {
         return [(expr.clone(), 1)].into();
     }
-    if let Numeric(n) = expr {
-        return find_factors_of_numeric(*n);
+    if let Some(n) = evaluate_as_numeric(expr) {
+        return find_factors_of_numeric(n);
     }
     let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE));
     let cached = get_from_cache(factor_cache, expr);
