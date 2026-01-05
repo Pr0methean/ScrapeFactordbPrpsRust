@@ -1898,7 +1898,12 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         let exponent_numeric = match term {
             Numeric(a) => {
                 let (a, n) = factor_power(a, 1);
-                if n > 1 && let Some(coeff_pow_n) = coeff.unsigned_abs().checked_pow(n).and_then(|coeff_pow_n| i128::try_from(coeff_pow_n).ok()) {
+                if n > 1
+                    && let Some(coeff_pow_n) = coeff
+                        .unsigned_abs()
+                        .checked_pow(n)
+                        .and_then(|coeff_pow_n| i128::try_from(coeff_pow_n).ok())
+                {
                     term = Numeric(a);
                     coeff = coeff_pow_n * coeff.signum();
                     coeff_pow_n.unsigned_abs()
@@ -1907,8 +1912,7 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
                 }
             }
             Complex { inner: ref c, .. } => match **c {
-                Power { ref exponent, .. } => evaluate_as_numeric(exponent)
-                    .unwrap_or(1),
+                Power { ref exponent, .. } => evaluate_as_numeric(exponent).unwrap_or(1),
                 Multiply { ref terms, .. } => {
                     // Return GCD of exponents without modifying the term
                     // nth_root_exact will handle the exponent division later
@@ -1916,19 +1920,19 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
                         .values()
                         .copied()
                         .reduce(|x, y| x.gcd(&y))
-                        .unwrap_or(1).into()
+                        .unwrap_or(1)
+                        .into()
                 }
                 _ => 1,
             },
             _ => 1,
         };
         let mut term_exponent_factors = find_raw_factors_of_numeric(exponent_numeric);
-        sum_factor_btreemaps(&mut term_exponent_factors,
-                             find_raw_factors_of_numeric(coeff.unsigned_abs()));
-        exponent_factors = multiset_union(vec![
-            exponent_factors,
-            term_exponent_factors,
-        ]);
+        sum_factor_btreemaps(
+            &mut term_exponent_factors,
+            find_raw_factors_of_numeric(coeff.unsigned_abs()),
+        );
+        exponent_factors = multiset_union(vec![exponent_factors, term_exponent_factors]);
         let entry = simplified_terms.entry(term).or_insert(0i128);
         *entry += coeff;
     }
@@ -2015,8 +2019,7 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
         if divisor_numeric == 0 {
             return None;
         }
-        if let Some(product_numeric) = evaluate_as_numeric(product)
-        {
+        if let Some(product_numeric) = evaluate_as_numeric(product) {
             return product_numeric.div_exact(divisor_numeric).map(Numeric);
         }
     }
@@ -2298,9 +2301,9 @@ pub(crate) fn find_raw_factors_of_numeric(
         1 => BTreeMap::new(),
         0 | 2 | 3 => [(input, 1)].into(),
         4..=MAX_FACTORIZE128 => factorize128(input)
-                .into_iter()
-                .map(|(factor, exponent)| (factor, exponent as NumberLength))
-                .collect(),
+            .into_iter()
+            .map(|(factor, exponent)| (factor, exponent as NumberLength))
+            .collect(),
         _ => {
             let mut prefs = Preferences::default();
             prefs.verbosity = Silent;
@@ -3555,7 +3558,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                     for (term, exponent) in to_like_powers(terms) {
                                         if let Numeric(n) = term {
                                             for (sub_f, sub_e) in find_factors_of_numeric(n) {
-                                                *algebraic.entry(sub_f).or_insert(0) += sub_e * exponent;
+                                                *algebraic.entry(sub_f).or_insert(0) +=
+                                                    sub_e * exponent;
                                             }
                                         } else {
                                             *algebraic.entry(term).or_insert(0) += exponent;
@@ -3568,7 +3572,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
                                             let mut cofactor = div_exact(expr, factor)?;
                                             let mut remaining_exponent = exponent - 1;
                                             while remaining_exponent > 0
-                                                && let Some(new_cofactor) = div_exact(&cofactor, factor)
+                                                && let Some(new_cofactor) =
+                                                    div_exact(&cofactor, factor)
                                             {
                                                 cofactor = new_cofactor;
                                                 remaining_exponent -= 1;
