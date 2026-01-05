@@ -1868,7 +1868,7 @@ fn power_multiset<T: PartialEq + Ord + Copy>(
 
 fn factor_power(a: NumericFactor, n: NumberLength) -> (NumericFactor, NumberLength) {
     if a == 1 || n == 0 {
-        return (1, 0);
+        return (1, 1);
     }
     // A NumericFactor can't be a 128th or higher power
     for prime in [
@@ -1940,7 +1940,8 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         let Ok(prime) = NumberLength::try_from(prime) else {
             continue;
         };
-        if prime == 2 && !negative_terms.is_empty() {
+        if prime == 2 && negative_terms.is_empty() {
+            // sum of squares can't be factored
             continue;
         }
         let Some(pos_term_roots) = positive_terms
@@ -1957,9 +1958,9 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
         let Some(neg_term_roots) = negative_terms
             .iter()
             .map(|(term, coeff)| {
-                let coeff_root = coeff.nth_root_exact(prime.into())?;
+                let coeff_root = coeff.unsigned_abs().nth_root_exact(prime.into())?;
                 let term_root = nth_root_exact(term, prime.into())?;
-                Some((term_root, coeff_root))
+                Some((term_root, 0i128.checked_sub_unsigned(coeff_root).unwrap()))
             })
             .collect::<Option<Vec<_>>>()
         else {
@@ -2006,10 +2007,14 @@ pub fn div_exact(product: &Factor, divisor: &Factor) -> Option<Factor> {
     if product == divisor {
         return Some(Factor::one());
     }
-    if let Some(product_numeric) = evaluate_as_numeric(product)
-        && let Some(divisor_numeric) = evaluate_as_numeric(divisor)
-    {
-        return product_numeric.div_exact(divisor_numeric).map(Numeric);
+    if let Some(divisor_numeric) = evaluate_as_numeric(divisor) {
+        if divisor_numeric == 0 {
+            return None;
+        }
+        if let Some(product_numeric) = evaluate_as_numeric(product)
+        {
+            return product_numeric.div_exact(divisor_numeric).map(Numeric);
+        }
     }
     match *product {
         Complex { inner: ref c, .. } => match **c {
@@ -2418,6 +2423,7 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                         log10_bounds(positive_logs.len().try_into().unwrap()).0,
                     )))
                     .unwrap();
+                let no_negative = negative_logs.is_empty();
                 let [positive_upper, negative_upper] = [positive_logs, negative_logs]
                     .iter()
                     .map(|logs| {
@@ -2432,7 +2438,9 @@ fn estimate_log10_internal(expr: &Factor) -> (NumberLength, NumberLength) {
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
-                let combined_lower = if negative_upper < positive_lower.saturating_sub(1) {
+                let combined_lower = if no_negative {
+                    positive_lower
+                } else if negative_upper < positive_lower.saturating_sub(1) {
                     positive_lower.saturating_sub(1)
                 } else {
                     0
@@ -2513,7 +2521,10 @@ fn estimate_log10_of_product(
             x => estimate_log10_power(term, &Numeric(x as NumericFactor)),
         };
         lower = lower.saturating_add(power_lower);
-        upper = upper.saturating_add(power_upper).saturating_add(1);
+        upper = upper.saturating_add(power_upper);
+        if *term != Numeric(10) {
+            upper = upper.saturating_add(1);
+        }
     }
     (lower, upper.saturating_sub(1))
 }
