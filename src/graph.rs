@@ -323,6 +323,7 @@ impl FactorData {
         factor_vid: VertexId,
         equivalent: Factor,
         http: &impl FactorDbClient,
+        check_factor_finder: bool,
     ) -> Vec<VertexId> {
         let current = self.get_factor(factor_vid);
         let factor_vid = self.resolve_vid(factor_vid);
@@ -348,12 +349,14 @@ impl FactorData {
             let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
             facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
             facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
-            let mut new_factor_vids = if !replace(&mut facts.checked_in_factor_finder, true) {
+            let mut new_factor_vids = if check_factor_finder && !replace(&mut facts.checked_in_factor_finder, true) {
                 self.add_from_factor_finder(&current, http)
             } else {
                 Vec::new()
             };
-            new_factor_vids.extend(self.add_from_factor_finder(&equivalent, http));
+            if check_factor_finder {
+                new_factor_vids.extend(self.add_from_factor_finder(&equivalent, http));
+            }
             if !equivalent.is_elided() && equivalent.to_unelided_string().len() < current_len {
                 let _ = replace(
                     self.divisibility_graph.vertex_mut(factor_vid).unwrap(),
@@ -464,7 +467,7 @@ pub fn add_factor_node(
             (factor_vid, true)
         });
     if data.get_factor(merge_dest) != factor {
-        data.merge_equivalent_expressions(merge_dest, factor, http);
+        data.merge_equivalent_expressions(merge_dest, factor, http, true);
     }
     if let Some(matching_vid) = matching_vid
         && merge_dest != matching_vid
@@ -498,8 +501,11 @@ fn merge_vertices(
         });
     data.process_divisibility_worklist(worklist);
     let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
+    let mut checked_in_factor_finder = false;
     if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
         replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
+            checked_in_factor_finder = facts.checked_in_factor_finder
+                && old_facts.checked_in_factor_finder;
             NumberFacts {
                 lower_bound_log10: facts.lower_bound_log10.max(old_facts.lower_bound_log10),
                 upper_bound_log10: facts.upper_bound_log10.min(old_facts.upper_bound_log10),
@@ -517,8 +523,7 @@ fn merge_vertices(
                         .unique()
                         .collect(),
                 ),
-                checked_in_factor_finder: facts.checked_in_factor_finder
-                    && old_facts.checked_in_factor_finder,
+                checked_in_factor_finder,
                 expression_form_checked_in_factor_finder: facts
                     .expression_form_checked_in_factor_finder
                     && old_facts.expression_form_checked_in_factor_finder,
@@ -533,7 +538,7 @@ fn merge_vertices(
     // Only merge if the old_factor is different from current
     let current_factor = data.get_factor(merge_dest);
     if old_factor != current_factor {
-        data.merge_equivalent_expressions(merge_dest, old_factor, http);
+        data.merge_equivalent_expressions(merge_dest, old_factor, http, !checked_in_factor_finder);
     }
 }
 
@@ -689,6 +694,7 @@ pub async fn find_and_submit_factors(
                 root_vid,
                 known_factors.into_iter().next().unwrap(),
                 http,
+                true,
             );
         } else {
             let root_factors: Vec<_> = known_factors
@@ -1355,7 +1361,7 @@ async fn add_factors_to_graph(
         let new_known_factors: Vec<_> = if known_factor_count == 1 {
             let known_factor = known_factors.into_iter().next().unwrap();
             if known_factor != factor {
-                data.merge_equivalent_expressions(factor_vid, known_factor, http);
+                data.merge_equivalent_expressions(factor_vid, known_factor, http, true);
             }
             vec![factor_vid]
         } else {
@@ -1443,7 +1449,7 @@ async fn add_factors_to_graph(
         facts.expression_form_checked_in_factor_finder = true;
         if expression_form != factor {
             let added_via_equiv =
-                data.merge_equivalent_expressions(factor_vid, expression_form.clone(), http);
+                data.merge_equivalent_expressions(factor_vid, expression_form.clone(), http, true);
             added.extend(added_via_equiv);
         }
     }
@@ -1652,6 +1658,7 @@ pub mod tests {
             root_vid,
             Factor::from("(10^65035*18+10^130071-1)/3^2"),
             &http,
+            true,
         );
     }
 
@@ -1712,7 +1719,7 @@ pub mod tests {
         assert_ne!(vid5, vid6);
 
         // Now merge them
-        let _merged_vids = data.merge_equivalent_expressions(vid5, f6, &http);
+        let _merged_vids = data.merge_equivalent_expressions(vid5, f6, &http, true);
 
         // vid6 should now resolve to vid5 (or vice versa)
         let resolved_vid6 = data.resolve_vid(vid6);

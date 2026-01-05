@@ -26,7 +26,7 @@ use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp::{Ordering, PartialEq};
+use std::cmp::{Ordering, PartialEq, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::f64::consts::LN_10;
@@ -1731,7 +1731,7 @@ impl Factor {
                     let mut out = String::from("(");
                     for (i, (term, coeff)) in terms
                         .iter()
-                        .sorted_unstable_by_key(|(_term, coeff)| -**coeff)
+                        .sorted_unstable_by_key(|(term, coeff)| (-**coeff, Reverse(*term)))
                         .enumerate()
                     {
                         if i > 0 || *coeff < 0 {
@@ -1819,10 +1819,6 @@ impl Factor {
         fn divides_exactly(a: &Factor, b: &Factor) -> Option<bool> {
             // quick exit: identical expressions are not proper divisors
             if a == b {
-                return Some(false);
-            }
-            let b_numeric = evaluate_as_numeric(b);
-            if b_numeric == Some(0) {
                 return Some(false);
             }
             let b_numeric = evaluate_as_numeric(b);
@@ -2125,7 +2121,7 @@ impl Display for Factor {
                     f.write_str("(")?;
                     for (i, (term, coeff)) in terms
                         .iter()
-                        .sorted_unstable_by_key(|(_term, coeff)| -**coeff)
+                        .sorted_unstable_by_key(|(term, coeff)| (-**coeff, Reverse(*term)))
                         .enumerate()
                     {
                         if i > 0 || *coeff < 0 {
@@ -3753,8 +3749,8 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     if FIND_FACTORS_STACK.with(|stack| stack.borrow().contains(expr)) {
         return [(expr.clone(), 1)].into();
     }
-    if let Numeric(n) = expr {
-        return find_factors_of_numeric(*n);
+    if let Some(n) = evaluate_as_numeric(expr) {
+        return find_factors_of_numeric(n);
     }
     let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE));
     let cached = get_from_cache(factor_cache, expr);

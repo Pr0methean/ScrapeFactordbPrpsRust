@@ -47,6 +47,7 @@ const MAX_RETRIES_WITH_FALLBACK: usize = 10;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_mins(1);
 const E2E_TIMEOUT: Duration = Duration::from_mins(2);
+const PARALLEL_REQUEST_THROTTLING_DURATION: Duration = Duration::from_secs(5);
 
 const REQWEST_MAX_URL_LEN: usize = (u16::MAX - 1) as usize;
 
@@ -153,7 +154,7 @@ impl RealFactorDbClient {
         let id_and_expr_regex =
             Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>").unwrap();
         let http = Client::builder()
-            .pool_max_idle_per_host(max_concurrent_requests)
+            .pool_max_idle_per_host(4 * max_concurrent_requests)
             .timeout(E2E_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
@@ -236,6 +237,12 @@ impl RealFactorDbClient {
             Ok(text) => {
                 if text.contains("502 Proxy Error") {
                     error!("502 error from {url}");
+                    None
+                } else if text.contains("parallel processing requests") {
+                    warn!("Parallel-request limit reached; throttling");
+                    let end_of_throttling = Instant::now() + PARALLEL_REQUEST_THROTTLING_DURATION;
+                    self.all_threads_blocked_until
+                        .store(end_of_throttling.into(), Release);
                     None
                 } else {
                     Some(text.into())

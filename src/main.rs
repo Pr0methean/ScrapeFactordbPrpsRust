@@ -66,7 +66,6 @@ use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
 use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
-use tokio::task::JoinSet;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
@@ -478,16 +477,21 @@ async fn queue_composites(
 
 const STATS_INTERVAL: Duration = Duration::from_mins(1);
 
-pub fn log_stats<T: GlobalAlloc>(reg: &mut stats_alloc::Region<T>, sys: &mut sysinfo::System,
-                                 backtraces_paused_task: &mut Option<JoinHandle<()>>) {
+pub fn log_stats<T: GlobalAlloc>(
+    reg: &mut stats_alloc::Region<T>,
+    sys: &mut sysinfo::System,
+    backtraces_paused_task: &mut Option<JoinHandle<()>>,
+) {
     info!("Allocation stats: {:#?}", reg.change());
     sys.refresh_all();
     info!("System used memory: {}", sys.used_memory());
     info!("System available memory: {}", sys.available_memory());
     info!("Task backtraces:\n{}", taskdump_tree(false));
     match backtraces_paused_task {
-        Some(task) => if !task.is_finished() {
-            return;
+        Some(task) => {
+            if !task.is_finished() {
+                return;
+            }
         }
         None => return,
     }
@@ -985,7 +989,6 @@ async fn main() -> anyhow::Result<()> {
     };
     let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
         let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
-        let mut graph_tasks = JoinSet::new();
         loop {
             if u_shutdown_receiver.check_for_shutdown() {
                 warn!("Queue U's task received shutdown signal; exiting");
@@ -1013,38 +1016,24 @@ async fn main() -> anyhow::Result<()> {
                 id_count += 1;
                 if u_shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
-                    graph_tasks.join_all().await;
                     return;
                 }
-                if u_filter.contains(&u_id) {
+                if !matches!(u_filter.test_and_add(&u_id), Ok(true)) {
                     warn!("{u_id}: Skipping duplicate U");
                     continue;
                 }
-                let _ = u_filter.add(&u_id);
                 let digits_or_expr = digits_or_expr.to_owned();
-                let u_http_clone = u_http.clone();
-                let u_sender_clone = u_sender.clone();
-                while graph_tasks.len() >= 2 {
-                    let _ = graph_tasks.join_next().await;
-                    if u_shutdown_receiver.check_for_shutdown() {
-                        warn!("try_queue_unknowns thread received shutdown signal; exiting");
-                        graph_tasks.join_all().await;
-                        return;
-                    }
+                if graph::find_and_submit_factors(
+                    &*u_http,
+                    u_id,
+                    digits_or_expr.into(),
+                    false,
+                )
+                .await {
+                    info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
+                } else if u_sender.send(u_id).await.is_ok() {
+                    info!("{u_id}: Queued U");
                 }
-                graph_tasks.spawn(async move {
-                    if graph::find_and_submit_factors(
-                        u_http_clone.as_ref(),
-                        u_id,
-                        digits_or_expr.into(),
-                        false,
-                    )
-                    .await {
-                        info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-                    } else if u_sender_clone.send(u_id).await.is_ok() {
-                        info!("{u_id}: Queued U");
-                    }
-                });
             }
             if u_digits.is_some() {
                 u_start += id_count as u128;
@@ -1099,10 +1088,11 @@ async fn main() -> anyhow::Result<()> {
         select! {
             biased;
             _ = shutdown_receiver.recv() => {
-                warn!("Main thread received shutdown signal; exiting");
+                warn!("Main task received shutdown signal; waiting for other tasks to exit");
                 c_buffer_task.abort();
                 let _ = queue_u.await;
                 let _ = do_checks.await;
+                let _ = c_buffer_task.await;
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
@@ -1131,7 +1121,7 @@ async fn main() -> anyhow::Result<()> {
                 };
                 for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
                 {
-                    if let Ok(false) = prp_filter.test_and_add(&prp_id) {
+                    if !matches!(prp_filter.test_and_add(&prp_id), Ok(true)) {
                         warn!("{prp_id}: Skipping duplicate PRP");
                         continue;
                     }
@@ -1139,7 +1129,11 @@ async fn main() -> anyhow::Result<()> {
                     info!("{prp_id}: Queued PRP from search");
                 }
                 if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
-                    prp_digits = (prp_digits.get() + 1).try_into().unwrap();
+                    prp_digits = (prp_digits.get() + if prp_digits.get() > 100_001 {
+                        100
+                    } else {
+                        1
+                    }).try_into().unwrap();
                     if prp_digits > PRP_MAX_DIGITS {
                         prp_digits = PRP_MIN_DIGITS;
                     }
