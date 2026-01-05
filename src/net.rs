@@ -37,7 +37,7 @@ use std::process::{Command, exit};
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex};
 use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
@@ -121,7 +121,7 @@ pub struct RealFactorDbClient {
     rate_limiter: DefaultDirectRateLimiter<StateInformationMiddleware>,
     requests_left_last_check: AtomicU32,
     requests_per_hour: u32,
-    request_semaphore: Semaphore,
+    request_mutex: Mutex<()>,
     all_threads_blocked_until: AtomicInstant,
     shutdown_receiver: Monitor,
     id_and_expr_regex: Regex,
@@ -140,7 +140,6 @@ pub struct ResourceLimits {
 impl RealFactorDbClient {
     pub fn new(
         requests_per_hour: NonZeroU32,
-        max_concurrent_requests: usize,
         shutdown_receiver: Monitor,
     ) -> Self {
         let rate_limiter =
@@ -154,7 +153,7 @@ impl RealFactorDbClient {
         let id_and_expr_regex =
             Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>").unwrap();
         let http = Client::builder()
-            .pool_max_idle_per_host(4 * max_concurrent_requests)
+            .pool_max_idle_per_host(4)
             .timeout(E2E_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
@@ -180,7 +179,7 @@ impl RealFactorDbClient {
             rate_limiter,
             requests_per_hour: requests_per_hour.get(),
             requests_left_last_check,
-            request_semaphore: Semaphore::const_new(max_concurrent_requests),
+            request_mutex: Mutex::const_new(()),
             all_threads_blocked_until: AtomicInstant::now(),
             shutdown_receiver,
             id_and_expr_regex,
@@ -195,7 +194,7 @@ impl RealFactorDbClient {
     #[framed]
     async fn try_get_and_decode_core(&self, url: &str) -> Option<HipStr<'static>> {
         self.rate_limiter.until_ready().await;
-        let permit = self.request_semaphore.acquire().await.unwrap();
+        let permit = self.request_mutex.lock().await;
         let result = if url.len() > REQWEST_MAX_URL_LEN {
             let result = block_in_place(|| {
                 CURL_CLIENT.with_borrow_mut(|curl| {
@@ -627,7 +626,7 @@ impl FactorDbClient for RealFactorDbClient {
             }
         };
         self.rate_limiter.until_ready().await;
-        let permit = self.request_semaphore.acquire().await.unwrap();
+        let permit = self.request_mutex.lock().await;
         let response = self
             .http
             .post("https://factordb.com/reportfactor.php")
