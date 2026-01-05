@@ -467,13 +467,16 @@ pub fn add_factor_node(
             );
             (factor_vid, true)
         });
+    let mut merge_dest = data.resolve_vid(merge_dest);
     if data.get_factor(merge_dest) != factor {
         data.merge_equivalent_expressions(merge_dest, factor, http, true);
+        merge_dest = data.resolve_vid(merge_dest);
     }
-    if let Some(matching_vid) = matching_vid
-        && merge_dest != matching_vid
-    {
-        merge_vertices(data, http, merge_dest, matching_vid);
+    if let Some(matching_vid) = matching_vid {
+        let matching_vid = data.resolve_vid(matching_vid);
+        if merge_dest != matching_vid {
+            merge_vertices(data, http, merge_dest, matching_vid);
+        }
     }
     (merge_dest, added)
 }
@@ -484,6 +487,11 @@ fn merge_vertices(
     merge_dest: VertexId,
     matching_vid: VertexId,
 ) {
+    let merge_dest = data.resolve_vid(merge_dest);
+    let matching_vid = data.resolve_vid(matching_vid);
+    if merge_dest == matching_vid {
+        return;
+    }
     // Check if we're already merging these vertices
     if data.deleted_synonyms.contains_key(&matching_vid) {
         return; // Already being merged
@@ -501,7 +509,10 @@ fn merge_vertices(
             queue_transitive_divisibility(&mut worklist, merge_dest, neighbor_vid, divisibility)
         });
     data.process_divisibility_worklist(worklist);
-    let old_factor = data.divisibility_graph.remove_vertex(matching_vid).unwrap();
+    let old_factor = data
+        .divisibility_graph
+        .remove_vertex(matching_vid)
+        .expect("vertex does not exist");
     let mut checked_in_factor_finder = false;
     if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
         replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
@@ -679,7 +690,7 @@ pub async fn find_and_submit_factors(
     let mut data = FactorData::default();
     let root_factor = Factor::from(digits_or_expr.as_str());
     let elided = root_factor.is_elided();
-    let (root_vid, _) = add_factor_node(&mut data, root_factor, Some(id), http);
+    let (mut root_vid, _) = add_factor_node(&mut data, root_factor, Some(id), http);
     if (!skip_looking_up_known) || elided {
         let ProcessedStatusApiResponse {
             factors: known_factors,
@@ -736,9 +747,11 @@ pub async fn find_and_submit_factors(
     let mut accepted_factors = 0;
     let mut any_unprocessed = false;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
+        let factor_vid = data.resolve_vid(factor_vid);
         factor_found |= !add_factors_to_graph(http, &mut data, factor_vid)
             .await
             .is_empty();
+        let factor_vid = data.resolve_vid(factor_vid);
         any_unprocessed |= !data
             .number_facts_map
             .get(&factor_vid)
@@ -849,6 +862,7 @@ pub async fn find_and_submit_factors(
                 factors_to_submit_in_graph.push_back(factor_vid);
             }
         }
+        root_vid = data.resolve_vid(root_vid);
     }
     if factors_to_submit_in_graph.is_empty() {
         info!("{id}: {accepted_factors} factors accepted in a single pass");
@@ -1071,6 +1085,7 @@ pub async fn find_and_submit_factors(
             let factor_is_prime = factor_facts.last_known_status == Some(Prime);
             let factor_lower_bound_log10 = factor_facts.lower_bound_log10;
             if factor_is_prime {
+                let cofactor_vid = data.resolve_vid(cofactor_vid);
                 let cofactor_prime_factor_log10s =
                     neighbor_vids(&data.divisibility_graph, cofactor_vid, Incoming)
                         .into_iter()
@@ -1274,7 +1289,7 @@ fn mark_fully_factored(vid: VertexId, data: &mut FactorData) {
 }
 
 fn mark_fully_factored_internal(
-    vid: VertexId,
+    mut vid: VertexId,
     data: &mut FactorData,
     worklist: &mut BTreeSet<WorkItem>,
 ) {
@@ -1318,7 +1333,8 @@ fn mark_fully_factored_internal(
     {
         match data.get_edge(other_factor_vid, vid) {
             Some(Direct | Transitive) => {
-                mark_fully_factored_internal(other_factor_vid, data, worklist)
+                mark_fully_factored_internal(other_factor_vid, data, worklist);
+                vid = data.resolve_vid(vid);
             }
             None => {
                 if no_other_factors {
