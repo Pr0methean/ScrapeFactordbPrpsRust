@@ -349,11 +349,12 @@ impl FactorData {
             let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
             facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
             facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
-            let mut new_factor_vids = if check_factor_finder && !replace(&mut facts.checked_in_factor_finder, true) {
-                self.add_from_factor_finder(&current, http)
-            } else {
-                Vec::new()
-            };
+            let mut new_factor_vids =
+                if check_factor_finder && !replace(&mut facts.checked_in_factor_finder, true) {
+                    self.add_from_factor_finder(&current, http)
+                } else {
+                    Vec::new()
+                };
             if check_factor_finder {
                 new_factor_vids.extend(self.add_from_factor_finder(&equivalent, http));
             }
@@ -504,8 +505,8 @@ fn merge_vertices(
     let mut checked_in_factor_finder = false;
     if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
         replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
-            checked_in_factor_finder = facts.checked_in_factor_finder
-                && old_facts.checked_in_factor_finder;
+            checked_in_factor_finder =
+                facts.checked_in_factor_finder && old_facts.checked_in_factor_finder;
             NumberFacts {
                 lower_bound_log10: facts.lower_bound_log10.max(old_facts.lower_bound_log10),
                 upper_bound_log10: facts.upper_bound_log10.min(old_facts.upper_bound_log10),
