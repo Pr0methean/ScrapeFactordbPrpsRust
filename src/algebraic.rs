@@ -1345,10 +1345,6 @@ impl Factor {
             if b_numeric == Some(0) {
                 return Some(false);
             }
-            let b_numeric = evaluate_as_numeric(b);
-            if b_numeric == Some(0) {
-                return Some(false);
-            }
             let a_numeric = evaluate_as_numeric(a);
             if a_numeric == Some(0) {
                 return Some(true);
