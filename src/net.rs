@@ -37,7 +37,7 @@ use std::process::{Command, exit};
 use std::sync::atomic::Ordering::{Acquire, Release};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::{Mutex};
+use tokio::sync::Mutex;
 use tokio::task::block_in_place;
 use tokio::time::{Instant, sleep, sleep_until};
 use urlencoding::encode;
@@ -138,10 +138,7 @@ pub struct ResourceLimits {
 }
 
 impl RealFactorDbClient {
-    pub fn new(
-        requests_per_hour: NonZeroU32,
-        shutdown_receiver: Monitor,
-    ) -> Self {
+    pub fn new(requests_per_hour: NonZeroU32, shutdown_receiver: Monitor) -> Self {
         let rate_limiter =
             RateLimiter::direct(Quota::per_hour(requests_per_hour)).with_middleware();
         let resources_regex =
