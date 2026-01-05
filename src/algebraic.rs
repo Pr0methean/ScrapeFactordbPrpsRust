@@ -24,7 +24,7 @@ use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp::{Ordering, PartialEq};
+use std::cmp::{Ordering, PartialEq, Reverse};
 use std::collections::{BTreeMap, BTreeSet};
 use std::default::Default;
 use std::f64::consts::LN_10;
@@ -1251,7 +1251,7 @@ impl Factor {
                     let mut out = String::from("(");
                     for (i, (term, coeff)) in terms
                         .iter()
-                        .sorted_unstable_by_key(|(_term, coeff)| -**coeff)
+                        .sorted_unstable_by_key(|(term, coeff)| (-**coeff, Reverse(*term)))
                         .enumerate()
                     {
                         if i > 0 || *coeff < 0 {
@@ -1645,7 +1645,7 @@ impl Display for Factor {
                     f.write_str("(")?;
                     for (i, (term, coeff)) in terms
                         .iter()
-                        .sorted_unstable_by_key(|(_term, coeff)| -**coeff)
+                        .sorted_unstable_by_key(|(term, coeff)| (-**coeff, Reverse(*term)))
                         .enumerate()
                     {
                         if i > 0 || *coeff < 0 {
