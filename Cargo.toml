@@ -43,6 +43,7 @@ sysinfo = "0.37"
 stats_alloc = { version = "0.1", features = ["nightly"] }
 paste = "1.0"
 tikv-jemallocator = "0.6"
+egg = "0.11"
 
 [dev-dependencies]
 mockall = "0.14"
