@@ -153,7 +153,7 @@ impl RealFactorDbClient {
         let id_and_expr_regex =
             Regex::new("index\\.php\\?id=([0-9]+)\"><font[^>]*>([^<]+)</font>").unwrap();
         let http = Client::builder()
-            .pool_max_idle_per_host(max_concurrent_requests)
+            .pool_max_idle_per_host(4 * max_concurrent_requests)
             .timeout(E2E_TIMEOUT)
             .connect_timeout(CONNECT_TIMEOUT)
             .build()
