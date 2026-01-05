@@ -1825,6 +1825,6 @@ pub mod tests {
         let mut reg = stats_alloc::Region::new(&GLOBAL);
         black_box(find_and_submit_factors(&http, ID, expr, false).await);
 
-        log_stats(&mut reg, &mut sys);
+        log_stats(&mut reg, &mut sys, &mut None);
     }
 }
