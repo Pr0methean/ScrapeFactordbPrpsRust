@@ -10,7 +10,7 @@ debug = "full"
 
 [dependencies]
 reqwest = { version = "0.13", features = ["form"] }
-tokio = { version = "1.48", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time"] }
+tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time"] }
 regex = "1.12"
 primitive-types = "0.14"
 log = "0.4"
