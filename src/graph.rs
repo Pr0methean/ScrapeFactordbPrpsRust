@@ -410,13 +410,6 @@ impl FactorData {
                 .unwrap_or_else(|| Expression(Cow::Owned(factor)))
         }
     }
-
-    fn should_run_factor_finder_on_merge(&self, vid: VertexId) -> bool {
-        self.number_facts_map
-            .get(&vid)
-            .map(|facts| !facts.checked_in_factor_finder)
-            .unwrap_or(false)
-    }
 }
 
 pub fn add_factor_node(
@@ -530,7 +523,10 @@ fn merge_vertices(
         });
     data.process_divisibility_worklist(worklist);
     // Store whether we should run factor finder BEFORE we remove the vertex
-    let should_run_factor_finder = data.should_run_factor_finder_on_merge(matching_vid);
+    let should_run_factor_finder = data.number_facts_map
+        .get(&matching_vid)
+        .map(|facts| !facts.checked_in_factor_finder)
+        .unwrap_or(false);
     let old_factor_removed = data
         .divisibility_graph
         .remove_vertex(matching_vid)
