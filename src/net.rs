@@ -187,6 +187,7 @@ impl RealFactorDbClient {
     async fn try_get_and_decode_core(&self, url: &str) -> Option<HipStr<'static>> {
         self.rate_limiter.until_ready().await;
         let permit = self.request_mutex.lock().await;
+        info!("Start of request to {url}");
         let result = if url.len() > REQWEST_MAX_URL_LEN {
             let result = block_in_place(|| {
                 CURL_CLIENT.with_borrow_mut(|curl| {
@@ -220,6 +221,7 @@ impl RealFactorDbClient {
             drop(permit);
             result.map_err(|e| anyhow::Error::from(e.without_url()))
         };
+        info!("End of request to {url}");
         match result {
             Err(e) => {
                 error!("Error reading {url}: {e}");
@@ -585,6 +587,7 @@ impl FactorDbClient for RealFactorDbClient {
         };
         self.rate_limiter.until_ready().await;
         let permit = self.request_mutex.lock().await;
+        info!("Start of request to https://factordb.com/reportfactor.php");
         let response = self
             .http
             .post("https://factordb.com/reportfactor.php")
@@ -597,6 +600,7 @@ impl FactorDbClient for RealFactorDbClient {
             .and_then(Response::text)
             .await;
         drop(permit);
+        info!("End of request to https://factordb.com/reportfactor.php");
         match response {
             Ok(text) => {
                 info!("{u_id}: reported a factor of {factor}; response: {text}",);
