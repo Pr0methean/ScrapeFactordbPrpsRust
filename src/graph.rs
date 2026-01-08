@@ -335,8 +335,16 @@ impl FactorData {
             vec![]
         } else {
             info!("Merging equivalent expressions {current} and {equivalent}");
-            if let Some(existing_vid) = existing_vid {
-                merge_vertices(self, http, factor_vid, existing_vid);
+            let new_factor_vids = if let Some(existing_vid) = existing_vid {
+                merge_vertices(self, http, factor_vid, existing_vid)
+            } else {
+                Vec::new()
+            };
+            // Update our reference to the vertex (it might have changed during merge)
+            let new_vid = self.resolve_vid(factor_vid);
+            if new_vid != factor_vid {
+                // The original vertex was merged into another one
+                return new_factor_vids;
             }
             self.vertex_id_by_expr
                 .insert(equivalent.clone(), factor_vid);
@@ -401,6 +409,13 @@ impl FactorData {
                 .map(Id)
                 .unwrap_or_else(|| Expression(Cow::Owned(factor)))
         }
+    }
+
+    fn should_run_factor_finder_on_merge(&self, vid: VertexId) -> bool {
+        self.number_facts_map
+            .get(&vid)
+            .map(|facts| !facts.checked_in_factor_finder)
+            .unwrap_or(false)
     }
 }
 
@@ -475,7 +490,12 @@ pub fn add_factor_node(
     if let Some(matching_vid) = matching_vid {
         let matching_vid = data.resolve_vid(matching_vid);
         if merge_dest != matching_vid {
-            merge_vertices(data, http, merge_dest, matching_vid);
+            let new_vids = merge_vertices(data, http, merge_dest, matching_vid);
+            // Merge any new factor vids found during the merge
+            for vid in new_vids {
+                let new_subfactor = data.get_factor(vid);
+                let _ = add_factor_node(data, new_subfactor, None, http);
+            }
         }
     }
     (merge_dest, added)
@@ -486,15 +506,15 @@ fn merge_vertices(
     http: &impl FactorDbClient,
     merge_dest: VertexId,
     matching_vid: VertexId,
-) {
+) -> Vec<VertexId> {
     let merge_dest = data.resolve_vid(merge_dest);
     let matching_vid = data.resolve_vid(matching_vid);
     if merge_dest == matching_vid {
-        return;
+        return vec![];
     }
     // Check if we're already merging these vertices
     if data.deleted_synonyms.contains_key(&matching_vid) {
-        return; // Already being merged
+        return vec![]; // Already being merged
     }
     data.deleted_synonyms.insert(matching_vid, merge_dest);
     let mut worklist = BTreeSet::new();
@@ -509,11 +529,14 @@ fn merge_vertices(
             queue_transitive_divisibility(&mut worklist, merge_dest, neighbor_vid, divisibility)
         });
     data.process_divisibility_worklist(worklist);
-    let old_factor = data
+    // Store whether we should run factor finder BEFORE we remove the vertex
+    let should_run_factor_finder = data.should_run_factor_finder_on_merge(matching_vid);
+    let old_factor_removed = data
         .divisibility_graph
         .remove_vertex(matching_vid)
         .expect("vertex does not exist");
     let mut checked_in_factor_finder = false;
+    let mut new_factor_vids = Vec::new();
     if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
         replace_with_or_abort(data.facts_mut(merge_dest), |facts| {
             checked_in_factor_finder =
@@ -547,11 +570,32 @@ fn merge_vertices(
             }
         });
     }
-    // Only merge if the old_factor is different from current
-    let current_factor = data.get_factor(merge_dest);
-    if old_factor != current_factor {
-        data.merge_equivalent_expressions(merge_dest, old_factor, http, !checked_in_factor_finder);
+    // Update expression mapping
+    data.vertex_id_by_expr.insert(old_factor_removed.clone(), merge_dest);
+
+    // Check if we need to run factor finder on the old factor
+    if should_run_factor_finder {
+        new_factor_vids.extend(data.add_from_factor_finder(&old_factor_removed, http));
     }
+    // Check if we should update the vertex's expression
+    let current_factor = data.get_factor(merge_dest);
+    if old_factor_removed != current_factor {
+        let current_len = if current_factor.is_elided() {
+            usize::MAX
+        } else {
+            current_factor.to_unelided_string().len()
+        };
+
+        if !old_factor_removed.is_elided()
+            && old_factor_removed.to_unelided_string().len() < current_len {
+            let _ = replace(
+                data.divisibility_graph.vertex_mut(merge_dest).unwrap(),
+                old_factor_removed,
+            );
+        }
+    }
+
+    new_factor_vids
 }
 
 fn queue_transitive_divisibility(
@@ -1002,9 +1046,14 @@ pub async fn find_and_submit_factors(
             }
             if factor == cofactor {
                 warn!(
-                    "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
-                );
-                merge_vertices(&mut data, http, factor_vid, cofactor_vid);
+        "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
+    );
+                let new_vids = merge_vertices(&mut data, http, factor_vid, cofactor_vid);
+                // Merge any new factor vids found during the merge
+                for vid in new_vids {
+                    let new_subfactor = data.get_factor(vid);
+                    let _ = add_factor_node(&mut data, new_subfactor, None, http);
+                }
                 all_vids.remove(&cofactor_vid);
                 continue;
             }
