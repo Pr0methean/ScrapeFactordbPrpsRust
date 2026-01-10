@@ -26,7 +26,6 @@ use gryf::core::facts::complete_graph_edge_count;
 use gryf::core::id::{DefaultId, VertexId};
 use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
 use gryf::storage::{AdjMatrix, Stable};
-use hipstr::HipStr;
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use rand::rng;
@@ -723,12 +722,11 @@ fn dedup_and_shuffle<T: Ord>(deque: &mut VecDeque<T>) {
 pub async fn find_and_submit_factors(
     http: &impl FactorDbClientReadIdsAndExprs,
     id: EntryId,
-    digits_or_expr: HipStr<'static>,
+    root_factor: Factor,
     skip_looking_up_known: bool,
 ) -> bool {
     let mut digits_or_expr_full = Vec::new();
     let mut data = FactorData::default();
-    let root_factor = Factor::from(digits_or_expr.as_str());
     let elided = root_factor.is_elided();
     let (mut root_vid, _) = add_factor_node(&mut data, root_factor, Some(id), http);
     if (!skip_looking_up_known) || elided {
@@ -781,7 +779,7 @@ pub async fn find_and_submit_factors(
         root_facts.last_known_status = status;
     };
     let root_factor = data.get_factor(root_vid);
-    debug!("{id}: Root node for {digits_or_expr} is {root_factor} with vertex ID {root_vid:?}",);
+    debug!("{id}: Root node for {root_factor} has vertex ID {root_vid:?}",);
     digits_or_expr_full.push(root_vid);
     let mut factor_found = false;
     let mut accepted_factors = 0;
@@ -1888,7 +1886,7 @@ pub mod tests {
             .await;
 
         // ensure expr uses heap space
-        let expr = HipStr::from(String::from(EXPR));
+        let expr = Factor::from(EXPR);
         let mut reg = stats_alloc::Region::new(&GLOBAL);
         black_box(find_and_submit_factors(&http, ID, expr, false).await);
 

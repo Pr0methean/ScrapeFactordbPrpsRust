@@ -235,13 +235,12 @@ async fn check_composite(
             if matches!(factor, Factor::Numeric(_)) {
                 continue;
             }
-            let factor_str = factor.to_unelided_string();
-            if graph::find_and_submit_factors(http, id, factor_str, true).await {
+            if graph::find_and_submit_factors(http, id, factor.clone(), true).await {
                 factors_submitted = true;
             } else {
                 if let Some(out) = COMPOSITES_OUT.get() {
                     let mut out = out.lock().await;
-                    let result = out.write_fmt(format_args!("{factor}\n"));
+                    let result = out.write_fmt(format_args!("{}\n", factor.to_unelided_string()));
                     if let Err(error) = result {
                         error!("{id}: Failed to write factor to FIFO: {error}");
                     } else {
@@ -862,7 +861,7 @@ async fn main() -> anyhow::Result<()> {
                                         graph::find_and_submit_factors(
                                             do_checks_http.as_ref(),
                                             info.id,
-                                            factor.to_unelided_string(),
+                                            factor,
                                             true,
                                         )
                                         .await;
@@ -1020,11 +1019,11 @@ async fn main() -> anyhow::Result<()> {
                     warn!("{u_id}: Skipping duplicate U");
                     continue;
                 }
-                let digits_or_expr = digits_or_expr.to_owned();
+                let digits_or_expr = Factor::from(digits_or_expr);
                 if graph::find_and_submit_factors(
                     &*u_http,
                     u_id,
-                    digits_or_expr.into(),
+                    digits_or_expr,
                     false,
                 )
                 .await {
