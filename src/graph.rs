@@ -10,7 +10,7 @@ use crate::algebraic::{
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime};
+use crate::net::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
@@ -777,7 +777,11 @@ pub async fn find_and_submit_factors(
         }
         let root_facts = data.facts_mut(root_vid);
         root_facts.last_known_status = status;
-    };
+    } else {
+        let root_facts = data.facts_mut(root_vid);
+        root_facts.factors_known_to_factordb = UpToDate(vec![root_vid]);
+        root_facts.last_known_status = Some(UnfactoredComposite);
+    }
     let root_factor = data.get_factor(root_vid);
     debug!("{id}: Root node for {root_factor} has vertex ID {root_vid:?}",);
     digits_or_expr_full.push(root_vid);
