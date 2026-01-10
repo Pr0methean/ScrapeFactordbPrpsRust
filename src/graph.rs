@@ -734,6 +734,7 @@ pub async fn find_and_submit_factors(
     let mut data = FactorData::default();
     let elided = root_factor.is_elided();
     let (mut root_vid, _) = add_factor_node(&mut data, root_factor, Some(id), http);
+    let mut factor_found = false;
     if (!skip_looking_up_known) || elided {
         let ProcessedStatusApiResponse {
             factors: known_factors,
@@ -745,12 +746,12 @@ pub async fn find_and_submit_factors(
             return true;
         }
         if known_factors.len() == 1 && status != Some(PartlyFactoredComposite) {
-            data.merge_equivalent_expressions(
+            factor_found |= !data.merge_equivalent_expressions(
                 root_vid,
                 known_factors.into_iter().next().unwrap(),
                 http,
                 true,
-            );
+            ).is_empty();
         } else {
             let root_factors: Vec<_> = known_factors
                 .into_iter()
@@ -790,7 +791,6 @@ pub async fn find_and_submit_factors(
     let root_factor = data.get_factor(root_vid);
     debug!("{id}: Root node for {root_factor} has vertex ID {root_vid:?}",);
     digits_or_expr_full.push(root_vid);
-    let mut factor_found = false;
     let mut accepted_factors = 0;
     let mut any_unprocessed = false;
     for factor_vid in digits_or_expr_full.into_iter().rev() {
