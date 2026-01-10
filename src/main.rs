@@ -230,35 +230,26 @@ async fn check_composite(
         }
     } else {
         let mut factors_submitted = false;
-        let mut factors_to_dispatch = Vec::with_capacity(factors.len());
-        for factor in factors {
-            if !matches!(factor, Factor::Numeric(_)) {
-                let factor_str = factor.to_unelided_string();
-                if graph::find_and_submit_factors(http, id, factor_str, true).await {
-                    factors_submitted = true;
-                } else {
-                    factors_to_dispatch.push(factor);
-                }
-            }
-        }
         let mut dispatched = false;
-        if let Some(out) = COMPOSITES_OUT.get() {
-            if factors_to_dispatch.is_empty() {
-                info!("{id}: Skipping dispatch of C because already factored");
-                return true;
+        for factor in factors {
+            if matches!(factor, Factor::Numeric(_)) {
+                continue;
             }
-            let mut out = out.lock().await;
-            let mut result = factors_to_dispatch
-                .into_iter()
-                .map(|factor| out.write_fmt(format_args!("{factor}\n")))
-                .flat_map(Result::err)
-                .take(1);
-            if let Some(error) = result.next() {
-                error!("{id}: Failed to write factor to FIFO: {error}");
+            let factor_str = factor.to_unelided_string();
+            if graph::find_and_submit_factors(http, id, factor_str, true).await {
+                factors_submitted = true;
             } else {
-                info!("{id}: Dispatched C to yafu");
-                HAVE_DISPATCHED_TO_YAFU.store(true, Release);
-                dispatched = true;
+                if let Some(out) = COMPOSITES_OUT.get() {
+                    let mut out = out.lock().await;
+                    let result = out.write_fmt(format_args!("{factor}\n"));
+                    if let Err(error) = result {
+                        error!("{id}: Failed to write factor to FIFO: {error}");
+                    } else {
+                        info!("{id}: Dispatched C to yafu");
+                        HAVE_DISPATCHED_TO_YAFU.store(true, Release);
+                        dispatched = true;
+                    }
+                }
             }
         }
         if !dispatched && !checks_triggered && !factors_submitted {
