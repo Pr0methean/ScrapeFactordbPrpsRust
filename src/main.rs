@@ -637,41 +637,306 @@ async fn main() -> anyhow::Result<()> {
     // Task to consume PRP's, C's and U's dispatched from the other tasks
     let mut prp_receiver = PushbackReceiver::new(prp_receiver, &prp_sender);
     let mut u_receiver = PushbackReceiver::new(u_receiver, &u_sender);
-    let do_checks_http = http.clone();
-    let mut do_checks_shutdown_receiver = shutdown_receiver.clone();
-    let do_checks = task::spawn(async_backtrace::location!().named_const("Execute checks from channels").frame(async move {
-        info!("do_checks task starting");
+    let check_c_and_prp_http = http.clone();
+    let mut check_c_and_prp_shutdown_receiver = shutdown_receiver.clone();
+    let check_c_and_prp = task::spawn(async_backtrace::location!().named_const("Check PRPs/Cs").frame(async move {
         let mut c_filter = CuckooFilter::with_capacity(4096);
-        let mut next_unknown_attempt = Instant::now();
-        let cert_regex = Regex::new("(Verified|Processing)").unwrap();
-        let many_digits_regex =
-            Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
-        let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
         let nm1_regex = Regex::new("id=([0-9]+)\">N-1<").unwrap();
         let np1_regex = Regex::new("id=([0-9]+)\">N\\+1<").unwrap();
+        let bases_regex = Regex::new("Bases checked[^\n]*\n[^\n]*([0-9, ]+)").unwrap();
         let mut bases_before_next_cpu_check = 1;
-        let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
-        throttle_if_necessary(
-            do_checks_http.as_ref(),
-            &mut c_receiver,
-            &mut bases_before_next_cpu_check,
-            false,
-            &mut c_filter,
-        )
-            .await;
+        let cert_regex = Regex::new("(Verified|Processing)").unwrap();
         loop {
-            info!("do_checks: Polling for next task");
+            info!("check_c_and_prp: Polling for next task");
             select! {
                 biased;
-                _ = do_checks_shutdown_receiver.recv() => {
-                    warn!("do_checks received shutdown signal; exiting");
+                _ = check_c_and_prp_shutdown_receiver.recv() => {
+                    warn!("check_c_and_prp received shutdown signal; exiting");
+                    return;
+                }
+                (id, task_return_permit) = prp_receiver.recv() => {
+                    info!("{id}: Ready to check a PRP");
+                    let mut stopped_early = false;
+                    let mut bases_left = U256::MAX - 3;
+                    let Some(bases_text) = check_c_and_prp_http
+                        .retrying_get_and_decode(
+                            &format!("https://factordb.com/frame_prime.php?id={id}"),
+                            RETRY_DELAY,
+                        )
+                        .await else {
+                        task_return_permit.send(id);
+                        info!("{id}: Requeued PRP");
+                        continue;
+                    };
+                    if bases_text.contains("Proven") {
+                        info!("{id}: No longer PRP");
+                        continue;
+                    }
+                    #[derive(Debug)]
+                    struct NPlusMinus1Info {
+                        id: EntryId,
+                        parameter: &'static str,
+                        known_to_divide_2: bool,
+                        known_to_divide_3: bool,
+                        factors: Option<Box<[Factor]>>,
+                    }
+
+                    if let Some(mut infos) = (async {
+                        let mut results = Vec::with_capacity(2);
+                        for (parameter, regex) in [("nm1", &nm1_regex), ("np1", &np1_regex)] {
+                            if let Some(captures) = regex.captures(&bases_text) {
+                                let id_to_check = captures[1].parse::<EntryId>().unwrap();
+                                let ProcessedStatusApiResponse {
+                                    status,
+                                    factors,
+                                    ..
+                                } = check_c_and_prp_http
+                                    .known_factors_as_digits(Id(id_to_check), false, false)
+                                    .await;
+                                if factors.is_empty() && status == Some(FullyFactored) {
+                                    info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
+                                    report_primality_proof(id, parameter, check_c_and_prp_http.as_ref()).await;
+                                    return None;
+                                }
+                                let divide_2 = factors.first().and_then(|f| f.as_numeric()) == Some(2);
+                                let divide_3 = factors.first().and_then(|f| f.as_numeric()) == Some(3)
+                                    || factors.get(1).and_then(|f| f.as_numeric()) == Some(3);
+                                results.push(NPlusMinus1Info {
+                                    id: id_to_check,
+                                    parameter,
+                                    known_to_divide_2: divide_2,
+                                    known_to_divide_3: divide_3,
+                                    factors: if factors.is_empty() {
+                                        None
+                                    } else {
+                                        Some(factors)
+                                    },
+                                });
+                            } else {
+                                error!("{id}: {parameter} ID not found: {bases_text}");
+                            }
+                        }
+                        Some(results)
+                    })
+                        .await
+                    {
+                        for info in &mut infos {
+                            if !info.known_to_divide_2 {
+                                match check_c_and_prp_http.report_numeric_factor(info.id, 2).await {
+                                    AlreadyFullyFactored => {
+                                        info!(
+                                                        "{id}: {} (ID {}) is fully factored!",
+                                                        info.parameter, info.id
+                                                    );
+                                        report_primality_proof(id, info.parameter, check_c_and_prp_http.as_ref())
+                                            .await;
+                                        stopped_early = true;
+                                        break;
+                                    }
+                                    Accepted => {
+                                        info.factors = None;
+                                    }
+                                    _ => {
+                                        error!(
+                                                        "{id}: PRP, but factor of 2 was rejected for {} (id {})",
+                                                        info.parameter, info.id
+                                                    );
+                                    }
+                                }
+                            }
+                        }
+                        if stopped_early {
+                            continue;
+                        }
+                        if infos.len() == 2 && !infos[0].known_to_divide_3 && !infos[1].known_to_divide_3 {
+                            match check_c_and_prp_http.report_numeric_factor(infos[0].id, 3).await {
+                                AlreadyFullyFactored => {
+                                    info!(
+                                                    "{id}: {} (ID {}) is fully factored!",
+                                                    infos[0].parameter, infos[0].id
+                                                );
+                                    report_primality_proof(id, infos[0].parameter, check_c_and_prp_http.as_ref())
+                                        .await;
+                                    stopped_early = true;
+                                }
+                                Accepted => {
+                                    infos[0].factors = None;
+                                }
+                                _ => match check_c_and_prp_http.report_numeric_factor(infos[1].id, 3).await {
+                                    AlreadyFullyFactored => {
+                                        info!(
+                                                        "{id}: {} (ID {}) is fully factored!",
+                                                        infos[1].parameter, infos[1].id
+                                                    );
+                                        report_primality_proof(id, infos[1].parameter, check_c_and_prp_http.as_ref())
+                                            .await;
+                                        stopped_early = true;
+                                    }
+                                    Accepted => {
+                                        infos[1].factors = None;
+                                    }
+                                    _ => {
+                                        error!(
+                                                        "{id}: PRP, but factor of 3 was rejected for both N-1 (id {}) and N+1 (id {})",
+                                                        infos[0].id, infos[1].id
+                                                    );
+                                    }
+                                },
+                            }
+                        }
+                        if stopped_early {
+                            continue;
+                        }
+                        for info in infos {
+                            let factors = if let Some(factors) = info.factors {
+                                factors
+                            } else {
+                                check_c_and_prp_http
+                                    .known_factors_as_digits(Id(info.id), false, true)
+                                    .await
+                                    .factors
+                            };
+                            for factor in factors {
+                                if !matches!(factor, Factor::Numeric(_)) {
+                                    graph::find_and_submit_factors(
+                                        check_c_and_prp_http.as_ref(),
+                                        info.id,
+                                        factor,
+                                        true,
+                                    )
+                                        .await;
+                                }
+                            }
+                        }
+                    } else {
+                        continue;
+                    }
+                    let status_text = check_c_and_prp_http
+                        .retrying_get_and_decode(
+                            &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}"),
+                            RETRY_DELAY,
+                        ).await;
+                    if !status_text.as_ref().is_some_and(|status_text| status_text.contains("&lt;")) {
+                        error!("{id}: Failed to decode status for PRP: {status_text:?}");
+                        composites_while_waiting(
+                            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
+                            check_c_and_prp_http.as_ref(),
+                            &mut c_receiver,
+                            &mut c_filter,
+                        )
+                            .await;
+                        task_return_permit.send(id);
+                        info!("{id}: Requeued PRP");
+                        continue;
+                    };
+                    let status_text = status_text.unwrap();
+                    if status_text.contains(" is prime") || !status_text.contains("PRP") {
+                        info!("{id}: No longer PRP");
+                        continue;
+                    }
+                    if let Some(bases) = bases_regex.captures(&bases_text) {
+                        for base in bases[1].split(", ") {
+                            let Ok(base) = base.parse::<u8>() else {
+                                error!("Invalid PRP-check base: {:?}", base);
+                                continue;
+                            };
+                            bases_left &= !(U256::from(1) << base);
+                        }
+                        info!(
+                                    "{id}: {} bases left to check",
+                                    bases_left
+                                        .0
+                                        .iter()
+                                        .copied()
+                                        .map(u64::count_ones)
+                                        .sum::<u32>()
+                                );
+                    } else {
+                        info!("{id}: no bases checked yet");
+                    }
+                    if bases_left == U256::from(0) {
+                        info!("{id}: all bases already checked");
+                        continue;
+                    }
+                    for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
+                        let url = format!(
+                            "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
+                        );
+                        let Some(text) = check_c_and_prp_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
+                            error!("{id}: PRP check with base {base} failed");
+                            continue;
+                        };
+                        if !text.contains(">number<") {
+                            error!("Failed to decode result from {url}: {text}");
+                            task_return_permit.send(id);
+                            info!("{id}: Requeued PRP");
+                            composites_while_waiting(
+                                Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
+                                check_c_and_prp_http.as_ref(),
+                                &mut c_receiver,
+                                &mut c_filter,
+                            )
+                                .await;
+                            break;
+                        }
+                        throttle_if_necessary(
+                            check_c_and_prp_http.as_ref(),
+                            &mut c_receiver,
+                            &mut bases_before_next_cpu_check,
+                            true,
+                            &mut c_filter,
+                        )
+                            .await;
+                        if cert_regex.is_match(&text) {
+                            info!("{}: No longer PRP (has certificate)", id);
+                            stopped_early = true;
+                            break;
+                        }
+                        if text.contains("set to C") {
+                            info!("{}: No longer PRP (ruled out by PRP check)", id);
+                            stopped_early = true;
+                            break;
+                        }
+                        if !text.contains("PRP") {
+                            info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
+                            stopped_early = true;
+                            break;
+                        }
+                    }
+                    if !stopped_early {
+                        info!("{}: all bases now checked", id);
+                    }
+                }
+
+                c_task = c_receiver.recv() => {
+                    let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
+                    info!("{id}: Ready to check a C");
+                    check_composite(check_c_and_prp_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
+                }
+            }
+        }
+    }));
+    let mut check_u_shutdown_receiver = shutdown_receiver.clone();
+    let check_u_http = http.clone();
+    let check_u = task::spawn(async_backtrace::location!().named_const("Check Us").frame(async move {
+        info!("check_u task starting");
+        let mut next_unknown_attempt = Instant::now();
+        let many_digits_regex =
+            Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
+        let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
+        loop {
+            info!("check_u: Polling for next task");
+            select! {
+                biased;
+                _ = check_u_shutdown_receiver.recv() => {
+                    warn!("check_u received shutdown signal; exiting");
                     return;
                 }
                 (id, task_return_permit) = sleep_until(next_unknown_attempt).then(|_| u_receiver.recv())
                 => {
                     info!("{id}: Ready to check a U");
                     let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-                    let Some(result) = do_checks_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
+                    let Some(result) = check_u_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
                         task_return_permit.send(id);
                         info!("{id}: Requeued U");
                         continue;
@@ -711,264 +976,6 @@ async fn main() -> anyhow::Result<()> {
                         task_return_permit.send(id);
                         info!("{id}: Requeued U");
                     }
-                }
-                (id, task_return_permit) = prp_receiver.recv() => {
-                    info!("{id}: Ready to check a PRP");
-                    let mut stopped_early = false;
-                    let mut bases_left = U256::MAX - 3;
-                    let Some(bases_text) = do_checks_http
-                        .retrying_get_and_decode(
-                            &format!("https://factordb.com/frame_prime.php?id={id}"),
-                            RETRY_DELAY,
-                        )
-                        .await else {
-                        task_return_permit.send(id);
-                        info!("{id}: Requeued PRP");
-                        continue;
-                    };
-                    if bases_text.contains("Proven") {
-                        info!("{id}: No longer PRP");
-                        continue;
-                    }
-                    #[derive(Debug)]
-                    struct NPlusMinus1Info {
-                        id: EntryId,
-                        parameter: &'static str,
-                        known_to_divide_2: bool,
-                        known_to_divide_3: bool,
-                        factors: Option<Box<[Factor]>>,
-                    }
-
-                    if let Some(mut infos) = (async {
-                        let mut results = Vec::with_capacity(2);
-                        for (parameter, regex) in [("nm1", &nm1_regex), ("np1", &np1_regex)] {
-                            if let Some(captures) = regex.captures(&bases_text) {
-                                let id_to_check = captures[1].parse::<EntryId>().unwrap();
-                                let ProcessedStatusApiResponse {
-                                    status,
-                                    factors,
-                                    ..
-                                } = do_checks_http
-                                    .known_factors_as_digits(Id(id_to_check), false, false)
-                                    .await;
-                                if factors.is_empty() && status == Some(FullyFactored) {
-                                    info!("{id}: {parameter} (ID {id_to_check}) is fully factored!");
-                                    report_primality_proof(id, parameter, do_checks_http.as_ref()).await;
-                                    return None;
-                                }
-                                let divide_2 = factors.first().and_then(|f| f.as_numeric()) == Some(2);
-                                let divide_3 = factors.first().and_then(|f| f.as_numeric()) == Some(3)
-                                    || factors.get(1).and_then(|f| f.as_numeric()) == Some(3);
-                                results.push(NPlusMinus1Info {
-                                    id: id_to_check,
-                                    parameter,
-                                    known_to_divide_2: divide_2,
-                                    known_to_divide_3: divide_3,
-                                    factors: if factors.is_empty() {
-                                        None
-                                    } else {
-                                        Some(factors)
-                                    },
-                                });
-                            } else {
-                                error!("{id}: {parameter} ID not found: {bases_text}");
-                            }
-                        }
-                        Some(results)
-                    })
-                    .await
-                    {
-                            for info in &mut infos {
-                                if !info.known_to_divide_2 {
-                                    match do_checks_http.report_numeric_factor(info.id, 2).await {
-                                        AlreadyFullyFactored => {
-                                            info!(
-                                                "{id}: {} (ID {}) is fully factored!",
-                                                info.parameter, info.id
-                                            );
-                                            report_primality_proof(id, info.parameter, do_checks_http.as_ref())
-                                                .await;
-                                            stopped_early = true;
-                                            break;
-                                        }
-                                        Accepted => {
-                                            info.factors = None;
-                                        }
-                                        _ => {
-                                            error!(
-                                                "{id}: PRP, but factor of 2 was rejected for {} (id {})",
-                                                info.parameter, info.id
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            if stopped_early {
-                                continue;
-                            }
-                            if infos.len() == 2 && !infos[0].known_to_divide_3 && !infos[1].known_to_divide_3 {
-                                match do_checks_http.report_numeric_factor(infos[0].id, 3).await {
-                                    AlreadyFullyFactored => {
-                                        info!(
-                                            "{id}: {} (ID {}) is fully factored!",
-                                            infos[0].parameter, infos[0].id
-                                        );
-                                        report_primality_proof(id, infos[0].parameter, do_checks_http.as_ref())
-                                            .await;
-                                        stopped_early = true;
-                                    }
-                                    Accepted => {
-                                        infos[0].factors = None;
-                                    }
-                                    _ => match do_checks_http.report_numeric_factor(infos[1].id, 3).await {
-                                        AlreadyFullyFactored => {
-                                            info!(
-                                                "{id}: {} (ID {}) is fully factored!",
-                                                infos[1].parameter, infos[1].id
-                                            );
-                                            report_primality_proof(id, infos[1].parameter, do_checks_http.as_ref())
-                                                .await;
-                                            stopped_early = true;
-                                        }
-                                        Accepted => {
-                                            infos[1].factors = None;
-                                        }
-                                        _ => {
-                                            error!(
-                                                "{id}: PRP, but factor of 3 was rejected for both N-1 (id {}) and N+1 (id {})",
-                                                infos[0].id, infos[1].id
-                                            );
-                                        }
-                                    },
-                                }
-                            }
-                            if stopped_early {
-                                continue;
-                            }
-                            for info in infos {
-                                let factors = if let Some(factors) = info.factors {
-                                    factors
-                                } else {
-                                    do_checks_http
-                                        .known_factors_as_digits(Id(info.id), false, true)
-                                        .await
-                                        .factors
-                                };
-                                for factor in factors {
-                                    if !matches!(factor, Factor::Numeric(_)) {
-                                        graph::find_and_submit_factors(
-                                            do_checks_http.as_ref(),
-                                            info.id,
-                                            factor,
-                                            true,
-                                        )
-                                        .await;
-                                    }
-                            }
-                        }
-                    } else {
-                        continue;
-                    }
-                    let status_text = do_checks_http
-                        .retrying_get_and_decode(
-                            &format!("https://factordb.com/index.php?open=Prime&ct=Proof&id={id}"),
-                            RETRY_DELAY,
-                        ).await;
-                    if !status_text.as_ref().is_some_and(|status_text| status_text.contains("&lt;")) {
-                        error!("{id}: Failed to decode status for PRP: {status_text:?}");
-                        composites_while_waiting(
-                            Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                            do_checks_http.as_ref(),
-                            &mut c_receiver,
-                            &mut c_filter,
-                        )
-                        .await;
-                        task_return_permit.send(id);
-                        info!("{id}: Requeued PRP");
-                        continue;
-                    };
-                    let status_text = status_text.unwrap();
-                    if status_text.contains(" is prime") || !status_text.contains("PRP") {
-                        info!("{id}: No longer PRP");
-                        continue;
-                    }
-                    if let Some(bases) = bases_regex.captures(&bases_text) {
-                        for base in bases[1].split(", ") {
-                            let Ok(base) = base.parse::<u8>() else {
-                                error!("Invalid PRP-check base: {:?}", base);
-                                continue;
-                            };
-                            bases_left &= !(U256::from(1) << base);
-                        }
-                        info!(
-                            "{id}: {} bases left to check",
-                            bases_left
-                                .0
-                                .iter()
-                                .copied()
-                                .map(u64::count_ones)
-                                .sum::<u32>()
-                        );
-                    } else {
-                        info!("{id}: no bases checked yet");
-                    }
-                    if bases_left == U256::from(0) {
-                        info!("{id}: all bases already checked");
-                        continue;
-                    }
-                    for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                        let url = format!(
-                            "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
-                        );
-                        let Some(text) = do_checks_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
-                            error!("{id}: PRP check with base {base} failed");
-                            continue;
-                        };
-                        if !text.contains(">number<") {
-                            error!("Failed to decode result from {url}: {text}");
-                            task_return_permit.send(id);
-                            info!("{id}: Requeued PRP");
-                            composites_while_waiting(
-                                Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                                do_checks_http.as_ref(),
-                                &mut c_receiver,
-                                &mut c_filter,
-                            )
-                            .await;
-                            break;
-                        }
-                        throttle_if_necessary(
-                            do_checks_http.as_ref(),
-                            &mut c_receiver,
-                            &mut bases_before_next_cpu_check,
-                            true,
-                            &mut c_filter,
-                        )
-                        .await;
-                        if cert_regex.is_match(&text) {
-                            info!("{}: No longer PRP (has certificate)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if text.contains("set to C") {
-                            info!("{}: No longer PRP (ruled out by PRP check)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if !text.contains("PRP") {
-                            info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                    }
-                    if !stopped_early {
-                        info!("{}: all bases now checked", id);
-                    }
-                }
-                c_task = c_receiver.recv() => {
-                    let (CompositeCheckTask {id, digits_or_expr}, return_permit) = c_task;
-                    info!("{id}: Ready to check a C");
-                    check_composite(do_checks_http.as_ref(), &mut c_filter, id, digits_or_expr, return_permit).await;
                 }
             }
         }
@@ -1086,8 +1093,9 @@ async fn main() -> anyhow::Result<()> {
                 warn!("Main task received shutdown signal; waiting for other tasks to exit");
                 c_buffer_task.abort();
                 let _ = queue_u.await;
-                let _ = do_checks.await;
+                let _ = check_u.await;
                 let _ = c_buffer_task.await;
+                let _ = check_c_and_prp.await;
                 return Ok(());
             }
             // C comes first because otherwise it gets starved
