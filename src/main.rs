@@ -604,9 +604,7 @@ async fn main() -> anyhow::Result<()> {
             })
             .await;
     }
-    let http = Arc::new(RealFactorDbClient::new(
-        rph_limit,
-    ));
+    let http = Arc::new(RealFactorDbClient::new(rph_limit));
     let http_clone = http.clone();
     let c_sender_clone = c_sender.clone();
     let mut c_shutdown_receiver = shutdown_receiver.clone();
@@ -1147,7 +1145,8 @@ async fn main() -> anyhow::Result<()> {
         }
         if new_c_buffer_task {
             c_buffer_task =
-                queue_composites(http.as_ref(), &c_sender, c_digits, &mut u_shutdown_receiver).await;
+                queue_composites(http.as_ref(), &c_sender, c_digits, &mut u_shutdown_receiver)
+                    .await;
         }
     }
 }

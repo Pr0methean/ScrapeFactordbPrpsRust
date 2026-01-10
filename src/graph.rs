@@ -10,7 +10,9 @@ use crate::algebraic::{
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::NumberStatus::{FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite};
+use crate::net::NumberStatus::{
+    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite,
+};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
@@ -522,7 +524,8 @@ fn merge_vertices(
         });
     data.process_divisibility_worklist(worklist);
     // Store whether we should run factor finder BEFORE we remove the vertex
-    let should_run_factor_finder = data.number_facts_map
+    let should_run_factor_finder = data
+        .number_facts_map
         .get(&matching_vid)
         .map(|facts| !facts.checked_in_factor_finder)
         .unwrap_or(false);
@@ -566,7 +569,8 @@ fn merge_vertices(
         });
     }
     // Update expression mapping
-    data.vertex_id_by_expr.insert(old_factor_removed.clone(), merge_dest);
+    data.vertex_id_by_expr
+        .insert(old_factor_removed.clone(), merge_dest);
 
     // Check if we need to run factor finder on the old factor
     if should_run_factor_finder {
@@ -582,7 +586,8 @@ fn merge_vertices(
         };
 
         if !old_factor_removed.is_elided()
-            && old_factor_removed.to_unelided_string().len() < current_len {
+            && old_factor_removed.to_unelided_string().len() < current_len
+        {
             let _ = replace(
                 data.divisibility_graph.vertex_mut(merge_dest).unwrap(),
                 old_factor_removed,
@@ -1044,8 +1049,8 @@ pub async fn find_and_submit_factors(
             }
             if factor == cofactor {
                 warn!(
-        "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
-    );
+                    "{id}: Found duplicate vertices: {factor_vid:?} and {cofactor_vid:?} are both {factor}"
+                );
                 let new_vids = merge_vertices(&mut data, http, factor_vid, cofactor_vid);
                 // Merge any new factor vids found during the merge
                 for vid in new_vids {

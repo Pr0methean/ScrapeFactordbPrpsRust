@@ -78,7 +78,11 @@ pub trait FactorDbClient {
     ) -> Option<ResourceLimits>;
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
-    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Option<HipStr<'static>>;
+    async fn retrying_get_and_decode(
+        &self,
+        url: &str,
+        retry_delay: Duration,
+    ) -> Option<HipStr<'static>>;
     async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>>;
     async fn try_get_resource_limits(
         &self,
@@ -315,8 +319,13 @@ impl FactorDbClient for RealFactorDbClient {
     /// Executes a GET request with a large reasonable default number of retries, or else
     /// restarts the process if that request consistently fails.
     #[framed]
-    async fn retrying_get_and_decode(&self, url: &str, retry_delay: Duration) -> Option<HipStr<'static>> {
-        self.retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES).await
+    async fn retrying_get_and_decode(
+        &self,
+        url: &str,
+        retry_delay: Duration,
+    ) -> Option<HipStr<'static>> {
+        self.retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES)
+            .await
     }
 
     #[framed]
@@ -399,7 +408,8 @@ impl FactorDbClient for RealFactorDbClient {
                     Ok(response)
                 } else if get_digits_as_fallback {
                     sleep(RETRY_DELAY).await;
-                    Err(self.try_get_and_decode(&format!("https://factordb.com/index.php?showid={id}"))
+                    Err(self
+                        .try_get_and_decode(&format!("https://factordb.com/index.php?showid={id}"))
                         .await)
                 } else {
                     Err(None)
@@ -410,7 +420,10 @@ impl FactorDbClient for RealFactorDbClient {
                     "https://factordb.com/api?query={}",
                     encode(&expr.to_unelided_string())
                 );
-                self.try_get_and_decode(&url).await.map(Ok).unwrap_or(Err(None))
+                self.try_get_and_decode(&url)
+                    .await
+                    .map(Ok)
+                    .unwrap_or(Err(None))
             }
         };
         debug!("{id}: Got API response:\n{response:?}");
