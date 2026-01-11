@@ -48,7 +48,6 @@ use std::alloc::GlobalAlloc;
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
-use std::future::ready;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
 use std::num::{NonZero, NonZeroU32};
@@ -62,12 +61,12 @@ use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::ctrl_c;
-use tokio::sync::mpsc::error::TrySendError::{Closed, Full};
-use tokio::sync::mpsc::{OwnedPermit, Sender, channel};
+use tokio::sync::mpsc::{OwnedPermit, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
+use tokio::sync::mpsc::error::SendError;
 
 #[global_allocator]
 static GLOBAL: StatsAlloc<Jemalloc> = StatsAlloc::new(Jemalloc);
@@ -118,7 +117,7 @@ const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
 const U_TASK_BUFFER_SIZE: usize = 256;
 const C_RESULTS_PER_PAGE: usize = 5000;
-const C_TASK_BUFFER_SIZE: usize = 4096;
+const C_TASK_BUFFER_SIZE: usize = 8192;
 const C_MIN_DIGITS: NumberLength = 92;
 const C_MAX_DIGITS: NumberLength = 300;
 
@@ -377,94 +376,6 @@ async fn throttle_if_necessary(
     true
 }
 
-// The reason this method returns a JoinHandle (and thus needs .await.await at the start of the
-// program) is that even once the C search has completed, it may have returned more results than cam
-// fit into the channel at once. In that case, we want the remaining results to wait to be pushed
-// into the channel, without blocking PRP or U searches on the main thread.
-#[allow(clippy::async_yields_async)]
-#[framed]
-async fn queue_composites(
-    http: &impl FactorDbClientReadIdsAndExprs,
-    c_sender: &Sender<CompositeCheckTask>,
-    digits: Option<NonZero<NumberLength>>,
-    shutdown_receiver: &mut Monitor,
-) -> JoinHandle<()> {
-    let mut c_buffered = Vec::with_capacity(C_RESULTS_PER_PAGE);
-    while c_buffered.is_empty() {
-        let start = if digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
-            0
-        } else {
-            rng().random_range(0..=MAX_START)
-        };
-        let mut results_per_page = C_RESULTS_PER_PAGE;
-        let mut composites_page = None;
-        while composites_page.is_none() && results_per_page > 0 {
-            if shutdown_receiver.check_for_shutdown() {
-                return task::spawn(ready(()));
-            }
-            let digits = digits.unwrap_or_else(|| {
-                rng()
-                    .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
-                    .try_into()
-                    .unwrap()
-            });
-            info!("Retrieving {digits}-digit C's starting from {start}");
-            composites_page = http.try_get_and_decode(
-                &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}")
-            ).await;
-            if composites_page.is_none() {
-                results_per_page >>= 1;
-                sleep(SEARCH_RETRY_DELAY).await;
-            }
-        }
-        info!("{results_per_page} C search results retrieved");
-        let Some(composites_page) = composites_page else {
-            return task::spawn(ready(()));
-        };
-        let mut c_tasks: Box<[_]> = http
-            .read_ids_and_exprs(&composites_page)
-            .map(|(id, expr)| CompositeCheckTask {
-                id,
-                digits_or_expr: expr.into(),
-            })
-            .collect();
-        c_tasks.shuffle(&mut rng());
-        let c_initial = c_tasks.len();
-        c_buffered.extend(c_tasks.into_iter().filter_map(
-            |c_task| match c_sender.try_send(c_task) {
-                Ok(()) => None,
-                Err(Closed(_)) => None,
-                Err(Full(c_task)) => Some(c_task),
-            },
-        ));
-        let c_sent = c_initial - c_buffered.len();
-        info!("Sent {c_sent} C's to channel");
-    }
-    info!("Buffering {} more C's", c_buffered.len());
-    let c_sender = c_sender.clone();
-    let c_buffered = c_buffered.into_boxed_slice();
-    task::spawn(
-        async_backtrace::location!()
-            .named_const("Send buffered C's to channel")
-            .frame(async move {
-                let count = c_buffered.len();
-                let mut c_sent = 0;
-                for c_task in c_buffered {
-                    let id = c_task.id;
-                    if let Err(e) = c_sender.send(c_task).await {
-                        error!("{id}: Dropping C because we failed to send it to channel: {e}");
-                    } else {
-                        c_sent += 1;
-                    }
-                    if c_sent == 1 {
-                        info!("Sent first of {count} buffered C's to channel");
-                    }
-                }
-                info!("Sent {c_sent} buffered C's to channel");
-            }),
-    )
-}
-
 const STATS_INTERVAL: Duration = Duration::from_mins(1);
 
 pub fn log_stats<T: GlobalAlloc>(
@@ -605,22 +516,7 @@ async fn main() -> anyhow::Result<()> {
             .await;
     }
     let http = Arc::new(RealFactorDbClient::new(rph_limit));
-    let http_clone = http.clone();
-    let c_sender_clone = c_sender.clone();
     let mut c_shutdown_receiver = shutdown_receiver.clone();
-    let mut c_buffer_task: JoinHandle<()> =
-        task::spawn(async_backtrace::location!().frame(async move {
-            queue_composites(
-                http_clone.as_ref(),
-                &c_sender_clone,
-                c_digits,
-                &mut c_shutdown_receiver,
-            )
-            .await
-            .await
-            .unwrap();
-        }));
-
     FAILED_U_SUBMISSIONS_OUT
         .get_or_init(async || {
             Mutex::new(
@@ -1082,26 +978,78 @@ async fn main() -> anyhow::Result<()> {
             next_backtrace = Instant::now() + STATS_INTERVAL;
         }
     });
+    let c_http = http.clone();
+    let queue_c: JoinHandle<Result<(), SendError<()>>> = task::spawn(async move {
+        let mut c_tasks = Vec::with_capacity(C_RESULTS_PER_PAGE);
+        loop {
+            let select_start = Instant::now();
+            select! {
+                biased;
+                _ = c_shutdown_receiver.recv() => {
+                    warn!("queue_c received shutdown signal; exiting");
+                    return Ok(());
+                }
+                c_permits = c_sender.reserve_many(C_RESULTS_PER_PAGE) => {
+                    let mut c_permits = c_permits?;
+                    info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
+                    while c_tasks.is_empty() {
+                        let start = if c_digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
+                            0
+                        } else {
+                            rng().random_range(0..=MAX_START)
+                        };
+                        let mut results_per_page = C_RESULTS_PER_PAGE;
+                        let mut composites_page = None;
+                        while composites_page.is_none() && results_per_page > 0 {
+                            if c_shutdown_receiver.check_for_shutdown() {
+                                return Ok(());
+                            }
+                            let digits = c_digits.unwrap_or_else(|| {
+                                rng()
+                                    .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
+                                    .try_into()
+                                    .unwrap()
+                            });
+                            info!("Retrieving {digits}-digit C's starting from {start}");
+                            composites_page = c_http.try_get_and_decode(
+                                &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}")
+                            ).await;
+                            if composites_page.is_none() {
+                                results_per_page >>= 1;
+                                sleep(SEARCH_RETRY_DELAY).await;
+                            }
+                        }
+                        info!("{results_per_page} C search results retrieved");
+                        c_tasks.extend(c_http
+                            .read_ids_and_exprs(&composites_page.unwrap())
+                            .map(|(id, expr)| CompositeCheckTask {
+                                id,
+                                digits_or_expr: expr.into(),
+                            }));
+                        c_tasks.shuffle(&mut rng());
+                    }
+                    let c_sent = c_tasks.len();
+                    for task in c_tasks.drain(..) {
+                        c_permits.next().unwrap().send(task);
+                    }
+                    info!("Sent {c_sent} C's to channel");
 
-    // Queue C's and PRP's
+                }
+            }
+        }
+    });
+
     'queue_tasks: loop {
-        let mut new_c_buffer_task = false;
         let select_start = Instant::now();
         select! {
             biased;
             _ = u_shutdown_receiver.recv() => {
                 warn!("Main task received shutdown signal; waiting for other tasks to exit");
-                c_buffer_task.abort();
                 let _ = queue_u.await;
                 let _ = check_u.await;
-                let _ = c_buffer_task.await;
+                let _ = queue_c.await;
                 let _ = check_c_and_prp.await;
                 return Ok(());
-            }
-            // C comes first because otherwise it gets starved
-            _ = &mut c_buffer_task => {
-                info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
-                new_c_buffer_task = true;
             }
             prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
                 let prp_permits = prp_permits?;
@@ -1150,11 +1098,6 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-        }
-        if new_c_buffer_task {
-            c_buffer_task =
-                queue_composites(http.as_ref(), &c_sender, c_digits, &mut u_shutdown_receiver)
-                    .await;
         }
     }
 }
