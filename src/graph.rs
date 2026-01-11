@@ -746,12 +746,14 @@ pub async fn find_and_submit_factors(
             return true;
         }
         if known_factors.len() == 1 && status != Some(PartlyFactoredComposite) {
-            factor_found |= !data.merge_equivalent_expressions(
-                root_vid,
-                known_factors.into_iter().next().unwrap(),
-                http,
-                true,
-            ).is_empty();
+            factor_found |= !data
+                .merge_equivalent_expressions(
+                    root_vid,
+                    known_factors.into_iter().next().unwrap(),
+                    http,
+                    true,
+                )
+                .is_empty();
         } else {
             let root_factors: Vec<_> = known_factors
                 .into_iter()

@@ -61,12 +61,12 @@ use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::ctrl_c;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{OwnedPermit, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
-use tokio::sync::mpsc::error::SendError;
 
 #[global_allocator]
 static GLOBAL: StatsAlloc<Jemalloc> = StatsAlloc::new(Jemalloc);
