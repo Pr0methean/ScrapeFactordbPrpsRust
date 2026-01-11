@@ -909,6 +909,7 @@ async fn main() -> anyhow::Result<()> {
             info!("U search results retrieved");
             let ids = u_http
                 .read_ids_and_exprs(&results_text);
+            let mut advance_start = 0;
             for (u_id, digits_or_expr) in ids {
                 if shutdown_receiver.check_for_shutdown() {
                     warn!("try_queue_unknowns thread received shutdown signal; exiting");
@@ -916,6 +917,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 if !matches!(u_filter.test_and_add(&u_id), Ok(true)) {
                     warn!("{u_id}: Skipping duplicate U");
+                    advance_start += 1;
                     continue;
                 }
                 let digits_or_expr = Factor::from(digits_or_expr);
@@ -931,13 +933,14 @@ async fn main() -> anyhow::Result<()> {
                     if u_sender.send(u_id).await.is_ok() {
                         info!("{u_id}: Queued U");
                     }
-                    if u_digits.is_some() {
-                        u_start += 1;
-                        u_start %= MAX_START + 1;
-                    } else {
-                        u_start = rng().random_range(0..=MAX_START);
-                    }
+                    advance_start += 1;
                 }
+            }
+            if u_digits.is_some() {
+                u_start += advance_start;
+                u_start %= MAX_START + 1;
+            } else if advance_start != 0 {
+                u_start = rng().random_range(0..=MAX_START);
             }
         }
     }));
