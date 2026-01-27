@@ -424,7 +424,7 @@ async fn main() -> anyhow::Result<()> {
         {
             (
                 sigint,
-                tokio::signal::unix::signal(signal::unix::SignalKind::terminate())
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("Failed to create SIGTERM signal stream").recv(),
             )
         }
