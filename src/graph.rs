@@ -347,6 +347,7 @@ impl FactorData {
                 // The original vertex was merged into another one
                 return new_factor_vids;
             }
+            let factor_vid = new_vid;
             self.vertex_id_by_expr
                 .insert(equivalent.clone(), factor_vid);
             let current_len = if current.is_elided() {
