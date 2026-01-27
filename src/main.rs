@@ -425,7 +425,7 @@ async fn main() -> anyhow::Result<()> {
             (
                 sigint,
                 tokio::signal::unix::signal(signal::unix::SignalKind::terminate())
-                    .expect("Failed to create SIGTERM signal stream"),
+                    .expect("Failed to create SIGTERM signal stream").recv(),
             )
         }
         #[cfg(not(unix))]
@@ -963,7 +963,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             select! {
                 biased;
-                _ = &mut sigterm => {
+                _ = sigterm => {
                     warn!("Received SIGTERM; signaling tasks to exit");
                     break;
                 },
