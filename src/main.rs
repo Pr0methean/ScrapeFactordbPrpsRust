@@ -65,7 +65,7 @@ use tokio::sync::mpsc::{OwnedPermit, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
-use tokio::{select, signal, task};
+use tokio::{select, task};
 
 #[cfg(not(windows))]
 #[global_allocator]
@@ -73,7 +73,7 @@ static GLOBAL: StatsAlloc<tikv_jemallocator::Jemalloc> = StatsAlloc::new(tikv_je
 
 #[cfg(windows)]
 #[global_allocator]
-static GLOBAL: StatsAlloc<std::alloc::System> = stats_alloc::INSTRUMENTED_SYSTEM;
+static GLOBAL: StatsAlloc<std::alloc::System> = StatsAlloc::system();
 
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
 
@@ -424,14 +424,14 @@ async fn main() -> anyhow::Result<()> {
         {
             (
                 sigint,
-                signal::unix::signal(signal::unix::SignalKind::terminate())
+                tokio::signal::unix::signal(signal::unix::SignalKind::terminate())
                     .expect("Failed to create SIGTERM signal stream"),
             )
         }
         #[cfg(not(unix))]
         {
             // Create a channel that will never receive a signal
-            let (_sender, sigterm) = oneshot::channel();
+            let (_sender, sigterm) = tokio::sync::oneshot::channel::<()>();
             (sigint, sigterm)
         }
     });
@@ -961,7 +961,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             select! {
                 biased;
-                _ = sigterm.recv() => {
+                _ = &mut sigterm => {
                     warn!("Received SIGTERM; signaling tasks to exit");
                     break;
                 },
