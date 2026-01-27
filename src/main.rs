@@ -425,7 +425,7 @@ async fn main() -> anyhow::Result<()> {
             (
                 sigint,
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to create SIGTERM signal stream").recv(),
+                    .expect("Failed to create SIGTERM signal stream"),
             )
         }
         #[cfg(not(unix))]
@@ -952,6 +952,8 @@ async fn main() -> anyhow::Result<()> {
             error!("Failed to install signal handlers!");
             abort();
         };
+        #[cfg(unix)]
+        let sigterm = sigterm.recv();
         #[cfg(not(unix))]
         let (Ok(mut sigint), mut sigterm) = (signal_installer.await, core::future::pending()) else {
             error!("Failed to install signal handlers!");
@@ -963,7 +965,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             select! {
                 biased;
-                _ = sigterm => {
+                _ = &mut sigterm => {
                     warn!("Received SIGTERM; signaling tasks to exit");
                     break;
                 },
