@@ -953,7 +953,10 @@ async fn main() -> anyhow::Result<()> {
             abort();
         };
         #[cfg(unix)]
-        let sigterm = tokio::pin!(sigterm.recv());
+        let sigterm = {
+            let sigterm = sigterm.recv();
+            tokio::pin!(sigterm)
+        };
         #[cfg(not(unix))]
         let (Ok(mut sigint), mut sigterm) = (signal_installer.await, core::future::pending()) else {
             error!("Failed to install signal handlers!");
