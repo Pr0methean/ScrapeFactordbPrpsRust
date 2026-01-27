@@ -429,11 +429,7 @@ async fn main() -> anyhow::Result<()> {
             )
         }
         #[cfg(not(unix))]
-        {
-            // Create a channel that will never receive a signal
-            let (_sender, sigterm) = tokio::sync::oneshot::channel::<()>();
-            (sigint, sigterm)
-        }
+        sigint
     });
 
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
@@ -951,7 +947,13 @@ async fn main() -> anyhow::Result<()> {
     let mut backtraces_paused_task = None;
     // Monitoring task: print stats periodically
     task::spawn(async move {
+        #[cfg(unix)]
         let Ok((mut sigint, mut sigterm)) = signal_installer.await else {
+            error!("Failed to install signal handlers!");
+            abort();
+        };
+        #[cfg(not(unix))]
+        let (Ok(mut sigint), mut sigterm) = (signal_installer.await, core::future::pending()) else {
             error!("Failed to install signal handlers!");
             abort();
         };
