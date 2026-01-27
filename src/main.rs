@@ -59,7 +59,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
-use tikv_jemallocator::Jemalloc;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{OwnedPermit, channel};
@@ -68,8 +67,13 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
 use tokio::{select, signal, task};
 
+#[cfg(not(windows))]
 #[global_allocator]
-static GLOBAL: StatsAlloc<Jemalloc> = StatsAlloc::new(Jemalloc);
+static GLOBAL: StatsAlloc<tikv_jemallocator::Jemalloc> = StatsAlloc::new(tikv_jemallocator::Jemalloc);
+
+#[cfg(windows)]
+#[global_allocator]
+static GLOBAL: StatsAlloc<std::alloc::System> = stats_alloc::INSTRUMENTED_SYSTEM;
 
 pub type BasicCache<K, V> = Cache<K, V, UnitWeighter, RandomState, DefaultLifecycle<K, V>>;
 
