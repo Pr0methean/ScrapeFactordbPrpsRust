@@ -7,6 +7,7 @@
 #![feature(iterator_try_reduce)]
 #![feature(explicit_tail_calls)]
 #![feature(never_type)]
+use tokio_stream::StreamExt;
 extern crate alloc;
 extern crate core;
 
@@ -423,12 +424,11 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(unix)]
         {
             let sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to create SIGTERM signal stream").recv();
-            tokio::pin!(sigterm);
-            (sigint, sigterm)
+                    .expect("Failed to create SIGTERM signal stream");
+            (sigint, tokio_stream::wrappers::SignalStream::new(sigterm))
         }
         #[cfg(not(unix))]
-        (sigint, core::future::pending())
+        (sigint, tokio_stream::pending::<()>())
     });
 
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
@@ -956,7 +956,7 @@ async fn main() -> anyhow::Result<()> {
         loop {
             select! {
                 biased;
-                _ = &mut sigterm => {
+                _ = sigterm.next() => {
                     warn!("Received SIGTERM; signaling tasks to exit");
                     break;
                 },
