@@ -955,7 +955,8 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(unix)]
         let sigterm = {
             let sigterm = sigterm.recv();
-            tokio::pin!(sigterm)
+            tokio::pin!(sigterm);
+            sigterm
         };
         #[cfg(not(unix))]
         let (Ok(mut sigint), mut sigterm) = (signal_installer.await, core::future::pending()) else {
