@@ -422,14 +422,13 @@ async fn main() -> anyhow::Result<()> {
         let sigint = Box::pin(ctrl_c());
         #[cfg(unix)]
         {
-            (
-                sigint,
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to create SIGTERM signal stream"),
-            )
+            let sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("Failed to create SIGTERM signal stream").recv();
+            tokio::pin!(sigterm);
+            (sigint, sigterm)
         }
         #[cfg(not(unix))]
-        sigint
+        (sigint, core::future::pending())
     });
 
     let is_no_reserve = std::env::var("NO_RESERVE").is_ok();
@@ -947,19 +946,7 @@ async fn main() -> anyhow::Result<()> {
     let mut backtraces_paused_task = None;
     // Monitoring task: print stats periodically
     task::spawn(async move {
-        #[cfg(unix)]
         let Ok((mut sigint, mut sigterm)) = signal_installer.await else {
-            error!("Failed to install signal handlers!");
-            abort();
-        };
-        #[cfg(unix)]
-        let sigterm = {
-            let sigterm = sigterm.recv();
-            tokio::pin!(sigterm);
-            sigterm
-        };
-        #[cfg(not(unix))]
-        let (Ok(mut sigint), mut sigterm) = (signal_installer.await, core::future::pending()) else {
             error!("Failed to install signal handlers!");
             abort();
         };
