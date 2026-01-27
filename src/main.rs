@@ -65,7 +65,7 @@ use tokio::sync::mpsc::{OwnedPermit, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
-use tokio::{pin, select, task};
+use tokio::{select, task};
 
 #[cfg(not(windows))]
 #[global_allocator]
@@ -953,7 +953,7 @@ async fn main() -> anyhow::Result<()> {
             abort();
         };
         #[cfg(unix)]
-        let sigterm = pin!(sigterm.recv());
+        let sigterm = tokio::pin!(sigterm.recv());
         #[cfg(not(unix))]
         let (Ok(mut sigint), mut sigterm) = (signal_installer.await, core::future::pending()) else {
             error!("Failed to install signal handlers!");
