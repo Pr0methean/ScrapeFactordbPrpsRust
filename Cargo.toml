@@ -31,7 +31,6 @@ gryf = "0.2"
 curl = "0.4"
 replace_with = "0.1"
 quick_cache = "0.6"
-nonzero = "0.2"
 async-backtrace = { git = "https://github.com/Pr0methean/async-backtrace.git", branch = "patch-1" }
 hipstr = { version = "0.8", default-features = false, features = ["serde"] }
 futures-util = "0.3"

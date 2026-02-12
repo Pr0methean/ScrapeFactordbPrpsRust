@@ -35,7 +35,6 @@ use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
-use nonzero::nonzero;
 use primitive_types::U256;
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
@@ -51,7 +50,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::Write;
-use std::num::{NonZero, NonZeroU32};
+use std::num::NonZeroU32;
 use std::ops::Add;
 use std::panic;
 use std::process::{abort, exit};
@@ -115,8 +114,8 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 const SEARCH_RETRY_DELAY: Duration = Duration::from_secs(10);
 const UNPARSEABLE_RESPONSE_RETRY_DELAY: Duration = Duration::from_secs(10);
 const PRP_RESULTS_PER_PAGE: usize = 32;
-const PRP_MIN_DIGITS: NonZero<NumberLength> = nonzero!(300u32);
-const PRP_MAX_DIGITS: NonZero<NumberLength> = nonzero!(80_000u32); // FIXME: Increase this once FactorDB can handle PRP checks on larger numbers without timing out.
+const PRP_MIN_DIGITS: NumberLength = 300u32;
+const PRP_MAX_DIGITS: NumberLength = 80_000u32; // FIXME: Increase this once FactorDB can handle PRP checks on larger numbers without timing out.
 const PRP_MAX_DIGITS_FOR_START_OFFSET: NumberLength = 30489;
 const U_RESULTS_PER_PAGE: usize = 1;
 const PRP_TASK_BUFFER_SIZE: usize = 4 * PRP_RESULTS_PER_PAGE;
@@ -435,16 +434,16 @@ async fn main() -> anyhow::Result<()> {
     NO_RESERVE.store(is_no_reserve, Release);
     let mut c_digits = std::env::var("C_DIGITS")
         .ok()
-        .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
+        .and_then(|s| s.parse::<NumberLength>().ok());
     let mut u_digits = std::env::var("U_DIGITS")
         .ok()
-        .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
+        .and_then(|s| s.parse::<NumberLength>().ok());
     let prp_start = std::env::var("PRP_START")
         .ok()
         .and_then(|s| s.parse::<EntryId>().ok());
     let mut prp_digits = std::env::var("PRP_DIGITS")
         .ok()
-        .and_then(|s| s.parse::<NonZero<NumberLength>>().ok());
+        .and_then(|s| s.parse::<NumberLength>().ok());
     if let Ok(run_number) = std::env::var("RUN") {
         let run_number = run_number.parse::<EntryId>()?;
         if c_digits.is_none() {
@@ -467,40 +466,44 @@ async fn main() -> anyhow::Result<()> {
         if prp_digits.is_none() {
             prp_digits = Some(PRP_MIN_DIGITS.saturating_add(NumberLength::try_from(
                 (run_number * 9973)
-                    % EntryId::from(PRP_MAX_DIGITS.get() - PRP_MIN_DIGITS.get() + 1),
+                    % EntryId::from(PRP_MAX_DIGITS - PRP_MIN_DIGITS + 1),
             )?));
         }
         info!("Run number is {run_number}");
     }
     match c_digits {
+        Some(0) => info!("Skipping processing of C's"),
         Some(c_digits) => info!("C's will be {c_digits} digits"),
         None => info!("C's will be random sizes"),
     }
     match u_digits {
+        Some(0) => info!("Skipping processing of U's"),
         Some(u_digits) => info!("U's will be {u_digits} digits"),
         None => info!("U's will be random sizes"),
     }
-    let unknown_status_check_backoff = if let Some(u_digits) = u_digits {
+    let unknown_status_check_backoff = if let Some(u_digits) = u_digits && u_digits != 0 {
         // max will be 15s + (200_000 * 200_000 * 200_000 / 40_000) ns = 15 s + (8e15 / 4e4)*(1e-9 s) = 215 s
-        let u_digits = u_digits.get() as u64;
+        let u_digits = u_digits as u64;
         Duration::from_secs(15) + Duration::from_nanos(u_digits * u_digits * u_digits / 40_000)
     } else {
         Duration::from_mins(3)
     };
     let mut prp_digits = prp_digits.unwrap_or_else(|| {
         rng()
-            .random_range(PRP_MIN_DIGITS.get()..=PRP_MAX_DIGITS.get())
+            .random_range(PRP_MIN_DIGITS..=PRP_MAX_DIGITS)
             .try_into()
             .unwrap()
     });
     let mut prp_start = prp_start.unwrap_or_else(|| {
-        if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
+        if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET {
             0
         } else {
             rng().random_range(0..=MAX_START)
         }
     });
-    info!("PRP initial start is {prp_start}");
+    if prp_digits > 0 {
+        info!("PRP initial start is {prp_start}");
+    }
     let rph_limit: NonZeroU32 = if is_no_reserve { 6400 } else { 6100 }.try_into()?;
     let (prp_sender, prp_receiver) = channel(PRP_TASK_BUFFER_SIZE);
     let (u_sender, u_receiver) = channel(U_TASK_BUFFER_SIZE);
@@ -811,138 +814,145 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }));
-    let mut check_u_shutdown_receiver = shutdown_receiver.clone();
-    let check_u_http = http.clone();
-    let check_u = task::spawn(async_backtrace::location!().named_const("Check Us").frame(async move {
-        info!("check_u task starting");
-        let mut next_unknown_attempt = Instant::now();
-        let many_digits_regex =
-            Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
-        let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
-        loop {
-            info!("check_u: Polling for next task");
-            select! {
-                biased;
-                _ = check_u_shutdown_receiver.recv() => {
-                    warn!("check_u received shutdown signal; exiting");
-                    return;
-                }
-                (id, task_return_permit) = sleep_until(next_unknown_attempt).then(|_| u_receiver.recv())
-                => {
-                    info!("{id}: Ready to check a U");
-                    let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
-                    let Some(result) = check_u_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
-                        task_return_permit.send(id);
-                        info!("{id}: Requeued U");
-                        continue;
-                    };
-                    if let Some(status) = u_status_regex.captures_iter(&result).next() {
-                        match status.get(1) {
-                            None => {
-                                if many_digits_regex.is_match(&result) {
-                                    warn!("{id}: U is too large for a PRP check!");
-                                } else {
-                                    error!("{id}: Failed to decode status for U: {result}");
-                                    next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-                                    task_return_permit.send(id);
-                                    info!("{id}: Requeued U");
+    let check_u = if u_digits != Some(0) {
+        let mut check_u_shutdown_receiver = shutdown_receiver.clone();
+        let check_u_http = http.clone();
+        task::spawn(async_backtrace::location!().named_const("Check Us").frame(async move {
+            info!("check_u task starting");
+            let mut next_unknown_attempt = Instant::now();
+            let many_digits_regex =
+                Regex::new("&lt;([2-9]|[0-9]+[0-9])[0-9][0-9][0-9][0-9][0-9]&gt;").unwrap();
+            let u_status_regex = Regex::new("(Assigned|already|Please wait|>CF?<|>P<|>PRP<|>FF<)").unwrap();
+            loop {
+                info!("check_u: Polling for next task");
+                select! {
+                    biased;
+                    _ = check_u_shutdown_receiver.recv() => {
+                        warn!("check_u received shutdown signal; exiting");
+                        return;
+                    }
+                    (id, task_return_permit) = sleep_until(next_unknown_attempt).then(|_| u_receiver.recv())
+                    => {
+                        info!("{id}: Ready to check a U");
+                        let url = format!("https://factordb.com/index.php?id={id}&prp=Assign+to+worker");
+                        let Some(result) = check_u_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
+                            task_return_permit.send(id);
+                            info!("{id}: Requeued U");
+                            continue;
+                        };
+                        if let Some(status) = u_status_regex.captures_iter(&result).next() {
+                            match status.get(1) {
+                                None => {
+                                    if many_digits_regex.is_match(&result) {
+                                        warn!("{id}: U is too large for a PRP check!");
+                                    } else {
+                                        error!("{id}: Failed to decode status for U: {result}");
+                                        next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
+                                        task_return_permit.send(id);
+                                        info!("{id}: Requeued U");
+                                    }
                                 }
+                                Some(matched_status) => match matched_status.as_str() {
+                                    "Assigned" => {
+                                         info!("Assigned PRP check for unknown-status number with ID {id}");
+                                    }
+                                    "Please wait" => {
+                                        warn!("{id}: Got 'please wait' for U");
+                                        next_unknown_attempt = Instant::now() + unknown_status_check_backoff;
+                                        task_return_permit.send(id);
+                                        info!("{id}: Requeued U");
+                                    }
+                                    _ => {
+                                        warn!("{id}: U is already being checked");
+                                    }
+                                },
                             }
-                            Some(matched_status) => match matched_status.as_str() {
-                                "Assigned" => {
-                                     info!("Assigned PRP check for unknown-status number with ID {id}");
-                                }
-                                "Please wait" => {
-                                    warn!("{id}: Got 'please wait' for U");
-                                    next_unknown_attempt = Instant::now() + unknown_status_check_backoff;
-                                    task_return_permit.send(id);
-                                    info!("{id}: Requeued U");
-                                }
-                                _ => {
-                                    warn!("{id}: U is already being checked");
-                                }
-                            },
+                        } else if many_digits_regex.is_match(&result) {
+                            warn!("{id}: U is too large for a PRP check!");
+                        } else {
+                            error!("{id}: Failed to decode status for U from result: {result}");
+                            next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
+                            task_return_permit.send(id);
+                            info!("{id}: Requeued U");
                         }
-                    } else if many_digits_regex.is_match(&result) {
-                        warn!("{id}: U is too large for a PRP check!");
-                    } else {
-                        error!("{id}: Failed to decode status for U from result: {result}");
-                        next_unknown_attempt = Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY;
-                        task_return_permit.send(id);
-                        info!("{id}: Requeued U");
                     }
                 }
             }
-        }
-    }));
-
-    // Task to queue unknowns
-    let u_http = http.clone();
-    let mut u_start = if u_digits.is_some() {
-        0
+        }))
     } else {
-        rng().random_range(0..=MAX_START)
+        task::spawn(async {})
     };
-    let mut u_shutdown_receiver = shutdown_receiver.clone();
-    let queue_u = task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
-        let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
-        loop {
-            if shutdown_receiver.check_for_shutdown() {
-                warn!("Queue U's task received shutdown signal; exiting");
-                return;
-            }
-            let digits = u_digits.unwrap_or_else(|| {
-                rng()
-                    .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
-                    .try_into()
-                    .unwrap()
-            });
-            if u_digits.is_none() && digits.get() == U_MIN_DIGITS {
-                u_start = 0;
-            }
-            let u_search_url =
-                format!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start={u_start}&mindig={}", digits.get());
-            let Some(results_text) = u_http.try_get_and_decode(&u_search_url).await else {
-                continue;
-            };
-            info!("U search results retrieved");
-            let ids = u_http
-                .read_ids_and_exprs(&results_text);
-            let mut advance_start = 0;
-            for (u_id, digits_or_expr) in ids {
-                if shutdown_receiver.check_for_shutdown() {
-                    warn!("try_queue_unknowns thread received shutdown signal; exiting");
+    let queue_u = if u_digits != Some(0) {
+        // Task to queue unknowns
+        let mut queue_u_shutdown_receiver = shutdown_receiver.clone();
+        let u_http = http.clone();
+        let mut u_start = if u_digits.is_some() {
+            0
+        } else {
+            rng().random_range(0..=MAX_START)
+        };
+        task::spawn(async_backtrace::location!().named_const("Queue U's").frame(async move {
+            let mut u_filter: CuckooFilter<DefaultHasher> = CuckooFilter::with_capacity(4096);
+            loop {
+                if queue_u_shutdown_receiver.check_for_shutdown() {
+                    warn!("Queue U's task received shutdown signal; exiting");
                     return;
                 }
-                if !matches!(u_filter.test_and_add(&u_id), Ok(true)) {
-                    warn!("{u_id}: Skipping duplicate U");
-                    advance_start += 1;
+                let digits = u_digits.unwrap_or_else(|| {
+                    rng()
+                        .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
+                        .try_into()
+                        .unwrap()
+                });
+                if u_digits.is_none() && digits == U_MIN_DIGITS {
+                    u_start = 0;
+                }
+                let u_search_url =
+                    format!("https://factordb.com/listtype.php?t=2&perpage={U_RESULTS_PER_PAGE}&start={u_start}&mindig={digits}");
+                let Some(results_text) = u_http.try_get_and_decode(&u_search_url).await else {
                     continue;
-                }
-                let digits_or_expr = Factor::from(digits_or_expr);
-                if graph::find_and_submit_factors(
-                    &*u_http,
-                    u_id,
-                    digits_or_expr,
-                    false,
-                )
-                .await {
-                    info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
-                } else {
-                    if u_sender.send(u_id).await.is_ok() {
-                        info!("{u_id}: Queued U");
+                };
+                info!("U search results retrieved");
+                let ids = u_http
+                    .read_ids_and_exprs(&results_text);
+                let mut advance_start = 0;
+                for (u_id, digits_or_expr) in ids {
+                    if queue_u_shutdown_receiver.check_for_shutdown() {
+                        warn!("try_queue_unknowns thread received shutdown signal; exiting");
+                        return;
                     }
-                    advance_start += 1;
+                    if !matches!(u_filter.test_and_add(&u_id), Ok(true)) {
+                        warn!("{u_id}: Skipping duplicate U");
+                        advance_start += 1;
+                        continue;
+                    }
+                    let digits_or_expr = Factor::from(digits_or_expr);
+                    if graph::find_and_submit_factors(
+                        &*u_http,
+                        u_id,
+                        digits_or_expr,
+                        false,
+                    )
+                        .await {
+                        info!("{u_id}: Skipping PRP check because this former U is now CF or FF");
+                    } else {
+                        if u_sender.send(u_id).await.is_ok() {
+                            info!("{u_id}: Queued U");
+                        }
+                        advance_start += 1;
+                    }
+                }
+                if u_digits.is_some() {
+                    u_start += advance_start;
+                    u_start %= MAX_START + 1;
+                } else if advance_start != 0 {
+                    u_start = rng().random_range(0..=MAX_START);
                 }
             }
-            if u_digits.is_some() {
-                u_start += advance_start;
-                u_start %= MAX_START + 1;
-            } else if advance_start != 0 {
-                u_start = rng().random_range(0..=MAX_START);
-            }
-        }
-    }));
+        }))
+    } else {
+        task::spawn(async {})
+    };
     let mut backtraces_paused_task = None;
     // Monitoring task: print stats periodically
     task::spawn(async move {
@@ -980,12 +990,13 @@ async fn main() -> anyhow::Result<()> {
             next_backtrace = Instant::now() + STATS_INTERVAL;
         }
     });
-    let c_http = http.clone();
-    let queue_c: JoinHandle<Result<(), SendError<()>>> = task::spawn(async move {
-        let mut c_tasks = Vec::with_capacity(C_RESULTS_PER_PAGE);
-        loop {
-            let select_start = Instant::now();
-            select! {
+    let queue_c: JoinHandle<Result<(), SendError<()>>> = if c_digits != Some(0) {
+        let c_http = http.clone();
+        task::spawn(async move {
+            let mut c_tasks = Vec::with_capacity(C_RESULTS_PER_PAGE);
+            loop {
+                let select_start = Instant::now();
+                select! {
                 biased;
                 _ = c_shutdown_receiver.recv() => {
                     warn!("queue_c received shutdown signal; exiting");
@@ -995,7 +1006,7 @@ async fn main() -> anyhow::Result<()> {
                     let mut c_permits = c_permits?;
                     info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
                     while c_tasks.is_empty() {
-                        let start = if c_digits.is_some_and(|digits| digits.get() < C_MIN_DIGITS) {
+                        let start = if c_digits.is_some_and(|digits| digits < C_MIN_DIGITS) {
                             0
                         } else {
                             rng().random_range(0..=MAX_START)
@@ -1038,69 +1049,81 @@ async fn main() -> anyhow::Result<()> {
 
                 }
             }
-        }
-    });
-
-    'queue_tasks: loop {
-        let select_start = Instant::now();
-        select! {
-            biased;
-            _ = u_shutdown_receiver.recv() => {
-                warn!("Main task received shutdown signal; waiting for other tasks to exit");
-                let _ = queue_u.await;
-                let _ = check_u.await;
-                let _ = queue_c.await;
-                let _ = check_c_and_prp.await;
-                return Ok(());
             }
-            prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
-                let prp_permits = prp_permits?;
-                info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
-                let mut results_per_page = PRP_RESULTS_PER_PAGE;
-                let mut results_text = None;
-                while results_text.is_none() && results_per_page > 0 {
-                    let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={prp_digits}&perpage={results_per_page}&start={prp_start}");
-                    let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
-                        sleep(SEARCH_RETRY_DELAY).await;
-                        results_per_page >>= 1;
-                        continue;
+        })
+    } else {
+        task::spawn(async { Ok(()) })
+    };
+    if prp_digits != 0 {
+        'queue_tasks: loop {
+            let select_start = Instant::now();
+            select! {
+                biased;
+                _ = shutdown_receiver.recv() => {
+                    warn!("Main task received shutdown signal; waiting for other tasks to exit");
+                    let _ = queue_u.await;
+                    let _ = check_u.await;
+                    let _ = queue_c.await;
+                    let _ = check_c_and_prp.await;
+                    return Ok(());
+                }
+                prp_permits = prp_sender.reserve_many(PRP_RESULTS_PER_PAGE) => {
+                    let prp_permits = prp_permits?;
+                    info!("Ready to search for PRP's after {:?}", Instant::now() - select_start);
+                    let mut results_per_page = PRP_RESULTS_PER_PAGE;
+                    let mut results_text = None;
+                    while results_text.is_none() && results_per_page > 0 {
+                        let prp_search_url = format!("https://factordb.com/listtype.php?t=1&mindig={prp_digits}&perpage={results_per_page}&start={prp_start}");
+                        let Some(text) = http.try_get_and_decode(&prp_search_url).await else {
+                            sleep(SEARCH_RETRY_DELAY).await;
+                            results_per_page >>= 1;
+                            continue;
+                        };
+                        results_text = Some(text);
+                        break;
+                    }
+                    info!("{results_per_page} PRP search results retrieved");
+                    let Some(results_text) = results_text else {
+                        continue 'queue_tasks;
                     };
-                    results_text = Some(text);
-                    break;
-                }
-                info!("{results_per_page} PRP search results retrieved");
-                let Some(results_text) = results_text else {
-                    continue 'queue_tasks;
-                };
-                for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
-                {
-                    if !matches!(prp_filter.test_and_add(&prp_id), Ok(true)) {
-                        warn!("{prp_id}: Skipping duplicate PRP");
-                        continue;
+                    for ((prp_id, _), prp_permit) in http.read_ids_and_exprs(&results_text).zip(prp_permits)
+                    {
+                        if !matches!(prp_filter.test_and_add(&prp_id), Ok(true)) {
+                            warn!("{prp_id}: Skipping duplicate PRP");
+                            continue;
+                        }
+                        prp_permit.send(prp_id);
+                        info!("{prp_id}: Queued PRP from search");
                     }
-                    prp_permit.send(prp_id);
-                    info!("{prp_id}: Queued PRP from search");
-                }
-                if prp_digits.get() > PRP_MAX_DIGITS_FOR_START_OFFSET {
-                    prp_digits = (prp_digits.get() + if prp_digits.get() > 100_001 {
-                        100
-                    } else {
-                        1
-                    }).try_into().unwrap();
-                    if prp_digits > PRP_MAX_DIGITS {
-                        prp_digits = PRP_MIN_DIGITS;
-                    }
-                    prp_start = 0;
-                } else {
-                    prp_start += PRP_RESULTS_PER_PAGE as EntryId;
-                    if prp_start > MAX_START {
-                        info!("Restarting PRP search: reached maximum starting index");
+                    if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET {
+                        prp_digits += if prp_digits > 100_001 {
+                            100
+                        } else {
+                            1
+                        };
+                        if prp_digits > PRP_MAX_DIGITS {
+                            prp_digits = PRP_MIN_DIGITS;
+                        }
                         prp_start = 0;
-                        prp_digits = (prp_digits.get() + 1).try_into().unwrap();
+                    } else {
+                        prp_start += PRP_RESULTS_PER_PAGE as EntryId;
+                        if prp_start > MAX_START {
+                            info!("Restarting PRP search: reached maximum starting index");
+                            prp_start = 0;
+                            prp_digits += 1;
+                        }
                     }
                 }
             }
         }
+    } else {
+        shutdown_receiver.recv().await;
+        warn!("Main task received shutdown signal; waiting for other tasks to exit");
+        let _ = queue_u.await;
+        let _ = check_u.await;
+        let _ = queue_c.await;
+        let _ = check_c_and_prp.await;
+        Ok(())
     }
 }
 
