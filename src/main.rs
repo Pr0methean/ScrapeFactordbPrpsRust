@@ -69,7 +69,8 @@ use tokio::{select, task};
 
 #[cfg(not(windows))]
 #[global_allocator]
-static GLOBAL: StatsAlloc<tikv_jemallocator::Jemalloc> = StatsAlloc::new(tikv_jemallocator::Jemalloc);
+static GLOBAL: StatsAlloc<tikv_jemallocator::Jemalloc> =
+    StatsAlloc::new(tikv_jemallocator::Jemalloc);
 
 #[cfg(windows)]
 #[global_allocator]
@@ -423,7 +424,7 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(unix)]
         {
             let sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("Failed to create SIGTERM signal stream");
+                .expect("Failed to create SIGTERM signal stream");
             (sigint, tokio_stream::wrappers::SignalStream::new(sigterm))
         }
         #[cfg(not(unix))]
@@ -465,8 +466,7 @@ async fn main() -> anyhow::Result<()> {
         }
         if prp_digits.is_none() {
             prp_digits = Some(PRP_MIN_DIGITS.saturating_add(NumberLength::try_from(
-                (run_number * 9973)
-                    % EntryId::from(PRP_MAX_DIGITS - PRP_MIN_DIGITS + 1),
+                (run_number * 9973) % EntryId::from(PRP_MAX_DIGITS - PRP_MIN_DIGITS + 1),
             )?));
         }
         info!("Run number is {run_number}");
@@ -481,7 +481,9 @@ async fn main() -> anyhow::Result<()> {
         Some(u_digits) => info!("U's will be {u_digits} digits"),
         None => info!("U's will be random sizes"),
     }
-    let unknown_status_check_backoff = if let Some(u_digits) = u_digits && u_digits != 0 {
+    let unknown_status_check_backoff = if let Some(u_digits) = u_digits
+        && u_digits != 0
+    {
         // max will be 15s + (200_000 * 200_000 * 200_000 / 40_000) ns = 15 s + (8e15 / 4e4)*(1e-9 s) = 215 s
         let u_digits = u_digits as u64;
         Duration::from_secs(15) + Duration::from_nanos(u_digits * u_digits * u_digits / 40_000)
@@ -997,58 +999,58 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 let select_start = Instant::now();
                 select! {
-                biased;
-                _ = c_shutdown_receiver.recv() => {
-                    warn!("queue_c received shutdown signal; exiting");
-                    return Ok(());
-                }
-                c_permits = c_sender.reserve_many(C_RESULTS_PER_PAGE) => {
-                    let mut c_permits = c_permits?;
-                    info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
-                    while c_tasks.is_empty() {
-                        let start = if c_digits.is_some_and(|digits| digits < C_MIN_DIGITS) {
-                            0
-                        } else {
-                            rng().random_range(0..=MAX_START)
-                        };
-                        let mut results_per_page = C_RESULTS_PER_PAGE;
-                        let mut composites_page = None;
-                        while composites_page.is_none() && results_per_page > 0 {
-                            if c_shutdown_receiver.check_for_shutdown() {
-                                return Ok(());
+                    biased;
+                    _ = c_shutdown_receiver.recv() => {
+                        warn!("queue_c received shutdown signal; exiting");
+                        return Ok(());
+                    }
+                    c_permits = c_sender.reserve_many(C_RESULTS_PER_PAGE) => {
+                        let mut c_permits = c_permits?;
+                        info!("Ready to send C's from new search after {:?}", Instant::now() - select_start);
+                        while c_tasks.is_empty() {
+                            let start = if c_digits.is_some_and(|digits| digits < C_MIN_DIGITS) {
+                                0
+                            } else {
+                                rng().random_range(0..=MAX_START)
+                            };
+                            let mut results_per_page = C_RESULTS_PER_PAGE;
+                            let mut composites_page = None;
+                            while composites_page.is_none() && results_per_page > 0 {
+                                if c_shutdown_receiver.check_for_shutdown() {
+                                    return Ok(());
+                                }
+                                let digits = c_digits.unwrap_or_else(|| {
+                                    rng()
+                                        .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
+                                        .try_into()
+                                        .unwrap()
+                                });
+                                info!("Retrieving {digits}-digit C's starting from {start}");
+                                composites_page = c_http.try_get_and_decode(
+                                    &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}")
+                                ).await;
+                                if composites_page.is_none() {
+                                    results_per_page >>= 1;
+                                    sleep(SEARCH_RETRY_DELAY).await;
+                                }
                             }
-                            let digits = c_digits.unwrap_or_else(|| {
-                                rng()
-                                    .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
-                                    .try_into()
-                                    .unwrap()
-                            });
-                            info!("Retrieving {digits}-digit C's starting from {start}");
-                            composites_page = c_http.try_get_and_decode(
-                                &format!("https://factordb.com/listtype.php?t=3&perpage={results_per_page}&start={start}&mindig={digits}")
-                            ).await;
-                            if composites_page.is_none() {
-                                results_per_page >>= 1;
-                                sleep(SEARCH_RETRY_DELAY).await;
-                            }
+                            info!("{results_per_page} C search results retrieved");
+                            c_tasks.extend(c_http
+                                .read_ids_and_exprs(&composites_page.unwrap())
+                                .map(|(id, expr)| CompositeCheckTask {
+                                    id,
+                                    digits_or_expr: expr.into(),
+                                }));
+                            c_tasks.shuffle(&mut rng());
                         }
-                        info!("{results_per_page} C search results retrieved");
-                        c_tasks.extend(c_http
-                            .read_ids_and_exprs(&composites_page.unwrap())
-                            .map(|(id, expr)| CompositeCheckTask {
-                                id,
-                                digits_or_expr: expr.into(),
-                            }));
-                        c_tasks.shuffle(&mut rng());
-                    }
-                    let c_sent = c_tasks.len();
-                    for task in c_tasks.drain(..) {
-                        c_permits.next().unwrap().send(task);
-                    }
-                    info!("Sent {c_sent} C's to channel");
+                        let c_sent = c_tasks.len();
+                        for task in c_tasks.drain(..) {
+                            c_permits.next().unwrap().send(task);
+                        }
+                        info!("Sent {c_sent} C's to channel");
 
+                    }
                 }
-            }
             }
         })
     } else {
