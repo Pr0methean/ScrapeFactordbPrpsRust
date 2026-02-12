@@ -490,9 +490,8 @@ async fn main() -> anyhow::Result<()> {
     } else {
         Duration::from_mins(3)
     };
-    let mut prp_digits = prp_digits.unwrap_or_else(|| {
-        rng().random_range(PRP_MIN_DIGITS..=PRP_MAX_DIGITS)
-    });
+    let mut prp_digits =
+        prp_digits.unwrap_or_else(|| rng().random_range(PRP_MIN_DIGITS..=PRP_MAX_DIGITS));
     let mut prp_start = prp_start.unwrap_or_else(|| {
         if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET {
             0
