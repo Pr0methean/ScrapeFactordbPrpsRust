@@ -455,14 +455,14 @@ async fn main() -> anyhow::Result<()> {
             if c_digits_value == C_MIN_DIGITS - 1 {
                 c_digits_value = 1;
             }
-            c_digits = Some(c_digits_value.try_into()?);
+            c_digits = Some(c_digits_value);
         }
         if u_digits.is_none() {
             let u_digits_value: NumberLength = U_MIN_DIGITS
                 + NumberLength::try_from(
                     (run_number * 19793) % EntryId::from(U_MAX_DIGITS - U_MIN_DIGITS + 1),
                 )?;
-            u_digits = Some(NumberLength::try_from(u_digits_value)?.try_into()?);
+            u_digits = Some(u_digits_value);
         }
         if prp_digits.is_none() {
             prp_digits = Some(PRP_MIN_DIGITS.saturating_add(NumberLength::try_from(
@@ -491,10 +491,7 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_mins(3)
     };
     let mut prp_digits = prp_digits.unwrap_or_else(|| {
-        rng()
-            .random_range(PRP_MIN_DIGITS..=PRP_MAX_DIGITS)
-            .try_into()
-            .unwrap()
+        rng().random_range(PRP_MIN_DIGITS..=PRP_MAX_DIGITS)
     });
     let mut prp_start = prp_start.unwrap_or_else(|| {
         if prp_digits > PRP_MAX_DIGITS_FOR_START_OFFSET {
@@ -901,10 +898,7 @@ async fn main() -> anyhow::Result<()> {
                     return;
                 }
                 let digits = u_digits.unwrap_or_else(|| {
-                    rng()
-                        .random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
-                        .try_into()
-                        .unwrap()
+                    rng().random_range(U_MIN_DIGITS..=U_MAX_DIGITS)
                 });
                 if u_digits.is_none() && digits == U_MIN_DIGITS {
                     u_start = 0;
@@ -1020,10 +1014,7 @@ async fn main() -> anyhow::Result<()> {
                                     return Ok(());
                                 }
                                 let digits = c_digits.unwrap_or_else(|| {
-                                    rng()
-                                        .random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
-                                        .try_into()
-                                        .unwrap()
+                                    rng().random_range(C_MIN_DIGITS..=C_MAX_DIGITS)
                                 });
                                 info!("Retrieving {digits}-digit C's starting from {start}");
                                 composites_page = c_http.try_get_and_decode(
