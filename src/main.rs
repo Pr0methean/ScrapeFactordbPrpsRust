@@ -40,7 +40,7 @@ use primitive_types::U256;
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use rand::seq::SliceRandom;
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
