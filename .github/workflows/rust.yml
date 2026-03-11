@@ -136,7 +136,7 @@ jobs:
           fi
       - name: Upload any failed submissions
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: Failed submissions
           path: 'failed-*.csv'
