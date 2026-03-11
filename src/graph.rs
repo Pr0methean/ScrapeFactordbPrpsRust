@@ -21,13 +21,10 @@ use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACT
 use alloc::borrow::Cow::Borrowed;
 use alloc::vec::IntoIter;
 use async_backtrace::framed;
-use gryf::Graph;
-use gryf::adapt::Subgraph;
-use gryf::algo::Connected;
-use gryf::core::facts::complete_graph_edge_count;
-use gryf::core::id::{DefaultId, VertexId};
-use gryf::core::marker::{Directed, Direction, Incoming, Outgoing};
-use gryf::storage::{AdjMatrix, Stable};
+use petgraph::stable_graph::{StableGraph, NodeIndex};
+use petgraph::{Directed, Direction};
+use petgraph::visit::{IntoEdgeReferences};
+use petgraph::Direction::{Incoming, Outgoing};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
 use rand::rng;
@@ -38,6 +35,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
 use std::sync::OnceLock;
+use petgraph::algo::spfa;
+use petgraph::prelude::EdgeRef;
 
 pub type EntryId = u128;
 
@@ -48,12 +47,10 @@ pub enum Divisibility {
     Direct,
 }
 
-pub type DivisibilityGraph = Graph<
-    Factor,
-    Divisibility,
-    Directed,
-    Stable<AdjMatrix<Factor, Divisibility, Directed, DefaultId>>,
->;
+pub type VertexId = NodeIndex;  // Optional alias for compatibility
+
+// Update DivisibilityGraph type
+pub type DivisibilityGraph = StableGraph<Factor, Divisibility, Directed>;
 
 pub struct FactorData {
     pub divisibility_graph: DivisibilityGraph,
@@ -63,10 +60,12 @@ pub struct FactorData {
     pub vertex_id_by_entry_id: BTreeMap<EntryId, VertexId>,
 }
 
+const DEFAULT_NODE_CAPACITY: usize = 256;
+
 impl Default for FactorData {
     fn default() -> Self {
         FactorData {
-            divisibility_graph: Graph::new_directed_in(AdjMatrix::new()).stabilize(),
+            divisibility_graph: StableGraph::with_capacity(DEFAULT_NODE_CAPACITY, DEFAULT_NODE_CAPACITY * (DEFAULT_NODE_CAPACITY - 1)),
             deleted_synonyms: BTreeMap::new(),
             number_facts_map: BTreeMap::new(),
             vertex_id_by_entry_id: BTreeMap::new(),
@@ -128,7 +127,7 @@ impl FactorData {
 
     pub fn get_factor(&mut self, vertex_id: VertexId) -> Factor {
         let real_id = self.resolve_vid(vertex_id);
-        self.divisibility_graph.vertex(real_id).unwrap().clone()
+        self.divisibility_graph.node_weight(real_id).unwrap().clone()
     }
 
     pub fn facts(&mut self, vertex_id: VertexId) -> Option<&NumberFacts> {
@@ -144,8 +143,8 @@ impl FactorData {
     pub fn get_edge(&mut self, source: VertexId, dest: VertexId) -> Option<Divisibility> {
         let source = self.resolve_vid(source);
         let dest = self.resolve_vid(dest);
-        let edge_id = self.divisibility_graph.edge_id_any(source, dest)?;
-        self.divisibility_graph.edge(edge_id).copied()
+        let edge = self.divisibility_graph.edges_connecting(source, dest).next()?;
+        Some(*edge.weight())
     }
 
     pub fn rule_out_divisibility(&mut self, nonfactor: VertexId, dest: VertexId) {
@@ -166,46 +165,45 @@ impl FactorData {
 
     fn process_divisibility_worklist(&mut self, mut worklist: BTreeSet<WorkItem>) {
         let mut already_processed = BTreeSet::new();
+
         while let Some(item) = worklist.pop_first() {
             if !already_processed.insert(item.clone()) {
                 continue;
             }
+
             match item {
-                WorkItem::Propagate {
-                    factor,
-                    dest,
-                    transitive,
-                } => {
+                WorkItem::Propagate { factor, dest, transitive } => {
                     let factor = self.resolve_vid(factor);
                     let dest = self.resolve_vid(dest);
                     if factor == dest {
                         continue;
                     }
-                    let edge_id = self.divisibility_graph.edge_id_any(factor, dest);
+
+                    // Check for existing edge
+                    let existing_edge = self.divisibility_graph.find_edge(factor, dest);
                     let mut added_or_upgraded = false;
 
-                    let edge =
-                        edge_id.and_then(|edge_id| self.divisibility_graph.edge_mut(edge_id));
-                    match edge {
-                        Some(Direct) | Some(NotFactor) => continue,
-                        Some(Transitive) => {
-                            if !transitive {
-                                *edge.unwrap() = Direct;
-                                added_or_upgraded = true;
+                    if let Some(edge_id) = existing_edge {
+                        match self.divisibility_graph[edge_id] {
+                            Direct | NotFactor => continue,
+                            Transitive => {
+                                if !transitive {
+                                    self.divisibility_graph[edge_id] = Direct;
+                                    added_or_upgraded = true;
+                                }
                             }
                         }
-                        None => {
-                            self.divisibility_graph.add_edge(
-                                factor,
-                                dest,
-                                if transitive { Transitive } else { Direct },
-                            );
-                            added_or_upgraded = true;
-                        }
+                    } else {
+                        // No edge exists - safe to add
+                        self.divisibility_graph.add_edge(
+                            factor,
+                            dest,
+                            if transitive { Transitive } else { Direct },
+                        );
+                        added_or_upgraded = true;
                     }
 
                     if added_or_upgraded {
-                        debug!("propagate_divisibility: factor {factor:?}, dest {dest:?}");
                         // Anti-symmetry: if f | d and f != d, then d !| f
                         worklist.insert(WorkItem::RuleOut {
                             nonfactor: dest,
@@ -273,6 +271,7 @@ impl FactorData {
                         }
                     }
                 }
+
                 WorkItem::RuleOut { nonfactor, dest } => {
                     let nonfactor = self.resolve_vid(nonfactor);
                     let dest = self.resolve_vid(dest);
@@ -280,8 +279,8 @@ impl FactorData {
                         continue;
                     }
 
-                    debug!("rule_out_divisibility: nonfactor {nonfactor:?}, dest {dest:?}");
                     self.divisibility_graph.add_edge(nonfactor, dest, NotFactor);
+
                     for (neighbor, divisibility) in
                         neighbor_vids(&self.divisibility_graph, dest, Incoming)
                     {
@@ -300,23 +299,21 @@ impl FactorData {
             }
         }
     }
-
     pub fn is_known_factor(&mut self, factor_vid: VertexId, composite_vid: VertexId) -> bool {
         let factor_vid = self.resolve_vid(factor_vid);
         let composite_vid = self.resolve_vid(composite_vid);
-        factor_vid != composite_vid
-            && (matches!(
-                self.get_edge(factor_vid, composite_vid),
-                Some(Direct) | Some(Transitive)
-            ) || Connected::on(
-                &Subgraph::new(&self.divisibility_graph).filter_edge(|edge_id, graph, _| {
-                    graph.edge(edge_id).copied() != Some(NotFactor)
-                }),
-            )
-            .between(&factor_vid, &composite_vid)
-            .strong()
-            .run()
-            .is())
+        if factor_vid == composite_vid {
+            return false;
+        }
+
+        // Check direct edge
+        if let Some(edge) = self.get_edge(factor_vid, composite_vid) {
+            return matches!(edge, Direct | Transitive);
+        }
+
+        spfa(&self.divisibility_graph, factor_vid, |edge|
+                    if *edge.weight() == NotFactor { f64::INFINITY } else { 0.0 }
+        ).unwrap().distances[composite_vid.index()] == 0.0
     }
 
     pub fn merge_equivalent_expressions(
@@ -370,7 +367,7 @@ impl FactorData {
             }
             if !equivalent.is_elided() && equivalent.to_unelided_string().len() < current_len {
                 let _ = replace(
-                    self.divisibility_graph.vertex_mut(factor_vid).unwrap(),
+                    self.divisibility_graph.node_weight_mut(factor_vid).unwrap(),
                     equivalent,
                 );
             }
@@ -432,7 +429,7 @@ pub fn add_factor_node(
         .or(matching_vid)
         .map(|x| (x, false))
         .unwrap_or_else(|| {
-            let factor_vid = data.divisibility_graph.add_vertex(factor.clone());
+            let factor_vid = data.divisibility_graph.add_node(factor.clone());
             data.vertex_id_by_expr.insert(factor.clone(), factor_vid);
             let (lower_bound_log10, upper_bound_log10) = estimate_log10(&factor);
 
@@ -530,10 +527,38 @@ fn merge_vertices(
         .get(&matching_vid)
         .map(|facts| !facts.checked_in_factor_finder)
         .unwrap_or(false);
-    let old_factor_removed = data
-        .divisibility_graph
-        .remove_vertex(matching_vid)
-        .expect("vertex does not exist");
+
+    // Transfer all edges from matching_vid to merge_dest
+
+    // Destructure EdgeReference instances so they won't borrow the graph
+    let edges_to_transfer: Vec<_> = data.divisibility_graph
+        .edges_directed(matching_vid, Outgoing)
+        .chain(data.divisibility_graph.edges_directed(matching_vid, Incoming))
+        .map(|edge| (edge.id(), edge.source(), edge.target(), *edge.weight()))
+        .collect();
+
+    for (edge_id, source, target, divisibility) in edges_to_transfer {
+        // Skip self-edges
+        if source == matching_vid && target == matching_vid {
+            continue;
+        }
+
+        let new_source = if source == matching_vid { merge_dest } else { source };
+        let new_target = if target == matching_vid { merge_dest } else { target };
+
+        // Only add if edge doesn't already exist
+        if data.divisibility_graph.find_edge(new_source, new_target).is_none() {
+            data.divisibility_graph.add_edge(new_source, new_target, divisibility);
+        }
+        data.divisibility_graph.remove_edge(edge_id);
+    }
+
+    // Remove the old vertex
+    let old_factor_removed = data.divisibility_graph.remove_node(matching_vid);
+
+    // Update mappings
+    let old_factor = data.divisibility_graph[merge_dest].clone();
+    data.vertex_id_by_expr.insert(old_factor, merge_dest);
     let mut checked_in_factor_finder = false;
     let mut new_factor_vids = Vec::new();
     if let Some(old_facts) = data.number_facts_map.remove(&matching_vid) {
@@ -569,31 +594,35 @@ fn merge_vertices(
             }
         });
     }
-    // Update expression mapping
-    data.vertex_id_by_expr
-        .insert(old_factor_removed.clone(), merge_dest);
+    if let Some(old_factor_removed) = old_factor_removed {
+         // Update expression mapping
+        data.vertex_id_by_expr
+            .insert(old_factor_removed.clone(), merge_dest);
 
-    // Check if we need to run factor finder on the old factor
-    if should_run_factor_finder {
-        new_factor_vids.extend(data.add_from_factor_finder(&old_factor_removed, http));
-    }
-    // Check if we should update the vertex's expression
-    let current_factor = data.get_factor(merge_dest);
-    if old_factor_removed != current_factor {
-        let current_len = if current_factor.is_elided() {
-            usize::MAX
-        } else {
-            current_factor.to_unelided_string().len()
-        };
-
-        if !old_factor_removed.is_elided()
-            && old_factor_removed.to_unelided_string().len() < current_len
-        {
-            let _ = replace(
-                data.divisibility_graph.vertex_mut(merge_dest).unwrap(),
-                old_factor_removed,
-            );
+        // Check if we need to run factor finder on the old factor
+        if should_run_factor_finder {
+            new_factor_vids.extend(data.add_from_factor_finder(&old_factor_removed, http));
         }
+        // Check if we should update the vertex's expression
+        let current_factor = data.get_factor(merge_dest);
+        if old_factor_removed != current_factor {
+            let current_len = if current_factor.is_elided() {
+                usize::MAX
+            } else {
+                current_factor.to_unelided_string().len()
+            };
+
+            if !old_factor_removed.is_elided()
+                && old_factor_removed.to_unelided_string().len() < current_len
+            {
+                let _ = replace(
+                    data.divisibility_graph.node_weight_mut(merge_dest).unwrap(),
+                    old_factor_removed,
+                );
+            }
+        }
+    } else {
+        error!("Vertex {:?} was not found during merge_vertices", merge_dest);
     }
 
     new_factor_vids
@@ -628,15 +657,26 @@ fn neighbor_vids(
     vertex_id: VertexId,
     direction: Direction,
 ) -> Vec<(VertexId, Divisibility)> {
-    divisibility_graph
-        .neighbors_directed(vertex_id, direction)
-        .map(|neighbor_ref| {
-            (
-                neighbor_ref.id,
-                *divisibility_graph.edge(neighbor_ref.edge).unwrap(),
-            )
-        })
-        .collect::<Vec<_>>()
+    match direction {
+        Outgoing => divisibility_graph
+            .neighbors_directed(vertex_id, Outgoing)
+            .map(|neighbor| {
+                let edge = divisibility_graph
+                    .find_edge(vertex_id, neighbor)
+                    .unwrap();
+                (neighbor, divisibility_graph[edge])
+            })
+            .collect(),
+        Incoming => divisibility_graph
+            .neighbors_directed(vertex_id, Incoming)
+            .map(|neighbor| {
+                let edge = divisibility_graph
+                    .find_edge(neighbor, vertex_id)
+                    .unwrap();
+                (neighbor, divisibility_graph[edge])
+            })
+            .collect(),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -831,7 +871,7 @@ pub async fn find_and_submit_factors(
     } else {
         (None, None)
     };
-    let mut all_vids: BTreeSet<VertexId> = data.divisibility_graph.vertices_by_id().collect();
+    let mut all_vids: BTreeSet<VertexId> = data.divisibility_graph.node_indices().collect();
     let mut known_factors: Vec<_> = all_vids
         .iter()
         .copied()
@@ -938,19 +978,19 @@ pub async fn find_and_submit_factors(
         .facts(root_vid)
         .expect("{id}: Reached 'graph_iter when root not entered in number_facts_map")
         .is_known_fully_factored()
-        && let node_count = data.divisibility_graph.vertex_count()
+        && let node_count = data.divisibility_graph.node_count()
         && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
         && let Some(factor_vid) = factors_to_submit_in_graph.pop_front()
         && let edge_count = data.divisibility_graph.edge_count()
-        && let complete_graph_edge_count = complete_graph_edge_count::<Directed>(node_count)
+        && let complete_graph_edge_count = node_count * (node_count - 1)
         && edge_count < complete_graph_edge_count
     {
         if iters_to_next_report == 0 {
             iters_to_next_report = node_count.min(20);
             let (direct_divisors, non_factors) = data
                 .divisibility_graph
-                .edges()
-                .map(|e| match *e.attr {
+                .edge_references()
+                .map(|e| match *e.weight() {
                     Direct => (1, 0),
                     NotFactor => (0, 1),
                     _ => (0, 0),
@@ -1381,7 +1421,7 @@ fn mark_fully_factored_internal(
     // Recursively mark all known factors as fully factored
     for other_factor_vid in data
         .divisibility_graph
-        .vertices_by_id()
+        .node_indices()
         .filter(|factor_vid| *factor_vid != vid)
         .collect::<Vec<_>>()
         .into_iter()
@@ -1532,8 +1572,7 @@ async fn add_factors_to_graph(
 #[cfg(test)]
 pub mod tests {
     use crate::GLOBAL;
-    use nonzero::nonzero;
-    use rand::RngCore;
+    use rand::{Rng};
     use rand::rng;
     use std::env::temp_dir;
     use std::fs::File;
@@ -1553,6 +1592,7 @@ pub mod tests {
     use const_format::formatcp;
     use hipstr::HipStr;
     use mockall::predicate::eq;
+    use nonzero::nonzero;
     use tokio::sync::Mutex;
 
     #[test]

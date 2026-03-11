@@ -1,10 +1,7 @@
 #![allow(stable_features)]
 #![allow(incomplete_features)]
-#![feature(duration_constructors_lite)]
 #![feature(float_gamma)]
 #![feature(exact_div)]
-#![feature(str_as_str)]
-#![feature(iterator_try_reduce)]
 #![feature(explicit_tail_calls)]
 #![feature(never_type)]
 use tokio_stream::StreamExt;
