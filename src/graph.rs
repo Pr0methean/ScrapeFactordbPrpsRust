@@ -323,8 +323,8 @@ impl FactorData {
         http: &impl FactorDbClient,
         check_factor_finder: bool,
     ) -> Vec<VertexId> {
-        let current = self.get_factor(factor_vid);
         let factor_vid = self.resolve_vid(factor_vid);
+        let current = self.get_factor(factor_vid);
         if equivalent == current {
             return vec![];
         }
@@ -352,16 +352,19 @@ impl FactorData {
             } else {
                 current.to_unelided_string().len()
             };
-            let facts = self.facts_mut(factor_vid);
-            let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
-            facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
-            facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
-            let mut new_factor_vids =
+            let mut new_factor_vids = if let Some(facts) = self.number_facts_map.get_mut(&factor_vid) {
+                let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
+                facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
+                facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
                 if check_factor_finder && !replace(&mut facts.checked_in_factor_finder, true) {
                     self.add_from_factor_finder(&current, http)
                 } else {
                     Vec::new()
-                };
+                }
+            } else {
+                error!("NumberFacts for {factor_vid:?} not found");
+                Vec::new()
+            };
             if check_factor_finder {
                 new_factor_vids.extend(self.add_from_factor_finder(&equivalent, http));
             }
@@ -437,31 +440,12 @@ pub fn add_factor_node(
                 data.vertex_id_by_entry_id.insert(entry_id, factor_vid);
             }
             // Only full factorizations are stored in the cache or obtained via evaluate_as_numeric.
-            let mut has_cached = false;
-            let (last_known_status, factors_known_to_factordb) =
-                if let Some(cached) = cached_factors {
-                    has_cached = true;
-                    let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
-                    for subfactor in cached.factors {
-                        let (subfactor_vid, _) = if subfactor == factor {
-                            (factor_vid, false)
-                        } else {
-                            let subfactor_entry_id = http
-                                .cached_factors(&Expression(Borrowed(&subfactor)))
-                                .and_then(|f| f.id);
-                            add_factor_node(data, subfactor, subfactor_entry_id, http)
-                        };
-                        cached_subfactors.push(subfactor_vid);
-                    }
-                    (cached.status, UpToDate(cached_subfactors))
-                } else {
-                    (None, NotUpToDate(vec![]))
-                };
+            let has_cached = cached_factors.is_some();
             data.number_facts_map.insert(
                 factor_vid,
                 NumberFacts {
-                    last_known_status,
-                    factors_known_to_factordb,
+                    last_known_status: None,
+                    factors_known_to_factordb: NotUpToDate(vec![]),
                     numeric_value: evaluate_as_numeric(&factor),
                     lower_bound_log10,
                     upper_bound_log10,
@@ -472,6 +456,25 @@ pub fn add_factor_node(
                     checked_with_root_denominator: has_cached,
                 },
             );
+
+            if let Some(cached) = cached_factors {
+                let mut cached_subfactors = Vec::with_capacity(cached.factors.len());
+                for subfactor in cached.factors {
+                    let (subfactor_vid, _) = if subfactor == factor {
+                        (factor_vid, false)
+                    } else {
+                        let subfactor_entry_id = http
+                            .cached_factors(&Expression(Borrowed(&subfactor)))
+                            .and_then(|f| f.id);
+                        add_factor_node(data, subfactor, subfactor_entry_id, http)
+                    };
+                    cached_subfactors.push(subfactor_vid);
+                }
+                let real_vid = data.resolve_vid(factor_vid);
+                let facts = data.facts_mut(real_vid);
+                facts.last_known_status = cached.status;
+                facts.factors_known_to_factordb = UpToDate(cached_subfactors);
+            }
             (factor_vid, true)
         });
     let mut merge_dest = data.resolve_vid(merge_dest);
@@ -1943,5 +1946,57 @@ pub mod tests {
         black_box(find_and_submit_factors(&http, ID, expr, false).await);
 
         log_stats(&mut reg, &mut sys, &mut None);
+    }
+
+    #[test]
+    fn test_recursive_add_factor_node_with_merge() {
+        use crate::NumberSpecifier::{Expression, Id};
+        use crate::net::MockFactorDbClient;
+        use crate::net::NumberStatus::PartlyFactoredComposite;
+        use crate::net::ProcessedStatusApiResponse;
+
+        let mut data = FactorData::default();
+        let mut http = MockFactorDbClient::new();
+
+        let fa = Factor::from("A");
+        let fb = Factor::from("B");
+
+        // Expectations for cached_factors(Id(1))
+        // Called for "A" initially, and then for "B" during recursion.
+        http.expect_cached_factors()
+            .withf(|id| matches!(id, Id(1)))
+            .times(2)
+            .returning({
+                let fb = fb.clone();
+                move |_| Some(ProcessedStatusApiResponse {
+                    factors: Box::from([fb.clone()]),
+                    status: Some(PartlyFactoredComposite),
+                    id: Some(1),
+                })
+            });
+
+        // Expectation for cached_factors(Expression("B"))
+        // Called to get entry_id for subfactor "B"
+        http.expect_cached_factors()
+            .withf({
+                let fb = fb.clone();
+                move |id| {
+                    if let Expression(cow) = id {
+                        **cow == fb
+                    } else {
+                        false
+                    }
+                }
+            })
+            .returning(|_| Some(ProcessedStatusApiResponse {
+                factors: Box::from([]),
+                status: Some(PartlyFactoredComposite),
+                id: Some(1),
+            }));
+
+        // This should not panic
+        let (vid, added) = add_factor_node(&mut data, fa.clone(), Some(1), &http);
+        assert!(added);
+        assert_eq!(data.get_factor(vid), fa);
     }
 }

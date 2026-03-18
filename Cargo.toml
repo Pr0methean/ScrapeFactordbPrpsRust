@@ -8,6 +8,9 @@ lto = "fat"
 codegen-units = 1
 debug = "full"
 
+[profile.test]
+opt-level = 3
+
 [dependencies]
 reqwest = { version = "0.13", features = ["form"] }
 tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time"] }
