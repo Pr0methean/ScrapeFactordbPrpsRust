@@ -1446,11 +1446,10 @@ impl Factor {
         match *self {
             Factor::BigNumber { .. } => match *other {
                 Numeric(_) => return false,
-                Factor::BigNumber { .. } => {
-                    if self > other {
+                Factor::BigNumber { .. }
+                    if self > other => {
                         return false;
                     }
-                }
                 Complex { inner: ref c, .. } => {
                     if let Divide {
                         ref left,
@@ -1498,11 +1497,10 @@ impl Factor {
                         return false;
                     }
                 }
-                Multiply { ref terms, .. } => {
-                    if !product_may_be_proper_divisor_of(terms, other) {
+                Multiply { ref terms, .. }
+                    if !product_may_be_proper_divisor_of(terms, other) => {
                         return false;
                     }
-                }
                 Factorial(ref term) => {
                     if let Some(term) = evaluate_as_numeric(term)
                         && let Complex { inner: ref c, .. } = *other
@@ -1515,12 +1513,11 @@ impl Factor {
                                     return false;
                                 }
                             }
-                            Primorial(_) => {
-                                if term >= 4 {
+                            Primorial(_)
+                                if term >= 4 => {
                                     // Primorials are squarefree, factorials of >=4 aren't
                                     return false;
                                 }
-                            }
                             _ => {}
                         }
                         if (2..=term).any(|i| !Numeric(i).may_be_proper_divisor_of(other)) {
@@ -1986,7 +1983,7 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
             let a_minus_b = Factor::add_sub(
                 pos_term_roots
                     .into_iter()
-                    .chain(neg_term_roots.into_iter())
+                    .chain(neg_term_roots)
                     .collect(),
             );
             (a_plus_b, a_minus_b)
@@ -1994,7 +1991,7 @@ pub fn to_like_powers(terms: &BTreeMap<Factor, i128>) -> BTreeMap<Factor, Number
             let a_minus_b = Factor::add_sub(
                 pos_term_roots
                     .into_iter()
-                    .chain(neg_term_roots.into_iter())
+                    .chain(neg_term_roots)
                     .collect(),
             );
             let cofactor = div_exact(&terms_add_sub, &a_minus_b)
@@ -3707,12 +3704,11 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                                 raw_factors.extend(terms.iter().map(|(k, v)| (k.clone(), *v)));
                                 continue;
                             }
-                            Divide { ref left, .. } => {
-                                if *left == Factor::one() {
+                            Divide { ref left, .. }
+                                if *left == Factor::one() => {
                                     // Factors of 1/x are either non-integer when x!=1 or trivial when x==1
                                     continue;
                                 }
-                            }
                             _ => {}
                         }
                     }

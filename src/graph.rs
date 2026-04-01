@@ -1434,14 +1434,13 @@ fn mark_fully_factored_internal(
                 mark_fully_factored_internal(other_factor_vid, data, worklist);
                 vid = data.resolve_vid(vid);
             }
-            None => {
-                if no_other_factors {
+            None
+                if no_other_factors => {
                     worklist.insert(WorkItem::RuleOut {
                         nonfactor: other_factor_vid,
                         dest: vid,
                     });
                 }
-            }
             _ => {}
         }
     }
