@@ -21,12 +21,14 @@ use crate::{FAILED_U_SUBMISSIONS_OUT, NumberLength, NumberSpecifier, SUBMIT_FACT
 use alloc::borrow::Cow::Borrowed;
 use alloc::vec::IntoIter;
 use async_backtrace::framed;
-use petgraph::stable_graph::{StableGraph, NodeIndex};
-use petgraph::{Directed, Direction};
-use petgraph::visit::{IntoEdgeReferences};
-use petgraph::Direction::{Incoming, Outgoing};
 use itertools::Itertools;
 use log::{debug, error, info, warn};
+use petgraph::Direction::{Incoming, Outgoing};
+use petgraph::algo::spfa;
+use petgraph::prelude::EdgeRef;
+use petgraph::stable_graph::{NodeIndex, StableGraph};
+use petgraph::visit::IntoEdgeReferences;
+use petgraph::{Directed, Direction};
 use rand::rng;
 use rand::seq::SliceRandom;
 use replace_with::replace_with_or_abort;
@@ -35,8 +37,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::Write;
 use std::mem::replace;
 use std::sync::OnceLock;
-use petgraph::algo::spfa;
-use petgraph::prelude::EdgeRef;
 
 pub type EntryId = u128;
 
@@ -47,7 +47,7 @@ pub enum Divisibility {
     Direct,
 }
 
-pub type VertexId = NodeIndex;  // Optional alias for compatibility
+pub type VertexId = NodeIndex; // Optional alias for compatibility
 
 // Update DivisibilityGraph type
 pub type DivisibilityGraph = StableGraph<Factor, Divisibility, Directed>;
@@ -65,7 +65,10 @@ const DEFAULT_NODE_CAPACITY: usize = 256;
 impl Default for FactorData {
     fn default() -> Self {
         FactorData {
-            divisibility_graph: StableGraph::with_capacity(DEFAULT_NODE_CAPACITY, DEFAULT_NODE_CAPACITY * (DEFAULT_NODE_CAPACITY - 1)),
+            divisibility_graph: StableGraph::with_capacity(
+                DEFAULT_NODE_CAPACITY,
+                DEFAULT_NODE_CAPACITY * (DEFAULT_NODE_CAPACITY - 1),
+            ),
             deleted_synonyms: BTreeMap::new(),
             number_facts_map: BTreeMap::new(),
             vertex_id_by_entry_id: BTreeMap::new(),
@@ -127,7 +130,10 @@ impl FactorData {
 
     pub fn get_factor(&mut self, vertex_id: VertexId) -> Factor {
         let real_id = self.resolve_vid(vertex_id);
-        self.divisibility_graph.node_weight(real_id).unwrap().clone()
+        self.divisibility_graph
+            .node_weight(real_id)
+            .unwrap()
+            .clone()
     }
 
     pub fn facts(&mut self, vertex_id: VertexId) -> Option<&NumberFacts> {
@@ -143,7 +149,10 @@ impl FactorData {
     pub fn get_edge(&mut self, source: VertexId, dest: VertexId) -> Option<Divisibility> {
         let source = self.resolve_vid(source);
         let dest = self.resolve_vid(dest);
-        let edge = self.divisibility_graph.edges_connecting(source, dest).next()?;
+        let edge = self
+            .divisibility_graph
+            .edges_connecting(source, dest)
+            .next()?;
         Some(*edge.weight())
     }
 
@@ -172,7 +181,11 @@ impl FactorData {
             }
 
             match item {
-                WorkItem::Propagate { factor, dest, transitive } => {
+                WorkItem::Propagate {
+                    factor,
+                    dest,
+                    transitive,
+                } => {
                     let factor = self.resolve_vid(factor);
                     let dest = self.resolve_vid(dest);
                     if factor == dest {
@@ -311,9 +324,16 @@ impl FactorData {
             return matches!(edge, Direct | Transitive);
         }
 
-        spfa(&self.divisibility_graph, factor_vid, |edge|
-                    if *edge.weight() == NotFactor { f64::INFINITY } else { 0.0 }
-        ).unwrap().distances[composite_vid.index()] == 0.0
+        spfa(&self.divisibility_graph, factor_vid, |edge| {
+            if *edge.weight() == NotFactor {
+                f64::INFINITY
+            } else {
+                0.0
+            }
+        })
+        .unwrap()
+        .distances[composite_vid.index()]
+            == 0.0
     }
 
     pub fn merge_equivalent_expressions(
@@ -352,7 +372,9 @@ impl FactorData {
             } else {
                 current.to_unelided_string().len()
             };
-            let mut new_factor_vids = if let Some(facts) = self.number_facts_map.get_mut(&factor_vid) {
+            let mut new_factor_vids = if let Some(facts) =
+                self.number_facts_map.get_mut(&factor_vid)
+            {
                 let (new_lower_bound_log10, new_upper_bound_log10) = estimate_log10(&equivalent);
                 facts.lower_bound_log10 = facts.lower_bound_log10.max(new_lower_bound_log10);
                 facts.upper_bound_log10 = facts.upper_bound_log10.min(new_upper_bound_log10);
@@ -534,9 +556,13 @@ fn merge_vertices(
     // Transfer all edges from matching_vid to merge_dest
 
     // Destructure EdgeReference instances so they won't borrow the graph
-    let edges_to_transfer: Vec<_> = data.divisibility_graph
+    let edges_to_transfer: Vec<_> = data
+        .divisibility_graph
         .edges_directed(matching_vid, Outgoing)
-        .chain(data.divisibility_graph.edges_directed(matching_vid, Incoming))
+        .chain(
+            data.divisibility_graph
+                .edges_directed(matching_vid, Incoming),
+        )
         .map(|edge| (edge.id(), edge.source(), edge.target(), *edge.weight()))
         .collect();
 
@@ -546,12 +572,25 @@ fn merge_vertices(
             continue;
         }
 
-        let new_source = if source == matching_vid { merge_dest } else { source };
-        let new_target = if target == matching_vid { merge_dest } else { target };
+        let new_source = if source == matching_vid {
+            merge_dest
+        } else {
+            source
+        };
+        let new_target = if target == matching_vid {
+            merge_dest
+        } else {
+            target
+        };
 
         // Only add if edge doesn't already exist
-        if data.divisibility_graph.find_edge(new_source, new_target).is_none() {
-            data.divisibility_graph.add_edge(new_source, new_target, divisibility);
+        if data
+            .divisibility_graph
+            .find_edge(new_source, new_target)
+            .is_none()
+        {
+            data.divisibility_graph
+                .add_edge(new_source, new_target, divisibility);
         }
         data.divisibility_graph.remove_edge(edge_id);
     }
@@ -598,7 +637,7 @@ fn merge_vertices(
         });
     }
     if let Some(old_factor_removed) = old_factor_removed {
-         // Update expression mapping
+        // Update expression mapping
         data.vertex_id_by_expr
             .insert(old_factor_removed.clone(), merge_dest);
 
@@ -625,7 +664,10 @@ fn merge_vertices(
             }
         }
     } else {
-        error!("Vertex {:?} was not found during merge_vertices", merge_dest);
+        error!(
+            "Vertex {:?} was not found during merge_vertices",
+            merge_dest
+        );
     }
 
     new_factor_vids
@@ -664,18 +706,14 @@ fn neighbor_vids(
         Outgoing => divisibility_graph
             .neighbors_directed(vertex_id, Outgoing)
             .map(|neighbor| {
-                let edge = divisibility_graph
-                    .find_edge(vertex_id, neighbor)
-                    .unwrap();
+                let edge = divisibility_graph.find_edge(vertex_id, neighbor).unwrap();
                 (neighbor, divisibility_graph[edge])
             })
             .collect(),
         Incoming => divisibility_graph
             .neighbors_directed(vertex_id, Incoming)
             .map(|neighbor| {
-                let edge = divisibility_graph
-                    .find_edge(neighbor, vertex_id)
-                    .unwrap();
+                let edge = divisibility_graph.find_edge(neighbor, vertex_id).unwrap();
                 (neighbor, divisibility_graph[edge])
             })
             .collect(),
@@ -1434,13 +1472,12 @@ fn mark_fully_factored_internal(
                 mark_fully_factored_internal(other_factor_vid, data, worklist);
                 vid = data.resolve_vid(vid);
             }
-            None
-                if no_other_factors => {
-                    worklist.insert(WorkItem::RuleOut {
-                        nonfactor: other_factor_vid,
-                        dest: vid,
-                    });
-                }
+            None if no_other_factors => {
+                worklist.insert(WorkItem::RuleOut {
+                    nonfactor: other_factor_vid,
+                    dest: vid,
+                });
+            }
             _ => {}
         }
     }
@@ -1574,7 +1611,7 @@ async fn add_factors_to_graph(
 #[cfg(test)]
 pub mod tests {
     use crate::GLOBAL;
-    use rand::{Rng};
+    use rand::Rng;
     use rand::rng;
     use std::env::temp_dir;
     use std::fs::File;
@@ -1967,11 +2004,13 @@ pub mod tests {
             .times(2)
             .returning({
                 let fb = fb.clone();
-                move |_| Some(ProcessedStatusApiResponse {
-                    factors: Box::from([fb.clone()]),
-                    status: Some(PartlyFactoredComposite),
-                    id: Some(1),
-                })
+                move |_| {
+                    Some(ProcessedStatusApiResponse {
+                        factors: Box::from([fb.clone()]),
+                        status: Some(PartlyFactoredComposite),
+                        id: Some(1),
+                    })
+                }
             });
 
         // Expectation for cached_factors(Expression("B"))
@@ -1987,11 +2026,13 @@ pub mod tests {
                     }
                 }
             })
-            .returning(|_| Some(ProcessedStatusApiResponse {
-                factors: Box::from([]),
-                status: Some(PartlyFactoredComposite),
-                id: Some(1),
-            }));
+            .returning(|_| {
+                Some(ProcessedStatusApiResponse {
+                    factors: Box::from([]),
+                    status: Some(PartlyFactoredComposite),
+                    id: Some(1),
+                })
+            });
 
         // This should not panic
         let (vid, added) = add_factor_node(&mut data, fa.clone(), Some(1), &http);
