@@ -17,7 +17,7 @@ tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "sign
 regex = "1.12"
 primitive-types = "0.14"
 log = "0.4"
-itertools = "0.14"
+itertools = "0.15"
 simple-log = "2.4"
 governor = "0.10"
 cuckoofilter = "0.5"
