@@ -17,7 +17,7 @@ tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "sign
 regex = "1.12"
 primitive-types = "0.14"
 log = "0.4"
-itertools = "0.14"
+itertools = "0.15"
 simple-log = "2.4"
 governor = "0.10"
 cuckoofilter = "0.5"
@@ -48,7 +48,7 @@ paste = "1.0"
 tokio-stream = { version = "0.1.18", features = ["signal"] }
 
 [target.'cfg(not(windows))'.dependencies]
-tikv-jemallocator = "0.6"
+tikv-jemallocator = "0.7"
 
 [dev-dependencies]
 mockall = "0.14"
