@@ -20,14 +20,17 @@ while read -r num; do
       start_time="$(date +%s%N)"
       while read -r factor; do (
         echo "Found factor ${factor} of ${num}"
-        output=$(sem --id 'factordb-curl' --fg -j 1 xargs curl --retry 10 --retry-all-errors --retry-delay 10 --connect-timeout 60 --max-time 60 -d "number=${num}&factor=${factor}" <<< "https://factordb.com/reportfactor.php")
+        output=$(sem --id 'factordb-curl' --fg -j 1 bash -c \
+          "curl --retry 10 --retry-all-errors --retry-delay 10 --connect-timeout 60 --max-time 60 \
+           --url-query 'number=${num}' --url-query 'factor=${factor}' \
+           'https://factordb.com/reportfactor.php'")
         error=$?
         if ! grep -q "submitted" <<< "$output"; then
           error=1
         fi
         if [ $error -ne 0 ]; then
           echo "Error submitting factor ${factor} of ${num}: ${output}"
-          flock failed-submissions.csv -c "echo \"$(date -Is)\",${num},${factor} >> failed-submissions.csv"
+          flock failed-submissions.csv -c "echo \"$(date -Is)\",\"${num}\",${factor} >> failed-submissions.csv"
         else
           if grep -q "Already" <<< "$output"; then
             echo "Factor ${factor} of ${num} already known!"
