@@ -2,10 +2,10 @@ use crate::algebraic::ComplexFactor::{
     AddSub, Divide, Factorial, Fibonacci, Lucas, Multiply, Power, Primorial,
 };
 use crate::algebraic::Factor::{Complex, ElidedNumber, Numeric, UnknownExpression};
-use crate::get_from_cache;
+use crate::{create_cache, get_from_cache, BasicCache};
 use crate::net::BigNumber;
 use crate::{NumberLength, hash, write_bignum};
-use ahash::{HashMap, HashMapExt, RandomState};
+use ahash::{HashMap, HashMapExt};
 use derivative::Derivative;
 use hipstr::HipStr;
 use itertools::Either::{Left, Right};
@@ -20,8 +20,6 @@ use num_prime::Primality::No;
 use num_prime::buffer::{NaiveBuffer, PrimeBufferExt};
 use num_prime::detail::SMALL_PRIMES;
 use num_prime::nt_funcs::factorize128;
-use quick_cache::UnitWeighter;
-use quick_cache::sync::{Cache, DefaultLifecycle};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::{Ordering, PartialEq, Reverse};
@@ -1031,9 +1029,7 @@ impl From<&str> for Factor {
         })
     }
 }
-
-type SyncFactorCache<V> = Cache<Factor, V, UnitWeighter, RandomState, DefaultLifecycle<Factor, V>>;
-type FactorCacheLock<T> = OnceLock<SyncFactorCache<T>>;
+type FactorCacheLock<T> = OnceLock<BasicCache<Factor, T>>;
 
 // Object pools are used to avoid discarding a thread-local cache's contents when the thread exits,
 // in case another thread started later can use them.
@@ -1049,8 +1045,8 @@ const LOG10_ESTIMATE_CACHE_SIZE: usize = 1 << 20;
 const FACTOR_CACHE_SIZE: usize = 1 << 12;
 const UNIQUE_FACTOR_CACHE_SIZE: usize = 1 << 16;
 
-pub fn get_numeric_value_cache() -> &'static SyncFactorCache<Option<NumericFactor>> {
-    NUMERIC_VALUE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(NUMERIC_VALUE_CACHE_SIZE))
+pub fn get_numeric_value_cache() -> &'static BasicCache<Factor, Option<NumericFactor>> {
+    NUMERIC_VALUE_CACHE_LOCK.get_or_init(|| create_cache(NUMERIC_VALUE_CACHE_SIZE))
 }
 
 impl Default for Factor {
@@ -2460,8 +2456,8 @@ fn get_cached_log10_bounds(expr: &Factor) -> Option<(NumberLength, NumberLength)
     get_from_cache(log10_estimate_cache, expr)
 }
 
-fn get_log10_cache() -> &'static SyncFactorCache<(NumberLength, NumberLength)> {
-    LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(LOG10_ESTIMATE_CACHE_SIZE))
+fn get_log10_cache() -> &'static BasicCache<Factor, (NumberLength, NumberLength)> {
+    LOG10_ESTIMATE_CACHE_LOCK.get_or_init(|| create_cache(LOG10_ESTIMATE_CACHE_SIZE))
 }
 
 #[inline]
@@ -3235,7 +3231,7 @@ fn find_factors(expr: &Factor) -> BTreeMap<Factor, NumberLength> {
     if let Some(n) = evaluate_as_numeric(expr) {
         return find_factors_of_numeric(n);
     }
-    let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(FACTOR_CACHE_SIZE));
+    let factor_cache = FACTOR_CACHE_LOCK.get_or_init(|| create_cache(FACTOR_CACHE_SIZE));
     let cached = get_from_cache(factor_cache, expr);
     match cached {
         Some(cached) => cached,
@@ -3670,7 +3666,7 @@ fn sum_factor_btreemaps<T: std::cmp::Ord>(
 #[inline(always)]
 pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
     let unique_factor_cache =
-        UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| SyncFactorCache::new(UNIQUE_FACTOR_CACHE_SIZE));
+        UNIQUE_FACTOR_CACHE_LOCK.get_or_init(|| create_cache(UNIQUE_FACTOR_CACHE_SIZE));
     let cached = get_from_cache(unique_factor_cache, expr);
     match cached {
         Some(cached) => cached,
