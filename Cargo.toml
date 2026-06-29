@@ -51,5 +51,5 @@ tokio-stream = { version = "0.1.18", features = ["signal"] }
 tikv-jemallocator = "0.7"
 
 [dev-dependencies]
-mockall = "0.14"
+mockall = "0.15"
 const_format = "0.2"
