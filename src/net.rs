@@ -583,12 +583,12 @@ impl FactorDbClient for RealFactorDbClient {
             return DoesNotDivide;
         }
         let (id, number) = match u_id {
-            Expression(ref x) => match x.as_ref() {
-                Numeric(n) => {
-                    error!("Attempted to submit factor {factor} of too-small number {n}");
+            Expression(ref x) => {
+                if let Some(x_numeric) = x.as_numeric() {
+                    error!("Attempted to submit factor {factor} of too-small number {x_numeric}");
                     return AlreadyFullyFactored;
                 }
-                _ => (None, Some(x.to_unelided_string())),
+                (None, Some(x.to_unelided_string()))
             },
             Id(id) => {
                 if id <= MAX_ID_EQUAL_TO_VALUE {

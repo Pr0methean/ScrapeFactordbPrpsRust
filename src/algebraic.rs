@@ -3683,6 +3683,9 @@ pub fn find_unique_factors(expr: &Factor) -> Box<[Factor]> {
                     && (simplified == *expr || factor.may_be_proper_divisor_of(&simplified))
                 {
                     let f = simplify(&factor);
+                    if f != factor && (f.as_numeric() == Some(1) || !f.may_be_proper_divisor_of(&simplified)) {
+                        continue;
+                    }
                     if let Complex { inner: ref c, .. } = f {
                         match **c {
                             Multiply { ref terms, .. } => {
