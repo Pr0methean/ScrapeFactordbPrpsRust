@@ -4,7 +4,5 @@
 #
 # On Debian and Ubuntu, install dependencies with:
 # sudo apt-get install libecm-dev gmp-ecm cargo
-mkfifo composites || true
 ./build.sh
-RUST_BACKTRACE=full nice -+19 ./target/release/ScrapeFactordbPrpsRust 2>&1 | tee /tmp/rust.log | sed -E 's/(.{1000}).*$/\1.../' &
-./yafu.sh <composites 2>&1 | tee /tmp/yafu.log &
+RUST_BACKTRACE=full nice -+19 ./target/release/ScrapeFactordbPrpsRust 2>&1 | tee /tmp/rust.log | sed -E 's/(.{1000}).*$/\1.../'
