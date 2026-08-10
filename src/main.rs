@@ -272,7 +272,7 @@ async fn yafu_task(
                                     Accepted => info!("{id}: Submitted factor {factor_str} to FactorDB"),
                                     AlreadyFullyFactored => {
                                         info!("{id}: Factor {factor_str} already known");
-                                        child.kill().await;
+                                        let _ = child.kill().await;
                                         break;
                                     },
                                     result => {
