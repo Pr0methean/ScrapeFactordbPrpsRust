@@ -237,7 +237,7 @@ async fn yafu_task(
                 let _ = child.kill().await;
                 continue;
             };
-            let expr = format!("factor({number})\n");
+            let expr = format!("factor({number})\nexit()\n");
             if let Err(e) = stdin.write_all(expr.as_bytes()).await {
                 error!("{id}: Failed to write to yafu stdin: {e}");
                 let _ = child.kill().await;
@@ -255,6 +255,7 @@ async fn yafu_task(
         // Drain both stdout and stderr concurrently.
         let mut stdout_done = false;
         let mut stderr_done = false;
+        let composite = Factor::from(number.as_str());
         while !stdout_done || !stderr_done {
             select! {
                 line = stdout_reader.next_line(), if !stdout_done => {
@@ -263,7 +264,27 @@ async fn yafu_task(
                             if let Some(caps) = YAFU_FACTOR_REGEX.captures(&line) {
                                 let factor_str = caps[1].to_owned();
                                 info!("{id}: yafu found factor {factor_str}");
-                                found_factors.push(factor_str);
+                                let factor = Factor::from(factor_str.as_str());
+                                match http.try_report_factor(
+                                    Expression(Cow::Borrowed(&composite)),
+                                    &factor,
+                                ).await {
+                                    Accepted => info!("{id}: Submitted factor {factor_str} to FactorDB"),
+                                    AlreadyFullyFactored => {
+                                        info!("{id}: Factor {factor_str} already known");
+                                        child.kill().await;
+                                        break;
+                                    },
+                                    result => {
+                                        error!("{id}: Error submitting factor {factor_str}: {result:?}");
+                                        if let Some(out) = FAILED_U_SUBMISSIONS_OUT.get() {
+                                            match out.lock().await.write_fmt(format_args!("{number},{factor_str}\n")) {
+                                                Ok(_) => warn!("{id}: Wrote failed factor {factor_str} to failed-u-submissions.csv"),
+                                                Err(e) => error!("{id}: Failed to write {factor_str} to failed-u-submissions.csv: {e}"),
+                                            }
+                                        }
+                                    }
+                                }
                             } else {
                                 info!("{id}: yafu: {line}");
                             }
@@ -314,27 +335,6 @@ async fn yafu_task(
             Ok(s) if !s.success() => warn!("{id}: yafu exited with status {s}"),
             Err(e) => error!("{id}: Failed to wait for yafu: {e}"),
             _ => {}
-        }
-        // Submit each found factor to FactorDB.
-        let number_factor = Factor::from(number.as_str());
-        for factor_str in found_factors {
-            let factor = Factor::from(factor_str.as_str());
-            match http.try_report_factor(
-                Expression(Cow::Borrowed(&number_factor)),
-                &factor,
-            ).await {
-                Accepted => info!("{id}: Submitted factor {factor_str} to FactorDB"),
-                AlreadyFullyFactored => info!("{id}: Factor {factor_str} already known"),
-                result => {
-                    error!("{id}: Error submitting factor {factor_str}: {result:?}");
-                    if let Some(out) = FAILED_U_SUBMISSIONS_OUT.get() {
-                        match out.lock().await.write_fmt(format_args!("{number},{factor_str}\n")) {
-                            Ok(_) => warn!("{id}: Wrote failed factor {factor_str} to failed-u-submissions.csv"),
-                            Err(e) => error!("{id}: Failed to write {factor_str} to failed-u-submissions.csv: {e}"),
-                        }
-                    }
-                }
-            }
         }
     }
 }
