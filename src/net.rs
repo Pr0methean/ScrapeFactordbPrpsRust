@@ -400,7 +400,7 @@ impl FactorDbClient for RealFactorDbClient {
         let response = match id {
             Id(id) => {
                 let url = format!("https://factordb.com/api?id={id}");
-                if let Some(response) = self.try_get_and_decode(&url).await {
+                if let Some(response) = self.try_get_and_decode(&url).await && !response.is_empty() {
                     Ok(response)
                 } else if get_digits_as_fallback {
                     sleep(RETRY_DELAY).await;
