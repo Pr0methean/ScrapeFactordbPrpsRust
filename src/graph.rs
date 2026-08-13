@@ -1163,6 +1163,12 @@ pub async fn find_and_submit_factors(
             let cofactor_facts = data.facts(cofactor_vid).expect(
                 "{id}: Reached cofactor_facts check for a number not entered in number_facts_map",
             );
+            if cofactor_facts.last_known_status == Some(NonInteger) {
+                info!(
+                    "{id}: Skipping submission of {factor} to {cofactor} because the destination is not an integer"
+                );
+                continue;
+            }
             let cofactor_upper_bound_log10 = cofactor_facts.upper_bound_log10;
             let known_factor_vids = match cofactor_facts.factors_known_to_factordb {
                 UpToDate(ref vids) | NotUpToDate(ref vids) if !vids.is_empty() => {
