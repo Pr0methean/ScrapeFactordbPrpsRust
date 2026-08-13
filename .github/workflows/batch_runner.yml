@@ -46,5 +46,3 @@ jobs:
     uses: ./.github/workflows/rust.yml
   rust_18:
     uses: ./.github/workflows/rust.yml
-  rust_19:
-    uses: ./.github/workflows/rust.yml
