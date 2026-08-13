@@ -3,7 +3,7 @@ permissions:
   contents: read
 on:
   schedule:
-    - cron: '41 */6 * * *' # Every 6 hours
+    - cron: '34 */6 * * *' # Every 6 hours
   push:
     branches: [ "main" ]
   pull_request:
