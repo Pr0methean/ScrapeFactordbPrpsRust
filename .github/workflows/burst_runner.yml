@@ -4,7 +4,9 @@ permissions:
 on:
   schedule:
     - cron: '* */6 * * *' # Every 6 hours
-
+  push:
+  pull_request:
+    branches: [ "main" ]
 jobs:
   rust_00:
     uses: ./.github/workflows/rust.yml
