@@ -149,18 +149,9 @@ pub async fn yafu_task(
 
             select! {
                 biased;
-                _ = shutdown.recv(), if !shutdown_received => {
-                    warn!("yafu_task received shutdown signal; will finish queued numbers then exit");
-                    shutdown_received = true;
-                    while let Ok(item) = receiver.try_recv() {
-                        if in_flight.insert(item.id) {
-                            heap.push(item);
-                        }
-                    }
-                    if heap.is_empty() {
-                        info!("yafu_task: no items remaining on shutdown; exiting");
-                        break;
-                    }
+                _ = shutdown.recv() => {
+                    warn!("yafu_task received shutdown signal");
+                    break;
                 }
                 item = receiver.recv(), if !shutdown_received => {
                     match item {
