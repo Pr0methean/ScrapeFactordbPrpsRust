@@ -220,7 +220,7 @@ async fn check_composite(
         factors, status, ..
     } = http.known_factors_as_digits(Id(id), false, true).await;
     if factors.is_empty() {
-        if status.is_known_fully_factored() {
+        if status.is_known_finished() {
             warn!("{id}: Already fully factored");
             true
         } else {

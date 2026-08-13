@@ -3,9 +3,7 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, O
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{NumericFactor, find_factors_of_numeric, get_numeric_value_cache};
 use crate::graph::EntryId;
-use crate::net::NumberStatus::{
-    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
-};
+use crate::net::NumberStatus::{FullyFactored, NonInteger, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
 use crate::{BasicCache, get_from_cache};
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
@@ -247,14 +245,6 @@ impl RealFactorDbClient {
             }
         }
     }
-
-    async fn retrying_get_and_decode_internal(
-        &self,
-        url: &str,
-        retry_delay: Duration,
-        max_retries: usize,
-    ) -> Option<HipStr<'static>> {
-    }
 }
 
 impl FactorDbClient for RealFactorDbClient {
@@ -398,8 +388,24 @@ impl FactorDbClient for RealFactorDbClient {
         let response = match id {
             Id(id) => {
                 let url = format!("https://factordb.com/api?id={id}");
-                if let Some(response) = self.try_get_and_decode(&url).await && !response.is_empty() {
-                    Ok(response)
+                if let Some(response) = self.try_get_and_decode(&url).await {
+                    if response.is_empty() {
+                        let fallback_from_empty = self
+                            .try_get_and_decode(&format!("https://factordb.com/index.php?showid={id}"))
+                            .await;
+                        if let Some(valid_fallback_from_empty) = &fallback_from_empty
+                                && valid_fallback_from_empty.contains("Not divisible") {
+                            return ProcessedStatusApiResponse {
+                                status: Some(NonInteger),
+                                factors: Box::new([]),
+                                id: None,
+                            };
+                        } else {
+                            Err(fallback_from_empty)
+                        }
+                    } else {
+                        Ok(response)
+                    }
                 } else if get_digits_as_fallback {
                     sleep(RETRY_DELAY).await;
                     Err(self
@@ -472,6 +478,13 @@ impl FactorDbClient for RealFactorDbClient {
                 factors: Box::new([]),
             },
             Err(Some(fallback_response)) => {
+                if fallback_response.contains("Not divisible") {
+                    return ProcessedStatusApiResponse {
+                        status: Some(NonInteger),
+                        factors: Box::new([]),
+                        id: None,
+                    };
+                }
                 let factors = self
                     .digits_fallback_regex
                     .captures(&fallback_response)
@@ -508,7 +521,7 @@ impl FactorDbClient for RealFactorDbClient {
                     .insert(expr.clone().into_owned(), processed.clone());
             }
         }
-        if !include_ff && processed.status.is_known_fully_factored() {
+        if !include_ff && processed.status.is_known_finished() {
             processed.factors = Box::default();
         }
         processed
@@ -734,13 +747,13 @@ pub struct ProcessedStatusApiResponse {
 }
 
 pub trait NumberStatusExt {
-    fn is_known_fully_factored(&self) -> bool;
+    fn is_known_finished(&self) -> bool;
 }
 
 impl NumberStatusExt for Option<NumberStatus> {
     #[inline]
-    fn is_known_fully_factored(&self) -> bool {
-        matches!(self, Some(FullyFactored) | Some(Prime))
+    fn is_known_finished(&self) -> bool {
+        matches!(self, Some(FullyFactored) | Some(Prime) | Some(NonInteger))
     }
 }
 
@@ -751,4 +764,5 @@ pub enum NumberStatus {
     PartlyFactoredComposite,
     Prime, // includes PRP
     FullyFactored,
+    NonInteger,
 }

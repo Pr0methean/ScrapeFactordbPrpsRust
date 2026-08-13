@@ -10,9 +10,7 @@ use crate::algebraic::{
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::NumberStatus::{
-    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite,
-};
+use crate::net::NumberStatus::{FullyFactored, NonInteger, PartlyFactoredComposite, Prime, UnfactoredComposite};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
@@ -775,12 +773,12 @@ impl PartialEq<Self> for NumberFacts {
 
 impl NumberFacts {
     #[inline(always)]
-    pub(crate) fn is_known_fully_factored(&self) -> bool {
-        self.last_known_status.is_known_fully_factored()
+    pub(crate) fn is_known_finished(&self) -> bool {
+        self.last_known_status.is_known_finished()
     }
     #[inline(always)]
     pub(crate) fn is_final(&self) -> bool {
-        self.is_known_fully_factored() && !self.needs_update()
+        self.is_known_finished() && !self.needs_update()
     }
     #[inline(always)]
     pub(crate) fn needs_update(&self) -> bool {
@@ -823,7 +821,7 @@ pub async fn find_and_submit_factors(
             status,
             ..
         } = http.known_factors_as_digits(Id(id), false, true).await;
-        if status.is_known_fully_factored() {
+        if status.is_known_finished() {
             warn!("{id}: Already fully factored");
             return true;
         }
@@ -1018,7 +1016,7 @@ pub async fn find_and_submit_factors(
     'graph_iter: while !data
         .facts(root_vid)
         .expect("{id}: Reached 'graph_iter when root not entered in number_facts_map")
-        .is_known_fully_factored()
+        .is_known_finished()
         && let node_count = data.divisibility_graph.node_count()
         && iters_without_progress < node_count * SUBMIT_FACTOR_MAX_ATTEMPTS
         && let Some(factor_vid) = factors_to_submit_in_graph.pop_front()
@@ -1046,7 +1044,7 @@ pub async fn find_and_submit_factors(
                 edge_count as f64 * 100.0 / complete_graph_edge_count as f64,
                 data.number_facts_map
                     .values()
-                    .filter(|facts| facts.is_known_fully_factored())
+                    .filter(|facts| facts.is_known_finished())
                     .count(),
                 data.number_facts_map
                     .values()
@@ -1109,6 +1107,10 @@ pub async fn find_and_submit_factors(
             }
             let factor_facts = data.facts(factor_vid)
                 .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
+            if factor_facts.last_known_status == Some(NonInteger) {
+                info!("{id}: Skipping submission of {factor} because it's not an integer");
+                continue 'graph_iter;
+            }
             match factor_facts.factors_known_to_factordb {
                 UpToDate(ref already_known_factors) | NotUpToDate(ref already_known_factors) => {
                     if already_known_factors.contains(&cofactor_vid) {
@@ -1120,7 +1122,7 @@ pub async fn find_and_submit_factors(
                     } else if data
                         .facts(cofactor_vid)
                         .expect("{id}: cofactor not in number_facts_map")
-                        .is_known_fully_factored()
+                        .is_known_finished()
                     {
                         debug!(
                             "{id}: Skipping submission of {factor} to {cofactor} because destination is already fully factored (based on FactorDB check)"
@@ -1430,7 +1432,7 @@ fn mark_fully_factored_internal(
     worklist: &mut BTreeSet<WorkItem>,
 ) {
     let facts = data.facts_mut(vid);
-    if facts.is_known_fully_factored() {
+    if facts.is_known_finished() {
         return;
     }
     facts.checked_for_listed_algebraic = true;
