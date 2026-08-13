@@ -310,6 +310,15 @@ impl FactorDbClient for RealFactorDbClient {
         let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
         let resets_at = now + Duration::from_secs(seconds_to_reset);
+        if EXIT_TIME
+            .get()
+            .is_some_and(|exit_time| exit_time <= &resets_at)
+        {
+            error!("Resource limits reached and won't reset during this process's lifespan");
+            exit(0);
+        }
+        self.all_threads_blocked_until
+            .store(resets_at.into(), Release);
         Some(ResourceLimits {
             cpu_tenths_spent,
             resets_at,
@@ -331,27 +340,14 @@ impl FactorDbClient for RealFactorDbClient {
     #[framed]
     async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
-        let response = self.try_get_and_decode_core(url).await?;
-        let mut temp_bases = usize::MAX;
-        if let Some(ResourceLimits { resets_at, .. }) =
-            self.parse_resource_limits(&mut temp_bases, &response).await
-        {
-            self.all_threads_blocked_until
-                .store(resets_at.into(), Release);
-            if EXIT_TIME
-                .get()
-                .is_some_and(|exit_time| exit_time <= &resets_at)
+        loop {
+            let response = self.try_get_and_decode_core(url).await?;
+            let mut temp_bases = usize::MAX;
+            if self.parse_resource_limits(&mut temp_bases, &response).await.is_none()
             {
-                error!("Resource limits reached and won't reset during this process's lifespan");
-                exit(0);
-            } else if let Some(throttling_duration) =
-                resets_at.checked_duration_since(Instant::now())
-            {
-                warn!("Resource limits reached; throttling for {throttling_duration:?}");
+                return Some(response);
             }
-            return None;
         }
-        Some(response)
     }
 
     #[framed]
@@ -626,6 +622,8 @@ impl FactorDbClient for RealFactorDbClient {
                 } else if text.contains("Does not divide") {
                     DoesNotDivide
                 } else {
+                    let mut temp_bases = usize::MAX;
+                    let _ = self.parse_resource_limits(&mut temp_bases, &text);
                     OtherError
                 }
             }
