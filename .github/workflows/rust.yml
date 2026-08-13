@@ -29,6 +29,7 @@ on:
         description: "Specific composites to factor, separated by spaces"
         required: false
         type: string
+  workflow_call:
 env:
   CARGO_TERM_COLOR: always
   C_DIGITS: ${{ inputs.c_digits }}
