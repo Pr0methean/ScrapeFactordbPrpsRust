@@ -6,8 +6,6 @@ on:
   push:
   pull_request:
     branches: [ "main" ]
-  schedule:
-    - cron: "* * * * *"
   workflow_dispatch:
     inputs:
       c_digits:

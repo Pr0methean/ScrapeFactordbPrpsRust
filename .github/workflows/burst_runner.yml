@@ -1,0 +1,46 @@
+name: Schedule Batch of Rust Runs
+on:
+  schedule:
+    - cron: '* */6 * * *' # Every 6 hours
+
+jobs:
+  rust_00:
+    uses: ./.github/workflows/rust.yml
+  rust_01:
+    uses: ./.github/workflows/rust.yml
+  rust_02:
+    uses: ./.github/workflows/rust.yml
+  rust_03:
+    uses: ./.github/workflows/rust.yml
+  rust_04:
+    uses: ./.github/workflows/rust.yml
+  rust_05:
+    uses: ./.github/workflows/rust.yml
+  rust_06:
+    uses: ./.github/workflows/rust.yml
+  rust_07:
+    uses: ./.github/workflows/rust.yml
+  rust_08:
+    uses: ./.github/workflows/rust.yml
+  rust_09:
+    uses: ./.github/workflows/rust.yml
+  rust_10:
+    uses: ./.github/workflows/rust.yml
+  rust_11:
+    uses: ./.github/workflows/rust.yml
+  rust_12:
+    uses: ./.github/workflows/rust.yml
+  rust_13:
+    uses: ./.github/workflows/rust.yml
+  rust_14:
+    uses: ./.github/workflows/rust.yml
+  rust_15:
+    uses: ./.github/workflows/rust.yml
+  rust_16:
+    uses: ./.github/workflows/rust.yml
+  rust_17:
+    uses: ./.github/workflows/rust.yml
+  rust_18:
+    uses: ./.github/workflows/rust.yml
+  rust_19:
+    uses: ./.github/workflows/rust.yml
