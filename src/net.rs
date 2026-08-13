@@ -3,9 +3,7 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, O
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{NumericFactor, find_factors_of_numeric, get_numeric_value_cache};
 use crate::graph::EntryId;
-use crate::net::NumberStatus::{
-    FullyFactored, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown,
-};
+use crate::net::NumberStatus::{FullyFactored, NonInteger, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
 use crate::{BasicCache, get_from_cache};
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
@@ -247,21 +245,6 @@ impl RealFactorDbClient {
             }
         }
     }
-
-    async fn retrying_get_and_decode_internal(
-        &self,
-        url: &str,
-        retry_delay: Duration,
-        max_retries: usize,
-    ) -> Option<HipStr<'static>> {
-        for _ in 0..max_retries {
-            if let Some(value) = self.try_get_and_decode(url).await {
-                return Some(value);
-            }
-            sleep(retry_delay).await;
-        }
-        None
-    }
 }
 
 impl FactorDbClient for RealFactorDbClient {
@@ -310,6 +293,15 @@ impl FactorDbClient for RealFactorDbClient {
         let seconds_to_reset = minutes_to_reset.parse::<u64>().unwrap() * 60
             + seconds_within_minute_to_reset.parse::<u64>().unwrap();
         let resets_at = now + Duration::from_secs(seconds_to_reset);
+        if EXIT_TIME
+            .get()
+            .is_some_and(|exit_time| exit_time <= &resets_at)
+        {
+            error!("Resource limits reached and won't reset during this process's lifespan");
+            exit(0);
+        }
+        self.all_threads_blocked_until
+            .store(resets_at.into(), Release);
         Some(ResourceLimits {
             cpu_tenths_spent,
             resets_at,
@@ -324,34 +316,26 @@ impl FactorDbClient for RealFactorDbClient {
         url: &str,
         retry_delay: Duration,
     ) -> Option<HipStr<'static>> {
-        self.retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES)
-            .await
+        for _ in 0..MAX_RETRIES {
+            if let Some(value) = self.try_get_and_decode(url).await {
+                return Some(value);
+            }
+            sleep(retry_delay).await;
+        }
+        None
     }
 
     #[framed]
     async fn try_get_and_decode(&self, url: &str) -> Option<HipStr<'static>> {
         sleep_until(self.all_threads_blocked_until.load(Acquire).into()).await;
-        let response = self.try_get_and_decode_core(url).await?;
-        let mut temp_bases = usize::MAX;
-        if let Some(ResourceLimits { resets_at, .. }) =
-            self.parse_resource_limits(&mut temp_bases, &response).await
-        {
-            self.all_threads_blocked_until
-                .store(resets_at.into(), Release);
-            if EXIT_TIME
-                .get()
-                .is_some_and(|exit_time| exit_time <= &resets_at)
+        loop {
+            let response = self.try_get_and_decode_core(url).await?;
+            let mut temp_bases = usize::MAX;
+            if self.parse_resource_limits(&mut temp_bases, &response).await.is_none()
             {
-                error!("Resource limits reached and won't reset during this process's lifespan");
-                exit(0);
-            } else if let Some(throttling_duration) =
-                resets_at.checked_duration_since(Instant::now())
-            {
-                warn!("Resource limits reached; throttling for {throttling_duration:?}");
+                return Some(response);
             }
-            return None;
         }
-        Some(response)
     }
 
     #[framed]
@@ -405,7 +389,23 @@ impl FactorDbClient for RealFactorDbClient {
             Id(id) => {
                 let url = format!("https://factordb.com/api?id={id}");
                 if let Some(response) = self.try_get_and_decode(&url).await {
-                    Ok(response)
+                    if response.is_empty() {
+                        let fallback_from_empty = self
+                            .try_get_and_decode(&format!("https://factordb.com/index.php?showid={id}"))
+                            .await;
+                        if let Some(valid_fallback_from_empty) = &fallback_from_empty
+                                && valid_fallback_from_empty.contains("Not divisible") {
+                            return ProcessedStatusApiResponse {
+                                status: Some(NonInteger),
+                                factors: Box::new([]),
+                                id: None,
+                            };
+                        } else {
+                            Err(fallback_from_empty)
+                        }
+                    } else {
+                        Ok(response)
+                    }
                 } else if get_digits_as_fallback {
                     sleep(RETRY_DELAY).await;
                     Err(self
@@ -478,6 +478,13 @@ impl FactorDbClient for RealFactorDbClient {
                 factors: Box::new([]),
             },
             Err(Some(fallback_response)) => {
+                if fallback_response.contains("Not divisible") {
+                    return ProcessedStatusApiResponse {
+                        status: Some(NonInteger),
+                        factors: Box::new([]),
+                        id: None,
+                    };
+                }
                 let factors = self
                     .digits_fallback_regex
                     .captures(&fallback_response)
@@ -514,7 +521,7 @@ impl FactorDbClient for RealFactorDbClient {
                     .insert(expr.clone().into_owned(), processed.clone());
             }
         }
-        if !include_ff && processed.status.is_known_fully_factored() {
+        if !include_ff && processed.status.is_known_finished() {
             processed.factors = Box::default();
         }
         processed
@@ -626,6 +633,8 @@ impl FactorDbClient for RealFactorDbClient {
                 } else if text.contains("Does not divide") {
                     DoesNotDivide
                 } else {
+                    let mut temp_bases = usize::MAX;
+                    let _ = self.parse_resource_limits(&mut temp_bases, &text);
                     OtherError
                 }
             }
@@ -738,13 +747,13 @@ pub struct ProcessedStatusApiResponse {
 }
 
 pub trait NumberStatusExt {
-    fn is_known_fully_factored(&self) -> bool;
+    fn is_known_finished(&self) -> bool;
 }
 
 impl NumberStatusExt for Option<NumberStatus> {
     #[inline]
-    fn is_known_fully_factored(&self) -> bool {
-        matches!(self, Some(FullyFactored) | Some(Prime))
+    fn is_known_finished(&self) -> bool {
+        matches!(self, Some(FullyFactored) | Some(Prime) | Some(NonInteger))
     }
 }
 
@@ -755,4 +764,5 @@ pub enum NumberStatus {
     PartlyFactoredComposite,
     Prime, // includes PRP
     FullyFactored,
+    NonInteger,
 }

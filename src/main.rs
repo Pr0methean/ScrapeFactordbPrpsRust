@@ -13,6 +13,7 @@ mod channel;
 mod graph;
 mod monitor;
 mod net;
+mod yafu;
 
 use crate::NumberSpecifier::{Expression, Id};
 use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored};
@@ -20,6 +21,7 @@ use crate::algebraic::Factor;
 use crate::graph::EntryId;
 use crate::monitor::Monitor;
 use crate::net::{FactorDbClient, FactorDbClientReadIdsAndExprs, ResourceLimits};
+use crate::yafu::{YafuWorkItem, YAFU_KILL_GRACE_PERIOD, YAFU_SENDER, yafu_task};
 use ahash::RandomState;
 use alloc::sync::Arc;
 use async_backtrace::framed;
@@ -46,7 +48,6 @@ use std::borrow::Cow;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::Write;
 use std::num::NonZeroU32;
 use std::ops::Add;
 use std::panic;
@@ -56,11 +57,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::{Acquire, Release};
 use sysinfo::MemoryRefreshKind;
 use sysinfo::RefreshKind;
-use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use tokio::signal::ctrl_c;
 use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::{OwnedPermit, Receiver, channel};
+use tokio::sync::mpsc::{OwnedPermit, channel};
 use tokio::sync::{Mutex, OnceCell};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep, sleep_until, timeout};
@@ -129,8 +128,7 @@ const U_MIN_DIGITS: NumberLength = 2001;
 const U_MAX_DIGITS: NumberLength = 199_999;
 const SUBMIT_FACTOR_MAX_ATTEMPTS: usize = 5;
 static EXIT_TIME: OnceCell<Instant> = OnceCell::const_new();
-static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
-static YAFU_SENDER: OnceCell<tokio::sync::mpsc::Sender<(EntryId, HipStr)>> = OnceCell::const_new();
+pub(crate) static FAILED_U_SUBMISSIONS_OUT: OnceCell<Mutex<File>> = OnceCell::const_new();
 
 #[derive(Clone, Debug, Eq)]
 struct CompositeCheckTask {
@@ -164,179 +162,6 @@ struct FactorSubmission<'a> {
     id: Option<EntryId>,
     number: Option<HipStr<'static>>,
     factor: &'a str,
-}
-
-/// Duration to wait after shutdown before forcibly killing yafu.
-const YAFU_KILL_GRACE_PERIOD: Duration = Duration::from_secs(120);
-
-/// Regex matching yafu factor output lines, e.g. "P15 = 123456789012345" or "factor = 123456789012345".
-static YAFU_FACTOR_REGEX: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
-    Regex::new(r"(?i)(?:P\d+|factor)\s*=\s*([0-9]+)").unwrap()
-});
-
-/// Task that serially factors composite numbers using the yafu binary and submits found factors
-/// to FactorDB. Runs until the channel is closed (all other tasks have exited), then waits up
-/// to [`YAFU_KILL_GRACE_PERIOD`] for any in-progress yafu invocation to complete before killing it.
-#[framed]
-async fn yafu_task(
-    mut receiver: Receiver<(EntryId, HipStr<'_>)>,
-    http: Arc<RealFactorDbClient>,
-    mut shutdown: Monitor,
-) {
-    // Track numbers already dispatched to avoid double-factoring (replaces flock logic).
-    let mut in_flight: std::collections::HashSet<EntryId> = std::collections::HashSet::new();
-    let mut shutdown_received = false;
-    loop {
-        // Wait for the next composite to factor, but stop accepting new work after shutdown.
-        let item = if shutdown_received {
-            receiver.try_recv().ok()
-        } else {
-            select! {
-                biased;
-                _ = shutdown.recv(), if !shutdown_received => {
-                    warn!("yafu_task received shutdown signal; will finish current number then exit");
-                    shutdown_received = true;
-                    // Drain any already-queued items but don't block waiting for new ones.
-                    receiver.try_recv().ok()
-                }
-                item = receiver.recv() => item,
-            }
-        };
-        let Some((id, number)) = item else {
-            info!("yafu_task: channel closed; exiting");
-            return;
-        };
-        // Deduplication.
-        if !in_flight.insert(id) {
-            info!("{id}: Skipping duplicate yafu dispatch");
-            continue;
-        }
-        // Spawn yafu with stdin/stdout piped.
-        let mut child = match Command::new("./yafu")
-            .args(["-threads", "4", "-R", "-qssave", "./qs", "-session", "./session",
-                   "-logfile", "./log", "-o", "./nfs", "-pscreen", "-inmem", "2000000000"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                error!("{id}: Failed to spawn yafu: {e}");
-                in_flight.remove(&id);
-                continue;
-            }
-        };
-        info!("{id}: Factoring with yafu");
-        let start = Instant::now();
-        // Write the factor expression to stdin then close it.
-        {
-            use tokio::io::AsyncWriteExt;
-            let Some(mut stdin) = child.stdin.take() else {
-                error!("{id}: yafu stdin not available");
-                let _ = child.kill().await;
-                continue;
-            };
-            let expr = format!("factor({number})\nexit()\n");
-            if let Err(e) = stdin.write_all(expr.as_bytes()).await {
-                error!("{id}: Failed to write to yafu stdin: {e}");
-                let _ = child.kill().await;
-                continue;
-            }
-            // stdin is dropped here, signalling EOF to yafu.
-        }
-        // Read stdout in the background while we wait.
-        let stdout = child.stdout.take().expect("stdout was piped");
-        let stderr = child.stderr.take().expect("stderr was piped");
-        // Collect all output lines that match the factor pattern.
-        let mut found_factors: Vec<String> = Vec::new();
-        let mut stdout_reader = BufReader::new(stdout).lines();
-        let mut stderr_reader = BufReader::new(stderr).lines();
-        // Drain both stdout and stderr concurrently.
-        let mut stdout_done = false;
-        let mut stderr_done = false;
-        let composite = Factor::from(number.as_str());
-        while !stdout_done || !stderr_done {
-            select! {
-                line = stdout_reader.next_line(), if !stdout_done => {
-                    match line {
-                        Ok(Some(line)) => {
-                            if let Some(caps) = YAFU_FACTOR_REGEX.captures(&line) {
-                                let factor_str = caps[1].to_owned();
-                                info!("{id}: yafu found factor {factor_str}");
-                                let factor = Factor::from(factor_str.as_str());
-                                match http.try_report_factor(
-                                    Expression(Cow::Borrowed(&composite)),
-                                    &factor,
-                                ).await {
-                                    Accepted => info!("{id}: Submitted factor {factor_str} to FactorDB"),
-                                    AlreadyFullyFactored => {
-                                        info!("{id}: Factor {factor_str} already known");
-                                        let _ = child.kill().await;
-                                        break;
-                                    },
-                                    result => {
-                                        error!("{id}: Error submitting factor {factor_str}: {result:?}");
-                                        if let Some(out) = FAILED_U_SUBMISSIONS_OUT.get() {
-                                            match out.lock().await.write_fmt(format_args!("{number},{factor_str}\n")) {
-                                                Ok(_) => warn!("{id}: Wrote failed factor {factor_str} to failed-u-submissions.csv"),
-                                                Err(e) => error!("{id}: Failed to write {factor_str} to failed-u-submissions.csv: {e}"),
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                info!("{id}: yafu: {line}");
-                            }
-                        }
-                        Ok(None) => stdout_done = true,
-                        Err(e) => {
-                            error!("{id}: yafu stdout read error: {e}");
-                            stdout_done = true;
-                        }
-                    }
-                }
-                line = stderr_reader.next_line(), if !stderr_done => {
-                    match line {
-                        Ok(Some(line)) => info!("{id}: yafu stderr: {line}"),
-                        Ok(None) => stderr_done = true,
-                        Err(e) => {
-                            error!("{id}: yafu stderr read error: {e}");
-                            stderr_done = true;
-                        }
-                    }
-                }
-            }
-        }
-        // Wait for the process; if shutdown occurred, give it the grace period.
-        let exit_status = if shutdown_received {
-            select! {
-                status = child.wait() => status,
-                _ = sleep(YAFU_KILL_GRACE_PERIOD) => {
-                    warn!("{id}: yafu grace period expired; killing");
-                    let _ = child.kill().await;
-                    child.wait().await
-                }
-            }
-        } else {
-            child.wait().await
-        };
-        let elapsed = start.elapsed();
-        let elapsed_secs = elapsed.as_secs();
-        let elapsed_nanos = elapsed.subsec_nanos();
-        if found_factors.is_empty() {
-            warn!("{id}: yafu found no factors after {:02}:{:02}.{:09}",
-                  elapsed_secs / 60, elapsed_secs % 60, elapsed_nanos);
-        } else {
-            info!("{id}: Done factoring with yafu after {:02}:{:02}.{:09}",
-                  elapsed_secs / 60, elapsed_secs % 60, elapsed_nanos);
-        }
-        match exit_status {
-            Ok(s) if !s.success() => warn!("{id}: yafu exited with status {s}"),
-            Err(e) => error!("{id}: Failed to wait for yafu: {e}"),
-            _ => {}
-        }
-    }
 }
 
 #[framed]
@@ -395,7 +220,7 @@ async fn check_composite(
         factors, status, ..
     } = http.known_factors_as_digits(Id(id), false, true).await;
     if factors.is_empty() {
-        if status.is_known_fully_factored() {
+        if status.is_known_finished() {
             warn!("{id}: Already fully factored");
             true
         } else {
@@ -414,8 +239,15 @@ async fn check_composite(
                 factors_submitted = true;
             } else {
                 if let Some(sender) = YAFU_SENDER.get() {
+                    let (lower_bound, upper_bound) = algebraic::estimate_log10(&factor);
                     let number_str = factor.to_unelided_string().into_owned();
-                    match sender.send((id, number_str)).await {
+                    let item = YafuWorkItem {
+                        id,
+                        number: number_str.into(),
+                        lower_bound,
+                        upper_bound,
+                    };
+                    match sender.send(item).await {
                         Ok(()) => {
                             info!("{id}: Dispatched C to yafu");
                             dispatched = true;
@@ -616,7 +448,11 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse::<NumberLength>().ok());
     if let Ok(run_number) = std::env::var("RUN") {
-        let run_number = run_number.parse::<EntryId>()?;
+        let mut run_number = run_number.parse::<EntryId>()?;
+        if let Ok(sub_run_number) = std::env::var("SUB_RUN")
+                && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>() {
+            run_number += 149993 * (11 + sub_run_number);
+        }
         if c_digits.is_none() {
             let mut c_digits_value = C_MAX_DIGITS
                 - NumberLength::try_from(
@@ -683,7 +519,7 @@ async fn main() -> anyhow::Result<()> {
     let http = Arc::new(RealFactorDbClient::new(rph_limit));
     // Spawn the yafu factoring task. The channel is bounded so that backpressure
     // propagates naturally if yafu can't keep up.
-    let (yafu_tx, yafu_rx) = channel::<(EntryId, HipStr)>(64);
+    let (yafu_tx, yafu_rx) = channel::<YafuWorkItem>(64);
     YAFU_SENDER.set(yafu_tx).expect("YAFU_SENDER already set");
     let yafu_http = http.clone();
     let yafu_shutdown = shutdown_receiver.clone();

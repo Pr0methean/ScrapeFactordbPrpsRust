@@ -3,11 +3,6 @@ permissions:
   contents: read
 
 on:
-  push:
-  pull_request:
-    branches: [ "main" ]
-  schedule:
-    - cron: "* * * * *"
   workflow_dispatch:
     inputs:
       c_digits:
@@ -27,17 +22,23 @@ on:
         required: false
         type: number
       chosen_c:
+        # FIXME: not currently implemented by the Rust program
         description: "Specific composites to factor, separated by spaces"
         required: false
         type: string
+  workflow_call:
+    inputs:
+      sub_run_id:
+        description: "ID of the sub-run to process"
+        required: true
+        type: number
 env:
   CARGO_TERM_COLOR: always
   C_DIGITS: ${{ inputs.c_digits }}
   U_DIGITS: ${{ inputs.u_digits }}
   PRP_DIGITS: ${{ inputs.prp_digits }}
   PRP_START: ${{ inputs.prp_start }}
-  SCCACHE_CACHE_SIZE: "10G"
-  RUSTC_WRAPPER: "/usr/bin/sccache"
+  SUB_RUN: ${{ inputs.sub_run_id }}
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -53,11 +54,10 @@ jobs:
         run: |
           rustup install nightly
           rustup default nightly
-      - name: Cache sccache local cache, cargo registry/git, and target
+      - name: Cache cargo registry/git and target
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cache/sccache
             ~/.cargo/registry
             ~/.cargo/git
             target
@@ -72,15 +72,7 @@ jobs:
             /usr/lib/x86_64-linux-gnu/libecm.a
             /var/cache/apt/archives/*.deb
             /var/lib/dpkg/status
-            /usr/bin/sccache
           key: dpkg-ecm-2025-11-17
-      - name: Start sccache server
-        run: |
-          sudo apt-get install sccache
-          # start sccache in the background; it will use $SCCACHE_* env vars if present
-          sccache --start-server || true
-          # show status
-          sccache --show-stats || true
       - name: Build
         run: |
           (
@@ -88,20 +80,9 @@ jobs:
           sudo apt-get install libecm-dev gmp-ecm
           ) &
           apt_pid=$!
-          # Dump sccache stats before build
-          sccache --show-stats || true
           # Use the same wrapper for the nightly build; rustup respects RUSTC_WRAPPER
           cargo +nightly build --release
-          # Dump stats after
-          sccache --show-stats || true
           wait ${apt_pid}
-        env:
-          RUSTC_WRAPPER: /usr/bin/sccache
-      - name: Stop sccache server
-        if: always()
-        run: |
-          sccache --stop-server || true
-          sccache --zero-stats || true
       - name: Run
         run: |
           set -x
@@ -111,29 +92,11 @@ jobs:
           # RUSTFLAGS is set at job level so builds are reproducible across the steps and match the cached artifacts.
           NO_RESERVE=1 RUN=${{github.run_number}} timeout 355m nice -+19 ./target/release/ScrapeFactordbPrpsRust &
           rust_pid=$!
-          sleep 21300 &
-          yafu_timer_pid=$!
-          ./yafu.sh <composites &
-          yafu_pid=$!
-          if [ "${{ inputs.chosen_c }}" != "" ]; then
-            echo "${{ inputs.chosen_c }}" | sed 's/\s\+/\n/g' >composites
-          fi
-          wait -n "${yafu_pid}" "${yafu_timer_pid}" || true
-          echo "yafu time is up"
+          sleep 21300
+          echo "Time is up"
           kill -TERM "${rust_pid}" || true
-          # Prevent any more yafu processes from starting
-          rm ./yafu || true
-          rm composites || true
           wait "${rust_pid}" || true
           echo "Rust program exited"
-          yafus=$(ps -C yafu -o pid= || true)
-          if [ "${yafus}" != "" ]; then
-            echo "Canceling ${#yafus} unfinished yafu processes"
-            xargs kill <<< "${yafus}"
-            sleep 60
-          else
-            echo "No unfinished yafu processes found"
-          fi
       - name: Upload any failed submissions
         if: always()
         uses: actions/upload-artifact@v7

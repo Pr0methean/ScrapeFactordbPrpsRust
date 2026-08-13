@@ -1,0 +1,87 @@
+name: Schedule Batch of Rust Runs
+permissions:
+  contents: read
+on:
+  schedule:
+    - cron: '34 */6 * * *' # Every 6 hours
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+jobs:
+  rust_00:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 0
+  rust_01:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 1
+  rust_02:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 2
+  rust_03:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 3
+  rust_04:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 4
+  rust_05:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 5
+  rust_06:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 6
+  rust_07:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 7
+  rust_08:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 8
+  rust_09:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 9
+  rust_10:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 10
+  rust_11:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 11
+  rust_12:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 12
+  rust_13:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 13
+  rust_14:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 14
+  rust_15:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 15
+  rust_16:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 16
+  rust_17:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 17
+  rust_18:
+    uses: ./.github/workflows/rust.yml
+    with:
+      sub_run_id: 18
