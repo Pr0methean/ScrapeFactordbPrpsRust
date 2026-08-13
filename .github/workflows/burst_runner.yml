@@ -1,4 +1,6 @@
 name: Schedule Batch of Rust Runs
+permissions:
+  contents: read
 on:
   schedule:
     - cron: '* */6 * * *' # Every 6 hours
