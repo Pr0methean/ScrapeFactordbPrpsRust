@@ -254,13 +254,6 @@ impl RealFactorDbClient {
         retry_delay: Duration,
         max_retries: usize,
     ) -> Option<HipStr<'static>> {
-        for _ in 0..max_retries {
-            if let Some(value) = self.try_get_and_decode(url).await {
-                return Some(value);
-            }
-            sleep(retry_delay).await;
-        }
-        None
     }
 }
 
@@ -333,8 +326,13 @@ impl FactorDbClient for RealFactorDbClient {
         url: &str,
         retry_delay: Duration,
     ) -> Option<HipStr<'static>> {
-        self.retrying_get_and_decode_internal(url, retry_delay, MAX_RETRIES)
-            .await
+        for _ in 0..MAX_RETRIES {
+            if let Some(value) = self.try_get_and_decode(url).await {
+                return Some(value);
+            }
+            sleep(retry_delay).await;
+        }
+        None
     }
 
     #[framed]
