@@ -239,7 +239,7 @@ async fn check_composite(
                 factors_submitted = true;
             } else {
                 if let Some(sender) = YAFU_SENDER.get() {
-                    let (lower_bound, upper_bound) = crate::algebraic::estimate_log10(&factor);
+                    let (lower_bound, upper_bound) = algebraic::estimate_log10(&factor);
                     let number_str = factor.to_unelided_string().into_owned();
                     let item = YafuWorkItem {
                         id,
@@ -448,7 +448,11 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse::<NumberLength>().ok());
     if let Ok(run_number) = std::env::var("RUN") {
-        let run_number = run_number.parse::<EntryId>()?;
+        let mut run_number = run_number.parse::<EntryId>()?;
+        if let Ok(sub_run_number) = std::env::var("SUB_RUN")
+                && let Ok(sub_run_number) = sub_run_number.parse::<EntryId>() {
+            run_number += 149993 * (11 + sub_run_number);
+        }
         if c_digits.is_none() {
             let mut c_digits_value = C_MAX_DIGITS
                 - NumberLength::try_from(
