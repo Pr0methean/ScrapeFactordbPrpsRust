@@ -39,8 +39,6 @@ env:
   PRP_DIGITS: ${{ inputs.prp_digits }}
   PRP_START: ${{ inputs.prp_start }}
   SUB_RUN: ${{ inputs.sub_run_id }}
-  SCCACHE_CACHE_SIZE: "10G"
-  RUSTC_WRAPPER: "/usr/bin/sccache"
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -56,11 +54,10 @@ jobs:
         run: |
           rustup install nightly
           rustup default nightly
-      - name: Cache sccache local cache, cargo registry/git, and target
+      - name: Cache cargo registry/git and target
         uses: actions/cache@v6
         with:
           path: |
-            ~/.cache/sccache
             ~/.cargo/registry
             ~/.cargo/git
             target
@@ -75,15 +72,7 @@ jobs:
             /usr/lib/x86_64-linux-gnu/libecm.a
             /var/cache/apt/archives/*.deb
             /var/lib/dpkg/status
-            /usr/bin/sccache
           key: dpkg-ecm-2025-11-17
-      - name: Start sccache server
-        run: |
-          sudo apt-get install sccache
-          # start sccache in the background; it will use $SCCACHE_* env vars if present
-          sccache --start-server || true
-          # show status
-          sccache --show-stats || true
       - name: Build
         run: |
           (
@@ -91,20 +80,9 @@ jobs:
           sudo apt-get install libecm-dev gmp-ecm
           ) &
           apt_pid=$!
-          # Dump sccache stats before build
-          sccache --show-stats || true
           # Use the same wrapper for the nightly build; rustup respects RUSTC_WRAPPER
           cargo +nightly build --release
-          # Dump stats after
-          sccache --show-stats || true
           wait ${apt_pid}
-        env:
-          RUSTC_WRAPPER: /usr/bin/sccache
-      - name: Stop sccache server
-        if: always()
-        run: |
-          sccache --stop-server || true
-          sccache --zero-stats || true
       - name: Run
         run: |
           set -x
