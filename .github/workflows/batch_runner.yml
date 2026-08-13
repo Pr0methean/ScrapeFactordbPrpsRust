@@ -5,6 +5,7 @@ on:
   schedule:
     - cron: '* */6 * * *' # Every 6 hours
   push:
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
 jobs:
