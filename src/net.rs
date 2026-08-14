@@ -47,19 +47,19 @@ const PARALLEL_REQUEST_THROTTLING_DURATION: Duration = Duration::from_secs(5);
 const REQWEST_MAX_URL_LEN: usize = (u16::MAX - 1) as usize;
 
 thread_local! {
-    static CURL_CLIENT: RefCell<Easy2<Collector>> = RefCell::new(Easy2::new(Collector(Vec::new())));
+    static CURL_CLIENT: RefCell<Easy2<CurlResponseCollector >> = RefCell::new(Easy2::new(CurlResponseCollector(Vec::new())));
 }
 
-struct Collector(Vec<u8>);
+struct CurlResponseCollector(Vec<u8>);
 
-impl Handler for Collector {
+impl Handler for CurlResponseCollector {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
         self.0.extend_from_slice(data);
         Ok(data.len())
     }
 }
 
-impl Collector {
+impl CurlResponseCollector {
     fn take_all(&mut self) -> Vec<u8> {
         let mut out = Vec::new();
         swap(&mut self.0, &mut out);
