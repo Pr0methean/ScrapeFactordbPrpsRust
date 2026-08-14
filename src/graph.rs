@@ -1164,6 +1164,10 @@ pub async fn find_and_submit_factors(
                 "{id}: Reached cofactor_facts check for a number not entered in number_facts_map",
             );
             if cofactor_facts.last_known_status == Some(Invalid) {
+                for factor_vid in data.divisibility_graph.node_indices().collect::<Vec<_>>().into_iter() {
+                    data.rule_out_divisibility(factor_vid, cofactor_vid);
+                    data.rule_out_divisibility(cofactor_vid, factor_vid);
+                }
                 info!(
                     "{id}: Skipping submission of {factor} to {cofactor} because the destination is not an integer"
                 );
