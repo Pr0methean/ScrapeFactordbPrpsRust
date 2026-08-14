@@ -10,7 +10,7 @@ use crate::algebraic::{
 };
 use crate::graph::Divisibility::{Direct, NotFactor, Transitive};
 use crate::graph::FactorsKnownToFactorDb::{NotUpToDate, UpToDate};
-use crate::net::NumberStatus::{FullyFactored, NonInteger, PartlyFactoredComposite, Prime, UnfactoredComposite};
+use crate::net::NumberStatus::{FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite};
 use crate::net::{
     FactorDbClient, FactorDbClientReadIdsAndExprs, NumberStatus, NumberStatusExt,
     ProcessedStatusApiResponse,
@@ -1107,7 +1107,7 @@ pub async fn find_and_submit_factors(
             }
             let factor_facts = data.facts(factor_vid)
                 .expect("{id}: Reached factors_known_to_factordb check for a number not entered in number_facts_map");
-            if factor_facts.last_known_status == Some(NonInteger) {
+            if factor_facts.last_known_status == Some(Invalid) {
                 info!("{id}: Skipping submission of {factor} because it's not an integer");
                 continue 'graph_iter;
             }
@@ -1163,7 +1163,11 @@ pub async fn find_and_submit_factors(
             let cofactor_facts = data.facts(cofactor_vid).expect(
                 "{id}: Reached cofactor_facts check for a number not entered in number_facts_map",
             );
-            if cofactor_facts.last_known_status == Some(NonInteger) {
+            if cofactor_facts.last_known_status == Some(Invalid) {
+                for factor_vid in data.divisibility_graph.node_indices().collect::<Vec<_>>().into_iter() {
+                    data.rule_out_divisibility(factor_vid, cofactor_vid);
+                    data.rule_out_divisibility(cofactor_vid, factor_vid);
+                }
                 info!(
                     "{id}: Skipping submission of {factor} to {cofactor} because the destination is not an integer"
                 );

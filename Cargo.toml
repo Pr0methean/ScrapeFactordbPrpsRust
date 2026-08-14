@@ -13,8 +13,8 @@ opt-level = 3
 
 [dependencies]
 reqwest = { version = "0.13", features = ["form"] }
-tokio = { version = "1.49", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time", "process"] }
-regex = "1.12"
+tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "macros", "signal", "sync", "time", "process"] }
+regex = "1.13.1"
 primitive-types = "0.14"
 log = "0.4"
 itertools = "0.15"
