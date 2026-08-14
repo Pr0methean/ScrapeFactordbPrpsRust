@@ -3,7 +3,7 @@ use crate::ReportFactorResult::{Accepted, AlreadyFullyFactored, DoesNotDivide, O
 use crate::algebraic::Factor::Numeric;
 use crate::algebraic::{NumericFactor, find_factors_of_numeric, get_numeric_value_cache};
 use crate::graph::EntryId;
-use crate::net::NumberStatus::{FullyFactored, NonInteger, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
+use crate::net::NumberStatus::{FullyFactored, Invalid, PartlyFactoredComposite, Prime, UnfactoredComposite, Unknown};
 use crate::{BasicCache, get_from_cache};
 use crate::{
     EXIT_TIME, FAILED_U_SUBMISSIONS_OUT, FactorSubmission, MAX_CPU_BUDGET_TENTHS,
@@ -396,7 +396,7 @@ impl FactorDbClient for RealFactorDbClient {
                         if let Some(valid_fallback_from_empty) = &fallback_from_empty
                                 && valid_fallback_from_empty.contains("Not divisible") {
                             return ProcessedStatusApiResponse {
-                                status: Some(NonInteger),
+                                status: Some(Invalid),
                                 factors: Box::new([]),
                                 id: None,
                             };
@@ -478,9 +478,9 @@ impl FactorDbClient for RealFactorDbClient {
                 factors: Box::new([]),
             },
             Err(Some(fallback_response)) => {
-                if fallback_response.contains("Not divisible") {
+                if fallback_response.contains("Error: ") {
                     return ProcessedStatusApiResponse {
-                        status: Some(NonInteger),
+                        status: Some(Invalid),
                         factors: Box::new([]),
                         id: None,
                     };
@@ -753,7 +753,7 @@ pub trait NumberStatusExt {
 impl NumberStatusExt for Option<NumberStatus> {
     #[inline]
     fn is_known_finished(&self) -> bool {
-        matches!(self, Some(FullyFactored) | Some(Prime) | Some(NonInteger))
+        matches!(self, Some(FullyFactored) | Some(Prime) | Some(Invalid))
     }
 }
 
@@ -764,5 +764,7 @@ pub enum NumberStatus {
     PartlyFactoredComposite,
     Prime, // includes PRP
     FullyFactored,
-    NonInteger,
+    /// This expression represents a number outside FactorDB's domain (integers from 0 to
+    /// 10^10^7) or produces one as an intermediate value.
+    Invalid,
 }
