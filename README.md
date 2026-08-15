@@ -8,7 +8,6 @@ The programs in this repository help the field of pure mathematics by factorizin
 ** Logical deduction of factors of 2 and 3 (since all PRPs are equivalent to 1 or 5 mod 6).
 ** The same factor-finding methods used with unknown status (see below).
 * Request an N-1/N+1 combined proof attempt for the number. This can confirm or disconfirm its primality.
-* Request Lucas probable-prime checks to all available bases (2 through 255). This can't confirm primality, but will almost always disconfirm it if the "probable prime" is actually composite.
 
 ### Composite (C, 91 to 300 digits)
 

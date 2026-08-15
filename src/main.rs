@@ -34,7 +34,6 @@ use log::{error, info, warn};
 use net::NumberStatus::FullyFactored;
 use net::{CPU_TENTHS_SPENT_LAST_CHECK, RealFactorDbClient};
 use net::{NumberStatusExt, ProcessedStatusApiResponse};
-use primitive_types::U256;
 use quick_cache::UnitWeighter;
 use quick_cache::sync::{Cache, DefaultLifecycle};
 use rand::seq::SliceRandom;
@@ -565,7 +564,6 @@ async fn main() -> anyhow::Result<()> {
                 (id, task_return_permit) = prp_receiver.recv() => {
                     info!("{id}: Ready to check a PRP");
                     let mut stopped_early = false;
-                    let mut bases_left = U256::MAX - 3;
                     let Some(bases_text) = check_c_and_prp_http
                         .retrying_get_and_decode(
                             &format!("https://factordb.com/frame_prime.php?id={id}"),
@@ -741,78 +739,6 @@ async fn main() -> anyhow::Result<()> {
                     if status_text.contains(" is prime") || !status_text.contains("PRP") {
                         info!("{id}: No longer PRP");
                         continue;
-                    }
-                    if let Some(bases) = bases_regex.captures(&bases_text) {
-                        for base in bases[1].split(", ") {
-                            let Ok(base) = base.parse::<u8>() else {
-                                error!("Invalid PRP-check base: {:?}", base);
-                                continue;
-                            };
-                            bases_left &= !(U256::from(1) << base);
-                        }
-                        info!(
-                                    "{id}: {} bases left to check",
-                                    bases_left
-                                        .0
-                                        .iter()
-                                        .copied()
-                                        .map(u64::count_ones)
-                                        .sum::<u32>()
-                                );
-                    } else {
-                        info!("{id}: no bases checked yet");
-                    }
-                    if bases_left == U256::from(0) {
-                        info!("{id}: all bases already checked");
-                        continue;
-                    }
-                    for base in (0..=(u8::MAX as usize)).filter(|i| bases_left.bit(*i)) {
-                        let url = format!(
-                            "https://factordb.com/index.php?id={id}&open=prime&basetocheck={base}"
-                        );
-                        let Some(text) = check_c_and_prp_http.retrying_get_and_decode(&url, RETRY_DELAY).await else {
-                            error!("{id}: PRP check with base {base} failed");
-                            continue;
-                        };
-                        if !text.contains(">number<") {
-                            error!("Failed to decode result from {url}: {text}");
-                            task_return_permit.send(id);
-                            info!("{id}: Requeued PRP");
-                            composites_while_waiting(
-                                Instant::now() + UNPARSEABLE_RESPONSE_RETRY_DELAY,
-                                check_c_and_prp_http.as_ref(),
-                                &mut c_receiver,
-                                &mut c_filter,
-                            )
-                                .await;
-                            break;
-                        }
-                        throttle_if_necessary(
-                            check_c_and_prp_http.as_ref(),
-                            &mut c_receiver,
-                            &mut bases_before_next_cpu_check,
-                            true,
-                            &mut c_filter,
-                        )
-                            .await;
-                        if cert_regex.is_match(&text) {
-                            info!("{}: No longer PRP (has certificate)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if text.contains("set to C") {
-                            info!("{}: No longer PRP (ruled out by PRP check)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                        if !text.contains("PRP") {
-                            info!("{}: No longer PRP (solved by N-1/N+1 or factor)", id);
-                            stopped_early = true;
-                            break;
-                        }
-                    }
-                    if !stopped_early {
-                        info!("{}: all bases now checked", id);
                     }
                 }
 
